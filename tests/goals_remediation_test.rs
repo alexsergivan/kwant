@@ -125,6 +125,22 @@ async fn mend_goal(e: &Env, id: &str) {
     on_change(&e.state, &before, &after, &[], owed).await;
 }
 
+/// [`break_goal`] that also logs the `not_met` event the runner logs, so the incident starts here.
+async fn break_logged(e: &Env, id: &str) {
+    let before = e.state.db.get_goal(id).await.unwrap().unwrap().status;
+    let after = e.state.db.set_goal_status(id, "not_met", "failing", &[], Some(("not_met", json!({"failing": ["a check"]})))).await.unwrap().unwrap();
+    on_change(&e.state, &before, &after, &["a check".to_string()], false).await;
+}
+
+/// [`mend_goal`] that also logs the `met` event the runner logs, which closes the incident (and
+/// what the person was told about it), as in `goals::runner`.
+async fn mend_logged(e: &Env, id: &str) {
+    let before = e.state.db.get_goal(id).await.unwrap().unwrap().status;
+    let owed = e.state.db.told_broken(id).await.unwrap();
+    let after = e.state.db.set_goal_status(id, "met", "", &[], Some(("met", json!({})))).await.unwrap().unwrap();
+    on_change(&e.state, &before, &after, &[], owed).await;
+}
+
 /// The kind of the newest notice sent about the goal.
 async fn last_notice(e: &Env, id: &str) -> Option<String> {
     e.state.db.goal_events(id, 100).await.unwrap().into_iter().find(|ev| ev.kind == "notified").and_then(|ev| ev.detail_value()["kind"].as_str().map(str::to_string))
@@ -134,8 +150,23 @@ async fn kinds(e: &Env, id: &str) -> Vec<String> {
     e.state.db.goal_events(id, 100).await.unwrap().into_iter().map(|ev| ev.kind).collect()
 }
 
+/// Every notice sent about the goal, whatever its kind.
 async fn sent(e: &Env, id: &str) -> i64 {
-    e.state.db.goal_notices_since(id, 0).await.unwrap()
+    notified(e, id).await.len() as i64
+}
+
+/// The kinds of the notices sent about the goal, oldest first.
+async fn notified(e: &Env, id: &str) -> Vec<String> {
+    let mut out: Vec<String> = e.state.db.goal_events(id, 200).await.unwrap().into_iter().filter(|ev| ev.kind == "notified").filter_map(|ev| ev.detail_value()["kind"].as_str().map(str::to_string)).collect();
+    out.reverse();
+    out
+}
+
+/// The kinds of the notices the cap held back, oldest first.
+async fn capped(e: &Env, id: &str) -> Vec<String> {
+    let mut out: Vec<String> = e.state.db.goal_events(id, 200).await.unwrap().into_iter().filter(|ev| ev.kind == "notice_capped").filter_map(|ev| ev.detail_value()["kind"].as_str().map(str::to_string)).collect();
+    out.reverse();
+    out
 }
 
 async fn open_link(e: &Env, id: &str) -> kwnt::db::goal_missions::GoalLink {
@@ -316,7 +347,7 @@ async fn g_r_07_a_failed_fix_replans_after_the_cooldown_then_stops_at_two_attemp
     assert!(e.state.db.open_goal_link_of(&g.id).await.unwrap().is_none(), "no third attempt");
     assert_eq!(e.state.db.goal_links(&g.id, 10).await.unwrap().len(), 2);
     assert_eq!(status(&e, &g.id).await, ("needs_you".into(), "fix_failed".into()));
-    let told = e.state.db.goal_notices_since(&g.id, 0).await.unwrap();
+    let told = sent(&e, &g.id).await;
     assert!(told <= 3, "never more than three notices: {told}");
 }
 
@@ -748,15 +779,66 @@ async fn g_p_03_a_fix_that_breaks_another_goal_is_a_conflict_and_never_ping_pong
 }
 
 #[tokio::test]
-async fn g_q_29_a_goal_that_keeps_breaking_never_sends_more_than_three_notices_a_day() {
+async fn g_q_29_a_goal_that_keeps_breaking_never_sends_more_than_three_broken_notices_a_day() {
     let e = setup().await;
     let g = goal(&e, "Site is up", "watch").await;
     for _ in 0..5 {
-        break_goal(&e, &g.id).await;
-        mend_goal(&e, &g.id).await;
+        break_logged(&e, &g.id).await;
+        mend_logged(&e, &g.id).await;
     }
-    assert_eq!(sent(&e, &g.id).await, 3, "three, then silence");
-    assert!(kinds(&e, &g.id).await.contains(&"notice_capped".to_string()), "what was held back is logged, never sent late");
+    // Each break the person heard about gets its "OK again"; the fourth and fifth are held back,
+    // and a recovery nobody was told about stays quiet
+    assert_eq!(notified(&e, &g.id).await, ["broken", "recovered", "broken", "recovered", "broken", "recovered"], "three, then silence");
+    assert_eq!(capped(&e, &g.id).await, ["broken", "broken"], "what was held back is logged, never sent late");
+    assert_eq!(e.state.db.goal_notices_since(&g.id, 0).await.unwrap(), 3);
+}
+
+// 33y (Mira's UX pass at 0.9.40, fix #2): one normal incident (broken, decision, recovered) no
+// longer uses up the day. The same goal breaking again that day still tells the person it broke,
+// that a fix waits for their decision, and that kwant gave up and needs them.
+#[tokio::test]
+async fn g_q_30_a_second_incident_the_same_day_still_tells_the_person() {
+    let e = setup().await;
+    let g = goal(&e, "Site is up", "suggest").await;
+    // Incident 1: broken, the decision, then it recovers on its own. The status changes log
+    // their events as the runner does, so each incident starts and ends where it really would.
+    break_logged(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    let l1 = open_link(&e, &g.id).await;
+    investigated(&e, &l1).await;
+    tick_at(&e.state, now()).await;
+    mend_logged(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    assert_eq!(e.state.db.goal_links(&g.id, 5).await.unwrap()[0].outcome.as_deref(), Some("not_needed"));
+    assert_eq!(notified(&e, &g.id).await, ["broken", "decision", "recovered"]);
+    // Incident 2, the same day: broken and the decision go out again
+    break_logged(&e, &g.id).await;
+    let t0 = now();
+    tick_at(&e.state, t0).await;
+    let l = open_link(&e, &g.id).await;
+    assert_eq!(l.attempt, 1, "a new incident starts its own attempts");
+    investigated(&e, &l).await;
+    tick_at(&e.state, t0).await;
+    assert_eq!(status(&e, &g.id).await, ("needs_you".into(), "fix_ready".into()));
+    assert_eq!(notified(&e, &g.id).await, ["broken", "decision", "recovered", "broken", "decision"]);
+    // The person runs the fix (as g_r_20: its bot picks it up, the tick sees it running); it
+    // fails, the replan's investigation fails too, and kwant stops
+    let (s, v) = send(&e, "POST", &format!("/api/tasks/{}/run", l.fix_task_id), None, None, None).await;
+    assert!(s.is_success(), "{v}");
+    e.state.db.claim_task(&l.fix_task_id, &e.bot, None, None, 60_000, false, &e.bot).await.unwrap().unwrap();
+    tick_at(&e.state, t0).await;
+    assert_eq!(status(&e, &g.id).await.0, "fixing");
+    fail(&e, &l.fix_task_id).await;
+    tick_at(&e.state, t0 + MIN).await;
+    tick_at(&e.state, t0 + 12 * MIN).await;
+    let l2 = open_link(&e, &g.id).await;
+    assert_eq!(l2.attempt, 2);
+    fail(&e, &l2.investigate_task_id).await;
+    tick_at(&e.state, t0 + 13 * MIN).await;
+    tick_at(&e.state, t0 + 30 * MIN).await;
+    assert_eq!(status(&e, &g.id).await.0, "needs_you");
+    assert_eq!(notified(&e, &g.id).await, ["broken", "decision", "recovered", "broken", "decision", "needs_you"], "and it needs you");
+    assert!(capped(&e, &g.id).await.is_empty(), "nothing held back: {:?}", capped(&e, &g.id).await);
 }
 
 #[tokio::test]
@@ -1092,4 +1174,95 @@ async fn lapse_7_deleted_and_paused_goals_are_left_out_and_rows_are_newest_first
     let (s, _) = send(&e, "DELETE", &format!("/api/goals/{}", b.id), None, None, None).await;
     assert_eq!(s, StatusCode::OK);
     assert_eq!(titles(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap()), ["First site"]);
+}
+
+// 33w: a Fix task checks what the goal checks (Mira's UX pass at 0.9.40, item 1)
+
+/// A site on 127.0.0.1 whose /sitemap.xml answers 200 with `body`.
+async fn sitemap_site(body: &'static str) -> String {
+    let app = Router::new().route("/sitemap.xml", axum::routing::get(move || async move { body }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}/sitemap.xml")
+}
+
+/// A fix-mode goal "the sitemap lists /pricing": one required http check, body_contains "/pricing".
+async fn sitemap_goal(e: &Env, url: &str) -> Goal {
+    let new = NewGoal {
+        space_id: SpaceId::default_space().as_str().into(),
+        title: "The sitemap lists every page".into(),
+        description: String::new(),
+        kwant_id: e.bot.clone(),
+        folder: e.folder.to_string_lossy().into_owned(),
+        mode: "fix".into(),
+        interval_minutes: 60,
+        confirm_failures: 2,
+        budget_tokens: 0,
+        max_fixes_per_day: 3,
+        priority: 2,
+        created_by: "person".into(),
+        draft: false,
+        checks: vec![NewGoalCheck {
+            label: "sitemap lists /pricing".into(),
+            kind: "http".into(),
+            spec: json!({"url": url}),
+            metric: Some("body_contains".into()),
+            operator: None,
+            target: Some("/pricing".into()),
+            severity: "required".into(),
+            freshness_minutes: 180,
+        }],
+    };
+    match e.state.db.create_goal(&new, now()).await.unwrap() {
+        Created::Goal(g) => *g,
+        Created::TooManyDrafts => panic!("draft"),
+    }
+}
+
+async fn verified_7d(e: &Env) -> i64 {
+    let (_, v) = send(e, "GET", "/api/missions/insights", None, None, None).await;
+    v["verified_7d"].as_i64().unwrap_or_else(|| panic!("insights: {v}"))
+}
+
+#[tokio::test]
+async fn g_r_33w_a_fix_that_changed_nothing_fails_the_goals_own_test_and_is_not_verified() {
+    let e = setup().await;
+    // The sitemap answers 200 but doesn't list /pricing, and the fix changes nothing
+    let url = sitemap_site("<urlset><url><loc>/about</loc></url></urlset>").await;
+    let g = sitemap_goal(&e, &url).await;
+    break_goal(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    let l = open_link(&e, &g.id).await;
+    investigated(&e, &l).await;
+    let fix_checks = e.state.db.list_checks(&l.fix_task_id).await.unwrap();
+    let http = fix_checks.iter().find(|c| c.kind == "http").expect("the goal's http check is on the Fix");
+    assert_eq!(http.spec_value()["contains"], json!("/pricing"), "the Fix check carries the goal's predicate: {}", http.spec);
+    let before = verified_7d(&e).await;
+
+    finish(&e, &l.fix_task_id).await;
+
+    let fix = task(&e, &l.fix_task_id).await;
+    assert_ne!(fix.state, "verified", "a fix that changed nothing is not verified");
+    let http = e.state.db.list_checks(&l.fix_task_id).await.unwrap().into_iter().find(|c| c.kind == "http").unwrap();
+    assert_eq!(http.status, "failed", "{http:?}");
+    assert!(http.output_excerpt.as_deref().unwrap_or("").contains("does not contain \"/pricing\""), "{http:?}");
+    assert_eq!(verified_7d(&e).await, before, "\"Verified this week\" does not go up");
+    tick_at(&e.state, now()).await;
+    assert!(!kinds(&e, &g.id).await.contains(&"fix_verified".to_string()));
+}
+
+#[tokio::test]
+async fn g_r_33w_a_fix_that_worked_still_passes_the_goals_test_and_is_verified() {
+    let e = setup().await;
+    let url = sitemap_site("<urlset><url><loc>/about</loc></url><url><loc>/pricing</loc></url></urlset>").await;
+    let g = sitemap_goal(&e, &url).await;
+    break_goal(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    let l = open_link(&e, &g.id).await;
+    investigated(&e, &l).await;
+    assert_eq!(finish(&e, &l.fix_task_id).await, StatusCode::OK);
+    assert_eq!(task(&e, &l.fix_task_id).await.state, "verified");
 }

@@ -32,6 +32,8 @@ import {
   METRICS,
   MODE_OPTIONS,
   OPEN_GOAL_EVENT,
+  GOAL_NOT_NOW_KEY,
+  takePendingGoal,
   OPERATOR_WORDS,
   PRIORITY_OPTIONS,
   StatusLook,
@@ -41,6 +43,9 @@ import {
   checkObserved,
   clockText,
   currentWorkText,
+  FIX_READY_TEXT,
+  firstMetIds,
+  fixReadyForOk,
   draftFromForm,
   emptyCheckRow,
   eventTaskId,
@@ -466,7 +471,7 @@ export const GoalRow: React.FC<{
             <button type="button" onClick={() => onOpenTask(fixTask.id)} className={`relative z-10 min-w-0 truncate text-left text-sky-300 underline underline-offset-2 hover:text-sky-200 rounded ${focusRing}`} data-open-fix>
               {fixTask.title}
             </button>
-            <span className="shrink-0 text-zinc-500">· {fixTask.held ? 'fix ready, waiting for your OK' : stateLabel(fixTask.state).label}</span>
+            <span className="shrink-0 text-zinc-500">· {fixTask.held && fixReadyForOk(g) ? FIX_READY_TEXT : stateLabel(fixTask.state).label}</span>
           </p>
         ) : work ? (
           <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-zinc-400" data-goal-line="work">
@@ -1077,8 +1082,9 @@ const DOT: Record<ReturnType<typeof goalEventTone>, string> = {
 };
 
 /** Oldest first, as the story went: broke → looked into → approved → fixed → verified. */
-export const GoalTimeline: React.FC<{ events: GoalEvent[]; names: Record<string, string>; now: number; onOpenTask?: (id: string) => void }> = ({ events, names, now, onOpenTask }) => {
+export const GoalTimeline: React.FC<{ events: GoalEvent[]; names: Record<string, string>; now: number; bot?: string | null; onOpenTask?: (id: string) => void }> = ({ events, names, now, bot = null, onOpenTask }) => {
   if (events.length === 0) return <p className="text-[11px] text-zinc-500">Nothing has happened yet.</p>;
+  const first = firstMetIds(events);
   return (
     <ol className="space-y-2 border-l border-zinc-800 pl-3" data-goal-timeline>
       {events.map((e) => {
@@ -1087,7 +1093,7 @@ export const GoalTimeline: React.FC<{ events: GoalEvent[]; names: Record<string,
         return (
           <li key={e.id} className="relative text-[11px]" data-event={e.kind}>
             <span className={`absolute -left-[17px] top-1 h-2 w-2 rounded-full ${DOT[goalEventTone(e.kind)]}`} aria-hidden="true" />
-            <span className={`text-zinc-200 ${wrap}`}>{goalEventText(e, names)}</span>
+            <span className={`text-zinc-200 ${wrap}`}>{goalEventText(e, names, { bot, first: first.has(e.id) })}</span>
             {task && onOpenTask && (
               <>
                 {' '}
@@ -1213,7 +1219,7 @@ export const GoalDetailBody: React.FC<{
                       <span className={`text-zinc-200 ${wrap}`}>{m.title}</span>
                     )}
                     {missionLine(m) && <span className="text-zinc-500"> · {missionLine(m)}</span>}
-                    {isOpenMission(m) && m.run_task_id && <span className="text-amber-200"> · fix ready, waiting for your OK</span>}
+                    {isOpenMission(m) && m.run_task_id && fixReadyForOk(g) && <span className="text-amber-200"> · {FIX_READY_TEXT}</span>}
                   </span>
                 </li>
               ))}
@@ -1232,7 +1238,7 @@ export const GoalDetailBody: React.FC<{
                     ) : (
                       <span className={`text-zinc-200 ${wrap}`}>{t.title}</span>
                     )}
-                    <span className="text-zinc-500"> · {t.held ? 'fix ready, waiting for your OK' : stateLabel(t.state).label}</span>
+                    <span className="text-zinc-500"> · {t.held && fixReadyForOk(g) ? FIX_READY_TEXT : stateLabel(t.state).label}</span>
                   </span>
                 </li>
               ))}
@@ -1262,7 +1268,7 @@ export const GoalDetailBody: React.FC<{
 
       <section className="space-y-1.5">
         <h4 className={heading}>What happened</h4>
-        <GoalTimeline events={d.events} names={names} now={now} onOpenTask={onOpenTask} />
+        <GoalTimeline events={d.events} names={names} now={now} bot={g.kwant_id ? names[g.kwant_id] ?? null : null} onOpenTask={onOpenTask} />
       </section>
       {error && (
         <p role="alert" className={`text-[11px] text-rose-300 ${wrap}`} data-goal-detail-error>
@@ -1393,7 +1399,7 @@ export const GoalChip: React.FC<{ goal: { id: string; title: string }; onOpen?: 
 type Panel = { kind: 'new' } | { kind: 'form'; seed: string } | { kind: 'edit'; goal: Goal } | { kind: 'goal'; id: string };
 
 const OPEN_KEY = 'kwnt.goals.open';
-const NOT_NOW_KEY = 'kwnt.goals.notnow';
+const NOT_NOW_KEY = GOAL_NOT_NOW_KEY;
 const readJson = <T,>(key: string, fallback: T): T => {
   try {
     const v = localStorage.getItem(key);
@@ -1449,7 +1455,9 @@ export const GoalsStrip: React.FC<{
   openPanel?: 'new' | 'form';
   hidden?: boolean;
   api?: GoalsApi;
-}> = ({ names, bots, spaceId = null, now = Date.now(), onOpenTask, onOpenMission, initial, openGoalId, openPanel, hidden = false, api = goalsApi }) => {
+  /** How many goals the strip draws as Needs you (0 while loading or without Goals): the board's "Waiting on you" adds them. */
+  onNeedsYou?: (n: number) => void;
+}> = ({ names, bots, spaceId = null, now = Date.now(), onOpenTask, onOpenMission, initial, openGoalId, openPanel, hidden = false, api = goalsApi, onNeedsYou }) => {
   const headId = useId();
   const listId = useId();
   const [goals, setGoals] = useState<Goal[] | null>(initial ? initial.goals : null);
@@ -1607,8 +1615,14 @@ export const GoalsStrip: React.FC<{
   useEffect(() => {
     const onOpen = (e: Event) => {
       const id = (e as CustomEvent<{ id?: unknown }>).detail?.id;
-      if (typeof id === 'string' && id) setPanel({ kind: 'goal', id });
+      if (typeof id === 'string' && id) {
+        takePendingGoal();
+        setPanel({ kind: 'goal', id });
+      }
     };
+    // Opened from the Inbox before the board was on screen: open it now.
+    const pending = takePendingGoal();
+    if (pending) setPanel({ kind: 'goal', id: pending });
     window.addEventListener(OPEN_GOAL_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_GOAL_EVENT, onOpen);
   }, []);
@@ -1837,6 +1851,10 @@ export const GoalsStrip: React.FC<{
   const firstMet = useFirstMoment('goal_met', spaceId ?? '', goals ? sorted.map((g) => ({ id: g.id, reached: g.status === 'met' })) : null);
   const [firstDone, setFirstDone] = useState(false);
   const drafts = sorted.filter((g) => g.status === 'draft').length;
+  const needsYouN = sorted.filter((g) => g.status === 'needs_you').length;
+  useEffect(() => {
+    onNeedsYou?.(needsYouN);
+  }, [onNeedsYou, needsYouN]);
   const panelTitle =
     panel?.kind === 'new'
       ? 'New goal'

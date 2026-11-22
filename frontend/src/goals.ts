@@ -32,7 +32,9 @@ export type GoalEventKind =
   | 'fix_approved'
   | 'replanned'
   | 'conflict'
-  | 'waiting';
+  | 'waiting'
+  | 'notified'
+  | 'notice_capped';
 export type GoalOperator = 'eq' | 'ne' | 'lt' | 'lte' | 'gt' | 'gte' | 'contains';
 export type GoalSeverity = 'required' | 'advisory';
 
@@ -605,8 +607,24 @@ const who = (actor: string, names: Record<string, string>): string => {
   return names[actor] ?? 'A bot';
 };
 
+/** What the person was told, by the notice's `kind` (src/server/goals/mod.rs). */
+const TOLD_YOU: Record<string, string> = {
+  broken: 'Told you it broke',
+  recovered: 'Told you it works again',
+  cant_check: 'Told you it can’t be checked',
+  needs_you: 'Told you it needs you',
+  decision: 'Told you a decision is waiting',
+};
+
+export interface GoalEventTextOpts {
+  /** The goal's bot, for lines about its work ("Patch couldn’t finish looking into it"). */
+  bot?: string | null;
+  /** This `met` is the goal's first passing check (see firstMetIds). */
+  first?: boolean;
+}
+
 /** One line of the goal's timeline, in plain words. Quoted bot reports come back separately from goalEventQuote. */
-export function goalEventText(e: Pick<GoalEvent, 'kind' | 'actor' | 'detail'>, names: Record<string, string> = {}): string {
+export function goalEventText(e: Pick<GoalEvent, 'kind' | 'actor' | 'detail'>, names: Record<string, string> = {}, opts: GoalEventTextOpts = {}): string {
   const d = e.detail ?? {};
   const label = s(d.check_label) ?? s(d.label);
   const title = s(d.task_title) ?? s(d.title);
@@ -623,16 +641,29 @@ export function goalEventText(e: Pick<GoalEvent, 'kind' | 'actor' | 'detail'>, n
       return v === 'met' ? `Checked: OK${count}` : v === 'not_met' ? `Checked: failing${count}` : v ? `Checked: couldn’t tell${count}` : `Checked${count}`;
     }
     case 'not_met': {
+      // The runner writes `{failing: ["<what it checks> (it saw <value>)"], confirmed_after}`; older events carry a label.
+      const failing = Array.isArray(d.failing) ? d.failing.map(txt).filter((x): x is string => !!x) : [];
+      if (failing.length) return `Broke: ${failing[0]}${failing.length > 1 ? ` and ${failing.length - 1} more` : ''}`;
       const times = typeof d.fail_streak === 'number' && d.fail_streak > 1 ? ` ${d.fail_streak} times in a row` : '';
       const seen = txt(d.observed_value);
       return label ? `Broke: “${label}” failed${times}${seen ? ` (observed ${seen})` : ''}` : 'Broke';
     }
     case 'met':
-      return 'OK again';
+      return opts.first ? 'First check: OK' : 'OK again';
     case 'mission_opened':
       return title ? `Fix work opened: ${title}` : 'Fix work opened';
-    case 'investigated':
-      return `${actorOr(e.actor, names, 'The bot')} looked into it`;
+    case 'investigated': {
+      const bot = actorOr(e.actor, names, opts.bot || 'The bot');
+      return lookFailed(e) ? `${bot} couldn’t finish looking into it` : `${bot} looked into it`;
+    }
+    case 'notified':
+      {
+      const k = s(d.kind) ?? '';
+      return Object.prototype.hasOwnProperty.call(TOLD_YOU, k) ? TOLD_YOU[k] : 'Told you';
+    }
+    case 'notice_capped':
+      // No count: what counts toward the daily cap is the server's to change.
+      return 'Didn’t ping you (already alerted today)';
     case 'fix_approved':
       return `${who(e.actor, names)} said fix it`;
     case 'fix_opened':
@@ -671,12 +702,58 @@ export function goalEventText(e: Pick<GoalEvent, 'kind' | 'actor' | 'detail'>, n
 
 const actorOr = (actor: string, names: Record<string, string>, fallback: string) => (names[actor] ? names[actor] : fallback);
 
+/**
+ * A report's first paragraph with its markdown marks dropped (heading #s, bold, list markers), so the quote reads as
+ * words. Text only: nothing here is ever rendered as HTML.
+ */
+export function plainQuote(v: string | null): string | null {
+  if (!v) return null;
+  const lines = v.replace(/\r\n?/g, '\n').split('\n');
+  const out: string[] = [];
+  let body = false;
+  for (const raw of lines) {
+    const heading = /^\s{0,3}#{1,6}(\s|$)/.test(raw);
+    const l = raw
+      .replace(/^\s{0,3}#{1,6}(\s+|$)/, '')
+      .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
+      .replace(/\*\*|__/g, '')
+      .trim();
+    // A blank line ends the quote once it holds some words past a heading ("## What is failing", blank, the finding).
+    if (!l) {
+      if (body) break;
+      continue;
+    }
+    out.push(l);
+    if (!heading) body = true;
+  }
+  return out.length ? out.join('\n') : null;
+}
+
 /** A bot's report quoted under its timeline line (investigate summary, failure excerpt). Untrusted text: show it as text only. */
 export function goalEventQuote(e: Pick<GoalEvent, 'kind' | 'detail'>): string | null {
   const d = e.detail ?? {};
-  if (e.kind === 'investigated') return s(d.summary) ?? s(d.report) ?? null;
-  if (e.kind === 'replanned' || e.kind === 'fix_failed') return s(d.excerpt) ?? s(d.reason) ?? null;
+  if (e.kind === 'investigated') return lookFailed(e) ? 'It stopped without a report.' : plainQuote(s(d.summary) ?? s(d.report));
+  if (e.kind === 'replanned' || e.kind === 'fix_failed') return plainQuote(s(d.excerpt) ?? s(d.reason));
   return null;
+}
+
+/** Events that leave a goal as it was: before the first `met`, only these may come for it to read "First check". */
+const QUIET_KINDS = new Set(['created', 'approved', 'edited', 'paused', 'resumed']);
+
+/**
+ * The `met` event that is a goal's first passing check, as a set of at most one id. Only quiet events (and passing
+ * checks) come before it, and the start of the story (created or approved) is in the list, so a page that begins
+ * mid-story claims no "first". A failing check, a break, a notice or any fix work before it makes it "OK again".
+ * Events oldest first.
+ */
+export function firstMetIds(events: ReadonlyArray<Pick<GoalEvent, 'id' | 'kind' | 'detail'>>): Set<string> {
+  let start = false;
+  for (const e of events) {
+    if (e.kind === 'met') return start ? new Set([e.id]) : new Set();
+    if (e.kind === 'created' || e.kind === 'approved') start = true;
+    else if (!(QUIET_KINDS.has(e.kind) || (e.kind === 'checked' && s(e.detail?.verdict) === 'met'))) return new Set();
+  }
+  return new Set();
 }
 
 export const eventTaskId = (e: Pick<GoalEvent, 'detail'>): string | null => s(e.detail?.task_id);
@@ -918,6 +995,19 @@ export function draftFromForm(f: GoalFormState): GoalDraft {
 export const OPEN_GOAL_EVENT = 'kwnt:open-goal';
 export const openGoal = (id: string) => window.dispatchEvent(new CustomEvent(OPEN_GOAL_EVENT, { detail: { id } }));
 
+// A goal opened from outside the board (the Inbox's Needs-you row): the board may not be on screen yet, so the
+// strip takes it when it mounts. One at a time, used once.
+let pendingGoal: string | null = null;
+export const openGoalOnBoard = (id: string) => {
+  pendingGoal = id;
+  openGoal(id);
+};
+export const takePendingGoal = (): string | null => {
+  const id = pendingGoal;
+  pendingGoal = null;
+  return id;
+};
+
 /**
  * A mission's goal: `goal_link {id, title}`, or `goal` when the server sends it as an object. `goal` as text
  * is the mission's own goal line (0.6.x), not a link.
@@ -983,12 +1073,19 @@ export function desiredVsObserved(c: GoalCheck): string {
   return seen ? `${checkDesired(c)} · observed ${seen}` : checkDesired(c);
 }
 
+/** An `investigated` event that says the look stopped without a report. */
+const lookFailed = (e: Pick<GoalEvent, 'detail'>): boolean => {
+  const d = e.detail ?? {};
+  return d.failed === true || d.failed === 'true' || d.status === 'failed';
+};
+
 export function goalDiagnosis(g: Goal, events: GoalEvent[] = [], now: number = Date.now()): Diagnosis {
   const c = brokenCheck(g, now);
   const m = g.open_mission;
   const own = g.diagnosis;
   const inv = [...events].reverse().find((e) => e.kind === 'investigated');
-  const d = inv?.detail ?? {};
+  // A failed look carries its raw reason, not a report (the server skips it too, goals_remediation.rs).
+  const d = inv && !lookFailed(inv) ? inv.detail : {};
   const broke = [...events].reverse().find((e) => e.kind === 'not_met');
   // goal.diagnosis, then open_mission.diagnosis, then the `investigated` event (D4).
   const pick = (k: 'summary' | 'cause' | 'proposed_fix', ...alt: string[]) => own?.[k] ?? m?.[k] ?? alt.map((a) => s(d[a])).find(Boolean) ?? null;
@@ -1008,8 +1105,7 @@ export function goalDiagnosis(g: Goal, events: GoalEvent[] = [], now: number = D
  */
 export function diagnosisPhase(g: Goal, events: GoalEvent[] = [], now: number = Date.now()): DiagnosisPhase {
   const inv = [...events].reverse().find((e) => e.kind === 'investigated');
-  const failed = !!inv && (inv.detail.failed === true || inv.detail.failed === 'true' || inv.detail.status === 'failed');
-  if (failed) return 'failed';
+  if (inv && lookFailed(inv)) return 'failed';
   const d = goalDiagnosis(g, events, now);
   if (d.cause || d.proposed_fix || d.summary || inv) return 'ready';
   const opened = Date.parse(g.open_mission?.opened_at ?? '');
@@ -1097,21 +1193,49 @@ export function displayStatus(g: Goal, events: GoalEvent[] = [], now: number = D
   return shown;
 }
 
+/**
+ * The fix waits for the person's OK only once the server says so (goals_remediation: needs_you / fix_ready). The held
+ * Fix task exists from the moment the mission opens, so while the bot still looks it is not "ready".
+ */
+export const fixReadyForOk = (g: Pick<Goal, 'status' | 'raw_status' | 'status_reason'>): boolean =>
+  serverStatus(g) === 'needs_you' && (g.status_reason ?? '').trim().toLowerCase() === 'fix_ready';
+
+export const FIX_READY_TEXT = 'fix ready, waiting for your OK';
+
 /** "Restore: kwant.si is up · Active" for the goal's current work, or null. */
-export function currentWorkText(g: Pick<Goal, 'open_mission' | 'open_fix_task' | 'status' | 'waiting_title' | 'waiting_for'>, titles: Record<string, string> = {}): string | null {
+export function currentWorkText(g: Pick<Goal, 'open_mission' | 'open_fix_task' | 'status' | 'raw_status' | 'status_reason' | 'waiting_title' | 'waiting_for'>, titles: Record<string, string> = {}): string | null {
   if (g.status === 'waiting') {
     const other = g.waiting_title ?? (g.waiting_for ? titles[g.waiting_for] : null);
     return other ? `Waiting for “${other}” to finish its fix` : 'Waiting for another fix in the same folder';
   }
   const m = g.open_mission && isOpenMission(g.open_mission) ? g.open_mission : null;
   if (m) {
-    if (m.run_task_id) return `${m.title} · fix ready, waiting for your OK`;
+    if (m.run_task_id && fixReadyForOk(g)) return `${m.title} · ${FIX_READY_TEXT}`;
     const try_ = m.attempt > 1 ? ` · attempt ${m.attempt}` : '';
     return `${m.title}${m.status ? ` · ${missionStatusLabel(m.status).label}` : ''}${try_}`;
   }
   const t = g.open_fix_task;
-  if (t) return t.held ? `${t.title} · fix ready, waiting for your OK` : `${t.title} · ${stateLabel(t.state).label}`;
+  if (t) return t.held && fixReadyForOk(g) ? `${t.title} · ${FIX_READY_TEXT}` : `${t.title} · ${stateLabel(t.state).label}`;
   return null;
+}
+
+/** Where the strip keeps "Not now" per goal on this device ({goalId: held task id}). */
+export const GOAL_NOT_NOW_KEY = 'kwnt.goals.notnow';
+export function readGoalNotNow(): Record<string, string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(GOAL_NOT_NOW_KEY) ?? '{}');
+    return v && typeof v === 'object' ? (v as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The goals waiting on the person (33x): the ones the strip draws as Needs you. A Not now on this device and a
+ * fix already released (Fix it) aren't requests, so they don't count. Read from the list, without detail reads.
+ */
+export function goalsNeedingYou(goals: Goal[], now: number = Date.now(), notNow: Record<string, string> = {}): Goal[] {
+  return goals.filter((g) => displayStatus(g, [], now, notNow[g.id] ?? null) === 'needs_you');
 }
 
 /** The strip's one line (plan v2 B.0 rule 5): "3 goals OK · checked 4 min ago", or what wants a look first. */
