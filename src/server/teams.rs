@@ -596,6 +596,10 @@ async fn suggestion_plan(
             existing: c.existing.clone(),
         });
     }
+    // 32u: (template name, saved name) for each row that took a Coding template bot, and the bots
+    // whose texts are the template's, so they name the bots and team as saved (as `template_plan`)
+    let mut renames: Vec<(String, String)> = Vec::new();
+    let mut from_template: Vec<usize> = Vec::new();
     for c in on.iter().filter(|_| s.need.is_none()) {
         let r = c.row;
         let role = c.preset.or_else(|| Role::from_preset(&r.preset)).unwrap_or(Role::Backend);
@@ -609,12 +613,19 @@ async fn suggestion_plan(
             Some(b) => (b.persona.clone(), b.soul.clone(), scope_list(&b.good_for), scope_list(&b.not_for)),
             None => (discover::persona(p, r.lead, s.stack_line.as_deref(), &r.owns), p.soul.clone(), Vec::new(), Vec::new()),
         };
+        let name = c.name.clone().unwrap_or(default_name);
+        if let Some(b) = tbot {
+            // A row filled by an existing bot goes by that bot's own name
+            let saved = c.existing.as_ref().and_then(|id| live.iter().find(|k| &k.id == id)).map_or(&name, |k| &k.name);
+            renames.push((b.name.clone(), saved.clone()));
+            from_template.push(bots.len());
+        }
         bots.push(PlanBot {
             slot: r.key.clone(),
             field: format!("edits.rows.{}.name", r.key),
             preset: p.id.clone(),
             lead: r.lead,
-            name: c.name.clone().unwrap_or(default_name),
+            name,
             title,
             avatar,
             persona,
@@ -623,6 +634,13 @@ async fn suggestion_plan(
             avoids,
             existing: c.existing.clone(),
         });
+    }
+
+    let new_handle = (handle != coding_t.handle).then_some((coding_t.handle.as_str(), handle.as_str()));
+    let rn = |text: &str| rename_text(text, &renames, new_handle);
+    for &i in &from_template {
+        bots[i].persona = rn(&bots[i].persona);
+        bots[i].soul = rn(&bots[i].soul);
     }
 
     // T1: posted for the Coding template, the team gets its starter skills, each on the row that
@@ -635,9 +653,14 @@ async fn suggestion_plan(
                 .filter(|b| b.existing.is_none())
                 .map(|b| b.slot.clone())
         })
+        .into_iter()
+        .map(|sk| PlanSkill { description: rn(&sk.description), body: rn(&sk.body), ..sk })
+        .collect()
     } else {
         Vec::new()
     };
+    // The Coding rules in a suggested team's instructions name the template's bots too ("QA reads every pull request")
+    let instructions = rn(&discover::team_instructions(s.stack_line.as_deref()));
 
     let target = match (&s.team_id, &s.need) {
         (Some(team_id), _) => Target::Existing { team_id: team_id.clone() },
@@ -653,7 +676,7 @@ async fn suggestion_plan(
             handle,
             icon: coding_t.icon.clone(),
             description: coding_t.card_line.clone(),
-            instructions: discover::team_instructions(s.stack_line.as_deref()),
+            instructions,
             workspace_path: s.workspace_path.clone(),
             repo_url: s.repo_url.clone(),
         },

@@ -127,9 +127,11 @@ export type NotifyKind =
   | 'automation_suggested'
   | 'tier_proposed'
   | 'fact_disputed'
-  | 'spend_stopped';
+  | 'spend_stopped'
+  | 'turn_stopped';
 export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'turn_finished', label: 'A bot finished replying' },
+  { id: 'turn_stopped', label: 'A bot stopped or is blocked' },
   { id: 'approval_needed', label: 'A bot needs your approval' },
   { id: 'routine_failed', label: 'A routine failed' },
   { id: 'delegation_finished', label: 'A delegated task finished' },
