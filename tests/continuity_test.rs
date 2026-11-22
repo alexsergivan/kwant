@@ -365,6 +365,88 @@ async fn search_ranks_filters_and_marks() {
     }
 }
 
+/// 33i: a hit inside a thread names its thread, so search can open it. Before, a person's thread
+/// message came back with `kwant_id` null (only the sender bot was looked up) and no thread, so the
+/// app said "That chat no longer exists."; a bot's thread reply opened the bot's direct chat.
+#[tokio::test]
+async fn search_hits_in_a_thread_carry_the_thread() {
+    use kwnt::db::models::MessageExtra;
+    let (app, state, _tmp) = setup().await;
+    let db = &state.db;
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let (k1, k2) = (&kwants[0], &kwants[1]);
+    let general = db
+        .list_channels(&kwnt::db::spaces::SpaceId::default_space())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.name == "general")
+        .unwrap();
+    let thread = db.create_thread(&k1.id, "2025 tax return", "chat", None, "user").await.unwrap();
+    let in_thread = MessageExtra { thread_id: Some(thread.id.clone()), meta: None };
+    let ask = db
+        .insert_message_with(&msg(None, None, "user", "you", "please file my tax return"), &in_thread)
+        .await
+        .unwrap();
+    let answer = db
+        .insert_message_with(&msg(None, None, "kwant", &k1.name, "your tax return is filed"), &in_thread)
+        .await
+        .unwrap();
+    // A teammate's reply in k1's thread opens k1's thread too
+    let helper = db
+        .insert_message_with(&msg(None, None, "kwant", &k2.name, "tax receipts attached"), &in_thread)
+        .await
+        .unwrap();
+    let direct = db
+        .insert_message(&msg(None, Some(&k1.id), "user", "you", "tax question in the direct chat"))
+        .await
+        .unwrap();
+    let channel = db
+        .insert_message(&msg(Some(&general.id), None, "kwant", &k2.name, "tax day in general"))
+        .await
+        .unwrap();
+
+    let (status, hits) = req(&app, "GET", "/api/search?q=tax", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let hits = hits.as_array().unwrap();
+    assert_eq!(hits.len(), 5, "{hits:?}");
+    let hit = |id: &str| hits.iter().find(|h| h["message_id"] == id).unwrap_or_else(|| panic!("no hit {id}"));
+
+    for (label, id, author) in [("ask", &ask.id, "you"), ("answer", &answer.id, k1.name.as_str()), ("helper", &helper.id, k2.name.as_str())] {
+        let h = hit(id);
+        assert_eq!(h["kwant_id"], k1.id.as_str(), "{label}: the thread's bot");
+        assert_eq!(h["thread_id"], thread.id.as_str(), "{label}");
+        assert_eq!(h["thread_title"], "2025 tax return", "{label}");
+        assert_eq!(h["channel_id"], Value::Null, "{label}");
+        assert_eq!(h["author"], author, "{label}");
+    }
+
+    // A direct chat and a channel are no thread, and otherwise unchanged
+    let h = hit(&direct.id);
+    assert_eq!(h["kwant_id"], k1.id.as_str());
+    assert_eq!(h["channel_id"], Value::Null);
+    for key in ["thread_id", "thread_title"] {
+        assert!(h.get(key).is_some_and(Value::is_null), "direct {key}: {h}");
+    }
+    let h = hit(&channel.id);
+    assert_eq!(h["channel_id"], general.id.as_str());
+    assert_eq!(h["channel_name"], "general");
+    assert_eq!(h["kwant_id"], k2.id.as_str(), "a channel hit still names its sender");
+    for key in ["thread_id", "thread_title"] {
+        assert!(h.get(key).is_some_and(Value::is_null), "channel {key}: {h}");
+    }
+
+    // The store returns the same fields
+    let hits = db
+        .search_messages(&kwnt::db::spaces::SpaceId::default_space(), "filed", &SearchFilter { limit: 10, ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    let h = serde_json::to_value(&hits[0]).unwrap();
+    assert_eq!(h["thread_id"], thread.id.as_str());
+    assert_eq!(h["thread_title"], "2025 tax return");
+}
+
 // Memory
 
 #[tokio::test]
@@ -1692,7 +1774,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     assert_eq!(s["notify_webhook_url"], "");
     assert_eq!(
         s["notify_on"],
-        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked", "loose_ends", "human_step", "app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped", "turn_quiet"])
+        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked", "loose_ends", "human_step", "app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped", "turn_quiet", "turn_stopped"])
     );
 
     let (status, _) = req(
@@ -1804,6 +1886,7 @@ async fn notifications_are_filtered_and_content_free() {
         turn_id: None,
         thread_id: None,
         quiet: false,
+        reply: None,
     });
     let _ = state.event_sender.send(RuntimeEvent::TurnEnded {
         kwant_id: k.id.clone(),
@@ -1812,6 +1895,7 @@ async fn notifications_are_filtered_and_content_free() {
         turn_id: None,
         thread_id: None,
         quiet: false,
+        reply: None,
     });
     // A quiet turn (a mission runner turn) leaves its notification to the runner
     let _ = state.event_sender.send(RuntimeEvent::TurnEnded {
@@ -1821,6 +1905,7 @@ async fn notifications_are_filtered_and_content_free() {
         turn_id: None,
         thread_id: None,
         quiet: true,
+        reply: None,
     });
     let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired {
         id: "a1".into(),

@@ -542,6 +542,136 @@ async fn a_create_that_fails_at_any_step_leaves_nothing() {
     assert_eq!((after.bots, after.teams, after.skills, after.routines), (before.bots + 3, before.teams + 1, before.skills + 1, before.routines + 1));
 }
 
+// 32p: a renamed bot or handle reaches every text the team's bots read.
+
+/// `word` standing alone in `text`: not part of a longer name such as `Researcher2` or `OutreachWriter`.
+fn says(text: &str, word: &str) -> bool {
+    let wordy = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(word)
+        .any(|(i, _)| !text[..i].chars().next_back().is_some_and(wordy) && !text[i + word.len()..].chars().next().is_some_and(wordy))
+}
+
+/// Every text the new team's bots read, by label: the team's instructions, each new bot's persona
+/// and soul, and their skills (description and body) and routines.
+async fn team_texts(e: &Env, created: &Value) -> Vec<(String, String)> {
+    let team_id = created["team"]["id"].as_str().unwrap();
+    let team = e.state.db.list_teams(&e.space).await.unwrap().into_iter().find(|t| t.id == team_id).unwrap();
+    let mut out = vec![("team instructions".to_string(), team.instructions.unwrap_or_default())];
+    let ids: Vec<String> = created["bots"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap().to_string()).collect();
+    for k in e.state.db.list_kwants(&e.space).await.unwrap().into_iter().filter(|k| ids.contains(&k.id)) {
+        out.push((format!("{} persona", k.name), k.persona_prompt));
+        out.push((format!("{} soul", k.name), k.soul));
+    }
+    for s in e.state.db.list_skills(&e.space, None, None).await.unwrap() {
+        if s.kwant_id.as_ref().is_some_and(|k| ids.contains(k)) {
+            out.push((format!("skill {} description", s.name), s.description));
+            out.push((format!("skill {}", s.name), s.body));
+        }
+    }
+    for r in e.state.db.list_routines(&e.space).await.unwrap().into_iter().filter(|r| ids.contains(&r.kwant_id)) {
+        out.push((format!("routine {}", r.name), r.instructions));
+    }
+    out
+}
+
+fn text<'a>(texts: &'a [(String, String)], label: &str) -> &'a str {
+    &texts.iter().find(|(l, _)| l == label).unwrap_or_else(|| panic!("no {label} in {texts:?}")).1
+}
+
+#[tokio::test]
+async fn a_fresh_install_inbox_tells_its_lead_about_researcher2() {
+    let e = setup().await;
+    // The seeded @helpers has a Researcher, so the preview offers Researcher2 and the sheet posts it unedited
+    let (_, p) = call(&e.app, "GET", "/api/team-templates/inbox/preview", &[], None).await;
+    assert_eq!(p["names"]["Researcher"], "Researcher2", "{p}");
+    let (s, v) = create(&e, json!({"template_id": "inbox", "handle": p["handle"], "names": p["names"]})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let texts = team_texts(&e, &v).await;
+    assert!(texts.len() >= 10, "instructions, 3 personas, 3 souls, 2 skills x2, 1 routine: {texts:?}");
+
+    for label in ["team instructions", "InboxManager persona", "Researcher2 persona"] {
+        assert!(says(text(&texts, label), "Researcher2"), "{label}: {}", text(&texts, label));
+    }
+    for (label, t) in &texts {
+        assert!(!says(t, "Researcher"), "{label} still names the other team's Researcher: {t}");
+        assert!(!says(t, "@helpers"), "{label}: {t}");
+    }
+    // The other names didn't change, so neither did their mentions
+    assert!(says(text(&texts, "InboxManager persona"), "Drafter"));
+    assert!(says(text(&texts, "InboxManager persona"), "@inbox"));
+
+    // The seeded @helpers' own Researcher is untouched
+    let seeded = e.state.db.list_kwants(&e.space).await.unwrap().into_iter().find(|k| k.name == "Researcher").unwrap();
+    assert!(seeded.persona_prompt.starts_with("You are Researcher, the research analyst on the @helpers team"), "{}", seeded.persona_prompt);
+}
+
+#[tokio::test]
+async fn a_sales_team_with_a_renamed_bot_and_handle_says_them_everywhere() {
+    let e = setup().await;
+    let (s, v) = create(&e, json!({"template_id": "sales", "handle": "helpers2", "names": {"Prospector": "Scout"}})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let texts = team_texts(&e, &v).await;
+
+    assert!(says(text(&texts, "team instructions"), "Scout"), "{}", text(&texts, "team instructions"));
+    for bot in ["SalesLead", "Scout", "OutreachWriter"] {
+        let persona = text(&texts, &format!("{bot} persona"));
+        assert!(says(persona, "Scout"), "{bot}: {persona}");
+        assert!(says(persona, "@helpers2"), "{bot}: {persona}");
+    }
+    assert!(says(text(&texts, "skill Write a first outreach email"), "Scout"));
+    for (label, t) in &texts {
+        assert!(!says(t, "Prospector"), "{label}: {t}");
+        assert!(!says(t, "@sales"), "{label}: {t}");
+    }
+    // OutreachWriter wasn't renamed, and its "outreach writer" role words have no bot named Writer to follow
+    assert!(says(text(&texts, "SalesLead persona"), "OutreachWriter"));
+    assert!(text(&texts, "OutreachWriter persona").starts_with("You are OutreachWriter, the outreach writer on the @helpers2 team"), "{}", text(&texts, "OutreachWriter persona"));
+    assert!(text(&texts, "Scout persona").starts_with("You are Scout, the lead researcher on the @helpers2 team"), "{}", text(&texts, "Scout persona"));
+}
+
+// 32v: the team's instructions speak to the person ("you"), and every persona opens with the bot's
+// name and then its role in lower case, so a renamed bot reads "You are Pixel, the frontend engineer".
+
+#[test]
+fn every_template_speaks_to_you_and_opens_each_persona_with_the_name() {
+    for t in kwnt::teams::templates::all() {
+        assert!(!t.instructions.contains("the person"), "{} instructions: {}", t.id, t.instructions);
+        assert!(t.instructions.contains("\nNever without you\n"), "{} instructions: {}", t.id, t.instructions);
+        for b in &t.bots {
+            let head = format!("You are {}, the ", b.name);
+            assert!(b.persona.starts_with(&head), "{} {}: {}", t.id, b.name, b.persona);
+            // The role words up to the team handle are lower case, so no rename can reach them
+            let role = b.persona[head.len()..].split(" @").next().unwrap();
+            assert!(!role.chars().any(|c| c.is_uppercase()), "{} {} role {role:?}", t.id, b.name);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_coding_team_with_frontend_renamed_to_pixel_reads_you_are_pixel_the_frontend_engineer() {
+    let e = setup().await;
+    let (s, v) = create(&e, json!({"template_id": "coding", "handle": "web", "names": {"Frontend": "Pixel"}})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let texts = team_texts(&e, &v).await;
+
+    let pixel = text(&texts, "Pixel persona");
+    assert!(pixel.starts_with("You are Pixel, the frontend engineer on the @web team."), "{pixel}");
+    for (label, t) in &texts {
+        assert!(!t.contains("Pixel Engineer"), "{label}: {t}");
+        assert!(!says(t, "Frontend"), "{label}: {t}");
+    }
+    // The other bots keep their names, and their personas read the same way
+    assert!(text(&texts, "Backend persona").starts_with("You are Backend, the backend engineer on the @web team."));
+    assert!(text(&texts, "QA persona").starts_with("You are QA, the test engineer on the @web team."));
+    assert!(text(&texts, "TechLead persona").starts_with("You are TechLead, the tech lead of the @web team."));
+    assert!(says(text(&texts, "TechLead persona"), "Pixel"), "{}", text(&texts, "TechLead persona"));
+    // The pinned instructions speak to the person and name the renamed bot
+    let instructions = text(&texts, "team instructions");
+    assert!(instructions.contains("Pixel builds screens."), "{instructions}");
+    assert!(instructions.contains("Never without you\n") && instructions.contains("You merge."), "{instructions}");
+    assert!(!instructions.contains("the person") && !instructions.contains("The person"), "{instructions}");
+}
+
 async fn needs_done_of(e: &Env, team_id: &str) -> Value {
     let (s, t) = call(&e.app, "GET", &format!("/api/teams/{team_id}/template"), &[], None).await;
     assert_eq!(s, StatusCode::OK, "{t}");
