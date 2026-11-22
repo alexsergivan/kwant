@@ -163,6 +163,12 @@ test('lead_review_asked: kwant asked the lead, by name when known', () => {
   assert.equal(m.eventText({ ...ev('lead_review_asked'), detail: null }), 'Kwant asked the lead to review the hand-off');
 });
 
+test('lead_review_stopped: the person stopped the summary, so the review was skipped (32o)', () => {
+  assert.equal(m.eventText(ev('lead_review_stopped', { delegation_id: 'd1', lead_kwant_id: 'lead1' }), { lead1: 'Ada' }), 'Review skipped: you stopped the summary');
+  assert.equal(m.eventText({ ...ev('lead_review_stopped'), detail: null }), 'Review skipped: you stopped the summary');
+  assert.equal(m.isQuietEvent({ kind: 'lead_review_stopped' }), false);
+});
+
 test('spec: the bot wrote down what done means, with a count of points', () => {
   const bot = (detail) => ({ ...ev('spec', detail), actor: 'k1', actor_name: 'Lin' });
   assert.equal(m.eventText(bot({ lines: ['a', 'b', 'c'] })), 'Lin wrote down what done means (3 points)');
