@@ -654,7 +654,7 @@ export function goalEventText(e: Pick<GoalEvent, 'kind' | 'actor' | 'detail'>, n
       return title ? `Fix work opened: ${title}` : 'Fix work opened';
     case 'investigated': {
       const bot = actorOr(e.actor, names, opts.bot || 'The bot');
-      return d.failed === true ? `${bot} couldn’t finish looking into it` : `${bot} looked into it`;
+      return lookFailed(e) ? `${bot} couldn’t finish looking into it` : `${bot} looked into it`;
     }
     case 'notified':
       return TOLD_YOU[s(d.kind) ?? ''] ?? 'Told you';
@@ -724,7 +724,7 @@ export function plainQuote(v: string | null): string | null {
 /** A bot's report quoted under its timeline line (investigate summary, failure excerpt). Untrusted text: show it as text only. */
 export function goalEventQuote(e: Pick<GoalEvent, 'kind' | 'detail'>): string | null {
   const d = e.detail ?? {};
-  if (e.kind === 'investigated') return d.failed === true ? 'It stopped without a report.' : plainQuote(s(d.summary) ?? s(d.report));
+  if (e.kind === 'investigated') return lookFailed(e) ? 'It stopped without a report.' : plainQuote(s(d.summary) ?? s(d.report));
   if (e.kind === 'replanned' || e.kind === 'fix_failed') return plainQuote(s(d.excerpt) ?? s(d.reason));
   return null;
 }
@@ -1052,12 +1052,19 @@ export function desiredVsObserved(c: GoalCheck): string {
   return seen ? `${checkDesired(c)} · observed ${seen}` : checkDesired(c);
 }
 
+/** An `investigated` event that says the look stopped without a report. */
+const lookFailed = (e: Pick<GoalEvent, 'detail'>): boolean => {
+  const d = e.detail ?? {};
+  return d.failed === true || d.failed === 'true' || d.status === 'failed';
+};
+
 export function goalDiagnosis(g: Goal, events: GoalEvent[] = [], now: number = Date.now()): Diagnosis {
   const c = brokenCheck(g, now);
   const m = g.open_mission;
   const own = g.diagnosis;
   const inv = [...events].reverse().find((e) => e.kind === 'investigated');
-  const d = inv?.detail ?? {};
+  // A failed look carries its raw reason, not a report (the server skips it too, goals_remediation.rs).
+  const d = inv && !lookFailed(inv) ? inv.detail : {};
   const broke = [...events].reverse().find((e) => e.kind === 'not_met');
   // goal.diagnosis, then open_mission.diagnosis, then the `investigated` event (D4).
   const pick = (k: 'summary' | 'cause' | 'proposed_fix', ...alt: string[]) => own?.[k] ?? m?.[k] ?? alt.map((a) => s(d[a])).find(Boolean) ?? null;
@@ -1077,8 +1084,7 @@ export function goalDiagnosis(g: Goal, events: GoalEvent[] = [], now: number = D
  */
 export function diagnosisPhase(g: Goal, events: GoalEvent[] = [], now: number = Date.now()): DiagnosisPhase {
   const inv = [...events].reverse().find((e) => e.kind === 'investigated');
-  const failed = !!inv && (inv.detail.failed === true || inv.detail.failed === 'true' || inv.detail.status === 'failed');
-  if (failed) return 'failed';
+  if (inv && lookFailed(inv)) return 'failed';
   const d = goalDiagnosis(g, events, now);
   if (d.cause || d.proposed_fix || d.summary || inv) return 'ready';
   const opened = Date.parse(g.open_mission?.opened_at ?? '');

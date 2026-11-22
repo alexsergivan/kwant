@@ -53,6 +53,20 @@ test('a: a failed look names the goal’s bot and says it stopped without a repo
   assert.equal(b.goalEventQuote(done), 'The disk is full.');
 });
 
+test('a: the row’s decision never quotes a failed look’s raw reason as its report', () => {
+  const g = goal({ status: 'needs_you', status_reason: 'fix_ready', open_mission: mission({ opened_at: minsAgo(40) }) });
+  const events = [ev('e1', 'investigated', { failed: true, summary: 'no review after its last attempt' }, 30)];
+  assert.equal(b.goalDiagnosis(g, events, NOW).summary, null);
+  assert.equal(b.diagnosisPhase(g, events, NOW), 'failed');
+  const shown = { ...g, raw_status: g.status, status: b.displayStatus(g, events, NOW) };
+  const row = text(b.rowHtml({ goal: shown, names, now: NOW, onAction() {}, decision: b.goalDecision(shown, events, NOW, null) }));
+  assert.doesNotMatch(row, /no review after/, row);
+  assert.match(row, /Patch couldn’t finish looking into it/);
+  // A later good look is the report again.
+  const later = [...events, ev('e2', 'investigated', { summary: 'The disk is full.' }, 10)];
+  assert.equal(b.goalDiagnosis(g, later, NOW).summary, 'The disk is full.');
+});
+
 test('b: "fix ready" only when the goal needs you with a fix ready, at every place it can show', () => {
   // Still looking: the mission is open and its held Fix task exists from the start.
   const looking = goal({ open_mission: mission() });
