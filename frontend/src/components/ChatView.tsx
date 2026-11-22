@@ -92,6 +92,7 @@ import { ApproveRow } from './ApproveRow';
 import { CopyGhost } from './CopyGhost';
 import { copyText } from '../copyText';
 import { ContinuedLine, MessageMore, MessageMoreError } from './MessageMore';
+import { ChatStartLine, EarlierButton, type EarlierState } from './ChatStart';
 import { CONTINUE_LABEL, canContinueFrom } from '../continueChat';
 import { RoutineRow } from './RoutineRow';
 import { routineOf } from '../routineRow';
@@ -368,6 +369,10 @@ export interface ChatViewProps {
   viewingHistory?: boolean;
   /** Leaves that window for the latest messages. */
   onJumpToLatest?: () => void;
+  /** 33k: whether earlier messages exist ('more'), are loading, or the first message is shown ('start'). Unset: neither line. */
+  earlier?: EarlierState;
+  /** 33k: loads the page before the first message and puts it in front of `messages`; true when messages came in front. */
+  onLoadEarlier?: () => boolean | Promise<boolean>;
   /** Under the header: the bot's conversations and the open thread's controls. */
   subHeader?: React.ReactNode;
   /** Phone only: the header's second line in place of the subtitle (the thread picker in a bot's chat). */
@@ -659,6 +664,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onHighlightDone,
   viewingHistory,
   onJumpToLatest,
+  earlier,
+  onLoadEarlier,
   subHeader,
   threadLine,
   notice,
@@ -1124,6 +1131,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   }, [approvalKey]);
   useEffect(() => {
     stickRef.current = true;
+    // 33k: an earlier page for the chat left behind never lands here.
+    earlierAnchorRef.current = null;
+    if (scrollRef.current) scrollRef.current.style.overflowAnchor = '';
   }, [contextKey]);
   // Phone: the field's width picks the placeholder (A1), and its height follows when it moves between
   // one row and two. Keyboard mode keeps the last message in view while the chat follows the bottom.
@@ -1145,6 +1155,63 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
     if (scrollRef.current && stickRef.current) pinToBottom(scrollRef.current);
   }, [kbd, stacked]);
+  // 33k: "Earlier messages". The page comes in above what the person reads; the first message shown before it stays
+  // where it was on screen (the browser's own scroll anchoring is off meanwhile, so it doesn't move it twice).
+  const earlierBtnRef = useRef<HTMLButtonElement>(null);
+  const chatStartRef = useRef<HTMLParagraphElement>(null);
+  const earlierAnchorRef = useRef<{ id: string; top: number; fromBottom: number; hadFocus: boolean } | null>(null);
+  const firstId = messages[0]?.id;
+  const loadEarlier = () => {
+    const el = scrollRef.current;
+    if (!onLoadEarlier || earlier !== 'more' || !firstId || !el) return;
+    stickRef.current = false;
+    const row = el.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(firstId)}"]`);
+    earlierAnchorRef.current = {
+      id: firstId,
+      top: row ? row.getBoundingClientRect().top - el.getBoundingClientRect().top : 0,
+      fromBottom: el.scrollHeight - el.scrollTop,
+      hadFocus: document.activeElement === earlierBtnRef.current,
+    };
+    el.style.overflowAnchor = 'none';
+    // When messages came in front, the layout effect below puts the view back once they're drawn. When nothing
+    // did (an error, an empty last page, another chat), the browser gets its own anchoring back now.
+    const nothingCame = () => {
+      if (earlierAnchorRef.current?.id !== firstId) return;
+      earlierAnchorRef.current = null;
+      if (scrollRef.current) scrollRef.current.style.overflowAnchor = '';
+    };
+    void Promise.resolve(onLoadEarlier()).then((came) => {
+      if (!came) nothingCame();
+    }, nothingCame);
+  };
+  useLayoutEffect(() => {
+    const a = earlierAnchorRef.current;
+    const el = scrollRef.current;
+    if (!a || !el || firstId === a.id) return;
+    earlierAnchorRef.current = null;
+    const row = el.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(a.id)}"]`);
+    if (row) el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - a.top;
+    else el.scrollTop = el.scrollHeight - a.fromBottom;
+    lastScrollTopRef.current = el.scrollTop;
+    el.style.overflowAnchor = '';
+    // At the start the button gives way to the start line: focus follows it there.
+    if (a.hadFocus && !earlierBtnRef.current?.isConnected) chatStartRef.current?.focus({ preventScroll: true });
+  }, [firstId]);
+  // Scrolled up to the button: it loads by itself (only once the person has left the bottom, never on open).
+  useEffect(() => {
+    const btn = earlierBtnRef.current;
+    const root = scrollRef.current;
+    if (earlier !== 'more' || !btn || !root || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting) && !stickRef.current) loadEarlier();
+      },
+      { root },
+    );
+    io.observe(btn);
+    return () => io.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [earlier, firstId, viewingHistory]);
   // Back from an older window: land on the newest message
   useEffect(() => {
     if (!viewingHistory) stickRef.current = true;
@@ -2643,6 +2710,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-busy={isStreaming}
           >
         {topCard}
+        {!viewingHistory && messages.length > 0 && (earlier === 'more' || earlier === 'loading') && (
+          <EarlierButton ref={earlierBtnRef} loading={earlier === 'loading'} onLoad={loadEarlier} />
+        )}
+        {!viewingHistory && messages.length > 0 && earlier === 'start' && <ChatStartLine ref={chatStartRef} title={title} firstAt={messages[0].created_at} />}
         {continuedFrom && <ContinuedLine text={continuedFrom.text} onOpen={continuedFrom.onOpen} />}
         {welcome && messages.length === 0 && welcome}
         {showHome && home && (

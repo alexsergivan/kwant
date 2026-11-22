@@ -104,6 +104,7 @@ import { type H4Status, type HeldSend, afterRelease, applyBotStatusEvent, h4Api,
 import { HeldLine } from './components/HeldLine';
 import { type BrowsingMap, expireBrowsing, globeRows, noteBrowser, ownerStillRunning, pruneBrowsing, seedBrowsing, switchEntries } from './watchLive';
 import { LiveMissPage } from './components/WatchLive';
+import { PAGE, mergeLatest, prependOlder, reachedStart } from './chatPages';
 import {
   ChatLoads,
   Delegation,
@@ -942,6 +943,47 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   }, [kwants]);
 
   const chatLoadsRef = useRef(new ChatLoads());
+  // 33k long-chat-loads-earlier: chats whose first message is loaded (nothing earlier left), and the chat
+  // loading its earlier page right now.
+  const [chatStart, setChatStart] = useState<Record<string, boolean>>({});
+  const [olderLoading, setOlderLoading] = useState<string | null>(null);
+  const olderLoadingRef = useRef<string | null>(null);
+  const markStart = (ctx: string, start: boolean) => setChatStart((prev) => (!!prev[ctx] === start ? prev : { ...prev, [ctx]: start }));
+  /** The latest page merged into the cache (earlier pages kept, each id once); says whether the chat is at its start. */
+  const keepEarlier = (ctx: string, latest: ChatMessage[]): ChatMessage[] => {
+    const merged = mergeLatest(messagesCacheRef.current[ctx], latest);
+    messagesCacheRef.current[ctx] = merged;
+    // Merged means the earlier pages stayed, and so did whether they reach the start.
+    if (merged === latest) markStart(ctx, reachedStart(latest));
+    return merged;
+  };
+  /** 33k: loads the page before the chat's first message and puts it in front. True when messages came in front of it. */
+  const loadOlder = async (ctx: string | null | undefined): Promise<boolean> => {
+    const first = ctx ? messagesCacheRef.current[ctx]?.[0] : undefined;
+    if (!ctx || !first || olderLoadingRef.current) return false;
+    olderLoadingRef.current = ctx;
+    setOlderLoading(ctx);
+    try {
+      const base = knownThreadsRef.current.has(ctx) ? `/api/threads/${encodeURIComponent(ctx)}` : `/api/channels/${encodeURIComponent(ctx)}`;
+      const res = await fetch(`${base}/messages?before=${encodeURIComponent(first.id)}&limit=${PAGE}`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const older: ChatMessage[] = await res.json();
+      // The list was replaced meanwhile (a new latest page with a gap): this page no longer joins it.
+      if (messagesCacheRef.current[ctx]?.[0]?.id !== first.id) return false;
+      const next = prependOlder(messagesCacheRef.current[ctx], older);
+      messagesCacheRef.current[ctx] = next;
+      markStart(ctx, reachedStart(older));
+      if (openCtxRef.current !== ctx) return false;
+      setMessages(next);
+      return next[0]?.id !== first.id;
+    } catch {
+      if (openCtxRef.current === ctx) pushToast('Could not load earlier messages.');
+      return false;
+    } finally {
+      olderLoadingRef.current = null;
+      setOlderLoading(null);
+    }
+  };
   /** Loads a chat's latest messages into the cache, and on screen if it's open. */
   const refreshContext = (ctx: string | null | undefined): Promise<void> => {
     if (!ctx) return Promise.resolve();
@@ -958,7 +1000,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         }
         // A newer load of this chat started meanwhile: it has the newer messages
         if (!isLatest()) return;
-        messagesCacheRef.current[ctx] = data;
+        // 33k: keep the earlier pages already loaded in front of the latest page.
+        data = keepEarlier(ctx, data);
         if (openCtxRef.current === ctx) {
           // 22r: on screen now, so a settle after this load (which clears the streamed words) never paints before the saved reply.
           flushSync(() => {
@@ -3016,8 +3059,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const res = await fetch(`/api/channels/${encodeURIComponent(targetId)}/messages`);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const data: ChatMessage[] = await res.json();
-      messagesCacheRef.current[targetId] = data;
+      const data = keepEarlier(targetId, await res.json());
       if (selectedIdRef.current === targetId) setMessages(data);
       if (data.some((m) => m.id === hit.message_id)) {
         setHistoryWindow(null);
@@ -4559,6 +4601,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           messages={viewingHistory ? historyWindow.messages : messages}
           viewingHistory={viewingHistory}
           onJumpToLatest={() => setHistoryWindow(null)}
+          earlier={!openCtx || viewingHistory ? undefined : chatStart[openCtx] ? 'start' : olderLoading === openCtx ? 'loading' : 'more'}
+          onLoadEarlier={() => loadOlder(openCtx)}
           stream={isCurrentContextStreaming ? streamStore : NO_STREAM}
           pendingApprovals={approvalsHere}
           prepush={
