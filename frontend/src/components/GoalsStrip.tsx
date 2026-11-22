@@ -32,6 +32,8 @@ import {
   METRICS,
   MODE_OPTIONS,
   OPEN_GOAL_EVENT,
+  GOAL_NOT_NOW_KEY,
+  takePendingGoal,
   OPERATOR_WORDS,
   PRIORITY_OPTIONS,
   StatusLook,
@@ -1397,7 +1399,7 @@ export const GoalChip: React.FC<{ goal: { id: string; title: string }; onOpen?: 
 type Panel = { kind: 'new' } | { kind: 'form'; seed: string } | { kind: 'edit'; goal: Goal } | { kind: 'goal'; id: string };
 
 const OPEN_KEY = 'kwnt.goals.open';
-const NOT_NOW_KEY = 'kwnt.goals.notnow';
+const NOT_NOW_KEY = GOAL_NOT_NOW_KEY;
 const readJson = <T,>(key: string, fallback: T): T => {
   try {
     const v = localStorage.getItem(key);
@@ -1453,7 +1455,9 @@ export const GoalsStrip: React.FC<{
   openPanel?: 'new' | 'form';
   hidden?: boolean;
   api?: GoalsApi;
-}> = ({ names, bots, spaceId = null, now = Date.now(), onOpenTask, onOpenMission, initial, openGoalId, openPanel, hidden = false, api = goalsApi }) => {
+  /** How many goals the strip draws as Needs you (0 while loading or without Goals): the board's "Waiting on you" adds them. */
+  onNeedsYou?: (n: number) => void;
+}> = ({ names, bots, spaceId = null, now = Date.now(), onOpenTask, onOpenMission, initial, openGoalId, openPanel, hidden = false, api = goalsApi, onNeedsYou }) => {
   const headId = useId();
   const listId = useId();
   const [goals, setGoals] = useState<Goal[] | null>(initial ? initial.goals : null);
@@ -1611,8 +1615,14 @@ export const GoalsStrip: React.FC<{
   useEffect(() => {
     const onOpen = (e: Event) => {
       const id = (e as CustomEvent<{ id?: unknown }>).detail?.id;
-      if (typeof id === 'string' && id) setPanel({ kind: 'goal', id });
+      if (typeof id === 'string' && id) {
+        takePendingGoal();
+        setPanel({ kind: 'goal', id });
+      }
     };
+    // Opened from the Inbox before the board was on screen: open it now.
+    const pending = takePendingGoal();
+    if (pending) setPanel({ kind: 'goal', id: pending });
     window.addEventListener(OPEN_GOAL_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_GOAL_EVENT, onOpen);
   }, []);
@@ -1841,6 +1851,10 @@ export const GoalsStrip: React.FC<{
   const firstMet = useFirstMoment('goal_met', spaceId ?? '', goals ? sorted.map((g) => ({ id: g.id, reached: g.status === 'met' })) : null);
   const [firstDone, setFirstDone] = useState(false);
   const drafts = sorted.filter((g) => g.status === 'draft').length;
+  const needsYouN = sorted.filter((g) => g.status === 'needs_you').length;
+  useEffect(() => {
+    onNeedsYou?.(needsYouN);
+  }, [onNeedsYou, needsYouN]);
   const panelTitle =
     panel?.kind === 'new'
       ? 'New goal'
