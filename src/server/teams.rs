@@ -368,6 +368,15 @@ fn template_plan(t: &Template, req: &Map<String, Value>, key: Option<String>, tz
         }
         Some(_) => return Err(fail_at(StatusCode::BAD_REQUEST, "bad_request", "names must be an object", "names")),
     }
+    // 32p: the names and handle are final here (a taken one is a 409 in the create, never a quiet
+    // suffix), so every text the bots read names the bots and team as they are saved.
+    let renames: Vec<(String, String)> = t
+        .bots
+        .iter()
+        .filter_map(|b| chosen.get(b.slot()).filter(|n| **n != b.name).map(|n| (b.name.clone(), n.clone())))
+        .collect();
+    let new_handle = (handle != t.handle).then_some((t.handle.as_str(), handle.as_str()));
+    let rn = |text: &str| rename_text(text, &renames, new_handle);
     let bots = t
         .bots
         .iter()
@@ -379,13 +388,19 @@ fn template_plan(t: &Template, req: &Map<String, Value>, key: Option<String>, tz
             name: chosen.get(b.slot()).cloned().unwrap_or_else(|| b.name.clone()),
             title: b.title.clone(),
             avatar: b.avatar_sprite.clone(),
-            persona: b.persona.clone(),
-            soul: b.soul.clone(),
+            persona: rn(&b.persona),
+            soul: rn(&b.soul),
             covers: scope_list(&b.good_for),
             avoids: scope_list(&b.not_for),
             existing: None,
         })
         .collect();
+    let instructions = rn(&t.instructions);
+    let skills = template_skills(t, |slot| Some(slot.to_string()))
+        .into_iter()
+        .map(|s| PlanSkill { description: rn(&s.description), body: rn(&s.body), ..s })
+        .collect();
+    let routine = t.routine.as_ref().map(|r| PlanRoutine { owner_slot: r.bot.clone(), name: r.name.clone(), instructions: rn(&r.prompt), cron: r.cron.clone() });
     Ok(Plan {
         template_id: Some(t.id.clone()),
         suggestion_id: None,
@@ -395,15 +410,59 @@ fn template_plan(t: &Template, req: &Map<String, Value>, key: Option<String>, tz
             handle,
             icon: t.icon.clone(),
             description: t.card_line.clone(),
-            instructions: t.instructions.clone(),
+            instructions,
             workspace_path: None,
             repo_url: None,
         },
         bots,
-        skills: template_skills(t, |slot| Some(slot.to_string())),
-        routine: t.routine.as_ref().map(|r| PlanRoutine { owner_slot: r.bot.clone(), name: r.name.clone(), instructions: r.prompt.clone(), cron: r.cron.clone() }),
+        skills,
+        routine,
         tz,
     })
+}
+
+/// 32p: `text` with each template bot name in `names` (`(template name, saved name)`) swapped for
+/// its saved name, and `@old` for `@new` when `handle` is `Some((old, new))`. One pass, longest
+/// name first, so a swap of two names or `Researcher` -> `Researcher2` never applies twice.
+/// Whole words only and case-sensitive: renaming `Writer` leaves `OutreachWriter` and a lower-case
+/// "writer" alone, and `@inbox` leaves `@inbox-two` and `me@inbox` alone.
+fn rename_text(text: &str, names: &[(String, String)], handle: Option<(&str, &str)>) -> String {
+    let wordy = |c: char| c.is_alphanumeric() || c == '_';
+    // (from, to, a handle: `-` continues it)
+    let mut swaps: Vec<(String, String, bool)> = names.iter().filter(|(a, b)| !a.is_empty() && a != b).map(|(a, b)| (a.clone(), b.clone(), false)).collect();
+    if let Some((old, new)) = handle.filter(|(old, new)| !old.is_empty() && old != new) {
+        swaps.push((format!("@{old}"), format!("@{new}"), true));
+    }
+    if swaps.is_empty() {
+        return text.to_string();
+    }
+    swaps.sort_by_key(|(from, _, _)| std::cmp::Reverse(from.len()));
+    let mut out = String::with_capacity(text.len());
+    let (mut i, mut prev) = (0, None::<char>);
+    while i < text.len() {
+        let rest = &text[i..];
+        let hit = (!prev.is_some_and(wordy))
+            .then(|| {
+                swaps.iter().find(|(from, _, is_handle)| {
+                    rest.starts_with(from.as_str()) && !rest[from.len()..].chars().next().is_some_and(|c| wordy(c) || (*is_handle && c == '-'))
+                })
+            })
+            .flatten();
+        match hit {
+            Some((from, to, _)) => {
+                out.push_str(to);
+                i += from.len();
+                prev = from.chars().next_back();
+            }
+            None => {
+                let c = rest.chars().next().expect("i is on a char boundary inside text");
+                out.push(c);
+                i += c.len_utf8();
+                prev = Some(c);
+            }
+        }
+    }
+    out
 }
 
 /// A template's starter skills, each given to the plan slot `owner` maps its bot to.
@@ -1011,6 +1070,40 @@ fn clash_response(clashes: &[Clash], handle_field: &str) -> Response {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn renamed(text: &str, names: &[(&str, &str)], handle: Option<(&str, &str)>) -> String {
+        let names: Vec<(String, String)> = names.iter().map(|(a, b)| (a.to_string(), b.to_string())).collect();
+        rename_text(text, &names, handle)
+    }
+
+    #[test]
+    fn a_rename_touches_whole_names_only() {
+        // 32p unit case: only Writer renamed; OutreachWriter and a lower-case "writer" stay
+        let t = "Writer drafts. OutreachWriter follows up. Ask Writer's editor, not the writer; Writer2 is someone else.";
+        assert_eq!(
+            renamed(t, &[("Writer", "Scribe")], None),
+            "Scribe drafts. OutreachWriter follows up. Ask Scribe's editor, not the writer; Writer2 is someone else."
+        );
+        // Longest first: renaming both picks OutreachWriter before Writer
+        assert_eq!(renamed("OutreachWriter and Writer", &[("Writer", "W"), ("OutreachWriter", "Ow")], None), "Ow and W");
+        // One pass: Researcher -> Researcher2 doesn't grow on its own output, and a swap stays a swap
+        assert_eq!(renamed("Researcher, Researcher.", &[("Researcher", "Researcher2")], None), "Researcher2, Researcher2.");
+        assert_eq!(renamed("Drafter asks Researcher", &[("Drafter", "Researcher"), ("Researcher", "Drafter")], None), "Researcher asks Drafter");
+        // Nothing to rename: the text as it was
+        assert_eq!(renamed("Writer on @helpers", &[("Writer", "Writer")], Some(("helpers", "helpers"))), "Writer on @helpers");
+        assert_eq!(renamed("Ünïcode Bot ok", &[("Bot", "Bøt")], None), "Ünïcode Bøt ok");
+    }
+
+    #[test]
+    fn a_rename_moves_the_handle_and_only_the_handle() {
+        let t = "You are on the @inbox team. Not @inbox-two, @inboxes or me@inbox; @inbox.";
+        assert_eq!(
+            renamed(t, &[], Some(("inbox", "helpers2"))),
+            "You are on the @helpers2 team. Not @inbox-two, @inboxes or me@inbox; @helpers2."
+        );
+        // Name and handle in one text
+        assert_eq!(renamed("Prospector on @sales", &[("Prospector", "Scout")], Some(("sales", "s2"))), "Scout on @s2");
+    }
 
     #[test]
     fn suggestion_ids_are_128_bit_and_distinct() {

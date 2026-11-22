@@ -86,6 +86,14 @@ async fn status_of(env: &Env, kwant: &str) -> Value {
     v["bots"].as_array().unwrap().iter().find(|b| b["kwant_id"] == kwant).cloned().unwrap()
 }
 
+/// Waits until the bot's turn has ended and it reads "available". The reply is in the chat before
+/// the turn leaves the status board (`TurnEndedGuard` ends it as the turn returns), so a single read
+/// right after the reply can still say "working" on a slow runner (32t).
+async fn wait_available(env: &Env, kwant: &str) {
+    wait_for("the turn to end and the bot to be available", || async { status_of(env, kwant).await["status"] == "available" })
+        .await;
+}
+
 /// A 401 posts one line with a fix link; the bot needs the person until a call through that
 /// connection works again.
 #[tokio::test]
@@ -136,6 +144,7 @@ async fn a_401_posts_one_line_with_a_fix_link_and_needs_you_until_it_works() {
     turn(&env, "tf401ok", &call("tf401_2", "mcp__github__list_issues", None)).await;
     assert!(waiting(&env).await.is_empty());
     assert!(inbox_rows(&env).await.is_empty(), "the Inbox row goes once it works");
+    wait_available(&env, &env.a).await;
     assert_eq!(status_of(&env, &env.a).await["status"], "available");
     let lines = failure_lines(&env).await;
     assert_eq!(lines.len(), 1, "a working call posts nothing");
@@ -172,6 +181,7 @@ async fn a_failure_a_retry_fixed_gives_no_line() {
     turn(&env, "tfr", &lines).await;
     assert!(failure_lines(&env).await.is_empty());
     assert!(waiting(&env).await.is_empty());
+    wait_available(&env, &env.a).await;
     assert_eq!(status_of(&env, &env.a).await["status"], "available");
 }
 

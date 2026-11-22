@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.39] - 2026-11-22
+
+kwant 0.9.39: a sales step that waits for a real answer and ready-made teams that come straight back after Undo.
+
+### Fixed
+- In a ready-made Sales team, "Tell the team what you sell" is now ticked only once you answer it: a line starting "What we sell:" with your answer after it, not any first message or a suggested question (#986)
+- After you undo a ready-made team, its tile comes straight back so you can make it again, and a taken team handle is flagged before you press Create (#988)
+- When you rename a bot or the team handle before creating a ready-made team, the new names now reach the bots' instructions, skills and routine too, so no text still points at the old name (#984)
+- When a teammate's reply hands over to another bot, its words keep their author's name until the next bot starts (#987)
+
+## [Mac 0.9.38] - 2026-11-21
+
+kwant 0.9.38: one card per handoff, results that say when a teammate switched accounts and a stopped summary that stays stopped after a restart.
+
+### Fixed
+- When a teammate waits on another before it starts, its handoff card now shows once in the chat, with a short line when its work begins, instead of a second card (#974)
+- In a team chat, a teammate's result now says when it ran on another account after running out of usage or being signed out: a small "on Work Claude" next to "Result from", with the reason when you point at it (#975, #979)
+- When you stop the lead's summary of the team's work, it now stays stopped after kwant restarts: the lead no longer starts reviewing the hand-offs on its own once kwant is back (#982)
+- During a handoff the band's Stop button and the composer's stop button now just say Stop, and a team discussion shows its turn as "turn 2, up to 4" instead of "turn 2 of 4" (#981)
+
 ## [Mac 0.9.37] - 2026-11-21
 
 kwant 0.9.37: a Stop that stops the whole team, add-ons that wait for a busy teammate, team cards that say when a teammate waits for you and plain words when a teammate's model stops.

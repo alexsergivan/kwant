@@ -1,0 +1,24 @@
+{
+  "version": "0.9.38",
+  "date": "2026-11-21",
+  "highlights": [
+    {
+      "id": "handoff-card-shows-once",
+      "title": "One card per handoff",
+      "text": "When a teammate waits on another before starting, you now see its handoff card once, with a short line when the work begins, instead of the same card twice.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "failover-chip-on-team-result",
+      "title": "See when a teammate switched accounts",
+      "text": "When a teammate runs out of usage and carries on with another account, its result in the team chat says so: a small \"on Work Claude\", with the reason when you point at it.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A summary you stopped stays stopped after kwant restarts: the lead no longer starts reviewing on its own.",
+    "During a handoff the Stop button just says Stop, and a team discussion shows its turn as \"turn 2, up to 4\"."
+  ]
+}
