@@ -335,22 +335,27 @@ const AddAccountForm: React.FC<{
 
 type KeyOrLoginSpec = { engine: Profile['engine']; kind: 'cli_home' | 'api_key' };
 
+/** Get started's key panel (32y): the key is required, the name starts as the provider, it becomes the default, no Cancel. */
+export type GetStartedKeyMode = { label: string };
+
 /** "Paste an API key" for an API card (anthropic_api, openai_api, xai_api): the same form as on its card. */
-export const NewKeyAccountForm: React.FC<{ card: string; onCancel: () => void; onCreated: () => void }> = ({ card, onCancel, onCreated }) => {
+export const NewKeyAccountForm: React.FC<{ card: string; onCancel: () => void; onCreated: () => void; getStarted?: GetStartedKeyMode }> = ({ card, onCancel, onCreated, getStarted }) => {
   const spec = newAccountFor(card);
-  return spec && spec.kind === 'api_key' ? <KeyOrLoginForm key={card} spec={spec as KeyOrLoginSpec} onCancel={onCancel} onCreated={onCreated} /> : null;
+  return spec && spec.kind === 'api_key' ? <KeyOrLoginForm key={card} spec={spec as KeyOrLoginSpec} onCancel={onCancel} onCreated={onCreated} getStarted={getStarted} /> : null;
 };
 
 const KeyOrLoginForm: React.FC<{
   spec: KeyOrLoginSpec;
   onCancel: () => void;
   onCreated: () => void;
-}> = ({ spec, onCancel, onCreated }) => {
+  getStarted?: GetStartedKeyMode;
+}> = ({ spec, onCancel, onCreated, getStarted }) => {
   const { engine, kind } = spec;
-  const [name, setName] = useState('');
+  const needKey = !!getStarted && kind === 'api_key';
+  const [name, setName] = useState(getStarted?.label ?? '');
   const [apiKey, setApiKey] = useState('');
   const [homeDir, setHomeDir] = useState('');
-  const [isDefault, setIsDefault] = useState(false);
+  const [isDefault, setIsDefault] = useState(!!getStarted);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const id = `new-${engine}-${kind}`;
@@ -358,6 +363,8 @@ const KeyOrLoginForm: React.FC<{
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim()) return;
+    // Get started: no keyless account, and Enter during a create adds nothing more.
+    if (needKey && (busy || !apiKey.trim())) return;
     setBusy(true);
     setError(null);
     try {
@@ -381,7 +388,9 @@ const KeyOrLoginForm: React.FC<{
   return (
     <form
       onSubmit={submit}
-      {...editorProps(!!(name.trim() || apiKey.trim() || homeDir.trim() || isDefault), onCancel)}
+      {...(getStarted
+        ? editorProps(!!(apiKey.trim() || name.trim() !== getStarted.label || !isDefault))
+        : editorProps(!!(name.trim() || apiKey.trim() || homeDir.trim() || isDefault), onCancel))}
       className="bg-zinc-950/60 border border-sky-500/30 rounded-lg p-3 space-y-3"
       aria-label="New account"
     >
@@ -389,14 +398,30 @@ const KeyOrLoginForm: React.FC<{
         <label htmlFor={`${id}-name`} className="block text-[11px] font-medium text-zinc-400 mb-1">
           Name
         </label>
-        <input id={`${id}-name`} autoFocus required maxLength={60} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Work" className={input} />
+        <input id={`${id}-name`} autoFocus={!needKey} required maxLength={60} value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Work" className={input} />
       </div>
       {kind === 'api_key' ? (
         <div>
           <label htmlFor={`${id}-key`} className="block text-[11px] font-medium text-zinc-400 mb-1">
-            API key <span className="text-zinc-600 font-normal">· can be added later, never shown again</span>
+            API key <span className="text-zinc-500 font-normal">{needKey ? '· never shown again' : '· can be added later, never shown again'}</span>
           </label>
-          <input id={`${id}-key`} type="password" autoComplete="off" spellCheck={false} value={apiKey} onChange={(e) => setApiKey(e.target.value)} className={input} />
+          <input
+            id={`${id}-key`}
+            autoFocus={needKey}
+            type="password"
+            autoComplete="off"
+            spellCheck={false}
+            value={apiKey}
+            onChange={(e) => setApiKey(e.target.value)}
+            aria-describedby={needKey && !apiKey.trim() ? `${id}-key-hint` : undefined}
+            className={input}
+          />
+          {needKey ? (
+            // Kept in place once a key is typed (only hidden), so Add account doesn't jump.
+            <p id={`${id}-key-hint`} data-key-hint className={`mt-1 text-[11px] text-zinc-500${apiKey.trim() ? ' invisible' : ''}`}>
+              Paste your key to continue
+            </p>
+          ) : null}
         </div>
       ) : (
         <div>
@@ -417,10 +442,12 @@ const KeyOrLoginForm: React.FC<{
         </p>
       )}
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onCancel} className={quietBtn}>
-          Cancel
-        </button>
-        <button type="submit" disabled={busy || !name.trim()} className={primaryBtn}>
+        {getStarted ? null : (
+          <button type="button" onClick={onCancel} className={quietBtn}>
+            Cancel
+          </button>
+        )}
+        <button type="submit" disabled={busy || !name.trim() || (needKey && !apiKey.trim())} className={primaryBtn}>
           {busy && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />} Add account
         </button>
       </div>
