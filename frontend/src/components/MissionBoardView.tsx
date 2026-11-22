@@ -432,7 +432,7 @@ export const InsightsStrip: React.FC<{
       hint: 'A bot said done, then the check failed (last 7 days)',
       tone: insights.false_success_7d > 0 ? 'rose' : undefined,
     },
-    { label: 'Waiting on you', value: String(needsNow), hint: 'Board tasks waiting on a question, approval or step from you. Your Inbox can hold more.', tone: needsNow > 0 ? 'amber' : undefined },
+    { label: 'Waiting on you', value: String(needsNow), hint: 'Tasks and goals waiting on a question, approval or step from you.', tone: needsNow > 0 ? 'amber' : undefined },
     typeof blockedMin === 'number'
       ? {
           label: 'Blocked this week',
@@ -2838,6 +2838,8 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
   const [firstDone, setFirstDone] = useState(false);
   const firstVerified = useFirstMoment('verified', spaceId ?? '', tasks ? tasks.map((x) => ({ id: x.id, reached: x.state === 'verified' })) : null);
   const [confirmClear, setConfirmClear] = useState(false);
+  // Goals the strip draws as Needs you: "Waiting on you" counts them with the tasks (33x).
+  const [goalsNeedYou, setGoalsNeedYou] = useState(0);
   const visibleMissions = missions.filter((m) => m.status !== 'cancelled');
   const mission = missionId ? missions.find((m) => m.id === missionId) ?? null : null;
   const showGraph = !!mission && !!onView && view === 'graph';
@@ -2931,7 +2933,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
               {liveShown && <LiveStrip bots={liveShown} teams={teams} workingCards={workingCards} now={now} onOpen={onOpenLive} />}
 
               {firstVerified && !firstDone && <FirstMomentLine kind="verified" onDone={() => setFirstDone(true)} />}
-              <ThisWeek insights={insights} needsYou={needsYouCount(tasks)} />
+              <ThisWeek insights={insights} needsYou={needsYouCount(tasks) + goalsNeedYou} />
               <div className="order-1 lg:order-none space-y-4" data-board-notes>
                 <FactsLedger names={names} taskTitles={taskTitles} onOpenTask={openTaskById} now={now} />
 
@@ -2945,6 +2947,7 @@ export const MissionBoardView: React.FC<MissionBoardViewProps> = ({
                   hidden={!!missionId}
                   onOpenTask={onOpenTaskId ?? openTaskById}
                   onOpenMission={(id) => onMission(id)}
+                  onNeedsYou={setGoalsNeedYou}
                 />
               </div>
 
