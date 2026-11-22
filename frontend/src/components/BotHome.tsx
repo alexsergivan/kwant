@@ -78,6 +78,10 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
   const moods = useKwantMoods(bot ? [] : team.map((k) => k.id));
   const shown = heroOrder(team, (id) => moods[id]).slice(0, 8);
   const extra = team.length - shown.length;
+  // 33r: the bot that needs you (or works) takes the front face (the middle, enlarged one); the 2nd goes right, where
+  // its mood corner isn't covered. A quiet space keeps today's faces.
+  const lead0 = shown.length > 1 && heroState(moods[shown[0].id]) !== null;
+  const faces = !lead0 ? shown.slice(0, 3) : shown.length === 2 ? [shown[1], shown[0]] : [shown[2], shown[0], shown[1]];
   // Breathing is the working signal: only a working bot's glow moves (violet, like its dot).
   const working = useKwantMood(bot?.id) === 'working';
   // Nothing can run yet: the faces sleep (eyes shut) and the glow dims to 20 %.
@@ -100,7 +104,7 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
           </span>
         ) : (
           <span className="relative flex -space-x-5" aria-hidden="true">
-            {shown.slice(0, 3).map((k, i) => (
+            {faces.map((k, i) => (
               <span key={k.id} className={`kw-float rounded-2xl ring-4 ring-[var(--kw-surface-main)] ${i === 1 ? 'z-10 scale-110' : ''}`} style={{ animationDelay: `${i * 300}ms` }}>
                 <ModernAvatar role={k.avatar_sprite} name={k.name} size={72} kwantId={k.id} asleep={asleep} />
               </span>

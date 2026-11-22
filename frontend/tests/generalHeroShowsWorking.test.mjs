@@ -63,7 +63,8 @@ test('busy space: Kit (working, 9th) and Scout (needs you, 11th) come into the f
   assert.match(kit, /Kit<span class="sr-only">, working<\/span>/);
   assert.ok(!ada.includes('sr-only') && !ada.includes('data-hero-state'), 'everyone else stays as today');
   assert.match(ada, /title="Ada&#x27;s job"/);
-  assert.deepEqual(faces(html).slice(0, 3), ['Scout', 'Kit', 'Ada'], 'the big faces follow the same order');
+  assert.deepEqual(faces(html).slice(0, 3), ['Ada', 'Scout', 'Kit'], 'Scout takes the front (middle) face, Kit goes right');
+  assert.match(html, /z-10 scale-110[^>]*><div[^>]*title="Scout needs you"/, 'the front slot is Scout');
   reset();
 });
 
@@ -84,5 +85,18 @@ test("a bot's own home is unchanged by other bots' moods", () => {
   const bot = { id: 'ada', name: 'Ada', title: 'Tech lead', avatar_sprite: 'default', covers: [] };
   const html = m.render({ home: { kind: 'bot', bot }, team });
   assert.ok(!html.includes('data-hero-state') && !html.includes('Scout'));
+  reset();
+});
+
+test('big faces: a 2-bot space with a state puts the 1st in front; quiet keeps list order', () => {
+  reset();
+  const two = team.slice(0, 2);
+  assert.deepEqual(faces(m.render({ home: general, team: two })), ['Ada', 'Lin']);
+  m.setMoodNeedsYou(['lin']);
+  const html = m.render({ home: general, team: two });
+  assert.deepEqual(faces(html), ['Ada', 'Lin'], 'order Lin, Ada becomes faces [Ada, Lin] with Lin in front');
+  assert.match(html, /z-10 scale-110[^>]*><div[^>]*title="Lin needs you"/);
+  m.setMoodNeedsYou(['ada']);
+  assert.deepEqual(faces(m.render({ home: general, team: [team[0]] })), ['Ada'], 'one bot stays as it is');
   reset();
 });
