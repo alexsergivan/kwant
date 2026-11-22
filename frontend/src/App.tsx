@@ -51,7 +51,7 @@ import { AUTO_CLOSE_DELAY_MS, PANE_EXIT_MS, PHONE_PANE_QUERY, type PaneOpener, s
 import { McpSuggestionCard, type SuggestionSignInResult } from './components/McpSuggestionCard';
 import { isSignInDeadEndCode } from './mcpSignInDeadEnd';
 import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
-import type { ConnectionSuggestionMeta } from './connectionSuggestions';
+import { connectSheetFor, type ConnectionSuggestionMeta } from './connectionSuggestions';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
 import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi } from './botActions';
 import { BotActionCard, type BotActionDecision } from './components/BotActionCard';
@@ -398,8 +398,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [appsSection, setAppsSection] = useState<{ section: AppsSection; seq: number } | null>(() =>
     initialView?.kind === 'settings' && initialView.scope === 'space' && initialView.section ? { section: initialView.section, seq: 1 } : null,
   );
+  // A connection card's button: the Connect <App> sheet to open in Apps & accounts (cleared by any other way in).
+  const [connectApp, setConnectApp] = useState<{ slug: string; initial: { picked: string[] }; seq: number } | null>(null);
   const openSpaceSettings = (tab: SpaceSettingsTab = 'general', section?: AppsSection) => {
     setAppsSection(section ? { section, seq: Date.now() } : null);
+    setConnectApp(null);
     setClaudeSignInFocus(0);
     if (tab !== 'routines') setRoutineFocus(null);
     setSettingsScope('space');
@@ -441,6 +444,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     openAppSettings();
   };
   const openConnections = () => openSpaceSettings('apps', 'advanced');
+  // A bot's "suggests a connection" card: Apps & accounts with that app's Connect sheet open and the bot ticked.
+  const openConnectSheet = (meta: ConnectionSuggestionMeta) => {
+    openSpaceSettings('apps', 'apps');
+    setConnectApp({ ...connectSheetFor(meta), seq: Date.now() });
+  };
   // 0.9.0 P5: "See the note" in a chat opens Connections on that one note.
   const [toolNoteFocus, setToolNoteFocus] = useState<string | null>(null);
   const openToolNote = (noteId: string) => {
@@ -491,9 +499,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // The sidebar and chat under Settings: inert while it's open (the space rail stays usable).
   const contentRef = useRef<HTMLDivElement>(null);
   useSettingsCover(!!spaceSettingsTab, contentRef);
+  // Moving between Settings tabs drops the card's sheet too: Apps & accounts remounts on the way back and
+  // would open it again by itself (Rigel's 32x QA defect 1).
+  const changeSpaceSettingsTab = (tab: SpaceSettingsTab) => {
+    setConnectApp(null);
+    setSpaceSettingsTab(tab);
+  };
   const closeSpaceSettings = () => {
     setToolNoteFocus(null);
     setSpaceSettingsTab(null);
+    setConnectApp(null);
     setSettingsFocusRow(null);
     setSettingsClosedCount((n) => n + 1);
     // A key may have been added or removed: the dictation mic asks again.
@@ -1718,8 +1733,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const matchedChannel = teamChannelOf(channelsRef.current, { id: teamId ?? '', name: event.data?.team_name ?? '' });
             const contextId = matchedChannel ? matchedChannel.id : (teamId || selectedIdRef.current);
 
+            // 32s: a reply-mention handoff starts after the replying bot is done, with its words still the live text. Those
+            // words keep their author's name (band "<author> is replying · 1 of N") until DiscussionTurnStarted's swap
+            // moves name and text together. A discussion, or a handoff with no live text, names the next speaker at once.
+            const author = liveRef.current[contextId];
+            const keepAuthor =
+              event.data?.kind === 'handoff' && !!author && author !== initialSpeakerName && !!streamsRef.current[contextId]?.text;
+            const shownSpeaker = keepAuthor ? author : initialSpeakerName;
+
             streamingContextIdRef.current = contextId;
-            markLive(contextId, initialSpeakerName);
+            markLive(contextId, shownSpeaker);
 
             setDiscussionState({
               inProgress: true,
@@ -1727,7 +1750,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               contextId,
               teamName: event.data?.team_name,
               totalTurns: event.data?.total_turns,
-              currentSpeaker: initialSpeakerName,
+              currentSpeaker: shownSpeaker,
               currentTurn: 1,
               kind: event.data?.kind,
             });
@@ -2837,7 +2860,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         messageId={msg.id}
         kwantName={name ?? (msg.sender_id && msg.sender_id.length <= 20 ? msg.sender_id : chatTitle)}
         kwantId={meta.kwant_id ?? undefined}
-        onOpenConnections={openConnections}
+        onOpenConnections={openConnectSheet}
+        recheck={settingsClosedCount}
         flash={flash}
       />
     );
@@ -5039,7 +5063,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           space={space}
           spaces={spaces}
           tab={spaceSettingsTab}
-          onTab={setSpaceSettingsTab}
+          onTab={changeSpaceSettingsTab}
           onClose={closeSpaceSettings}
           kwants={kwants}
           channels={channels}
@@ -5067,6 +5091,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           connections={connectionsPage}
           appsSection={appsSection}
           toolNoteOpen={!!toolNoteFocus}
+          connectApp={connectApp}
           appSettings={
             <Suspense
               fallback={

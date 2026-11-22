@@ -75,6 +75,8 @@ interface Props {
   appsSection?: { section: AppsSection; seq: number } | null;
   /** A bot's tool note was asked for: Advanced opens on it. */
   toolNoteOpen?: boolean;
+  /** A bot's "suggests a connection" card: Apps & accounts opens the Connect <App> sheet with these bots ticked (seq: a fresh sheet per press). */
+  connectApp?: { slug: string; initial: { picked: string[] }; seq: number } | null;
   /** All spaces: the app-wide settings. */
   appSettings: React.ReactNode;
   onOpenArchived: () => void;
@@ -248,7 +250,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
               {tab === 'general' && <GeneralTab {...p} />}
               {tab === 'apps' && (
                 <AppsAccounts
-                  key={space.id}
+                  key={`${space.id}:${p.connectApp?.seq ?? 0}`}
                   spaceName={space.name}
                   spaceMode={space.approvals}
                   kwants={p.kwants}
@@ -256,6 +258,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
                   sectionSeq={p.appsSection?.seq}
                   focusClaudeSignIn={p.focusClaudeSignIn}
                   openAdvanced={p.toolNoteOpen}
+                  initialSheet={p.connectApp ? { slug: p.connectApp.slug, initial: p.connectApp.initial } : undefined}
                   onProfilesChanged={p.onProfilesChanged}
                   manageAccounts={(shared) => <AccountsTab {...p} {...shared} />}
                   advanced={p.connections}

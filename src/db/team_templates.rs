@@ -17,6 +17,36 @@ pub const UNDO_HOURS: i64 = 24;
 pub const IDEMPOTENCY_HOURS: i64 = 24;
 /// The bot action a create is logged as.
 pub const ACTION: &str = "team_template";
+/// How many of the person's messages that mention a need's answer prefix are read to find an
+/// answer (32q). The line check itself is in Rust, so "text after the prefix" is exact.
+pub const NEEDS_SCAN_MESSAGES: i64 = 50;
+
+/// Whether a `composer_prompt` need is done in the team chat `channel_id` (T5, A5). Without an
+/// answer prefix, any message from the person counts (a bot's never does). With one, such as
+/// Sales' "What we sell:", one of the person's latest messages that mention the prefix must have
+/// that line with real text after it ([`crate::teams::templates::answers`]), so the card's own
+/// "Try asking" chip or the empty starter doesn't tick it (32q).
+async fn composer_need_done(conn: &mut sqlx::SqliteConnection, channel_id: &str, answer_prefix: Option<&str>) -> Result<bool, DbError> {
+    let Some(prefix) = answer_prefix.map(str::trim).filter(|p| !p.is_empty()) else {
+        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM messages WHERE channel_id = ? AND sender_role = 'user'")
+            .bind(channel_id)
+            .fetch_one(&mut *conn)
+            .await?;
+        return Ok(n > 0);
+    };
+    // instr on lower() narrows the scan to messages that mention the prefix at all (any case);
+    // `answers` then checks the line exactly.
+    let texts: Vec<(String,)> = sqlx::query_as(
+        "SELECT text FROM messages WHERE channel_id = ? AND sender_role = 'user' AND instr(lower(text), lower(?)) > 0 \
+         ORDER BY created_at DESC, rowid DESC LIMIT ?",
+    )
+    .bind(channel_id)
+    .bind(prefix)
+    .bind(NEEDS_SCAN_MESSAGES)
+    .fetch_all(&mut *conn)
+    .await?;
+    Ok(texts.iter().any(|(t,)| crate::teams::templates::answers(prefix, t)))
+}
 
 /// What to make. Every text in it is already the server's own (template data, preset text,
 /// discovery facts, or a draft from the person's words that the server checked and kept with its
@@ -261,8 +291,9 @@ pub struct TemplateInfo {
     pub archived_chat: Option<String>,
     pub also_in: Vec<AlsoIn>,
     pub edited_skills: Vec<String>,
-    /// Needs (T5) the server can see are done. A `composer_prompt` need, such as Sales'
-    /// `what_you_sell` (A5), is done once the person has posted in the team chat.
+    /// Needs (T5) the server can see are done. A `composer_prompt` need is done once the person
+    /// has posted in the team chat; one with an `answer_prefix`, such as Sales' `what_you_sell`
+    /// (A5, 32q), only once a message of theirs answers it ("What we sell: …").
     pub needs_done: Vec<String>,
 }
 
@@ -463,6 +494,13 @@ impl Database {
         }
     }
 
+    /// Whether a `composer_prompt` need with `answer_prefix` (or none) is done in the chat
+    /// `channel_id`, by the same rule [`Self::team_template_info`] uses for `needs_done` (32q).
+    pub async fn composer_need_done(&self, channel_id: &str, answer_prefix: Option<&str>) -> Result<bool, DbError> {
+        let mut conn = self.pool.acquire().await?;
+        composer_need_done(&mut conn, channel_id, answer_prefix).await
+    }
+
     /// What Undo of `creation` would do, and whether it can (api.md §6).
     pub async fn team_template_info(&self, c: &Creation) -> Result<TemplateInfo, DbError> {
         let mut conn = self.pool.acquire().await?;
@@ -512,23 +550,14 @@ impl Database {
             }
             _ => None,
         };
-        let person_posted = match &c.created.channel_id {
-            Some(ch) => {
-                sqlx::query_as::<_, (i64,)>("SELECT COUNT(*) FROM messages WHERE channel_id = ? AND sender_role = 'user'")
-                    .bind(ch)
-                    .fetch_one(&mut *conn)
-                    .await?
-                    .0
-                    > 0
+        let mut needs_done = Vec::new();
+        if let (Some(t), Some(ch)) = (c.template_id.as_deref().and_then(crate::teams::templates::get), &c.created.channel_id) {
+            for n in t.needs.iter().filter(|n| n.opens == "composer_prompt") {
+                if composer_need_done(&mut conn, ch, n.answer_prefix.as_deref()).await? {
+                    needs_done.push(n.id.clone());
+                }
             }
-            None => false,
-        };
-        let needs_done = c
-            .template_id
-            .as_deref()
-            .and_then(crate::teams::templates::get)
-            .map(|t| t.needs.iter().filter(|n| n.opens == "composer_prompt" && person_posted).map(|n| n.id.clone()).collect())
-            .unwrap_or_default();
+        }
         let mut edited_skills = Vec::new();
         for s in &c.created.skills {
             let edited: Option<(String,)> = sqlx::query_as("SELECT name FROM skills WHERE id = ? AND updated_at > ?")

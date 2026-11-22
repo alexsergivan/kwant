@@ -242,7 +242,7 @@ export const TeamCreatedLine: React.FC<{ handle: string; label: string; createdA
 // ---------------------------------------------------------------------------------------------------
 // T4 toast
 
-export const TeamCreatedToast: React.FC<{ text: string; onUndo?: () => void; onDismiss: () => void; ms?: number }> = ({ text, onUndo, onDismiss, ms = 10_000 }) => {
+export const TeamCreatedToast: React.FC<{ text: string; onUndo?: () => void; onDismiss: () => void; ms?: number }> = ({ text, onUndo, onDismiss, ms = 6_000 }) => {
   const phone = useMedia(PHONE_QUERY);
   const ref = useRef<HTMLDivElement>(null);
   const btn = useRef<HTMLButtonElement>(null);
@@ -251,7 +251,7 @@ export const TeamCreatedToast: React.FC<{ text: string; onUndo?: () => void; onD
     btn.current?.focus({ preventScroll: true });
   }, []);
   useEffect(() => {
-    // It stays 10 s, and while hovered or focused.
+    // It stays 6 s (the Needs card has its own Undo team), and while hovered or focused.
     let left = ms;
     let last = Date.now();
     const id = window.setInterval(() => {
