@@ -584,8 +584,9 @@ async fn customer_text(state: &AppState, space: &str, reply: &str) -> Option<Str
 /// The bot can't or mustn't answer: the customer is told a person will reply, and the person gets
 /// a Needs-you item and a notification that open the thread.
 async fn hand_off(state: &AppState, runner: &CustomerRunner, chat: &CustomerChat, kwant: &Kwant, why: &str) {
-    runner.enqueue(chat.chat_id, copy::HANDED_OFF);
+    // Recorded before the customer is told, so the Needs-you item exists by the time they read it
     let _ = state.db.customer_set_handoff(&runner.space, chat.chat_id, Some(why)).await;
+    runner.enqueue(chat.chat_id, copy::HANDED_OFF);
     super::super::continuity::notify(
         state,
         super::super::continuity::Notification {

@@ -602,7 +602,7 @@ async fn a_fresh_install_inbox_tells_its_lead_about_researcher2() {
 
     // The seeded @helpers' own Researcher is untouched
     let seeded = e.state.db.list_kwants(&e.space).await.unwrap().into_iter().find(|k| k.name == "Researcher").unwrap();
-    assert!(seeded.persona_prompt.contains("You are the Researcher on the @helpers team"), "{}", seeded.persona_prompt);
+    assert!(seeded.persona_prompt.starts_with("You are Researcher, the research analyst on the @helpers team"), "{}", seeded.persona_prompt);
 }
 
 #[tokio::test]
@@ -623,9 +623,53 @@ async fn a_sales_team_with_a_renamed_bot_and_handle_says_them_everywhere() {
         assert!(!says(t, "Prospector"), "{label}: {t}");
         assert!(!says(t, "@sales"), "{label}: {t}");
     }
-    // OutreachWriter wasn't renamed, and its "Outreach Writer" title line has no bot named Writer to follow
+    // OutreachWriter wasn't renamed, and its "outreach writer" role words have no bot named Writer to follow
     assert!(says(text(&texts, "SalesLead persona"), "OutreachWriter"));
-    assert!(text(&texts, "OutreachWriter persona").contains("You are the Outreach Writer on the @helpers2 team"), "{}", text(&texts, "OutreachWriter persona"));
+    assert!(text(&texts, "OutreachWriter persona").starts_with("You are OutreachWriter, the outreach writer on the @helpers2 team"), "{}", text(&texts, "OutreachWriter persona"));
+    assert!(text(&texts, "Scout persona").starts_with("You are Scout, the lead researcher on the @helpers2 team"), "{}", text(&texts, "Scout persona"));
+}
+
+// 32v: the team's instructions speak to the person ("you"), and every persona opens with the bot's
+// name and then its role in lower case, so a renamed bot reads "You are Pixel, the frontend engineer".
+
+#[test]
+fn every_template_speaks_to_you_and_opens_each_persona_with_the_name() {
+    for t in kwnt::teams::templates::all() {
+        assert!(!t.instructions.contains("the person"), "{} instructions: {}", t.id, t.instructions);
+        assert!(t.instructions.contains("\nNever without you\n"), "{} instructions: {}", t.id, t.instructions);
+        for b in &t.bots {
+            let head = format!("You are {}, the ", b.name);
+            assert!(b.persona.starts_with(&head), "{} {}: {}", t.id, b.name, b.persona);
+            // The role words up to the team handle are lower case, so no rename can reach them
+            let role = b.persona[head.len()..].split(" @").next().unwrap();
+            assert!(!role.chars().any(|c| c.is_uppercase()), "{} {} role {role:?}", t.id, b.name);
+        }
+    }
+}
+
+#[tokio::test]
+async fn a_coding_team_with_frontend_renamed_to_pixel_reads_you_are_pixel_the_frontend_engineer() {
+    let e = setup().await;
+    let (s, v) = create(&e, json!({"template_id": "coding", "handle": "web", "names": {"Frontend": "Pixel"}})).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let texts = team_texts(&e, &v).await;
+
+    let pixel = text(&texts, "Pixel persona");
+    assert!(pixel.starts_with("You are Pixel, the frontend engineer on the @web team."), "{pixel}");
+    for (label, t) in &texts {
+        assert!(!t.contains("Pixel Engineer"), "{label}: {t}");
+        assert!(!says(t, "Frontend"), "{label}: {t}");
+    }
+    // The other bots keep their names, and their personas read the same way
+    assert!(text(&texts, "Backend persona").starts_with("You are Backend, the backend engineer on the @web team."));
+    assert!(text(&texts, "QA persona").starts_with("You are QA, the test engineer on the @web team."));
+    assert!(text(&texts, "TechLead persona").starts_with("You are TechLead, the tech lead of the @web team."));
+    assert!(says(text(&texts, "TechLead persona"), "Pixel"), "{}", text(&texts, "TechLead persona"));
+    // The pinned instructions speak to the person and name the renamed bot
+    let instructions = text(&texts, "team instructions");
+    assert!(instructions.contains("Pixel builds screens."), "{instructions}");
+    assert!(instructions.contains("Never without you\n") && instructions.contains("You merge."), "{instructions}");
+    assert!(!instructions.contains("the person") && !instructions.contains("The person"), "{instructions}");
 }
 
 async fn needs_done_of(e: &Env, team_id: &str) -> Value {

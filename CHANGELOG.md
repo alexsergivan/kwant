@@ -8,6 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.41] - 2026-11-22
+
+kwant 0.9.41: "Done while you were away" for a single bot's job, away notifications that say when a bot stopped or is blocked and a clear reply when your AI provider can't be reached.
+
+### Changed
+- An approval card now shows folders in your home as ~/… (hover for the full path), and Allow once leaves a short line in the chat where the bot asked, such as "Drafter wanted to run a command · ✓ You allowed once" (#1002)
+
+### Fixed
+- The Inbox's "Done while you were away" now lists a single bot's finished job (a reply that ends "Done: …"), not only a team's, and each row is titled with the request it answered instead of your newest message that day (#1009)
+- When you're away, a bot whose turn fails in your own chat now sends a notification that it stopped (not when it retries by itself after a usage limit), a reply that ends "Blocked: …" sends "<bot> is blocked" with the reason instead of "<bot> replied", and a reply that ends "Done: …" says what was done; Telegram treats stopped and blocked like other stuck work, and notification settings gain an "A bot stopped or is blocked" switch (#1005)
+- When kwant can't reach the model's server at all (no internet, or a proxy in the way), the reply now says "⚠️ Couldn't reach Anthropic from this computer. Check the internet connection (or proxy), then send again." with the provider's name, instead of "The model request failed: connection failed"; rejected keys, timeouts and Custom API accounts read as before (#1000)
+- When kwant installs uv for the Laya router and the download fails, the Install uv step now fails with curl's own error instead of showing as done and failing at the next step (#999)
+- When a lead hands work to a teammate, its "Delegated to …" card, and the card for a follow-up to that teammate, now shows in the team chat right away instead of only after a reload (#1006)
+
+## [Mac 0.9.40] - 2026-11-22
+
+kwant 0.9.40: a Get started step that says when an AI download fails and a Connect button on a bot's app suggestion.
+
+### Changed
+- New ready-made teams' instructions now speak to you directly ("you" and "we", with a "Never without you" list), and each teammate's persona starts with its own name and role; teams you already made keep their text (#991)
+
+### Fixed
+- In Get started, a failed Claude or Grok download now stops the step with "Couldn't get Claude ready." and Try again instead of spinning, and an install that still leaves no working CLI says so (#995)
+- When a bot suggests connecting an app such as Gmail, its card's button now reads "Connect Gmail" and opens Settings > Apps & accounts with that app's Connect sheet open and the bot already ticked, instead of Advanced; the card says "Connected." once it is (#997)
+- In Get started > Use an API key, Add account now stays off until you paste a key, so no keyless account is made; the account is named after the provider and made the default, and a setup that stalls for 20 seconds offers Try again (#998)
+- When you rename a bot or the handle of a suggested team (such as Coding) before creating it, the new names now reach the bots' instructions, skills and team rules too, as they already do for ready-made teams (#992)
+
 ## [Mac 0.9.39] - 2026-11-22
 
 kwant 0.9.39: a sales step that waits for a real answer and ready-made teams that come straight back after Undo.

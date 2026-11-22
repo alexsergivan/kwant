@@ -104,6 +104,30 @@ fn end_line(reply: &str, head: &str) -> Option<String> {
     (!what.is_empty()).then(|| what.to_string())
 }
 
+/// 33d: the `Done: …` a reply ends with when it hands nothing on by @mention to `teammates`. A
+/// reply that hands on leaves the Done mark to its chain (see [`after_lead_turn`]).
+pub(super) fn solo_done_line(reply: &str, teammates: &[&str]) -> Option<String> {
+    let done = done_line(reply)?;
+    crate::router::handoff_mentions(reply, teammates).targets.is_empty().then_some(done)
+}
+
+/// 33d: the [`DONE_KEY`] the save step stores on `bot`'s reply when the bot finished the person's
+/// request on its own: in the person's chat (not inside a hand-off), with a `Done: …` last line,
+/// handing nothing on by @mention, and with no hand-off of its own from this chat that is open
+/// or was made since the person's last message here. A lead's request with hand-offs is left to
+/// [`after_lead_turn`], which marks its results turn as before. Same shape as [`mark_done`].
+pub(super) async fn solo_done(scope: &TurnScope, bot: &Kwant, reply: &str) -> Option<Value> {
+    if scope.delegation_depth != 0 {
+        return None;
+    }
+    let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
+    let text = solo_done_line(reply, &names)?;
+    let context = scope.context_id(bot);
+    let since = super::routes::last_user_message_at(scope, &context).await;
+    let handed_on = lead_delegations(&scope.state, &context, bot).await.iter().any(|d| d.is_open() || since.is_none_or(|s| d.created_at >= s));
+    (!handed_on).then(|| json!({ "text": text, "at": Utc::now() }))
+}
+
 /// What the chat looked like before a lead turn: whatever isn't here afterwards is new.
 pub(super) struct Snapshot {
     context: String,
@@ -581,6 +605,17 @@ pub(super) async fn card_has(state: &AppState, q: &Question, key: &str) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 33d: a `Done:` last line counts for the save step only when the reply hands nothing on.
+    #[test]
+    fn a_done_line_that_hands_on_is_left_to_the_chain() {
+        let names = ["Checker", "Writer"];
+        assert_eq!(solo_done_line("Saved it.\nDone: 3-day plan saved", &names).as_deref(), Some("3-day plan saved"));
+        assert_eq!(solo_done_line("**Done:** plan saved", &[]).as_deref(), Some("plan saved"));
+        assert_eq!(solo_done_line("@Checker, please check the plan.\nDone: plan drafted", &names), None);
+        assert_eq!(solo_done_line("Saved it.", &names), None);
+        assert_eq!(solo_done_line("Done: \nMore to do", &names), None);
+    }
 
     /// 16d: a customer's message neither starts a new request (so it can't clear what the person's
     /// request still waits on) nor is quoted to the lead as the person's words.

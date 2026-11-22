@@ -37,6 +37,22 @@ export const AllowedFromTelegram: React.FC<{ lead: string }> = ({ lead }) => (
   </div>
 );
 
+/** 33a: the line the chat keeps for an approval the person allowed once in the app. */
+export const ALLOWED_IN_APP = '✓ You allowed once';
+
+/**
+ * 33a: an approval allowed once in the app, kept in the chat like Telegram's line: "Drafter: Bash ·
+ * ✓ You allowed once". No time, so it reads the same live and after a reload.
+ */
+export const AllowedInApp: React.FC<{ lead: string }> = ({ lead }) => (
+  <div className="tg-done flex items-start gap-2 ml-0 sm:ml-[50px] max-w-3xl px-3 py-2 rounded-xl border border-zinc-800 bg-zinc-900/50 text-xs text-zinc-400" data-resolved-via="app">
+    <ShieldCheck size={14} className="mt-0.5 shrink-0 text-info" aria-hidden="true" />
+    <p className="min-w-0 break-words leading-5">
+      {lead} · <b className="font-semibold text-zinc-100">{ALLOWED_IN_APP}</b>
+    </p>
+  </div>
+);
+
 /**
  * A decision that was made in Telegram, kept in the chat: "Drafter asked “Which day?” · You picked
  * Monday · via Telegram · 10:06". `lead` and `outcome` are the record's own words, shown as text.
