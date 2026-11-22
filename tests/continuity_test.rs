@@ -2133,6 +2133,11 @@ async fn approval_push_says_what_the_tool_does_with_the_bots_description() {
     let body = approval_push_body(&state, "g8", "mcp__github__create_issue", mcp).await;
     assert!(body.contains("create_issue") && body.contains("github"), "{body}");
     assert!(!body.contains("ISSUE-BODY-33G"), "{body}");
+
+    // 33u (33g QA Finding 3): an MCP card named `Bash` with an empty server isn't claude's Bash
+    let mcp_bash = json!({"source": "mcp", "server": "", "tool": "Bash", "arguments": {"description": "MCP-BASH-33U"}, "kwant_id": k.id, "kwant_name": "Concierge"});
+    let body = approval_push_body(&state, "g9", "Bash", mcp_bash).await;
+    assert_eq!(body, "Concierge wants to use Bash. Open kwant bots to allow or deny it.");
     assert!(body.ends_with("Open kwant bots to allow or deny it."), "{body}");
     handle.abort();
 }

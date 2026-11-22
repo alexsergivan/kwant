@@ -621,6 +621,8 @@ async fn a_read_cut_off_by_a_restart_runs_again_and_a_waiting_card_is_left_to_th
     let text = note["text"].as_str().unwrap();
     assert!(text.ends_with(". That step doesn't change anything, so Clio is carrying on."), "{text}");
     assert!(!text.contains("checks first") && !text.contains('`') && !text.contains("mcp__"), "{text}");
+    // 33u: the browser step in the browser's words, never "using agent browser snapshot (browser)"
+    assert!(text.contains(", in the middle of reading the browser page. "), "{text}");
     let meta: Value = serde_json::from_str(note["meta"].as_str().unwrap()).unwrap();
     assert_eq!(meta["cut_off_step"], "mcp__browser__agent_browser_snapshot");
     assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 1);

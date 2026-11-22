@@ -8,6 +8,8 @@
 //! `toolLabel`; [`action`] is form 1, `toolAction`), [`SERVERS`] its `SERVERS`, and a tool it
 //! doesn't know falls back to "using {spaced name}" (+ " ({server})"), as there. Keep them in step
 //! so the in-app card and strip, the phone push, Telegram and the chat's notes say the same thing.
+//! `tests/fixtures/tool_words.json` is the one list of names and words both sides are tested on (33u):
+//! the test below and `frontend/tests/toolWordsAgree.test.mjs`.
 //! [`action`] covers built-in tools only: an MCP tool's ask keeps naming itself and its server.
 
 /// How a few well-known servers are written (toolLabel.ts `SERVERS`). Others are shown as they come.
@@ -64,9 +66,23 @@ const VERBS: &[Verb] = &[
     ("edit_file", "changing a file", "change a file", false),
 ];
 
-/// Claude's own built-in names that toolLabel.ts has no key for, and the key they read as. Only
+/// Claude's own built-in names and the key they read as (toolLabel.ts `BUILT_IN_ALIASES`). Only
 /// for a built-in: an MCP server's own `read` tool isn't claude's Read.
 const BUILT_IN_ALIASES: &[(&str, &str)] = &[("read", "read_file"), ("write", "write_file"), ("edit", "edit_file"), ("multiedit", "edit_file")];
+
+/// Claude Code's bundled browser tools, `agent_browser_<x>` (seen as
+/// `mcp__browser__agent_browser_snapshot`), 33u: `<x>` reads as `browser_<x>` when that key exists,
+/// else as the key here, else as `browser_act` ("using the browser"). Never the raw name.
+/// toolLabel.ts `AGENT_BROWSER`.
+const AGENT_BROWSER: &[(&str, &str)] = &[
+    ("back", "browser_open"),
+    ("forward", "browser_open"),
+    ("reload", "browser_open"),
+    ("read", "browser_snapshot"),
+    ("get_text", "browser_snapshot"),
+    ("get_title", "browser_snapshot"),
+    ("get_url", "browser_snapshot"),
+];
 
 /// The built-in tools an approval ask names in words ([`action`]).
 const BUILT_INS: &[&str] = &[
@@ -88,11 +104,17 @@ fn split<'a>(name: &'a str, server: Option<&'a str>) -> (&'a str, Option<&'a str
 
 fn verb(tool: &str, built_in: bool) -> Option<&'static Verb> {
     let lower = tool.trim().to_ascii_lowercase();
-    let key = match BUILT_IN_ALIASES.iter().find(|(a, _)| built_in && *a == lower) {
-        Some((_, k)) => *k,
-        None => lower.as_str(),
-    };
-    VERBS.iter().find(|v| v.0 == key)
+    let find = |key: &str| VERBS.iter().find(|v| v.0 == key);
+    if let Some((_, key)) = BUILT_IN_ALIASES.iter().find(|(a, _)| built_in && *a == lower) {
+        return find(key);
+    }
+    if let Some(v) = find(&lower) {
+        return Some(v);
+    }
+    let x = lower.strip_prefix("agent_browser_")?;
+    find(&format!("browser_{x}"))
+        .or_else(|| AGENT_BROWSER.iter().find(|(a, _)| *a == x).and_then(|(_, key)| find(key)))
+        .or_else(|| find("browser_act"))
 }
 
 fn server_name(s: &str) -> String {
@@ -115,10 +137,12 @@ fn plain(s: &str, spaced: bool) -> String {
 }
 
 /// The plain words after "<bot> wants to" for built-in tool `tool` (matched case-insensitively,
-/// like toolLabel.ts): `Bash` → "run a command". `None` for an MCP tool (a `server`, or an
-/// `mcp__<server>__<tool>` name) and for a tool kwant has no words for: the caller names it.
-pub fn action(tool: &str, server: Option<&str>) -> Option<&'static str> {
-    if server.is_some_and(|s| !s.trim().is_empty()) || tool.starts_with("mcp__") {
+/// like toolLabel.ts): `Bash` → "run a command". `None` for an MCP tool (the card's `source` is
+/// "mcp", a `server`, or an `mcp__<server>__<tool>` name) and for a tool kwant has no words for:
+/// the caller names it. `source` is the card's `details.source`, so an MCP tool named `Bash` with
+/// no server never reads as claude's Bash (33u).
+pub fn action(tool: &str, server: Option<&str>, source: Option<&str>) -> Option<&'static str> {
+    if source == Some("mcp") || server.is_some_and(|s| !s.trim().is_empty()) || tool.starts_with("mcp__") {
         return None;
     }
     if !BUILT_INS.contains(&tool.trim().to_ascii_lowercase().as_str()) {
@@ -151,6 +175,7 @@ pub fn doing(tool: &str, server: Option<&str>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{action, doing, BUILT_INS};
+    use serde_json::Value;
 
     #[test]
     fn built_in_tools_read_as_what_they_do() {
@@ -169,22 +194,30 @@ mod tests {
             ("WebSearch", "search the web"),
             ("websearch", "search the web"),
         ] {
-            assert_eq!(action(tool, None), Some(words), "{tool}");
-            assert_eq!(action(tool, Some("")), Some(words), "{tool}: a blank server is no server");
+            assert_eq!(action(tool, None, None), Some(words), "{tool}");
+            assert_eq!(action(tool, Some(""), None), Some(words), "{tool}: a blank server is no server");
+            assert_eq!(action(tool, None, Some("claude_builtin")), Some(words), "{tool}");
         }
     }
 
     #[test]
     fn mcp_and_unknown_tools_keep_their_names() {
-        assert_eq!(action("Foo", None), None);
-        assert_eq!(action("", None), None);
-        assert_eq!(action("create_issue", Some("github")), None);
+        assert_eq!(action("Foo", None, None), None);
+        assert_eq!(action("", None, None), None);
+        assert_eq!(action("create_issue", Some("github"), None), None);
         // A shell tool on an MCP server is that server's, not claude's Bash
-        assert_eq!(action("bash", Some("shell")), None);
-        assert_eq!(action("mcp__shell__bash", None), None);
+        assert_eq!(action("bash", Some("shell"), None), None);
+        assert_eq!(action("mcp__shell__bash", None, None), None);
+        // 33u (33g QA Finding 3): the card's source decides too, so an MCP card named `Bash` with
+        // an empty or no server isn't claude's Bash either
+        assert_eq!(action("Bash", Some(""), Some("mcp")), None);
+        assert_eq!(action("Bash", None, Some("mcp")), None);
+        assert_eq!(action("Write", None, Some("mcp")), None);
+        // A local shell card is a command, as 33g's Telegram tests pin
+        assert_eq!(action("Bash", None, Some("local_shell")), Some("run a command"));
         // toolLabel.ts knows these, but an approval ask names only built-ins in words
-        assert_eq!(action("send_message", None), None);
-        assert_eq!(action("browser_navigate", None), None);
+        assert_eq!(action("send_message", None, None), None);
+        assert_eq!(action("browser_navigate", None, None), None);
     }
 
     /// 33n: the "-ing" form, as toolLabel.ts form 0 says it.
@@ -213,7 +246,10 @@ mod tests {
             ("mcp__shell__bash", None, "running a command"),
             // Unknown: the spaced name, and the server as it comes
             ("mcp__srv__foo_bar", None, "using foo bar (srv)"),
-            ("mcp__browser__agent_browser_snapshot", None, "using agent browser snapshot (browser)"),
+            // 33u: Claude Code's browser tools read as the browser does, never as their raw name
+            ("mcp__browser__agent_browser_snapshot", None, "reading the browser page"),
+            ("mcp__browser__agent_browser_open", None, "opening a page"),
+            ("mcp__browser__agent_browser_tab_new", None, "using the browser"),
             ("Task", None, "using Task"),
             ("apply-patch", None, "using apply patch"),
             ("", None, "using a tool"),
@@ -228,11 +264,11 @@ mod tests {
     #[test]
     fn every_built_in_ask_has_its_ing_form() {
         for tool in BUILT_INS {
-            assert!(action(tool, None).is_some(), "{tool}");
+            assert!(action(tool, None, None).is_some(), "{tool}");
             let ing = doing(tool, None);
             assert!(!ing.starts_with("using "), "{tool} reads as {ing}");
             // The two forms are one verb: "run a command" / "running a command"
-            let base = action(tool, None).unwrap();
+            let base = action(tool, None, None).unwrap();
             assert_eq!(ing.split(' ').skip(1).collect::<Vec<_>>(), base.split(' ').skip(1).collect::<Vec<_>>(), "{tool}");
         }
     }
@@ -245,5 +281,23 @@ mod tests {
             assert!(words.starts_with("using "), "{tool} → {words}");
         }
         assert_eq!(doing("mcp__x__`rm -rf`", None), "using rm rf (x)");
+    }
+
+    /// 33u: the one list of names and words that `frontend/tests/toolWordsAgree.test.mjs` walks
+    /// too, so the in-app card and strip (toolLabel.ts) and the push, Telegram and restart notes
+    /// (here) say the same step in the same words. `ing` is toolLabel.ts form 0 and [`doing`];
+    /// `base` is form 1, and [`action`] says it when `push` is true (built-ins only), else names the tool.
+    #[test]
+    fn the_shared_list_reads_the_same_here_as_in_the_app() {
+        let cases: Vec<Value> = serde_json::from_str(include_str!("../../tests/fixtures/tool_words.json")).unwrap();
+        assert!(cases.len() >= 30, "{}", cases.len());
+        for c in &cases {
+            let tool = c["tool"].as_str().unwrap();
+            let server = c["server"].as_str();
+            let (ing, base) = (c["ing"].as_str().unwrap(), c["base"].as_str().unwrap());
+            assert_eq!(doing(tool, server), ing, "{tool} {server:?}");
+            let push = c["push"].as_bool().unwrap();
+            assert_eq!(action(tool, server, c["source"].as_str()), push.then_some(base), "{tool} {server:?} {:?}", c["source"]);
+        }
     }
 }

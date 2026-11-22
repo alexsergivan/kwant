@@ -501,8 +501,9 @@ async fn on_approval(state: &AppState, id: &str, tool_name: &str, details: &Valu
     // where it runs. Never the arguments, nor the bot's description of the call (the push has
     // that): a Telegram chat isn't end-to-end encrypted, and they can hold anything the bot typed.
     let tool = details["tool"].as_str().unwrap_or(tool_name);
-    let server = details["server"].as_str();
-    let mut body = match crate::server::tool_words::action(tool, server) {
+    // A blank server is no server: never an empty " on <code></code>" (33u)
+    let server = details["server"].as_str().filter(|s| !s.trim().is_empty());
+    let mut body = match crate::server::tool_words::action(tool, server, details["source"].as_str()) {
         Some(plain) => format!("<b>{}</b> wants to {}", text::escape(&who), text::escape(plain)),
         None => format!("<b>{}</b> wants to use <code>{}</code>", text::escape(&who), text::escape(&clip(tool, 80))),
     };
