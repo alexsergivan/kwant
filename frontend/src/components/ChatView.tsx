@@ -24,7 +24,8 @@ import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
 import { composerStacked, fitPlaceholder, keyboardMode, measureText16, phonePlaceholder } from '../composer';
 import { isNewThing, markNewSeen, subscribeNew } from '../whatsNew';
-import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
+import { ModernApprovalCard, PendingApproval, approvalAction } from './ModernApprovalCard';
+import { placeSettled } from '../settledPlace';
 import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { StreamMarkdown } from './StreamMarkdown';
@@ -36,7 +37,7 @@ import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, foldedAnswerIds, parseMetaObject, parseQuestionMeta } from '../questions';
 import { fromTelegram, sentToTelegram } from '../telegram';
-import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
+import { AllowedFromTelegram, AllowedInApp, ViaTelegram } from './TelegramMarks';
 import { RefusedCustomerCall } from './RefusedCustomerCall';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, foldLiveSteps, hasThinkingText, parseActivityMeta } from '../activity';
@@ -169,12 +170,15 @@ export interface QueuedState {
   named?: boolean;
 }
 
-/** "Drafter: Write" for a resolved approval row; the card's own words, nothing computed. */
+/**
+ * 33a: "Drafter wanted to run a command" for a kept approval line (app or Telegram): the card's own
+ * "<Bot> wants to …" words (approvalAction), in the past.
+ */
 function approvalLead(a: PendingApproval): string {
   const d = (a.details ?? {}) as Record<string, unknown>;
   const who = typeof d.kwant_name === 'string' && d.kwant_name ? d.kwant_name : null;
-  const what = typeof d.summary === 'string' && d.summary ? d.summary : a.tool_name;
-  return who ? `${who}: ${what}` : what;
+  const action = approvalAction(a);
+  return who ? `${who} wanted to ${action}` : `Wanted to ${action}`;
 }
 
 export interface DiscussionState {
@@ -267,7 +271,7 @@ export interface ChatViewProps {
   /** 0.8.0 B3: this bot's pre-push cards (Dev mode), shown above its approvals. */
   prepush?: React.ReactNode;
   /** Approvals answered in Telegram (G4), kept as a resolved row; `refused` marks a customer's call nobody allowed (22d). */
-  settledApprovals?: (PendingApproval & { refused?: true })[];
+  settledApprovals?: (PendingApproval & { refused?: true; via?: 'app' })[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
@@ -586,6 +590,8 @@ const StreamPart = React.memo(function StreamPart({ stream, part, onGrow }: { st
 
 /** 33j: one empty list, so a chat without reroute targets doesn't hand the rows a new array on every render. */
 const NO_REROUTE_TARGETS: Array<{ id: string; name: string; title: string }> = [];
+/** 33j: likewise for kept approval lines, which the rows place among the messages (33a). */
+const NO_SETTLED: NonNullable<ChatViewProps['settledApprovals']> = [];
 
 /**
  * 33j: the loaded message rows, drawn by ChatView through a ref so a keystroke in the composer doesn't redraw them.
@@ -613,7 +619,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   streamingThinking: streamingThinkingProp = '',
   pendingApprovals,
   prepush,
-  settledApprovals = [],
+  settledApprovals = NO_SETTLED,
   isStreaming,
   streamingSpeakerName,
   onSendMessage,
@@ -2223,36 +2229,32 @@ export const ChatView: React.FC<ChatViewProps> = ({
     );
   };
 
-  // 33j: the rows live in MessageRows, which redraws only when something they read changes, never on a keystroke.
-  // Everything renderMessage and the list read (and the handlers they hand the rows use), minus the composer's state
-  // and React's own setters and refs, which never change. A value missing here leaves a row stale: add it.
-  const rowDeps = [
-    // props
-    messages, canRun, title, spaceName, home, threadKind, isStreaming, budgetBotId, ollamaReady, recheckingEngines,
-    rerouteTargets, heldNotes, renderDelegation, renderQuestion, renderHumanStep, renderMcpSuggestion,
-    renderConnectionSuggestion, renderWatchReport, renderBotAction, renderHire, renderRouteChoice, onSendMessage,
-    onOpenComputerSettings, onOpenAccounts, onChangeTeamFolder, onEditBot, onOpenConnections, onOpenToolNote,
-    onRecheckEngines, onRaiseBudget, onOpenUsage, onSendToOtherBot, onChangeDecision, onReact, onOpenSkills,
-    onContinueFrom, onVmOpenByPerson, onToggleVmPane,
-    // ChatView's own
-    listed, askOnly, trialCards, openThoughts, retries, flashId, flashKind, repeatStarts, knownBots, chatBudget,
-    approveId, doneItems, questionId, answered, activeKwants, arranged, liveShareIds, detailsAsk, switchNoteFor,
-    questionOf, approving, phone, replyTo, copiedId, continueError, continuing, newestId, vmOpen,
-  ];
-  const drawRows = () =>
-    groupDiscussionThreads(listed, { foldOpen: askOnly }).map((item, n, items) => {
-      if (item.kind === 'message') {
-        const trial = trialCards.get(item.message.id);
-        const above = items[n - 1];
-        const prev = above?.kind === 'message' && !trialCards.has(above.message.id) ? above.message : undefined;
-        if (!trial) return renderMessage(item.message, prev);
-        return (
-          <Fragment key={item.message.id}>
-            {renderMessage(item.message, prev)}
-            <TrialWaitsCard key={`trial:${trial.skill_id}`} skillId={trial.skill_id} kwantId={item.message.sender_role === 'kwant' ? item.message.sender_id : (item.message.direct_kwant_id ?? item.message.sender_id)} onOpenSkills={onOpenSkills} />
-          </Fragment>
-        );
-      }
+  // 33a: the chat's items, and where each kept approval line sits among them (Mira's fix 1).
+  const chatItems = groupDiscussionThreads(listed, { foldOpen: askOnly });
+  const itemTime = (item: (typeof chatItems)[number]) => (item.kind === 'message' ? item.message.created_at : item.turns[item.turns.length - 1]?.created_at);
+  const settledPlaced = placeSettled(chatItems.map(itemTime), settledApprovals);
+  const renderSettled = (approval: (typeof settledApprovals)[number]) =>
+    approval.refused ? (
+      <RefusedCustomerCall key={approval.id} approval={approval} />
+    ) : approval.via === 'app' ? (
+      <AllowedInApp key={approval.id} lead={approvalLead(approval)} />
+    ) : (
+      <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
+    );
+  const renderItem = (item: (typeof chatItems)[number], n: number, items: typeof chatItems) => {
+    if (item.kind === 'message') {
+      const trial = trialCards.get(item.message.id);
+      const above = items[n - 1];
+      // A kept line between two messages starts the next one's header again.
+      const prev = above?.kind === 'message' && !trialCards.has(above.message.id) && !settledPlaced.after.has(n - 1) ? above.message : undefined;
+      if (!trial) return renderMessage(item.message, prev);
+      return (
+        <Fragment key={item.message.id}>
+          {renderMessage(item.message, prev)}
+          <TrialWaitsCard key={`trial:${trial.skill_id}`} skillId={trial.skill_id} kwantId={item.message.sender_role === 'kwant' ? item.message.sender_id : (item.message.direct_kwant_id ?? item.message.sender_id)} onOpenSkills={onOpenSkills} />
+        </Fragment>
+      );
+    }
       const threadKey = `thread:${item.id}`;
       const isThreadOpen = !!openThoughts[threadKey];
       return (
@@ -2279,7 +2281,34 @@ export const ChatView: React.FC<ChatViewProps> = ({
           )}
         </div>
       );
-    });
+  };
+  // 33j: the rows live in MessageRows, which redraws only when something they read changes, never on a keystroke.
+  // Everything renderMessage and the list read (and the handlers they hand the rows use), minus the composer's state
+  // and React's own setters and refs, which never change. A value missing here leaves a row stale: add it.
+  const rowDeps = [
+    // props
+    messages, canRun, title, spaceName, home, threadKind, isStreaming, budgetBotId, ollamaReady, recheckingEngines,
+    rerouteTargets, settledApprovals, heldNotes, renderDelegation, renderQuestion, renderHumanStep, renderMcpSuggestion,
+    renderConnectionSuggestion, renderWatchReport, renderBotAction, renderHire, renderRouteChoice, onSendMessage,
+    onOpenComputerSettings, onOpenAccounts, onChangeTeamFolder, onEditBot, onOpenConnections, onOpenToolNote,
+    onRecheckEngines, onRaiseBudget, onOpenUsage, onSendToOtherBot, onChangeDecision, onReact, onOpenSkills,
+    onContinueFrom, onVmOpenByPerson, onToggleVmPane,
+    // ChatView's own
+    listed, askOnly, trialCards, openThoughts, retries, flashId, flashKind, repeatStarts, knownBots, chatBudget,
+    approveId, doneItems, questionId, answered, activeKwants, arranged, liveShareIds, detailsAsk, switchNoteFor,
+    questionOf, approving, phone, replyTo, copiedId, continueError, continuing, newestId, vmOpen,
+  ];
+  const drawRows = () => (
+    <>
+      {settledPlaced.after.get(-1)?.map(renderSettled)}
+      {chatItems.map((item, n, items) => {
+        // 33a: kept approval lines sit after the item that came before their card.
+        const linesAfter = settledPlaced.after.get(n);
+        if (linesAfter) return <Fragment key={`settled-after:${item.kind === 'message' ? item.message.id : item.id}`}>{renderItem(item, n, items)}{linesAfter.map(renderSettled)}</Fragment>;
+        return renderItem(item, n, items);
+      })}
+    </>
+  );
   const drawRowsRef = useRef(drawRows);
   drawRowsRef.current = drawRows;
   const drawLiveShares = () => arranged.live.map((m) => renderMessage(m));
@@ -2849,14 +2878,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {liveRowShown && <MessageRows draw={drawLiveSharesRef} deps={rowDeps} />}
 
         {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload;
-            22d: a customer's call nobody allowed, in that customer's chat */}
-        {settledApprovals.map((approval) =>
-          approval.refused ? (
-            <RefusedCustomerCall key={approval.id} approval={approval} />
-          ) : (
-            <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
-          ),
-        )}
+            33a: allowed once here, "✓ You allowed once"; 22d: a customer's call nobody allowed, in that customer's chat.
+            33a: a line whose card came before a later message sits among the messages (renderSettled above); these are
+            the newest ones and the ones with no time. */}
+        {settledPlaced.end.map(renderSettled)}
 
         {/* 0.8.0 B3: checks before this bot pushes */}
         {prepush}
