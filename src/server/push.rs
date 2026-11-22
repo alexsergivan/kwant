@@ -142,7 +142,7 @@ impl Payload {
     /// The person is waiting on these: kept a day and sent at high urgency (a spending stop that
     /// trips overnight still reaches a phone that was off).
     pub fn needs_person(&self) -> bool {
-        matches!(self.kind.as_str(), "approval_needed" | "question_asked" | "human_step" | "spend_stopped")
+        matches!(self.kind.as_str(), "approval_needed" | "question_asked" | "human_step" | "spend_stopped" | "turn_stopped")
     }
 
     pub fn ttl(&self) -> u32 {
@@ -903,6 +903,9 @@ mod tests {
         assert_eq!(p.url, "/?kwant=k1");
         assert_eq!(p.tag, "kwnt-none-turn_finished-k1");
         assert_eq!((p.ttl(), p.urgency()), (3_600, "normal"));
+        // 33e: a bot that stopped or is blocked waits on the person, and the tap opens that bot
+        let p = Payload::new("turn_stopped", "Writer is blocked", "Blocked: the drive isn't mounted.", None, None, "k1".into());
+        assert_eq!((p.url.as_str(), p.ttl(), p.urgency()), ("/?kwant=k1", 86_400, "high"));
         let p = Payload::new("spend_stopped", "Today's spending limit is reached", "Used 8k of 8k tokens.", None, None, String::new());
         assert_eq!((p.url.as_str(), p.tag.as_str()), ("/?notify=spend_stopped", "kwnt-none-spend_stopped-"));
         // F-D1: the held turn's space comes along, so the tap opens that space's Needs you
