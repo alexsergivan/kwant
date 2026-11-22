@@ -148,12 +148,43 @@ fn fix_brief(goal: &Goal, checks: &[GoalCheck], obs: &[crate::db::goals::Observa
     s
 }
 
+/// The Fix task's checks: each required goal check the mission's own checks can run with the same
+/// test the goal uses. A check they can't express exactly is left out, so the Fix can never pass
+/// on a weaker test; the goal's own re-check after the fix still decides.
 fn plan_checks(checks: &[GoalCheck]) -> Vec<PlanCheck> {
-    checks
-        .iter()
-        .filter(|c| c.required())
-        .map(|c| PlanCheck { kind: c.kind.clone(), spec: c.spec_value(), required: Some(true), goal_approved: true })
-        .collect()
+    checks.iter().filter(|c| c.required()).filter_map(fix_check).collect()
+}
+
+/// One goal check as a Fix check, with its predicate carried into the spec, or None when the
+/// mission check can't test what the goal tests: an http check gets `expect_status` (status eq) or
+/// `contains` (body_contains), which `missions::checks` http reads; a command check only for exit
+/// code 0, which is what a command check passes on; the file kinds as they are (they have no
+/// predicate). Everything else (latency, JSON values, stdout, ne) has no mission equivalent.
+fn fix_check(c: &GoalCheck) -> Option<PlanCheck> {
+    use crate::server::goals::predicate;
+    let mut spec = c.spec_value();
+    let pred = match c.metric.as_deref().map(str::trim).filter(|m| !m.is_empty()) {
+        Some(_) => Some(crate::server::goals::predicate_of(c)?),
+        None => predicate::default_predicate(&c.kind),
+    };
+    let op = pred.as_ref().and_then(|p| p.operator.as_deref());
+    match (c.kind.as_str(), pred.as_ref().map(|p| p.metric.as_str())) {
+        ("file_exists" | "file_contains" | "file_sha256", None) => {}
+        ("http", Some("status")) if matches!(op, None | Some("eq")) => {
+            let want = pred.as_ref()?.target.trim().parse::<u16>().ok().filter(|s| (100..=599).contains(s))?;
+            spec.as_object_mut()?.insert("expect_status".into(), want.into());
+        }
+        ("http", Some("body_contains")) => {
+            let needle = pred.as_ref()?.target.clone();
+            if needle.is_empty() {
+                return None;
+            }
+            spec.as_object_mut()?.insert("contains".into(), needle.into());
+        }
+        ("command", Some("exit_code")) if matches!(op, None | Some("eq")) && pred.as_ref()?.target.trim() == "0" => {}
+        _ => return None,
+    }
+    Some(PlanCheck { kind: c.kind.clone(), spec, required: Some(true), goal_approved: true })
 }
 
 // -- notices ----------------------------------------------------------------------------------
