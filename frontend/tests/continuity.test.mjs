@@ -48,6 +48,46 @@ test('groups hits by channel or direct chat, keeping rank order', () => {
   assert.equal(groups[1].kwant_id, 'k1');
 });
 
+test('33i: thread hits group under "<Bot> · <thread title>", never "· bot"', () => {
+  const hit = (id, channel_id, channel_name, kwant_id) => ({ message_id: id, channel_id, channel_name, kwant_id, author: 'a', snippet: '', created_at: null });
+  const th = (id, kwant, thread, title) => ({ ...hit(id, null, null, kwant), thread_id: thread, thread_title: title });
+  const groups = c.groupHits(
+    [th('ask', 'led', 't1', '2025 tax return'), hit('d1', null, null, 'led'), th('ans', 'led', 't1', '2025 tax return'), hit('g1', 'c1', 'general', null), th('x', 'gone', 't2', 'Old job'), th('y', 'led', 't3', '  ')],
+    (id) => (id === 'led' ? 'Ledger' : undefined),
+  );
+  assert.deepEqual(groups.map((g) => [g.label, g.hits.map((h) => h.message_id)]), [
+    ['Ledger · 2025 tax return', ['ask', 'ans']],
+    ['Direct chat · Ledger', ['d1']],
+    ['#general', ['g1']],
+    ['Old job', ['x']],
+    ['Ledger · Untitled conversation', ['y']],
+  ]);
+  assert.equal(groups[0].thread_id, 't1');
+  assert.equal(groups[0].kwant_id, 'led');
+  assert.equal(groups[1].thread_id, null);
+  assert.ok(groups.every((g) => !/· bot$/i.test(g.label)));
+  // An older server sends no thread fields: grouped as before.
+  assert.deepEqual(c.groupHits([hit('2', null, null, 'k1')], () => 'Ada').map((g) => [g.key, g.label, g.thread_id]), [['k:k1', 'Direct chat · Ada', null]]);
+});
+
+test('33i: a thread hit jumps to its thread route, others to the chat route', () => {
+  assert.deepEqual(c.jumpRoute({ message_id: 'm 1', channel_id: null, kwant_id: 'led', thread_id: 't1' }), {
+    kind: 'thread',
+    kwant_id: 'led',
+    thread_id: 't1',
+    ctx: 't1',
+    latest: '/api/threads/t1/messages',
+    around: '/api/threads/t1/messages?around=m%201',
+  });
+  assert.deepEqual(c.jumpRoute({ message_id: 'm', channel_id: null, kwant_id: 'led', thread_id: null }), {
+    kind: 'chat', ctx: 'led', latest: '/api/channels/led/messages', around: '/api/channels/led/messages?around=m',
+  });
+  assert.deepEqual(c.jumpRoute({ message_id: 'm', channel_id: 'c1', kwant_id: null }), {
+    kind: 'chat', ctx: 'c1', latest: '/api/channels/c1/messages', around: '/api/channels/c1/messages?around=m',
+  });
+  assert.equal(c.jumpRoute({ message_id: 'm', channel_id: null, kwant_id: null, thread_id: null }), null);
+});
+
 const form = (over) => ({ ...c.emptyScheduleForm(new Date('2026-10-17T08:00:00Z'), 'Europe/Kyiv'), ...over });
 const NOW = Date.parse('2026-10-17T08:00:00Z');
 
@@ -263,4 +303,60 @@ test('firstLine: the first non-empty line, and whether more follows', () => {
   assert.deepEqual(c.firstLine('\n  \n  Check prices.  \r\nThen post.\n'), { line: 'Check prices.', more: true });
   assert.deepEqual(c.firstLine('Only one\n\n   \n'), { line: 'Only one', more: false });
   assert.deepEqual(c.firstLine(''), { line: '', more: false });
+});
+
+// 33p (brief: autonomy/search-thread-title-first/brief.md): a thread whose title matches the search comes first.
+const h33 = (id, kwant_id, extra = {}) => ({ message_id: id, channel_id: null, channel_name: null, kwant_id, author: 'a', snippet: '', created_at: null, ...extra });
+const t33 = (id, kwant, thread, title) => h33(id, kwant, { thread_id: thread, thread_title: title });
+const names33 = (id) => ({ led: 'Ledger', ada: 'Ada' })[id];
+const order33 = (gs) => gs.map((g) => [g.label, g.hits.map((h) => h.message_id)]);
+
+test('33p: "tax" moves the thread "2025 tax return" ahead of direct chats; the rest keep their order', () => {
+  const hits = [
+    h33('d1', 'led'), h33('d2', 'ada'), h33('d3', 'led'), h33('d4', 'ada'), h33('d5', 'led'), h33('d6', 'led'), h33('d7', 'ada'),
+    t33('ask', 'led', 't1', '2025 tax return'), t33('ans', 'led', 't1', '2025 tax return'),
+  ];
+  assert.deepEqual(order33(c.groupHits(hits, names33, 'tax')), [
+    ['Ledger · 2025 tax return', ['ask', 'ans']],
+    ['Direct chat · Ledger', ['d1', 'd3', 'd5', 'd6']],
+    ['Direct chat · Ada', ['d2', 'd4', 'd7']],
+  ]);
+  assert.deepEqual(order33(c.groupHits(hits, names33, '  Tax  RET ')).map((g) => g[0])[0], 'Ledger · 2025 tax return');
+});
+
+test('33p: matching threads keep their relative order; a non-matching thread stays put; channels never jump', () => {
+  const hits = [
+    h33('g1', null, { channel_id: 'c1', channel_name: 'general' }),
+    t33('o1', 'led', 'tOld', 'Old job'),
+    h33('d1', 'ada'),
+    t33('a1', 'led', 'tA', 'Tax notes 2024'),
+    h33('r1', null, { channel_id: 'c2', channel_name: 'team-core' }),
+    t33('b1', 'ada', 'tB', '2025 tax return'),
+    t33('a2', 'led', 'tA', 'Tax notes 2024'),
+  ];
+  assert.deepEqual(order33(c.groupHits(hits, names33, 'tax')), [
+    ['Ledger · Tax notes 2024', ['a1', 'a2']],
+    ['Ada · 2025 tax return', ['b1']],
+    ['#general', ['g1']],
+    ['Ledger · Old job', ['o1']],
+    ['Direct chat · Ada', ['d1']],
+    ['@core', ['r1']],
+  ]);
+});
+
+test('33p: no query, an empty query or only 1-char words leave the order exactly as before', () => {
+  const hits = [h33('d1', 'ada'), t33('ask', 'led', 't1', '2025 tax return'), h33('g1', null, { channel_id: 'c1', channel_name: 'general' })];
+  const before = c.groupHits(hits, names33);
+  for (const q of [undefined, '', '   ', 'a', 't x']) assert.deepEqual(c.groupHits(hits, names33, q), before, `query ${JSON.stringify(q)}`);
+  assert.deepEqual(order33(before).map((g) => g[0]), ['Direct chat · Ada', 'Ledger · 2025 tax return', '#general']);
+});
+
+test('33p: prefix rule, not substring: "taxes" does not promote "tax return"', () => {
+  const hits = [h33('d1', 'ada'), t33('ask', 'led', 't1', 'tax return'), t33('s1', 'led', 't2', 'Syntax help')];
+  assert.deepEqual(order33(c.groupHits(hits, names33, 'taxes')).map((g) => g[0]), ['Direct chat · Ada', 'Ledger · tax return', 'Ledger · Syntax help']);
+  // "ax" is in "tax" and "Syntax" but starts no word of either title.
+  assert.deepEqual(order33(c.groupHits(hits, names33, 'ax')).map((g) => g[0]), ['Direct chat · Ada', 'Ledger · tax return', 'Ledger · Syntax help']);
+  assert.ok(c.titleMatches('2025 tax return', 'tax ret'));
+  assert.ok(!c.titleMatches('2025 tax return', 'tax refund'));
+  assert.ok(!c.titleMatches(null, 'tax'));
 });

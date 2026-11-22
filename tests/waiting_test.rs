@@ -18,6 +18,7 @@ use kwnt::{
     broker::PermissionBroker,
     config::Config,
     db::{models::Message, Database},
+    drivers::RuntimeEvent,
     router::LayaRouter,
     server::{continuity::SelfScope, create_router, mcp_runtime, waiting, AppState},
     tools::ToolRunner,
@@ -287,4 +288,82 @@ async fn the_waiting_list_is_for_the_person_only() {
     let (s, _) = call(&env.app, "GET", "/api/waiting", None, None).await;
     assert_eq!(s, StatusCode::OK);
     mcp_runtime::finish_turn(&env.state, &token).await;
+}
+
+/// The `reason`s of the `waiting_updated` events for item `id` received so far.
+fn reasons_for(events: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>, id: &str) -> Vec<Value> {
+    let mut out = Vec::new();
+    loop {
+        match events.try_recv() {
+            Ok(RuntimeEvent::WaitingUpdated { item }) if item["id"] == id => out.push(item["reason"].clone()),
+            Ok(_) | Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {}
+            Err(_) => return out,
+        }
+    }
+}
+
+/// 33f (Mira's UX pass at 0.9.38, fix #3): a solo bot (its own chat, no team, depth 0) that ends
+/// with `Blocked: <what>. <what unblocks it>` waits on the person as one that asks does: one
+/// Needs-you item quoting the line, listed by `GET /api/waiting`, with its reminder, closed when the
+/// person writes in that chat (reason person_wrote).
+#[tokio::test]
+async fn a_solo_bots_blocked_reply_waits_on_the_person_until_they_write() {
+    let env = setup().await;
+    let bot = add_bot(&env, "Writer7").await;
+    behave("Writer7", "I looked.\n\nBlocked: the backup drive isn't mounted. Plug it in and tell me to try again.");
+    say_to(&env, &bot, "back up the manuscript").await;
+    let items = waiting_list(&env).await;
+    assert_eq!(items.len(), 1, "{items:?}");
+    let text = items[0]["text"].as_str().unwrap();
+    assert!(text.starts_with("Blocked: the backup drive"), "{text}");
+    assert_eq!(text, "Blocked: the backup drive isn't mounted. Plug it in and tell me to try again.");
+    assert_eq!((items[0]["kind"].as_str(), items[0]["kwant_name"].as_str()), (Some("reply"), Some("Writer7")));
+    assert!(!items[0]["follow_up_at"].is_null(), "{items:?}");
+    let id = items[0]["id"].as_str().unwrap().to_string();
+    // The Inbox's and Home's Needs you list it as a stopped row titled with the line (Retry in the
+    // chat sends the person's message again), and count it
+    let rows = away_rows(&env, &bot).await;
+    assert_eq!(rows.len(), 1, "{rows:?}");
+    assert_eq!((rows[0]["kind"].as_str(), rows[0]["id"].as_str(), rows[0]["title"].as_str()), (Some("stopped"), Some(id.as_str()), Some(text)));
+    assert_eq!(rows[0]["link"]["direct_kwant_id"], bot.as_str());
+    let (_, inbox) = call(&env.app, "GET", "/api/inbox", None, None).await;
+    let row = inbox["items"].as_array().unwrap().iter().find(|i| i["id"] == id.as_str()).cloned();
+    assert_eq!(row.as_ref().map(|r| (r["kind"].as_str(), r["group"].as_str())), Some((Some("stopped"), Some("waiting_on_you"))), "{inbox}");
+
+    // The person writes in that chat: it closes, as an answered question does, and is never reminded
+    let mut events = env.state.event_sender.subscribe();
+    behave("Writer7", "Backed it up.");
+    say_to(&env, &bot, "Plugged in, try again").await;
+    assert!(waiting_list(&env).await.is_empty());
+    assert!(away_rows(&env, &bot).await.is_empty());
+    assert_eq!(reasons_for(&mut events, &id), [json!(waiting::REASON_PERSON_WROTE)]);
+    assert_eq!(waiting::run_due(&env.state, tomorrow()).await, 0);
+    assert_eq!(reminders(&messages(&env, &bot).await), 0);
+}
+
+/// 33f: a reply with no question and no closing `Blocked:` line still opens nothing, also when a
+/// Blocked line is followed by more text (only the last line counts, as for leads).
+#[tokio::test]
+async fn a_reply_without_a_question_or_a_closing_blocked_line_opens_nothing() {
+    let env = setup().await;
+    let plain = add_bot(&env, "Plain8").await;
+    behave("Plain8", "Backed up the manuscript to the drive.");
+    say_to(&env, &plain, "back it up").await;
+    let later = add_bot(&env, "Later8").await;
+    behave("Later8", "Blocked: the drive was busy for a minute.\nIt's free now, so I backed it up.");
+    say_to(&env, &later, "back it up").await;
+    assert!(waiting_list(&env).await.is_empty(), "{:?}", waiting_list(&env).await);
+    // A prose question still only waits for its reminder: Needs you lists only Blocked lines
+    let asks = add_bot(&env, "Asks8").await;
+    behave("Asks8", "Which drive should I use?");
+    say_to(&env, &asks, "back it up").await;
+    assert_eq!(waiting_list(&env).await.len(), 1);
+    assert!(away_rows(&env, &asks).await.is_empty());
+}
+
+/// `GET /api/away`'s waiting rows of bot `id`.
+async fn away_rows(env: &Env, id: &str) -> Vec<Value> {
+    let (s, away) = call(&env.app, "GET", "/api/away", None, None).await;
+    assert_eq!(s, StatusCode::OK, "{away}");
+    away["waiting"].as_array().unwrap().iter().filter(|i| i["kwant_id"] == id).cloned().collect()
 }

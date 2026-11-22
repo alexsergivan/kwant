@@ -130,11 +130,12 @@ export const teamMembers = (i: InboxItem): TeamMember[] => {
   return (Array.isArray(i.members) ? i.members : []).filter((m) => m && m.kwant_id !== lead);
 };
 
-/** "3 bots": the members and the lead. Null when the server named no members. */
+/** "3 bots": the members and the lead. Null when the server named no members, or only the lead (a solo job, 33h). */
 export function teamSize(i: InboxItem): string | null {
   if (!Array.isArray(i.members)) return null;
   const n = teamMembers(i).length + 1;
-  return `${n} ${n === 1 ? 'bot' : 'bots'}`;
+  if (n === 1) return null;
+  return `${n} bots`;
 }
 
 /** "Ann led Ben and Cody", "Ann led Ben, Cody and 2 more"; just "Ann" when nobody was handed work. */
@@ -280,8 +281,9 @@ export function servedDropped(item: InboxItem): number | null {
   return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? Math.floor(n) : null;
 }
 
-/** The trail's heading: "What the team did" for a team job, else "What Ben did". */
-export const trailHeading = (item: InboxItem): string => (isTeamJob(item) ? 'What the team did' : `What ${item.kwant_name} did`);
+/** The trail's heading: "What the team did" for a team job that handed work on, else "What Ben did" (33h: a team of 1 is solo). */
+export const trailHeading = (item: InboxItem): string =>
+  isTeamJob(item) && teamMembers(item).length ? 'What the team did' : `What ${isTeamJob(item) ? teamLead(item).kwant_name : item.kwant_name} did`;
 
 /** "Ann’s answer": a team job's answer is its lead's. */
 export const answerHeading = (item: InboxItem): string => `${isTeamJob(item) ? teamLead(item).kwant_name : item.kwant_name}’s answer`;

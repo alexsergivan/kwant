@@ -133,6 +133,18 @@
   animation: kw-flash 2.4s ease-out;
 }
 
+/* 33q: a chat row far off screen skips style, layout and paint until it scrolls near; it holds an estimated
+   height until drawn once, then its last real one (no visual change). Not while hovered, focused or flashing:
+   the containment this brings would clip a row's menus (they open upward) and the quote-jump ring. Only where the
+   engine has scroll anchoring: a row drawn above the screen grows from the estimate, and without anchoring (WebKit:
+   the Mac app, Safari) the rows on screen would jump by the difference while scrolling up. */
+@supports (overflow-anchor: auto) {
+  .kw-row-lazy:not(:hover):not(:focus-within):not(.kw-flash):not(.kw-flash-quote) {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 160px;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .kw-flash {
     animation: none;
