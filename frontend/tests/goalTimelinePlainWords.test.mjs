@@ -106,6 +106,10 @@ test('c: first check, break, notices and capped notices read as sentences', () =
   const evs = [ev('e1', 'created', {}, 300, 'person'), ev('e2', 'approved', {}, 290, 'person'), ev('e3', 'met', {}, 280), ev('e4', 'not_met', { failing: ['X (it saw 502)'] }, 60), ev('e5', 'met', {}, 10)];
   assert.deepEqual(b.firstMetIds(evs), new Set(['e3']));
   assert.deepEqual(b.firstMetIds(evs.slice(2)), new Set(), 'a page that starts mid-story claims no first check');
+  const failingCheck = [evs[0], ev('c1', 'checked', { verdict: 'not_met' }, 200), ev('f1', 'fix_opened', {}, 100), ev('e9', 'met', {}, 10)];
+  assert.deepEqual(b.firstMetIds(failingCheck), new Set(), 'OK after a failing check or a fix is OK again');
+  const quiet = [evs[0], evs[1], ev('c2', 'checked', { verdict: 'met' }, 285), ev('p1', 'paused', {}, 284, 'person'), ev('r1', 'resumed', {}, 283, 'person'), ev('e3', 'met', {}, 280)];
+  assert.deepEqual(b.firstMetIds(quiet), new Set(['e3']), 'passing checks, pauses and edits before it keep it first');
 });
 
 test('g: a quoted report has no markdown and only its first paragraph', () => {
@@ -131,9 +135,10 @@ test('the drawer timeline tells the week in plain words, with the bot’s name',
     ev('e8', 'investigated', { summary: '## What is failing\n**HTTP 502**\n\n## Likely cause\nDisk' }, 20),
   ];
   const html = b.detailHtml({ detail: b.parseGoalDetail({ goal: g, checks: g.checks, events, fix_tasks: [], missions: [g.open_mission] }), names, now: NOW });
-  const t = text(html);
+  // The timeline only: the decision card above it quotes the whole report, which is not this item.
+  const t = text(html.slice(html.indexOf('data-goal-timeline'), html.indexOf('</ol>', html.indexOf('data-goal-timeline'))));
   for (const line of ['First check: OK', 'Broke: HTTP status = 200 (it saw 502)', 'Told you it broke', 'Didn’t ping you (already alerted today)', 'Patch couldn’t finish looking into it', 'It stopped without a report.', 'Patch looked into it', 'What is failing HTTP 502']) {
     assert.ok(t.includes(line), `${line} in: ${t}`);
   }
-  for (const raw of ['OK again', 'Notified', 'Notice capped', 'no review after', 'The bot looked', '##', '**', 'Likely cause Disk', READY]) assert.ok(!t.includes(raw), `no ${raw}`);
+  for (const raw of ['OK again', 'Notified', 'Notice capped', 'no review after', 'The bot looked', '##', '**', 'Likely cause Disk', READY]) assert.ok(!t.includes(raw), `no ${raw} in: ${t}`);
 });
