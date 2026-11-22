@@ -308,6 +308,53 @@ const NeedsAttention: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: Attention
   );
 };
 
+/** 33l: the most working bots the desktop's Working block shows before "+n more". */
+export const WORKING_MAX = 3;
+
+/**
+ * 33l desktop: who is working (attention rank 5), right under the pinned Needs-you block, in its frame with the same
+ * row copies. Calm: no amber, no hand, no live region (the violet working dot already says it). At most 3 rows, then
+ * "+n more", which scrolls to and focuses the first working bot's own row in the list below. Gone at 0.
+ */
+const WorkingNow: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: AttentionRow<Kwant>) => React.ReactNode }> = ({ rows, row }) => {
+  const box = React.useRef<HTMLElement>(null);
+  const n = rows.length;
+  const more = n - WORKING_MAX;
+  const showFirst = () => {
+    // Only the bots the block doesn't show (Mira's design check 1)
+    const ids = new Set(rows.slice(WORKING_MAX).map((a) => a.kwant.id));
+    const first = [...(box.current?.closest('aside') ?? document).querySelectorAll<HTMLElement>('[data-bot-row]')].find((el) => ids.has(el.dataset.botRow ?? ''));
+    if (!first) return;
+    first.scrollIntoView?.({ block: 'center', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    // Focus from code shows no focus-visible ring after a mouse click: a ring that stays until the row loses focus
+    first.dataset.arrived = '';
+    first.addEventListener('blur', () => delete first.dataset.arrived, { once: true });
+    first.focus({ preventScroll: true });
+  };
+  return (
+    <section ref={box} data-working-now aria-labelledby="working-now-head" className="rounded-xl border border-hairline bg-white/[0.015] my-1.5 pb-1.5">
+      <h2 id="working-now-head" className="px-2 pt-1.5 pb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-[0.06em] text-zinc-400" aria-label={`Working, ${n}`}>
+        <span aria-hidden="true">Working · {n}</span>
+      </h2>
+      <div className="space-y-0.5 px-0.5">
+        {rows.slice(0, WORKING_MAX).map((a) => (
+          <div key={a.kwant.id}>{row(a)}</div>
+        ))}
+      </div>
+      {more > 0 && (
+        <button
+          type="button"
+          data-working-more
+          onClick={showFirst}
+          className="ml-2 mt-0.5 px-1 rounded text-[12px] text-sky-300 hover:underline focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+        >
+          and {more} more below
+        </button>
+      )}
+    </section>
+  );
+};
+
 export const Sidebar: React.FC<SidebarProps> = ({
   space,
   spaces,
@@ -436,6 +483,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // Desktop: ranks 1–4 (0.9 V1 adds To review), pinned above Channels (copies: the team list below keeps every bot in place).
   const inboxAsk = realAskCount(attention) > 0;
   const pinned = !phone && attention ? attention.filter((a) => a.rank <= PINNED_RANK) : [];
+  // 33l: who is working, under Needs you on desktop (copies too; never joins Needs you, PINNED_RANK unchanged)
+  const workingNow = !phone && attention ? attention.filter((a) => a.rank === 5) : [];
   const rankOf = new Map((attention ?? []).map((a) => [a.kwant.id, a.rank]));
 
   const toggleTeam = (id: string) =>
@@ -613,7 +662,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         data-rank={att?.rank}
         aria-describedby={[tipId, pin?.alsoIn ? `pin-also-${k.id}` : null].filter(Boolean).join(' ') || undefined}
         data-chat-row={chat ? (asked ? 'needs' : 'bot') : undefined}
-        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 ${
+        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 data-[arrived]:outline data-[arrived]:outline-2 data-[arrived]:outline-sky-400 ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
       >
@@ -1102,6 +1151,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         )}
 
         {pinned.length > 0 && <NeedsAttention rows={pinned} row={(a) => botRow(a.kwant, undefined, undefined, { att: a, alsoIn: teamOf(a.kwant.id) })} onOpenInbox={onOpenInbox} />}
+        {workingNow.length > 0 && <WorkingNow rows={workingNow} row={(a) => botRow(a.kwant, undefined, undefined, { att: a, alsoIn: teamOf(a.kwant.id) })} />}
 
         {/* Channels Section */}
         {showChats && (
