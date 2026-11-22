@@ -536,7 +536,11 @@ async fn a_reply_cut_off_mid_step_by_a_restart_continues_by_itself_once() {
     let notes: Vec<&Value> = msgs.as_array().unwrap().iter().filter(|m| m["sender_role"] == "system").collect();
     assert_eq!(notes.len(), 1, "{msgs}");
     let text = notes[0]["text"].as_str().unwrap();
-    assert!(text.contains("in the middle of `Bash`") && text.contains("continuing it now"), "{text}");
+    assert_eq!(
+        text,
+        "kwant restarted while Clio was replying, in the middle of running a command, so Clio is continuing it now and checks first whether that step already took effect.",
+        "33n: plain words, no tool id"
+    );
     assert!(!text.contains("Send your message again"), "{text}");
     let meta: Value = serde_json::from_str(notes[0]["meta"].as_str().unwrap()).unwrap();
     assert_eq!(meta["kind"], "turn_resumed_after_restart");
@@ -579,7 +583,8 @@ async fn a_reply_cut_off_mid_send_by_a_restart_asks_the_person_instead_of_contin
     let notes: Vec<&Value> = msgs.as_array().unwrap().iter().filter(|m| m["sender_role"] == "system").collect();
     assert_eq!(notes.len(), 1, "{msgs}");
     let text = notes[0]["text"].as_str().unwrap();
-    assert!(text.contains("in the middle of `mcp__slack__send_message`, which may already have gone out"), "{text}");
+    assert!(text.contains("in the middle of sending a message on Slack, which may already have gone out"), "33n: {text}");
+    assert!(!text.contains('`') && !text.contains("mcp__"), "33n: no tool id: {text}");
     assert!(text.contains("kwant won't run it again by itself"), "{text}");
     assert!(text.ends_with("tell Clio in the chat whether to do it again."), "{text}");
     assert!(!text.contains("Send your message again"), "no blind resend is offered: {text}");
@@ -610,6 +615,14 @@ async fn a_read_cut_off_by_a_restart_runs_again_and_a_waiting_card_is_left_to_th
     env.state.db.add_running_turn(&cut_off_turn("turn-read", &kid, steps_json("mcp__browser__agent_browser_snapshot", true), false)).await.unwrap();
     let mut rx = env.state.event_sender.subscribe();
     assert_eq!(routes::interrupt_running_turns(&env.state).await, 1);
+    // 33n: the chat says the step doesn't change anything, so the bot carries on (no "checks first" worry, no tool id)
+    let (_, msgs) = call(&env.app, "GET", &format!("/api/channels/{kid}/messages"), None).await;
+    let note = msgs.as_array().unwrap().iter().find(|m| m["sender_role"] == "system").expect("a note").clone();
+    let text = note["text"].as_str().unwrap();
+    assert!(text.ends_with(". That step doesn't change anything, so Clio is carrying on."), "{text}");
+    assert!(!text.contains("checks first") && !text.contains('`') && !text.contains("mcp__"), "{text}");
+    let meta: Value = serde_json::from_str(note["meta"].as_str().unwrap()).unwrap();
+    assert_eq!(meta["cut_off_step"], "mcp__browser__agent_browser_snapshot");
     assert_eq!(kwnt::server::parked::run_due(&env.state, chrono::Utc::now()).await, 1);
     let events = wait_turn_end(&mut rx, &kid).await;
     // The ended turn's own running record is removed in the background after TurnEnded; clear it

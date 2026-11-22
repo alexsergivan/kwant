@@ -293,7 +293,8 @@ mod tests {
             let t = turn(&[step("Read", true), step(name, false)], None);
             assert!(prompt(&t).is_none(), "{name} is not continued");
             let line = outward_line(&t, &cut_off_outward(&t).unwrap());
-            assert!(line.contains(&format!("in the middle of `{name}`, which may already have gone out")), "{line}");
+            assert!(line.contains(", which may already have gone out. "), "{line}");
+            assert!(!line.contains(name) && !line.contains('`'), "the person reads plain words, not the tool id: {line}");
             assert!(line.ends_with("then tell Ben in the chat whether to do it again."), "{line}");
         }
         // A shell command or a click is outward when its arguments say so
@@ -329,11 +330,63 @@ mod tests {
         assert!(!p.contains("mid-call"), "{p}");
     }
 
+    /// 33n: the chat note says the cut-off step in plain words, never a backticked tool id. A
+    /// step that acted keeps the "checks first" clause; a step that only read just carries on.
     #[test]
-    fn the_chat_note_names_the_step_that_was_cut_off() {
-        let t = turn(&[step("mcp__slack__send_message", false)], None);
-        assert!(note_text(&t).contains("in the middle of `mcp__slack__send_message`"), "{}", note_text(&t));
-        assert_eq!(note_meta(&t)["cut_off_step"], "mcp__slack__send_message");
+    fn the_chat_note_says_the_cut_off_step_in_plain_words() {
+        let t = turn(&[step("Read", true), step("Bash", false)], None);
+        assert_eq!(
+            note_text(&t),
+            "kwant restarted while Ben was replying, in the middle of running a command, so Ben is continuing it now and checks first whether that step already took effect."
+        );
+        assert_eq!(note_meta(&t)["cut_off_step"], "Bash", "the meta keeps the raw name");
+
+        let t = turn(&[step("WebFetch", false)], None);
+        assert_eq!(note_text(&t), "kwant restarted while Ben was replying, in the middle of opening a page. That step doesn't change anything, so Ben is carrying on.");
+        assert_eq!(note_meta(&t)["cut_off_step"], "WebFetch");
+
+        // An MCP read reads as its server's words; an unknown one as its spaced name and server
+        let t = turn(&[step("mcp__gh__get_file", false)], None);
+        assert_eq!(note_text(&t), "kwant restarted while Ben was replying, in the middle of using get file (gh). That step doesn't change anything, so Ben is carrying on.");
+        let t = turn(&[step("mcp__srv__foo_bar", false)], None);
+        assert!(note_text(&t).contains(", in the middle of using foo bar (srv), so Ben is continuing it now and checks first"), "{}", note_text(&t));
+
+        // No step: today's sentence, byte for byte
         assert_eq!(note_text(&turn(&[], None)), "kwant restarted while Ben was replying, so Ben is continuing it now.");
+        // Only finished steps: nothing was cut off
+        assert_eq!(note_text(&turn(&[step("Bash", true)], None)), "kwant restarted while Ben was replying, so Ben is continuing it now.");
+
+        for name in ["Bash", "Edit", "Write", "WebFetch", "WebSearch", "Read", "mcp__slack__send_message", "mcp__gh__create_pull_request", "mcp__browser__agent_browser_snapshot", "Task", "mcp__x__`q`"] {
+            let text = note_text(&turn(&[step(name, false)], None));
+            assert!(!text.contains('`'), "no backtick in the person's note: {text}");
+            assert!(!text.contains("(in the middle of"), "commas set off the step, never brackets: {text}");
+        }
+    }
+
+    /// 33n: the note when a step that reaches outside was cut off says it in plain words too.
+    #[test]
+    fn the_outward_note_says_the_step_in_plain_words() {
+        let t = turn(&[step("Read", true), step("mcp__slack__send_message", false)], None);
+        let line = outward_line(&t, &cut_off_outward(&t).unwrap());
+        assert_eq!(
+            line,
+            "Ben's reply was cut off when kwant restarted, in the middle of sending a message on Slack, which may already have gone out. \
+             kwant won't run it again by itself. Check whether it went out, then tell Ben in the chat whether to do it again."
+        );
+        let t = turn(&[step("mcp__shop__checkout", false)], None);
+        let line = outward_line(&t, &cut_off_outward(&t).unwrap());
+        assert!(line.contains("in the middle of using checkout (shop), which may already have gone out."), "{line}");
+        // A shell command that pushes
+        let t = turn(&[Step { args: r#"{"command":"git push origin main"}"#.into(), ..step("Bash", false) }], None);
+        let line = outward_line(&t, &cut_off_outward(&t).unwrap());
+        assert!(line.contains("in the middle of running a command, which may already have gone out."), "{line}");
+    }
+
+    /// 33n: the model still gets the exact tool names in its bracketed note.
+    #[test]
+    fn the_models_note_keeps_the_exact_tool_names() {
+        let p = prompt(&turn(&[step("Bash", true), step("WebFetch", false)], None)).unwrap();
+        assert!(p.contains("These steps finished before the restart and may have changed something: `Bash` with {\"x\":1}"), "{p}");
+        assert!(p.contains("The step `WebFetch` with {\"x\":1} was cut off mid-call."), "{p}");
     }
 }
