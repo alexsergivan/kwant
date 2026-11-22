@@ -208,7 +208,7 @@ test('a goal row is two short lines: status, then the fix task, the failing chec
   const fixTask = { id: 't_fix', title: 'Fix: The site stays up: Site answers failing', state: 'ready', held: true, created_at: minsAgo(30) };
   const failed = check({ latest: { status: 'failed', verdict: 'not_met', excerpt: 'HTTP 502', observed_at: minsAgo(10) } });
   const fixing = goal({ status: 'fixing', fix_tasks: [fixTask], spent_tokens: 12_400, checks: [failed] });
-  assert.equal(text(b.rowHtml({ goal: fixing, names, now: NOW })), 'The site stays up Fixing Fix: The site stays up: Site answers failing · fix ready, waiting for your OK');
+  assert.equal(text(b.rowHtml({ goal: fixing, names, now: NOW })), 'The site stays up Fixing Fix: The site stays up: Site answers failing · Ready', '34a: a held fix only reads "fix ready" once the goal needs you with one');
   assert.equal(text(b.rowHtml({ goal: goal({ status: 'not_met', checks: [failed] }), names, now: NOW })), 'The site stays up Failing HTTP status = 200 · Failed · 10 min ago');
   assert.equal(text(b.rowHtml({ goal: goal(), names, now: NOW })), 'The site stays up OK Checked 10 min ago · next in 50 min');
   const html = b.rowHtml({ goal: fixing, names, now: NOW });
@@ -789,6 +789,8 @@ test('server shape: needs_you / fix_ready with a held task is the Fix it decisio
   const none = fixReady({ open_mission: null });
   assert.equal(b.goalDecision(none, [], NOW, null).kind, 'needs_you');
   assert.match(b.needsYouText('fix_ready'), /^Needs you: a fix is ready/);
+  // 34b: a goal no fix can test says so in words, not "no fix check"
+  assert.equal(b.needsYouText('no_fix_check'), 'Needs you: no fix can be tested against its checks');
   // The other Needs you reasons are unchanged.
   assert.equal(b.goalDecision(fixReady({ status_reason: 'budget_spent' }), [], NOW, null).kind, 'needs_you');
 });

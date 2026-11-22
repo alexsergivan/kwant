@@ -43,6 +43,9 @@ import {
   checkObserved,
   clockText,
   currentWorkText,
+  FIX_READY_TEXT,
+  firstMetIds,
+  fixReadyForOk,
   draftFromForm,
   emptyCheckRow,
   eventTaskId,
@@ -472,7 +475,7 @@ export const GoalRow: React.FC<{
             <button type="button" onClick={() => onOpenTask(fixTask.id)} className={`relative z-10 min-w-0 truncate text-left text-sky-300 underline underline-offset-2 hover:text-sky-200 rounded ${focusRing}`} data-open-fix>
               {fixTask.title}
             </button>
-            <span className="shrink-0 text-zinc-500">· {fixTask.held ? 'fix ready, waiting for your OK' : stateLabel(fixTask.state).label}</span>
+            <span className="shrink-0 text-zinc-500">· {fixTask.held && fixReadyForOk(g) ? FIX_READY_TEXT : stateLabel(fixTask.state).label}</span>
           </p>
         ) : work ? (
           <p className="mt-0.5 flex min-w-0 items-center gap-1 text-[11px] text-zinc-400" data-goal-line="work">
@@ -1083,8 +1086,9 @@ const DOT: Record<ReturnType<typeof goalEventTone>, string> = {
 };
 
 /** Oldest first, as the story went: broke → looked into → approved → fixed → verified. */
-export const GoalTimeline: React.FC<{ events: GoalEvent[]; names: Record<string, string>; now: number; onOpenTask?: (id: string) => void }> = ({ events, names, now, onOpenTask }) => {
+export const GoalTimeline: React.FC<{ events: GoalEvent[]; names: Record<string, string>; now: number; bot?: string | null; onOpenTask?: (id: string) => void }> = ({ events, names, now, bot = null, onOpenTask }) => {
   if (events.length === 0) return <p className="text-[11px] text-zinc-500">Nothing has happened yet.</p>;
+  const first = firstMetIds(events);
   return (
     <ol className="space-y-2 border-l border-zinc-800 pl-3" data-goal-timeline>
       {events.map((e) => {
@@ -1093,7 +1097,7 @@ export const GoalTimeline: React.FC<{ events: GoalEvent[]; names: Record<string,
         return (
           <li key={e.id} className="relative text-[11px]" data-event={e.kind}>
             <span className={`absolute -left-[17px] top-1 h-2 w-2 rounded-full ${DOT[goalEventTone(e.kind)]}`} aria-hidden="true" />
-            <span className={`text-zinc-200 ${wrap}`}>{goalEventText(e, names)}</span>
+            <span className={`text-zinc-200 ${wrap}`}>{goalEventText(e, names, { bot, first: first.has(e.id) })}</span>
             {task && onOpenTask && (
               <>
                 {' '}
@@ -1219,7 +1223,7 @@ export const GoalDetailBody: React.FC<{
                       <span className={`text-zinc-200 ${wrap}`}>{m.title}</span>
                     )}
                     {missionLine(m) && <span className="text-zinc-500"> · {missionLine(m)}</span>}
-                    {isOpenMission(m) && m.run_task_id && <span className="text-amber-200"> · fix ready, waiting for your OK</span>}
+                    {isOpenMission(m) && m.run_task_id && fixReadyForOk(g) && <span className="text-amber-200"> · {FIX_READY_TEXT}</span>}
                   </span>
                 </li>
               ))}
@@ -1238,7 +1242,7 @@ export const GoalDetailBody: React.FC<{
                     ) : (
                       <span className={`text-zinc-200 ${wrap}`}>{t.title}</span>
                     )}
-                    <span className="text-zinc-500"> · {t.held ? 'fix ready, waiting for your OK' : stateLabel(t.state).label}</span>
+                    <span className="text-zinc-500"> · {t.held && fixReadyForOk(g) ? FIX_READY_TEXT : stateLabel(t.state).label}</span>
                   </span>
                 </li>
               ))}
@@ -1268,7 +1272,7 @@ export const GoalDetailBody: React.FC<{
 
       <section className="space-y-1.5">
         <h4 className={heading}>What happened</h4>
-        <GoalTimeline events={d.events} names={names} now={now} onOpenTask={onOpenTask} />
+        <GoalTimeline events={d.events} names={names} now={now} bot={g.kwant_id ? names[g.kwant_id] ?? null : null} onOpenTask={onOpenTask} />
       </section>
       {error && (
         <p role="alert" className={`text-[11px] text-rose-300 ${wrap}`} data-goal-detail-error>
