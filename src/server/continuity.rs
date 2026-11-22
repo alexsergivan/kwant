@@ -2038,6 +2038,16 @@ pub async fn notify_in(state: &AppState, n: Notification, space: Option<&crate::
 /// [`notify_in`], marking a `spend_stopped` notification whose held turn was the person's own
 /// message (see [`super::spend_stop`]).
 pub async fn notify_held(state: &AppState, n: Notification, space: Option<&crate::db::spaces::SpaceId>, held_message: bool) {
+    send_notification(state, n, space, held_message, None).await
+}
+
+/// [`notify`] for a goal notice (34d): the push and the app's event name the goal, so a tap opens it on
+/// the Mission board instead of the bot's chat.
+pub async fn notify_goal(state: &AppState, n: Notification, goal_id: &str) {
+    send_notification(state, n, None, false, Some(goal_id.to_string())).await
+}
+
+async fn send_notification(state: &AppState, n: Notification, space: Option<&crate::db::spaces::SpaceId>, held_message: bool, goal_id: Option<String>) {
     if !notify_on(state).await.iter().any(|k| k == n.kind) {
         return;
     }
@@ -2057,7 +2067,8 @@ pub async fn notify_held(state: &AppState, n: Notification, space: Option<&crate
     };
     if !state.push.subscriptions().is_empty() {
         let payload = super::push::Payload::new(n.kind, &title, &body, space_id.clone(), n.channel_id.clone(), n.kwant_id.clone())
-            .at(n.thread_id.clone(), n.card_id.clone());
+            .at(n.thread_id.clone(), n.card_id.clone())
+            .about_goal(goal_id.clone());
         let push = state.push.clone();
         tokio::spawn(async move { push.send_all(&payload).await });
     }
@@ -2073,6 +2084,7 @@ pub async fn notify_held(state: &AppState, n: Notification, space: Option<&crate
         held_message,
         thread_id: n.thread_id,
         card_id: n.card_id,
+        goal_id,
     });
     let Some(url) = state
         .db

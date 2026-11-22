@@ -158,7 +158,7 @@ test('the shell: ?goal= opens the space’s board with the goal pending, and lea
 test('the open app: the worker’s message with goal_id opens the board and the goal; without it, the chat', () => {
   const app = src('App.tsx');
   const handler = app.match(/const onMessage = \(e: MessageEvent\) => \{\s*const m = e\.data;\s*if \(!isNotificationOpen\(m\)\) return;[\s\S]*?\n    \};/)[0];
-  assert.match(handler, /\.\.\.\(m\.goal_id \? \{ goal_id: m\.goal_id \} : \{\}\)/);
+  assert.match(handler, /card_id: m\.card_id \?\? null,\s*goal_id: m\.goal_id \?\? null,/);
   const opened = app.match(/const openNotified = \([\s\S]*?\n  \};/)[0];
   // After the no-bot places, before the bot's chat; the board only when it is on
   assert.match(opened, /else if \(openGoalNotice\(n, missionBoard, showPage\)\) \{\s*\/\/[^\n]*\n\s*\}/);

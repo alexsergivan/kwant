@@ -73,7 +73,10 @@ self.addEventListener('fetch', (event) => {
 function notificationPath(p) {
   if (!p.space_id) return typeof p.url === 'string' && p.url.startsWith('/') && !p.url.startsWith('//') ? p.url : '/';
   const base = `/s/${encodeURIComponent(p.space_id)}`;
-  const card = p.card_id && (p.channel_id || p.kwant_id) ? `?card=${encodeURIComponent(p.card_id)}` : '';
+  // 34d: a goal notice names its goal (the bot stays in the address, so an older page opens its chat)
+  const card = p.card_id && (p.channel_id || p.kwant_id)
+    ? `?card=${encodeURIComponent(p.card_id)}`
+    : p.goal_id && typeof p.goal_id === 'string' ? `?goal=${encodeURIComponent(p.goal_id)}` : '';
   if (p.channel_id) return `${base}/c/${encodeURIComponent(p.channel_id)}${card}`;
   if (p.kwant_id && p.thread_id) return `${base}/b/${encodeURIComponent(p.kwant_id)}/t/${encodeURIComponent(p.thread_id)}${card}`;
   if (p.kwant_id) return `${base}/b/${encodeURIComponent(p.kwant_id)}${card}`;
@@ -109,6 +112,8 @@ self.addEventListener('push', (event) => {
     // 0.8.1 F6: only when the server named them, so older payloads stay as they were
     ...(p.thread_id ? { thread_id: p.thread_id } : {}),
     ...(p.card_id ? { card_id: p.card_id } : {}),
+    // 34d: only on a goal notice
+    ...(p.goal_id ? { goal_id: p.goal_id } : {}),
   };
   event.waitUntil(
     windows().then((list) => {
@@ -152,6 +157,7 @@ self.addEventListener('notificationclick', (event) => {
         // 0.8.1 F6: only when the server named them, so older payloads stay as they were
         ...(d.thread_id ? { thread_id: d.thread_id } : {}),
         ...(d.card_id ? { card_id: d.card_id } : {}),
+        ...(d.goal_id ? { goal_id: d.goal_id } : {}),
       });
       return client.focus().catch(() => self.clients.openWindow(path));
     }),

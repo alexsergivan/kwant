@@ -24,7 +24,8 @@ import {
   spacesApi,
 } from './spaces';
 import { NotifyEvent, TOAST_KINDS, browserNotifyEnabled, notificationPermission, shouldShowOsNotification } from './continuity';
-import { cardFromQuery, isNotificationOpen, placeOfQuery, resyncPushOnLoad, showDeviceNotification, spaceTargetOfNotification, targetFromQuery } from './push';
+import { cardFromQuery, goalFromQuery, goalOfNotification, isNotificationOpen, placeOfQuery, resyncPushOnLoad, showDeviceNotification, spaceTargetOfNotification, targetFromQuery } from './push';
+import { openGoalOnBoard } from './goals';
 import { requestSpendStopFocus } from './spendStop';
 
 const INBOX_NEW: SpaceView = { kind: 'inbox', tab: 'new' };
@@ -123,10 +124,14 @@ export const App: React.FC = () => {
               ...(cardId ? { cardId } : {}),
             }
           : null;
+      // 34d: a goal notice's address (`?goal=<id>`) opens the space's Mission board with the goal's drawer. The bot's
+      // chat stays the target, so with the board off it opens as before; a goal that is gone says so on the board.
+      const goalId = here ? goalFromQuery(window.location.search) : null;
       // An old address (/away, /loose-ends, /connections…) opens its new place, rewritten in place.
-      open(s.id, fromUrl, true, here && 'view' in route ? route.view ?? null : null);
-      // The card is shown once: a reload doesn't flash it again
-      if (cardId && window.location.search) window.history.replaceState(null, '', window.location.pathname);
+      open(s.id, fromUrl, true, goalId ? { kind: 'board' } : here && 'view' in route ? route.view ?? null : null);
+      if (goalId) openGoalOnBoard(goalId);
+      // The card and the goal are shown once: a reload doesn't open them again
+      if ((cardId || goalId) && window.location.search) window.history.replaceState(null, '', window.location.pathname);
     });
   }, [reload, open]);
 
@@ -177,6 +182,20 @@ export const App: React.FC = () => {
     [open, reload],
   );
 
+  // A tap on another space's notification: its chat, or for a goal notice (34d) that space's Mission board with the
+  // goal's drawer (the bot's chat when the board is off there).
+  const goToNotified = useCallback(
+    (sid: string, n: Parameters<typeof spaceTargetOfNotification>[0] & { goal_id?: string | null }) => {
+      const goal = goalOfNotification(n);
+      if (!goal) return switchTo(sid, spaceTargetOfNotification(n));
+      playSfx('click');
+      open(sid, spaceTargetOfNotification(n), false, { kind: 'board' });
+      openGoalOnBoard(goal);
+      reload();
+    },
+    [switchTo, open, reload],
+  );
+
   // Ctrl/⌘ 1–9 switches spaces.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -206,7 +225,7 @@ export const App: React.FC = () => {
         const sid = n.space_id ?? event.space_id;
         if (!sid || sid === currentRef.current) return;
         const name = n.space_name ?? 'another space';
-        const go = () => switchTo(sid, spaceTargetOfNotification(n));
+        const go = () => goToNotified(sid, n);
         reload();
         if (!document.hidden && (TOAST_KINDS as string[]).includes(n.kind)) {
           const id = ++toastIdRef.current;
@@ -220,7 +239,7 @@ export const App: React.FC = () => {
       }
     };
     return () => sse.close();
-  }, [activeCount, switchTo, reload]);
+  }, [activeCount, goToNotified, reload]);
 
   // A tap on a notification from another space (sw.js posts it): switch there. The open space's
   // own are SpaceApp's, which can also open a question or browser step.
@@ -231,11 +250,11 @@ export const App: React.FC = () => {
       const m = e.data;
       if (!isNotificationOpen(m) || !m.space_id || m.space_id === currentRef.current) return;
       if (!spaces?.some((s) => s.id === m.space_id)) return;
-      switchTo(m.space_id, spaceTargetOfNotification(m));
+      goToNotified(m.space_id, m);
     };
     sw.addEventListener('message', onMessage);
     return () => sw.removeEventListener('message', onMessage);
-  }, [spaces, switchTo]);
+  }, [spaces, goToNotified]);
 
   // Re-tell the server about this device's push subscription (it drops one the push service
   // rejected, or on sign-out), once per load.

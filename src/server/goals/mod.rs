@@ -12,7 +12,7 @@ use crate::db::goals::{Goal, GoalCheck, GoalEvent, NewGoal, NewGoalCheck, Observ
 use crate::db::missions::now_ms;
 use crate::db::spaces::SpaceId;
 use crate::drivers::events::RuntimeEvent;
-use crate::server::continuity::{notify, notify_on, Notification};
+use crate::server::continuity::{notify_goal, notify_on, Notification};
 use crate::server::AppState;
 use predicate::Predicate;
 use serde::Deserialize;
@@ -445,7 +445,7 @@ pub async fn notice(state: &AppState, g: &Goal, kind: &str, title: String, body:
         return false;
     };
     let _ = state.db.add_goal_event(&g.id, "notified", "kwant", &json!({ "kind": kind })).await;
-    notify(state, Notification { kind: "goal_alert", kwant_id: bot.id, kwant_name: bot.name, channel_id: None, title, body, thread_id: None, card_id: None }).await;
+    notify_goal(state, Notification { kind: "goal_alert", kwant_id: bot.id, kwant_name: bot.name, channel_id: None, title, body, thread_id: None, card_id: None }, &g.id).await;
     true
 }
 

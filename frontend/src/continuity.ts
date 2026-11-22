@@ -214,6 +214,8 @@ export interface NotifyEvent {
   thread_id?: string | null;
   /** The card to show there: an approval's id (0.8.1 F6). */
   card_id?: string | null;
+  /** The goal a goal notice is about (34d): a tap opens it on the Mission board. */
+  goal_id?: string | null;
 }
 
 // ---------------------------------------------------------------------------

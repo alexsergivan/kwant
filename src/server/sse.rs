@@ -354,6 +354,7 @@ mod tests {
                 held_message: false,
                 thread_id: None,
                 card_id: None,
+                goal_id: None,
             },
         ];
         for e in &all {

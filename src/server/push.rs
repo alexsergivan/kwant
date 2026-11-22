@@ -77,6 +77,9 @@ pub struct Payload {
     /// The card to show there: an approval's id (0.8.1 F6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_id: Option<String>,
+    /// The goal a goal notice is about (34d): a tap opens it on the Mission board. Old service workers ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_id: Option<String>,
 }
 
 impl Payload {
@@ -115,6 +118,7 @@ impl Payload {
             tag,
             thread_id: None,
             card_id: None,
+            goal_id: None,
         }
     }
 
@@ -135,6 +139,22 @@ impl Payload {
                 self.url.push_str(&format!("&card={}", enc(c)));
                 self.card_id = Some(c.to_string());
             }
+        }
+        self
+    }
+
+    /// The same notification about one goal (34d): `&goal=<id>`, kept with `kwant=` so an older page
+    /// still opens the bot, as [`Payload::at`] does for a thread. The tag names the goal, so one goal's
+    /// notice doesn't replace another's, and its next one replaces the last.
+    pub fn about_goal(mut self, goal_id: Option<String>) -> Self {
+        let enc = |s: &str| percent_encoding::utf8_percent_encode(s, QUERY_VALUE).to_string();
+        if self.url.contains("notify=") {
+            return self;
+        }
+        if let Some(g) = goal_id.as_deref().filter(|g| !g.is_empty()) {
+            self.url.push_str(&format!("&goal={}", enc(g)));
+            self.tag = format!("kwnt-{}-{}-{g}", self.space_id.as_deref().unwrap_or("none"), self.kind);
+            self.goal_id = Some(g.to_string());
         }
         self
     }

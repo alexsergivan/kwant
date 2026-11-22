@@ -6,11 +6,15 @@ import { BROWSER_NOTIFY_KEY, NotifyEvent, notificationPermission } from './conti
 import { isIos, isStandalone } from './pwa';
 import { spacePath } from './spaces';
 
-/** Same as the server's push tag: `kwnt-<space|none>-<kind>-<channel|thread|bot>`. */
-export function notificationTag(n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id' | 'thread_id'> & { space_id?: string | null }): string {
+/** Same as the server's push tag: `kwnt-<space|none>-<kind>-<channel|thread|goal|bot>`. */
+export function notificationTag(n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id' | 'thread_id'> & { space_id?: string | null; goal_id?: string | null }): string {
   const thread = !n.channel_id && n.kwant_id && n.thread_id ? n.thread_id : null;
-  return `kwnt-${n.space_id || 'none'}-${n.kind}-${n.channel_id ?? thread ?? n.kwant_id}`;
+  return `kwnt-${n.space_id || 'none'}-${n.kind}-${n.channel_id ?? thread ?? (n.goal_id || null) ?? n.kwant_id}`;
 }
+
+/** 34d: the goal a goal notice is about (`goal_id`), or null. A tap opens it on the Mission board. */
+export const goalOfNotification = (n: { goal_id?: unknown } | null | undefined): string | null =>
+  n && typeof n.goal_id === 'string' && n.goal_id ? n.goal_id : null;
 
 /**
  * Where a tap on the notification goes: the chat's own address (a channel or team chat, the bot's
@@ -22,11 +26,15 @@ export function notificationPath(n: {
   kwant_id?: string | null;
   thread_id?: string | null;
   card_id?: string | null;
+  goal_id?: string | null;
 }): string {
   if (!n.space_id) return '/';
   const botId = n.channel_id ? null : n.kwant_id;
   const path = spacePath(n.space_id, { channelId: n.channel_id, botId, threadId: botId ? n.thread_id : null });
-  return n.card_id && (n.channel_id || botId) ? `${path}?card=${encodeURIComponent(n.card_id)}` : path;
+  if (n.card_id && (n.channel_id || botId)) return `${path}?card=${encodeURIComponent(n.card_id)}`;
+  // 34d: a goal notice keeps its bot in the address (an older page opens the chat) and names the goal
+  const goal = goalOfNotification(n);
+  return goal ? `${path}?goal=${encodeURIComponent(goal)}` : path;
 }
 
 /** What a tap on a notification asks the open app to show (sw.js posts it; App and Shell act on it). */
@@ -39,6 +47,8 @@ export interface NotificationOpen {
   /** 0.8.1 F6; absent from a service worker that predates it. */
   thread_id?: string | null;
   card_id?: string | null;
+  /** 34d: a goal notice's goal; absent on other kinds and from an older service worker. */
+  goal_id?: string | null;
 }
 
 export function isNotificationOpen(m: unknown): m is NotificationOpen {
@@ -57,6 +67,8 @@ export interface QueryTarget {
   threadId?: string | null;
   /** `&card=<id>` (0.8.1 F6): the card to show, an approval's id. */
   cardId?: string | null;
+  /** `&goal=<id>` (34d): a goal notice's goal, opened on the Mission board. */
+  goalId?: string | null;
 }
 
 /**
@@ -76,11 +88,16 @@ export function targetFromQuery(search: string): QueryTarget | null {
   const cardId = channelId || botId ? q.get('card') : null;
   if (threadId) base.threadId = threadId;
   if (cardId) base.cardId = cardId;
+  const goalId = q.get('goal');
+  if (goalId) base.goalId = goalId;
   return base;
 }
 
 /** `?card=<id>` on a chat's own address (a notification's path, the Mac pill): the card to show. */
 export const cardFromQuery = (search: string): string | null => new URLSearchParams(search).get('card') || null;
+
+/** `?goal=<id>` on a goal notice's address (the push url or the worker's path, 34d): the goal to open on the board. */
+export const goalFromQuery = (search: string): string | null => new URLSearchParams(search).get('goal') || null;
 
 /** A tap on a notification that opens today's spending stop (it names no bot or chat). */
 export const opensSpendStop = (n: { kind?: unknown } | null | undefined): boolean => !!n && n.kind === 'spend_stopped';
@@ -298,6 +315,8 @@ export async function showDeviceNotification(
         // 0.8.1 F6: only when named, so a notification without them looks as before
         ...(n.thread_id ? { thread_id: n.thread_id } : {}),
         ...(n.card_id ? { card_id: n.card_id } : {}),
+        // 34d: only on a goal notice
+        ...(n.goal_id ? { goal_id: n.goal_id } : {}),
       },
     });
     return;

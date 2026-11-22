@@ -444,6 +444,9 @@ pub enum RuntimeEvent {
         /// The card to show in that chat: an approval's id (0.8.1 F6).
         #[serde(default, skip_serializing_if = "Option::is_none")]
         card_id: Option<String>,
+        /// The goal a goal notice is about (34d): a tap opens it on the Mission board. Absent on other kinds.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        goal_id: Option<String>,
     },
 }
 
