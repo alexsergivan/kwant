@@ -26,7 +26,7 @@ pub const REPLY_WINDOW_HOURS: i64 = 6;
 /// How often the timers run (pairing expiry, the reply sweep, answered approvals).
 const TICK: Duration = Duration::from_secs(2);
 /// Notify kinds that mean a bot is stuck or stopped (G5 "stuck").
-const STUCK_KINDS: &[&str] = &["delegation_stalled", "routine_failed", "spend_stopped"];
+const STUCK_KINDS: &[&str] = &["delegation_stalled", "routine_failed", "spend_stopped", "turn_stopped"];
 /// Notify kinds that mean work is done (G5 "done", off by default).
 const DONE_KINDS: &[&str] = &["turn_finished", "delegation_finished"];
 /// Choice buttons per row (design G5: two per row).
@@ -1031,6 +1031,15 @@ async fn hhmm(state: &AppState) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_stopped_or_blocked_bot_is_stuck() {
+        // 33e: a bot that stopped or is blocked reaches Telegram like a stalled hand-off
+        assert!(STUCK_KINDS.contains(&"turn_stopped"));
+        assert!(!DONE_KINDS.contains(&"turn_stopped"));
+        let notify = crate::server::continuity::NOTIFY_KINDS;
+        assert!(STUCK_KINDS.iter().chain(DONE_KINDS).all(|k| notify.contains(k)));
+    }
 
     #[test]
     fn unknown_names_lose_their_at_sign_only() {

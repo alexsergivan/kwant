@@ -91,10 +91,16 @@ pub enum RuntimeEvent {
         turn_id: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         thread_id: Option<String>,
-        /// No `turn_finished` notification for this turn: a mission runner turn, whose runner
-        /// notifies once for the task's outcome instead (an AutoFix retry stays silent).
+        /// No notification for this turn: a mission runner turn, whose runner notifies once for
+        /// the task's outcome instead (an AutoFix retry stays silent); for a failed turn also any
+        /// turn outside the person's own chat (a hand-off, routine run, discussion round, unsaved
+        /// view…), which reports its failure where it belongs.
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         quiet: bool,
+        /// A completed turn's reply text, so its notification can say it ended `Blocked:` or
+        /// `Done:` (33e). Server-side only: never sent to the app.
+        #[serde(skip)]
+        reply: Option<std::sync::Arc<str>>,
     },
     /// A turn is waiting for a free slot: its agent already runs as many turns as allowed
     /// (`reason` "agent_busy") or the whole server does ("server_busy"). It starts on its own,
@@ -411,7 +417,8 @@ pub enum RuntimeEvent {
     #[serde(rename = "idea_updated", alias = "IdeaUpdated")]
     IdeaUpdated { id: String, status: String, space_id: String },
     /// Something the user asked to be told about. `kind` is one of `continuity::NOTIFY_KINDS`
-    /// ("turn_finished", "approval_needed", "human_step", …). `body` never holds chat text, tool arguments or secrets.
+    /// ("turn_finished", "approval_needed", "human_step", …). `body` never holds chat text, tool arguments or secrets,
+    /// except a reply's own closing `Blocked:` / `Done:` line (33e), clipped.
     #[serde(rename = "notify", alias = "Notify")]
     Notify {
         kind: String,

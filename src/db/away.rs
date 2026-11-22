@@ -478,12 +478,15 @@ fn task_reply_before_sql(col: &str) -> String {
 
 /// `?` = lead, from, to. `delegations_by_lead` is on `(lead_kwant_id, created_at)`.
 const LEAD_DELEGATIONS: &str =
-    "SELECT * FROM delegations WHERE lead_kwant_id = ? AND created_at >= ? AND created_at <= ? ORDER BY created_at DESC, rowid DESC LIMIT 100";
+    "SELECT * FROM delegations WHERE lead_kwant_id = ? AND created_at >= ? AND created_at < ? ORDER BY created_at DESC, rowid DESC LIMIT 100";
 
 impl Database {
     /// The hand-offs `lead` made between `from` and `to` (at most 100, newest first): a team
-    /// job's members.
+    /// job's members. `to` counts to the end of its second: a message's time is whole seconds
+    /// and a hand-off's keeps its fraction, so one made in the reply's own second is still in.
     pub async fn lead_delegations(&self, lead: &str, from: DateTime<Utc>, to: DateTime<Utc>) -> Result<Vec<Delegation>, DbError> {
+        use chrono::Timelike;
+        let to = to.with_nanosecond(0).unwrap_or(to) + chrono::Duration::seconds(1);
         Ok(sqlx::query_as(LEAD_DELEGATIONS).bind(lead).bind(from).bind(to).fetch_all(&self.pool).await?)
     }
 
@@ -962,6 +965,29 @@ mod tests {
         said_at(&db, "late", "kwant", "Ann", "Done: plan saved", "2026-11-21 10:05:00", Some(done)).await;
         let rows = db.done_replies(utc("2026-11-21 09:00:00"), 10).await.unwrap();
         assert_eq!(rows.iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), ["late"]);
+    }
+
+    /// 33d: a hand-off made in the same second as the `Done:` reply (whole seconds) still counts
+    /// (its time keeps a fraction, which compared after the reply's); the next second doesn't.
+    #[tokio::test]
+    async fn a_hand_off_in_the_done_replys_own_second_is_a_member() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let reply = utc("2026-11-21 10:05:07");
+        for (id, ms) in [("before", -400), ("same", 650), ("next", 1200)] {
+            sqlx::query("INSERT INTO delegations (id, thread_id, lead_kwant_id, specialist_kwant_id, task, title, status, created_at) VALUES (?, 't', 'lead', 'spec', 'task', 'job', 'completed', ?)")
+                .bind(id)
+                .bind(reply + chrono::Duration::milliseconds(ms))
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        let ids = |v: Vec<Delegation>| v.into_iter().map(|d| d.id).collect::<Vec<_>>();
+        let got = ids(db.lead_delegations("lead", utc("2026-11-21 10:05:00"), reply).await.unwrap());
+        assert_eq!(got, ["same", "before"]);
+        // The request's own second is in too (`from` is whole seconds as well)
+        let got = ids(db.lead_delegations("lead", utc("2026-11-21 10:05:06"), utc("2026-11-21 10:05:06")).await.unwrap());
+        assert_eq!(got, ["before"]);
     }
 
     /// 33d: a task's result reply is the bot's first reply from its review within the slack, not

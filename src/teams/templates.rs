@@ -36,6 +36,23 @@ pub struct Need {
     pub required: bool,
     pub opens: String,
     pub done_when: String,
+    /// For a `composer_prompt` need: the line the person's answer starts with ("What we sell:").
+    /// With it, the need is done only when a message of theirs has that line with real text after
+    /// it ([`answers`]); without it, any message of theirs in the team chat counts (32q).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub answer_prefix: Option<String>,
+}
+
+/// Whether `text` answers a need whose answer starts with `prefix`: some line, after leading
+/// spaces, starts with `prefix` (ASCII case aside) and has more than spaces after it on that line.
+/// So the Sales starter as the composer fills it ("What we sell: \n…") is not an answer yet (32q).
+pub fn answers(prefix: &str, text: &str) -> bool {
+    let prefix = prefix.trim();
+    !prefix.is_empty()
+        && text.lines().any(|line| {
+            let line = line.trim_start();
+            line.get(..prefix.len()).is_some_and(|head| head.eq_ignore_ascii_case(prefix)) && !line[prefix.len()..].trim().is_empty()
+        })
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -245,9 +262,45 @@ mod tests {
         assert_eq!(n.why, "Three short answers in this chat. Leads are only as good as this.");
         assert!(n.required);
         assert_eq!(n.opens, "composer_prompt");
-        assert_eq!(n.done_when, "The person has posted a message in @sales");
+        assert_eq!(n.done_when, "The person has said what they sell");
+        assert_eq!(n.answer_prefix.as_deref(), Some("What we sell:"));
+        // Only this need has an answer prefix; the others keep their own rules
+        let prefixed: Vec<_> = all().iter().flat_map(|t| t.needs.iter().filter(|n| n.answer_prefix.is_some()).map(move |n| (t.id.as_str(), n.id.as_str()))).collect();
+        assert_eq!(prefixed, [("sales", "what_you_sell")]);
         let composer: Vec<_> = all().iter().flat_map(|t| t.needs.iter().filter(|n| n.opens == "composer_prompt").map(move |n| (t.id.as_str(), n.id.as_str()))).collect();
         assert_eq!(composer, [("sales", "what_you_sell")]);
+    }
+
+    /// 32q: the composer starter the Tell the team button fills in (frontend SELL_STARTER) and the
+    /// server's answer prefix are one string, and the starter as filled in is not an answer yet.
+    #[test]
+    fn sell_starter_shares_the_answer_prefix() {
+        let ts = include_str!("../../frontend/src/teams/teamTemplates.ts");
+        let line = ts.lines().find(|l| l.starts_with("export const SELL_STARTER = '")).expect("teamTemplates.ts has SELL_STARTER");
+        let starter = line.trim_start_matches("export const SELL_STARTER = '").trim_end_matches("';").replace("\\n", "\n");
+        let prefix = get("sales").unwrap().needs.iter().find(|n| n.id == "what_you_sell").unwrap().answer_prefix.clone().unwrap();
+        assert!(starter.starts_with(&prefix), "SELL_STARTER {starter:?} must start with {prefix:?}");
+        assert!(!answers(&prefix, &starter), "the empty starter is not an answer");
+        assert!(answers(&prefix, &starter.replacen(&prefix, &format!("{prefix} bookkeeping for dentists"), 1)));
+    }
+
+    #[test]
+    fn answers_needs_text_after_the_prefix_on_that_line() {
+        let p = "What we sell:";
+        for (text, want) in [
+            ("Find 10 companies like our best customer", false),
+            ("What we sell:", false),
+            ("What we sell:   \t", false),
+            ("What we sell: \nbookkeeping for dentists", false),
+            ("I'll tell you What we sell: later", false),
+            ("What we sell: bookkeeping for dentists", true),
+            ("Hi!\n  What we sell: bookkeeping for dentists\nWho our best customer is: ", true),
+            ("what we sell: bookkeeping", true),
+            ("What we sell:x", true),
+        ] {
+            assert_eq!(answers(p, text), want, "{text:?}");
+        }
+        assert!(!answers("", "anything"), "an empty prefix never matches");
     }
 
     #[test]

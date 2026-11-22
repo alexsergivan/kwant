@@ -34,7 +34,7 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 18] = [
+pub const NOTIFY_KINDS: [&str; 19] = [
     "turn_finished",
     "approval_needed",
     "routine_failed",
@@ -53,6 +53,7 @@ pub const NOTIFY_KINDS: [&str; 18] = [
     "idea_ready",
     "spend_stopped",
     "turn_quiet",
+    "turn_stopped",
 ];
 const MASK: &str = "••••••••";
 
@@ -2021,7 +2022,8 @@ pub struct Notification {
 }
 
 /// Sends `n` to the UI, the webhook and push subscriptions, if the user wants this kind. The body never holds chat
-/// text, tool arguments or settings, so nothing secret reaches the phone service.
+/// text, tool arguments or settings, so nothing secret reaches the phone service. The one exception (33e) is a
+/// reply's own closing `Blocked:` / `Done:` line, written for the person, masked for keys and clipped.
 pub async fn notify(state: &AppState, n: Notification) {
     notify_in(state, n, None).await
 }
@@ -2198,16 +2200,24 @@ async fn turn_thread(state: &AppState, kwant_id: &str, channel_id: Option<&str>,
     }
 }
 
-/// "<bot> finished replying in <place>", for a turn of `kwant_id` in `context_id`.
-pub async fn turn_finished(state: &AppState, kwant_id: &str, context_id: Option<&str>) -> Notification {
+/// A notification about a turn of `kwant_id` in `context_id`; `say(name, place)` gives its
+/// title and body.
+async fn turn_note(
+    state: &AppState,
+    kind: &'static str,
+    kwant_id: &str,
+    context_id: Option<&str>,
+    say: impl FnOnce(&str, &str) -> (String, String),
+) -> Notification {
     let name = kwant_name(state, kwant_id).await;
     let (channel_id, where_) = place(state, context_id).await;
     let thread_id = turn_thread(state, kwant_id, channel_id.as_deref(), context_id).await;
+    let (title, body) = say(&name, &where_);
     Notification {
-        kind: "turn_finished",
+        kind,
         kwant_id: kwant_id.to_string(),
-        title: format!("{name} replied"),
-        body: format!("{name} finished replying in {where_}."),
+        title,
+        body,
         kwant_name: name,
         channel_id,
         thread_id,
@@ -2215,21 +2225,93 @@ pub async fn turn_finished(state: &AppState, kwant_id: &str, context_id: Option<
     }
 }
 
+/// "<bot> finished replying in <place>", for a turn of `kwant_id` in `context_id`.
+pub async fn turn_finished(state: &AppState, kwant_id: &str, context_id: Option<&str>) -> Notification {
+    turn_note(state, "turn_finished", kwant_id, context_id, |name, where_| {
+        (format!("{name} replied"), format!("{name} finished replying in {where_}."))
+    })
+    .await
+}
+
 /// "<bot> is quiet": a live turn of `kwant_id` in `context_id` had no step for 15 min (H4/P4).
 pub async fn turn_quiet(state: &AppState, kwant_id: &str, context_id: Option<&str>) -> Notification {
-    let name = kwant_name(state, kwant_id).await;
-    let (channel_id, where_) = place(state, context_id).await;
-    let thread_id = turn_thread(state, kwant_id, channel_id.as_deref(), context_id).await;
-    Notification {
-        kind: "turn_quiet",
-        kwant_id: kwant_id.to_string(),
-        title: format!("{name} is quiet"),
-        body: format!("{name} has been quiet for {} min in {where_}.", super::bot_status::QUIET_LONG_MIN),
-        kwant_name: name,
-        channel_id,
-        thread_id,
-        card_id: None,
+    turn_note(state, "turn_quiet", kwant_id, context_id, |name, where_| {
+        let min = super::bot_status::QUIET_LONG_MIN;
+        (format!("{name} is quiet"), format!("{name} has been quiet for {min} min in {where_}."))
+    })
+    .await
+}
+
+/// How a completed turn's reply ended, for its notification (33e).
+#[derive(Debug, Clone, PartialEq)]
+pub enum ReplyEnd {
+    /// It is waiting on the person: the reply's saved `meta.blocked` text (which also covers a
+    /// reply that waits on them in prose after a failed step), else its own `Blocked:` line.
+    Blocked(String),
+    /// Its closing `Done: …` line.
+    Done(String),
+    Plain,
+}
+
+/// How `reply`, the reply a turn of `kwant_id` in `context_id` returned, ended. The save step
+/// stores the Blocked line on the saved reply's meta (see `keep_going::BLOCKED_KEY`); a reply
+/// that wasn't saved as is (a held one) is read by its own last line.
+async fn reply_end(state: &AppState, kwant_id: &str, context_id: Option<&str>, reply: Option<&str>) -> ReplyEnd {
+    let Some(reply) = reply.map(str::trim).filter(|r| !r.is_empty()) else {
+        return ReplyEnd::Plain;
+    };
+    let saved = match context_id {
+        Some(context) => saved_blocked(state, kwant_id, context, reply).await,
+        None => None,
+    };
+    // It leaves kwant (push, webhook, Telegram): anything that looks like a key is masked
+    let masked = |text: String| super::missions::autofix::redact(&text);
+    if let Some(text) = saved.or_else(|| super::keep_going::blocked_line(reply)) {
+        return ReplyEnd::Blocked(masked(text));
     }
+    match super::keep_going::done_line(reply) {
+        Some(text) => ReplyEnd::Done(masked(text)),
+        None => ReplyEnd::Plain,
+    }
+}
+
+/// The `meta.blocked` text on the bot's newest saved message in `context` that is `reply` (or,
+/// for a turn its delivery check continued, the joined reply's end).
+async fn saved_blocked(state: &AppState, kwant_id: &str, context: &str, reply: &str) -> Option<String> {
+    let name = kwant_name(state, kwant_id).await;
+    let msgs = state.db.list_messages(context, 20).await.ok()?;
+    let saved = msgs.iter().rev().find(|m| {
+        let text = m.text.trim();
+        m.sender_role == "kwant" && (m.sender_id == kwant_id || m.sender_id == name) && !text.is_empty() && reply.ends_with(text)
+    })?;
+    let meta: serde_json::Value = serde_json::from_str(saved.meta.as_deref()?).ok()?;
+    let text = meta[super::keep_going::BLOCKED_KEY]["text"].as_str()?.trim();
+    (!text.is_empty()).then(|| text.to_string())
+}
+
+/// What a turn of `kwant_id` in `context_id` that ended with `outcome` tells the person (33e):
+/// a failed turn "<bot> stopped"; a completed one "<bot> is blocked" when its reply ends Blocked,
+/// else "<bot> replied" (with its `Done:` line as the body when it has one). `None` for a
+/// cancelled turn: the person stopped it.
+pub async fn turn_ended(state: &AppState, kwant_id: &str, context_id: Option<&str>, outcome: &str, reply: Option<&str>) -> Option<Notification> {
+    if outcome == "failed" {
+        return Some(
+            turn_note(state, "turn_stopped", kwant_id, context_id, |name, where_| {
+                (format!("{name} stopped"), format!("{name} couldn't finish in {where_}. Open kwant bots to retry."))
+            })
+            .await,
+        );
+    }
+    if outcome != "completed" {
+        return None;
+    }
+    Some(match reply_end(state, kwant_id, context_id, reply).await {
+        ReplyEnd::Blocked(text) => {
+            turn_note(state, "turn_stopped", kwant_id, context_id, |name, _| (format!("{name} is blocked"), format!("Blocked: {text}"))).await
+        }
+        ReplyEnd::Done(text) => Notification { body: format!("Done: {text}"), ..turn_finished(state, kwant_id, context_id).await },
+        ReplyEnd::Plain => turn_finished(state, kwant_id, context_id).await,
+    })
 }
 
 async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Notification> {
@@ -2240,15 +2322,16 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
             outcome,
             thread_id,
             quiet,
+            reply,
             ..
-        } if outcome == "completed" && !quiet => {
+        } if (outcome == "completed" || outcome == "failed") && !quiet => {
             // A delegated task reports with delegation_finished instead
             if let Some(t) = thread_id {
                 if state.db.delegation_for_thread(t).await.ok().flatten().is_some() {
                     return None;
                 }
             }
-            Some(turn_finished(state, kwant_id, context_id.as_deref()).await)
+            turn_ended(state, kwant_id, context_id.as_deref(), outcome, reply.as_deref()).await
         }
         RuntimeEvent::ApprovalRequired {
             id, tool_name, details,
