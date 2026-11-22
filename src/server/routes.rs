@@ -4195,6 +4195,22 @@ async fn run_kwant_turn_inner(
                 if let Some(blocked) = blocked {
                     meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::BLOCKED_KEY] = blocked;
                 }
+                // 33d: a reply that ends with `Done: …` where the bot did the person's request
+                // itself is a finished job ("Done while you were away"). Only a turn for the
+                // person's own message: not a routine, mission, audit or other turn kwnt started
+                // (they have rows of their own), nor a discussion or unsaved turn
+                let for_person = opts.busy_slot.is_none()
+                    && !opts.always_ask
+                    && opts.audit.is_none()
+                    && opts.rehearse.is_none()
+                    && opts.task.is_none()
+                    && opts.discussion.is_none()
+                    && !opts.unsaved;
+                if for_person {
+                    if let Some(done) = super::keep_going::solo_done(scope, target_kwant, &asst_msg.text).await {
+                        meta.get_or_insert_with(|| serde_json::json!({}))[super::keep_going::DONE_KEY] = done;
+                    }
+                }
                 let meta = super::decide::with_decisions(meta, &decisions);
                 let meta = super::activity::with_activity(meta, activity);
                 // The claimed picture goes with the reply, posted as the bot. Saved before the reply,
