@@ -488,6 +488,45 @@ async fn point(e: &Env, id: &str, url: &str) {
         .unwrap();
 }
 
+// 34d: a goal notice names its goal, so a tap on it (push or the page's own) opens the goal, not the bot's chat
+#[tokio::test]
+async fn a_goal_notice_names_its_goal() {
+    use kwnt::drivers::events::RuntimeEvent;
+    let e = setup().await;
+    let g = create(&e, &new_goal(&e, "https://example.com/", 1)).await;
+    e.state.db.set_setting("notify_on", r#"["turn_finished","goal_alert"]"#).await.unwrap();
+    e.state.db.set_setting("notify_known", r#"["turn_finished","goal_alert"]"#).await.unwrap();
+    let mut rx = e.state.event_sender.subscribe();
+    assert!(goals::notice(&e.state, &g, "broken", "Site is up is failing".into(), "b".into()).await);
+    let mut seen = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let RuntimeEvent::Notify { kind, kwant_id, goal_id, thread_id, .. } = ev {
+            seen = Some((kind, kwant_id, goal_id, thread_id));
+        }
+    }
+    let (kind, kwant_id, goal_id, thread_id) = seen.expect("a notify event");
+    assert_eq!(kind, "goal_alert");
+    assert_eq!(kwant_id, e.bot.id, "still names the bot, for older pages and Telegram");
+    assert_eq!(goal_id.as_deref(), Some(g.id.as_str()));
+    assert_eq!(thread_id, None);
+    // Its JSON carries goal_id; a notice about no goal has no such key (older pages)
+    let ev = RuntimeEvent::Notify {
+        kind: "goal_alert".into(),
+        kwant_id: e.bot.id.clone(),
+        kwant_name: "x".into(),
+        channel_id: None,
+        title: "t".into(),
+        body: "b".into(),
+        space_id: None,
+        space_name: None,
+        held_message: false,
+        thread_id: None,
+        card_id: None,
+        goal_id: None,
+    };
+    assert!(!serde_json::to_string(&ev).unwrap().contains("goal_id"));
+}
+
 // Post-0.6.5 api-M6: a notice that wasn't sent is neither recorded nor counted
 #[tokio::test]
 async fn a_notice_the_person_turned_off_is_not_recorded_or_counted() {

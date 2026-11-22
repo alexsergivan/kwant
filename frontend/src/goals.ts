@@ -918,6 +918,19 @@ export function draftFromForm(f: GoalFormState): GoalDraft {
 export const OPEN_GOAL_EVENT = 'kwnt:open-goal';
 export const openGoal = (id: string) => window.dispatchEvent(new CustomEvent(OPEN_GOAL_EVENT, { detail: { id } }));
 
+// A goal opened from outside the board (the Inbox's Needs-you row): the board may not be on screen yet, so the
+// strip takes it when it mounts. One at a time, used once.
+let pendingGoal: string | null = null;
+export const openGoalOnBoard = (id: string) => {
+  pendingGoal = id;
+  openGoal(id);
+};
+export const takePendingGoal = (): string | null => {
+  const id = pendingGoal;
+  pendingGoal = null;
+  return id;
+};
+
 /**
  * A mission's goal: `goal_link {id, title}`, or `goal` when the server sends it as an object. `goal` as text
  * is the mission's own goal line (0.6.x), not a link.
@@ -1112,6 +1125,25 @@ export function currentWorkText(g: Pick<Goal, 'open_mission' | 'open_fix_task' |
   const t = g.open_fix_task;
   if (t) return t.held ? `${t.title} · fix ready, waiting for your OK` : `${t.title} · ${stateLabel(t.state).label}`;
   return null;
+}
+
+/** Where the strip keeps "Not now" per goal on this device ({goalId: held task id}). */
+export const GOAL_NOT_NOW_KEY = 'kwnt.goals.notnow';
+export function readGoalNotNow(): Record<string, string> {
+  try {
+    const v = JSON.parse(localStorage.getItem(GOAL_NOT_NOW_KEY) ?? '{}');
+    return v && typeof v === 'object' ? (v as Record<string, string>) : {};
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * The goals waiting on the person (33x): the ones the strip draws as Needs you. A Not now on this device and a
+ * fix already released (Fix it) aren't requests, so they don't count. Read from the list, without detail reads.
+ */
+export function goalsNeedingYou(goals: Goal[], now: number = Date.now(), notNow: Record<string, string> = {}): Goal[] {
+  return goals.filter((g) => displayStatus(g, [], now, notNow[g.id] ?? null) === 'needs_you');
 }
 
 /** The strip's one line (plan v2 B.0 rule 5): "3 goals OK · checked 4 min ago", or what wants a look first. */
