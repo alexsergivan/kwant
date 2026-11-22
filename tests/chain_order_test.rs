@@ -355,6 +355,104 @@ async fn a_leads_delegation_waiting_for_a_failed_or_asking_one_does_not_start() 
     assert!(w.error.as_deref().is_some_and(|e| e.contains("asked you something first")), "{w:?}");
 }
 
+// --- 32i: something the person adds while a teammate works waits for that teammate's task ---
+
+/// Delegations from `lead` to `to`, newest first.
+async fn delegations_to(env: &Env, lead: &str, to: &str) -> Vec<kwnt::db::threads::Delegation> {
+    env.state.db.list_delegations(Some(lead), None, 50).await.unwrap().into_iter().filter(|d| d.specialist_kwant_id == to).collect()
+}
+
+fn texts(msgs: &[Message]) -> Vec<&str> {
+    msgs.iter().map(|m| m.text.as_str()).collect()
+}
+
+#[tokio::test]
+async fn a_leads_add_on_for_a_busy_teammate_waits_for_its_earlier_task() {
+    let env = setup().await;
+    let (channel, ids) = team(&env, "f4-addon", &["Ld10", "Wr10"]).await;
+    let (lead, wr) = (&ids[0], &ids[1]);
+    let release = release_file("wr10-release");
+    behave("Ld10", "On it. @Wr10 please draft the launch email.");
+    behave("Ld10.resume", "The email is ready.");
+    behave("Wr10", &format!("WAIT:{}\nDraft written WRDRAFT10.", release.display()));
+    say_in(&env, &channel, "@Ld10 write the launch email").await;
+    wait_for("Wr10's first task to run", || async { !prompts_of("Wr10").is_empty() }).await;
+    let first = delegations_to(&env, lead, wr).await.pop().unwrap();
+    assert!(first.is_open(), "{first:?}");
+
+    // The person adds something while the Writer works; the lead passes it on
+    behave("Ld10", "Added to the plan. @Wr10, add the free shipping line ADDON10 under the button.");
+    say_in(&env, &channel, "@Ld10 also mention free shipping over EUR 40").await;
+    let not_sent = |msgs: &[Message]| msgs.iter().any(|m| m.text.starts_with("Not sent to Wr10"));
+    wait_for("the add-on to be handed on or refused", || async {
+        delegations_to(&env, lead, wr).await.len() == 2 || not_sent(&messages(&env, &channel).await)
+    })
+    .await;
+    let msgs = messages(&env, &channel).await;
+    assert!(!not_sent(&msgs), "the add-on isn't dropped: {:?}", texts(&msgs));
+    let add_on = delegations_to(&env, lead, wr).await.into_iter().next().unwrap();
+    assert_ne!(add_on.id, first.id);
+    assert_eq!(add_on.status, "queued", "it waits: {add_on:?}");
+    assert_eq!(add_on.after_delegation_id.as_deref(), Some(first.id.as_str()), "behind Wr10's earlier task");
+    assert!(add_on.task.contains("ADDON10"), "{}", add_on.task);
+    assert!(msgs.iter().any(|m| m.text.contains("once Wr10 has finished")), "the chat says it waits: {:?}", texts(&msgs));
+    assert_eq!(prompts_of("Wr10").len(), 1, "Wr10 is still on the first task");
+
+    // The same line again is not an add-on: still refused while Wr10 is on it
+    behave("Ld10", "On it. @Wr10 please draft the launch email.");
+    say_in(&env, &channel, "@Ld10 is the email on its way?").await;
+    wait_for("the repeat's notice", || async {
+        messages(&env, &channel).await.iter().any(|m| m.text == "Not sent to Wr10: still working on an earlier task from this chat")
+    })
+    .await;
+    assert_eq!(delegations_to(&env, lead, wr).await.len(), 2, "no third task");
+
+    std::fs::write(&release, "").unwrap();
+    wait_for("the add-on's result", || async { env.state.db.get_delegation(&add_on.id).await.unwrap().is_some_and(|d| d.status == "completed") }).await;
+    let prompts = prompts_of("Wr10");
+    assert_eq!(prompts.len(), 2, "the add-on ran once, after the first");
+    assert!(prompts[1].contains("ADDON10") && prompts[1].contains("WRDRAFT10"), "Wr10 gets the add-on with its own earlier result: {}", prompts[1]);
+    wait_for("the lead's resume", || async { lead_resumed("Ld10") }).await;
+    settle(&env, &channel).await;
+    let resumes: Vec<_> = prompts_of("Ld10").into_iter().filter(|p| p.contains("tasks you delegated have ended") || p.contains("finished the task you delegated")).collect();
+    assert_eq!(resumes.len(), 1, "one resume with both results: {resumes:?}");
+}
+
+#[tokio::test]
+async fn a_teammates_result_still_does_not_hand_work_to_a_busy_teammate() {
+    let env = setup().await;
+    let (channel, ids) = team(&env, "f4-addon-relay", &["Ld11", "Wr11", "An11"]).await;
+    let (lead, wr) = (&ids[0], &ids[1]);
+    let release = release_file("wr11-release");
+    behave("Wr11", &format!("WAIT:{}\nIntro written.", release.display()));
+    // Wr11 is on a task the lead gave it from this chat with the delegate tool
+    let (s, v) = call(
+        &env.app,
+        "POST",
+        "/api/delegations",
+        Some(json!({"lead_kwant_id": lead, "specialist_kwant_id": wr, "task": "Draft the intro.", "channel_id": channel, "continue_lead": false})),
+    )
+    .await;
+    assert!(s.is_success(), "{s} {v}");
+    wait_for("Wr11's task to run", || async { !prompts_of("Wr11").is_empty() }).await;
+
+    behave("Ld11", "On it. @An11 please crunch the numbers.");
+    behave("Ld11.resume", "The numbers are in.");
+    behave("An11", "Numbers done. @Wr11 please add the chart.");
+    say_in(&env, &channel, "@Ld11 get me the numbers").await;
+    wait_for("the relay's notice", || async {
+        messages(&env, &channel).await.iter().any(|m| m.text == "Not sent to Wr11: still working on an earlier task from this chat")
+    })
+    .await;
+    assert_eq!(delegations_to(&env, lead, wr).await.len(), 1, "a teammate's result doesn't queue work for a busy teammate");
+    wait_for("the lead's resume", || async { lead_resumed("Ld11") }).await;
+
+    std::fs::write(&release, "").unwrap();
+    wait_for("Wr11's result", || async { delegations_to(&env, lead, wr).await.iter().all(|d| !d.is_open()) }).await;
+    settle(&env, &channel).await;
+    assert_eq!(prompts_of("Wr11").len(), 1, "Wr11 ran only its own task");
+}
+
 // --- F5: one list of what the team needs from the person ---
 
 #[tokio::test]
