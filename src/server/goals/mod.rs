@@ -1,7 +1,8 @@
 //! Goals (docs/mission-control.md §22): what should stay true, checked on a schedule. There is no
 //! setting: goals show with the Mission board, and nothing runs until the person creates or
 //! approves one, so an upgrade starts no background work. Quiet by default (plan B.0): a goal
-//! tells the person only when its state changes, at most [`NOTICE_CAP`] times in 24 hours.
+//! tells the person only when its state changes, at most [`NOTICE_CAP`] "it broke" notices in 24
+//! hours and at most [`NOTICE_CEILING`] notices of any kind.
 
 pub mod predicate;
 pub mod routes;
@@ -32,8 +33,17 @@ pub const MAX_CHECKS: usize = 10;
 pub const MAX_BUDGET: i64 = 10_000_000;
 /// Freshness, in minutes: at most a week.
 pub const FRESHNESS_RANGE: (i64, i64) = (1, 10_080);
-/// Notices per goal in any rolling 24 hours (plan B.0 rule 1).
+/// "It broke" notices (`broken`, `cant_check`) per goal in any rolling 24 hours (plan B.0 rule 1):
+/// what silences a flapping goal. Notices that ask the person to act (`decision`, `needs_you`, at
+/// most one of each per incident) or close a break they were told about (`recovered`) neither
+/// count nor are held back by it, so one normal incident never uses up the day (33y).
 pub const NOTICE_CAP: i64 = 3;
+/// Notices of every kind per goal in any rolling 24 hours: the backstop over the per-incident
+/// kinds. One incident sends at most four (broken, decision, needs_you, recovered), so this lets
+/// [`NOTICE_CAP`] full incidents through.
+pub const NOTICE_CEILING: i64 = 4 * NOTICE_CAP;
+/// The kinds [`NOTICE_CAP`] counts and holds back.
+pub const CAPPED_KINDS: [&str; 2] = ["broken", "cant_check"];
 pub const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 /// Unapproved drafts are deleted silently after this (plan B.0 rule 4).
 pub const DRAFT_TTL_MS: i64 = 7 * DAY_MS;
@@ -422,18 +432,19 @@ pub fn emit_goal(state: &AppState, g: &Goal) {
     emit(state, &g.id, &g.status, &g.space_id);
 }
 
-/// Sends one goal notice (`kind`: broken, recovered, cant_check, needs_you) unless the goal
-/// already had [`NOTICE_CAP`] in the last 24 hours. A capped notice is logged, never sent: the
-/// cap hides pings, not state. Returns whether it went out; a notice the person turned off in
-/// Settings is neither sent nor recorded, so it never counts toward the cap.
+/// Sends one goal notice (`kind`: broken, cant_check, decision, needs_you, recovered). A broken
+/// or cant_check notice is held back once the goal had [`NOTICE_CAP`] of those in the last 24
+/// hours; any notice is held back once it had [`NOTICE_CEILING`] of every kind. A capped notice is
+/// logged as `notice_capped`, never sent: the cap hides pings, not state. Returns whether it went
+/// out; a notice the person turned off in Settings is neither sent nor recorded, so it never counts.
 pub async fn notice(state: &AppState, g: &Goal, kind: &str, title: String, body: String) -> bool {
     // With goal alerts off in Settings nothing is sent, so nothing is recorded or counted
     if !notify_on(state).await.iter().any(|k| k == "goal_alert") {
         return false;
     }
     let now = now_ms();
-    let sent = state.db.goal_notices_since(&g.id, now - DAY_MS).await.unwrap_or(0);
-    if sent >= NOTICE_CAP {
+    let (alarms, all) = state.db.goal_notice_counts_since(&g.id, now - DAY_MS).await.unwrap_or((0, 0));
+    if all >= NOTICE_CEILING || (CAPPED_KINDS.contains(&kind) && alarms >= NOTICE_CAP) {
         let _ = state.db.add_goal_event(&g.id, "notice_capped", "kwant", &json!({ "kind": kind })).await;
         return false;
     }

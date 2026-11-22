@@ -289,16 +289,58 @@ async fn unknown_tells_once_after_a_day() {
     assert_eq!(notices(&e, &g.id).await, ["cant_check"]);
 }
 
-// G-Q-24: no more than three notices per goal per day; held back ones are logged
+// G-Q-24 (33y): no more than three "it broke" notices per goal per day; held back ones are logged.
+// A notice that asks the person to act (decision, needs you) or closes a told break (recovered) is
+// not one of them, so one normal incident never uses up the day.
 #[tokio::test]
-async fn notices_are_capped_at_three_a_day() {
+async fn broken_notices_are_capped_at_three_a_day_and_asks_still_go_out() {
     let e = setup().await;
     let g = create(&e, &new_goal(&e, "https://example.com/", 1)).await;
     for _ in 0..3 {
         assert!(goals::notice(&e.state, &g, "broken", "t".into(), "b".into()).await);
     }
-    assert!(!goals::notice(&e.state, &g, "recovered", "t".into(), "b".into()).await);
-    assert!(kinds(&e, &g.id).await.contains(&"notice_capped".to_string()));
+    assert!(!goals::notice(&e.state, &g, "broken", "t".into(), "b".into()).await, "a fourth break the same day is held back");
+    assert!(!goals::notice(&e.state, &g, "cant_check", "t".into(), "b".into()).await, "so is a can't-check alarm");
+    let capped: Vec<String> = e.state.db.goal_events(&g.id, 100).await.unwrap().into_iter().filter(|ev| ev.kind == "notice_capped").filter_map(|ev| ev.detail_value()["kind"].as_str().map(str::to_string)).collect();
+    assert_eq!(capped, ["cant_check", "broken"], "held back and logged, newest first");
+    for kind in ["decision", "needs_you", "recovered"] {
+        assert!(goals::notice(&e.state, &g, kind, "t".into(), "b".into()).await, "{kind} is not capped by the broken count");
+    }
+    assert_eq!(e.state.db.goal_notices_since(&g.id, 0).await.unwrap(), 3, "only the broken ones count");
+}
+
+// 33y: the one ceiling over every kind, so nothing a goal says can ping without end: four
+// notices an incident (broken, decision, needs you, recovered) for three incidents
+#[tokio::test]
+async fn every_goal_notice_stops_at_the_daily_ceiling() {
+    let e = setup().await;
+    let g = create(&e, &new_goal(&e, "https://example.com/", 1)).await;
+    let ceiling = 4 * goals::NOTICE_CAP;
+    for i in 0..ceiling {
+        let kind = ["broken", "decision", "needs_you", "recovered"][(i % 4) as usize];
+        assert!(goals::notice(&e.state, &g, kind, "t".into(), "b".into()).await, "notice {i} ({kind}) goes out");
+    }
+    for kind in ["decision", "needs_you", "recovered", "broken"] {
+        assert!(!goals::notice(&e.state, &g, kind, "t".into(), "b".into()).await, "{kind} past the ceiling is held back");
+    }
+    assert_eq!(notices(&e, &g.id).await.len() as i64, ceiling);
+    assert_eq!(kinds(&e, &g.id).await.iter().filter(|k| *k == "notice_capped").count(), 4);
+}
+
+// 33y: the cap counts "it broke" alarms (broken, cant_check) sent in the window, nothing else
+#[tokio::test]
+async fn the_notice_count_is_only_broken_and_cant_check_sent_in_the_window() {
+    let e = setup().await;
+    let g = create(&e, &new_goal(&e, "https://example.com/", 1)).await;
+    let db = &e.state.db;
+    for kind in ["broken", "decision", "recovered", "needs_you"] {
+        db.add_goal_event(&g.id, "notified", "kwant", &json!({ "kind": kind })).await.unwrap();
+    }
+    db.add_goal_event(&g.id, "notice_capped", "kwant", &json!({ "kind": "broken" })).await.unwrap();
+    assert_eq!(db.goal_notices_since(&g.id, 0).await.unwrap(), 1, "one incident is one notice toward the cap");
+    db.add_goal_event(&g.id, "notified", "kwant", &json!({ "kind": "cant_check" })).await.unwrap();
+    assert_eq!(db.goal_notices_since(&g.id, 0).await.unwrap(), 2);
+    assert_eq!(db.goal_notices_since(&g.id, now_ms() + 60_000).await.unwrap(), 0, "only inside the window");
 }
 
 // G-T-01..03, G-T-07, G-T-08, G-T-10: the API
@@ -546,7 +588,7 @@ async fn a_notice_the_person_turned_off_is_not_recorded_or_counted() {
     for _ in 0..3 {
         assert!(goals::notice(&e.state, &g, "broken", "t".into(), "b".into()).await);
     }
-    assert!(!goals::notice(&e.state, &g, "recovered", "t".into(), "b".into()).await);
+    assert!(!goals::notice(&e.state, &g, "broken", "t".into(), "b".into()).await);
     assert_eq!(notices(&e, &g.id).await, ["broken", "broken", "broken"]);
 }
 
