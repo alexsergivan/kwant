@@ -86,6 +86,9 @@ const goodBtn = `${btn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-20
 const mainBtn = `${btn} bg-sky-600 text-white hover:bg-sky-700`;
 const dangerBtn = `${btn} border border-rose-500/40 text-rose-200 hover:bg-rose-500/10`;
 const linkBtn = `inline-flex items-center min-h-[40px] sm:min-h-0 rounded text-sky-300 underline underline-offset-2 hover:text-sky-200 ${focusRing}`;
+// A link inside a sentence: it keeps the sentence's line height (a button lays out as an inline block, so padding
+// would push the lines apart); on a phone an invisible layer makes the tap target about 40 px tall instead.
+const inlineLinkBtn = `relative inline rounded text-left text-sky-300 underline underline-offset-2 hover:text-sky-200 after:absolute after:inset-x-0 after:-inset-y-3 sm:after:hidden ${focusRing}`;
 const field =
   'w-full min-w-0 min-h-[40px] sm:min-h-[36px] px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-sky-500 aria-[invalid=true]:border-rose-500/70';
 const heading = 'text-[11px] font-medium uppercase tracking-wide text-zinc-500';
@@ -1944,9 +1947,9 @@ export const GoalsStrip: React.FC<{
       {drafting.bot} is drafting checks for “{quotedGoalText(drafting.text)}”. The draft shows here.
     </p>
   ) : draftFailed ? (
-    <p role="status" className={`flex min-w-0 flex-wrap items-center gap-x-1.5 text-[11px] text-amber-200 ${wrap}`} data-goals-draft-failed>
-      <AlertTriangle size={11} className="shrink-0" aria-hidden="true" />
-      <span className={`min-w-0 ${wrap}`}>
+    <p role="status" className="flex min-w-0 items-start gap-1.5 text-[11px] text-amber-200" data-goals-draft-failed>
+      <AlertTriangle size={11} className="mt-[3px] shrink-0" aria-hidden="true" />
+      <span className={`min-w-0 flex-1 ${wrap}`}>
         {draftFailed.bot} couldn’t draft it: {draftFailed.reason.replace(/[.\s]+$/, '')}.{' '}
         <button
           type="button"
@@ -1956,14 +1959,14 @@ export const GoalsStrip: React.FC<{
             setFormError(null);
             setPanel({ kind: 'form', seed });
           }}
-          className={linkBtn}
+          className={inlineLinkBtn}
           data-goals-draft-write
         >
           Write the checks yourself
         </button>
         .
       </span>
-      <button type="button" onClick={() => setDraftFailed(null)} aria-label="Dismiss" className={`shrink-0 rounded p-0.5 text-zinc-500 hover:text-zinc-200 ${focusRing}`} data-goals-draft-dismiss>
+      <button type="button" onClick={() => setDraftFailed(null)} aria-label="Dismiss" className={`-my-2.5 -mr-2 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded text-zinc-500 hover:text-zinc-200 sm:my-0 sm:mr-0 sm:h-auto sm:w-auto sm:p-0.5 ${focusRing}`} data-goals-draft-dismiss>
         <X size={11} aria-hidden="true" />
       </button>
     </p>
