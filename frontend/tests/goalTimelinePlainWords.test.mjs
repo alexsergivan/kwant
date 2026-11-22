@@ -114,6 +114,7 @@ test('c: first check, break, notices and capped notices read as sentences', () =
   assert.equal(e('notified', { kind: 'decision' }), 'Told you a decision is waiting');
   assert.equal(e('notified', { kind: 'something_new' }), 'Told you');
   assert.equal(e('notified'), 'Told you');
+  assert.equal(e('notified', { kind: 'constructor' }), 'Told you', 'an odd kind is never a lookup into the object');
   assert.equal(e('notice_capped', { kind: 'broken' }), 'Didn’t ping you (already alerted today)');
 
   // "First" is the caller's call: no earlier met or not_met, and the start of the story is in view.
@@ -134,6 +135,9 @@ test('g: a quoted report has no markdown and only its first paragraph', () => {
   assert.equal(b.goalEventQuote({ kind: 'investigated', detail: { summary: '- one\n* two\n1. three' } }), 'one\ntwo\nthree');
   assert.equal(b.goalEventQuote({ kind: 'fix_failed', detail: { excerpt: '### Tests\n__2 failed__' } }), 'Tests\n2 failed');
   assert.equal(b.goalEventQuote({ kind: 'investigated', detail: { summary: '## \n\n' } }), null, 'nothing left: no quote');
+  // A blank line after the heading (Mira, Rigel): the quote keeps the finding, not just the title.
+  assert.equal(b.goalEventQuote({ kind: 'investigated', detail: { summary: '## What is failing\n\nThe shop answers 502.\n\n## Likely cause\nDisk' } }), 'What is failing\nThe shop answers 502.');
+  assert.equal(b.goalEventQuote({ kind: 'investigated', detail: { summary: '# Investigation report\n\n## What is failing\n\nThe shop answers 502.\nSince 7:38.\n\nMore.' } }), 'Investigation report\nWhat is failing\nThe shop answers 502.\nSince 7:38.');
 });
 
 test('the drawer timeline tells the week in plain words, with the bot’s name', () => {

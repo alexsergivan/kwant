@@ -657,7 +657,10 @@ export function goalEventText(e: Pick<GoalEvent, 'kind' | 'actor' | 'detail'>, n
       return lookFailed(e) ? `${bot} couldn’t finish looking into it` : `${bot} looked into it`;
     }
     case 'notified':
-      return TOLD_YOU[s(d.kind) ?? ''] ?? 'Told you';
+      {
+      const k = s(d.kind) ?? '';
+      return Object.prototype.hasOwnProperty.call(TOLD_YOU, k) ? TOLD_YOU[k] : 'Told you';
+    }
     case 'notice_capped':
       // No count: what counts toward the daily cap is the server's to change.
       return 'Didn’t ping you (already alerted today)';
@@ -705,20 +708,25 @@ const actorOr = (actor: string, names: Record<string, string>, fallback: string)
  */
 export function plainQuote(v: string | null): string | null {
   if (!v) return null;
-  const lines = v
-    .replace(/\r\n?/g, '\n')
-    .split('\n')
-    .map((l) =>
-      l
-        .replace(/^\s{0,3}#{1,6}(\s+|$)/, '')
-        .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
-        .replace(/\*\*|__/g, '')
-        .trim(),
-    );
-  const start = lines.findIndex((l) => l !== '');
-  if (start < 0) return null;
-  const end = lines.indexOf('', start);
-  return lines.slice(start, end < 0 ? undefined : end).join('\n');
+  const lines = v.replace(/\r\n?/g, '\n').split('\n');
+  const out: string[] = [];
+  let body = false;
+  for (const raw of lines) {
+    const heading = /^\s{0,3}#{1,6}(\s|$)/.test(raw);
+    const l = raw
+      .replace(/^\s{0,3}#{1,6}(\s+|$)/, '')
+      .replace(/^\s*(?:[-*+]|\d+[.)])\s+/, '')
+      .replace(/\*\*|__/g, '')
+      .trim();
+    // A blank line ends the quote once it holds some words past a heading ("## What is failing", blank, the finding).
+    if (!l) {
+      if (body) break;
+      continue;
+    }
+    out.push(l);
+    if (!heading) body = true;
+  }
+  return out.length ? out.join('\n') : null;
 }
 
 /** A bot's report quoted under its timeline line (investigate summary, failure excerpt). Untrusted text: show it as text only. */
