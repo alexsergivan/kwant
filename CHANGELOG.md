@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- Package-manager builds can turn off the update check: `cargo install --features no-update-check` makes the server report updates off, exactly as `KWNT_UPDATE_CHECK=off` does, so it never looks for a new release (the package manager updates kwant). The Homebrew formula builds with it and needs `openssl@4` on Linux instead of `openssl@3` (#1054)
+
 ## [Mac 0.9.42] - 2026-11-22
 
 kwant 0.9.42: formatted answers in Done while you were away, blocked solo bots under Needs you, search opens the thread, quick typing in long chats, a Working block in the sidebar, earlier messages in long chats, scripts given an address ask first, matching threads first in search, one report after a Stop, busy bots first on a space's home, project scripts given an address ask first, Done rows show what was done first, approval alerts say what the bot wants to do, restart notes name the cut-off step in plain words, steps read the same in the app, alerts and Telegram, long chats open faster and a stopped job's Inbox row names your request.

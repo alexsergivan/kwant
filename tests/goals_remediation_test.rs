@@ -1175,3 +1175,94 @@ async fn lapse_7_deleted_and_paused_goals_are_left_out_and_rows_are_newest_first
     assert_eq!(s, StatusCode::OK);
     assert_eq!(titles(e.state.db.goal_lapses_of_bot(&e.bot, 0, 10).await.unwrap()), ["First site"]);
 }
+
+// 33w: a Fix task checks what the goal checks (Mira's UX pass at 0.9.40, item 1)
+
+/// A site on 127.0.0.1 whose /sitemap.xml answers 200 with `body`.
+async fn sitemap_site(body: &'static str) -> String {
+    let app = Router::new().route("/sitemap.xml", axum::routing::get(move || async move { body }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move {
+        axum::serve(listener, app).await.unwrap();
+    });
+    format!("http://{addr}/sitemap.xml")
+}
+
+/// A fix-mode goal "the sitemap lists /pricing": one required http check, body_contains "/pricing".
+async fn sitemap_goal(e: &Env, url: &str) -> Goal {
+    let new = NewGoal {
+        space_id: SpaceId::default_space().as_str().into(),
+        title: "The sitemap lists every page".into(),
+        description: String::new(),
+        kwant_id: e.bot.clone(),
+        folder: e.folder.to_string_lossy().into_owned(),
+        mode: "fix".into(),
+        interval_minutes: 60,
+        confirm_failures: 2,
+        budget_tokens: 0,
+        max_fixes_per_day: 3,
+        priority: 2,
+        created_by: "person".into(),
+        draft: false,
+        checks: vec![NewGoalCheck {
+            label: "sitemap lists /pricing".into(),
+            kind: "http".into(),
+            spec: json!({"url": url}),
+            metric: Some("body_contains".into()),
+            operator: None,
+            target: Some("/pricing".into()),
+            severity: "required".into(),
+            freshness_minutes: 180,
+        }],
+    };
+    match e.state.db.create_goal(&new, now()).await.unwrap() {
+        Created::Goal(g) => *g,
+        Created::TooManyDrafts => panic!("draft"),
+    }
+}
+
+async fn verified_7d(e: &Env) -> i64 {
+    let (_, v) = send(e, "GET", "/api/missions/insights", None, None, None).await;
+    v["verified_7d"].as_i64().unwrap_or_else(|| panic!("insights: {v}"))
+}
+
+#[tokio::test]
+async fn g_r_33w_a_fix_that_changed_nothing_fails_the_goals_own_test_and_is_not_verified() {
+    let e = setup().await;
+    // The sitemap answers 200 but doesn't list /pricing, and the fix changes nothing
+    let url = sitemap_site("<urlset><url><loc>/about</loc></url></urlset>").await;
+    let g = sitemap_goal(&e, &url).await;
+    break_goal(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    let l = open_link(&e, &g.id).await;
+    investigated(&e, &l).await;
+    let fix_checks = e.state.db.list_checks(&l.fix_task_id).await.unwrap();
+    let http = fix_checks.iter().find(|c| c.kind == "http").expect("the goal's http check is on the Fix");
+    assert_eq!(http.spec_value()["contains"], json!("/pricing"), "the Fix check carries the goal's predicate: {}", http.spec);
+    let before = verified_7d(&e).await;
+
+    finish(&e, &l.fix_task_id).await;
+
+    let fix = task(&e, &l.fix_task_id).await;
+    assert_ne!(fix.state, "verified", "a fix that changed nothing is not verified");
+    let http = e.state.db.list_checks(&l.fix_task_id).await.unwrap().into_iter().find(|c| c.kind == "http").unwrap();
+    assert_eq!(http.status, "failed", "{http:?}");
+    assert!(http.output_excerpt.as_deref().unwrap_or("").contains("does not contain \"/pricing\""), "{http:?}");
+    assert_eq!(verified_7d(&e).await, before, "\"Verified this week\" does not go up");
+    tick_at(&e.state, now()).await;
+    assert!(!kinds(&e, &g.id).await.contains(&"fix_verified".to_string()));
+}
+
+#[tokio::test]
+async fn g_r_33w_a_fix_that_worked_still_passes_the_goals_test_and_is_verified() {
+    let e = setup().await;
+    let url = sitemap_site("<urlset><url><loc>/about</loc></url><url><loc>/pricing</loc></url></urlset>").await;
+    let g = sitemap_goal(&e, &url).await;
+    break_goal(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    let l = open_link(&e, &g.id).await;
+    investigated(&e, &l).await;
+    assert_eq!(finish(&e, &l.fix_task_id).await, StatusCode::OK);
+    assert_eq!(task(&e, &l.fix_task_id).await.state, "verified");
+}
