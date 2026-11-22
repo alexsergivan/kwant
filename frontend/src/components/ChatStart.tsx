@@ -26,12 +26,12 @@ export const EarlierButton = React.forwardRef<HTMLButtonElement, { loading: bool
 ));
 EarlierButton.displayName = 'EarlierButton';
 
-/** "Start of your chat with Ada · Oct 3, 2026". Focusable from script only, so focus can land here from the button. */
-export const ChatStartLine = React.forwardRef<HTMLParagraphElement, { title: string; firstAt: string | null | undefined }>(({ title, firstAt }, ref) => {
+/** "Start of your chat with Ada · Oct 3, 2026" (the label comes from chatPages startLabel). Focusable from script only, so focus can land here from the button. */
+export const ChatStartLine = React.forwardRef<HTMLParagraphElement, { label: string; firstAt: string | null | undefined }>(({ label, firstAt }, ref) => {
   const date = dateText(firstAt, { year: true });
   return (
     <p ref={ref} tabIndex={-1} data-chat-start="" className="mx-auto mb-1 w-full max-w-4xl px-3 py-2 text-center text-xs text-zinc-400 break-words focus:outline-none">
-      {`Start of your chat with ${title}${date ? ` · ${date}` : ''}`}
+      {`${label}${date ? ` · ${date}` : ''}`}
     </p>
   );
 });

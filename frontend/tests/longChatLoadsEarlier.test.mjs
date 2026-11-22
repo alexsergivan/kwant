@@ -75,7 +75,7 @@ const m = await loadBundled(`
   export { default as React } from 'react';
   export { createRoot } from 'react-dom/client';
   export { SpaceApp } from './src/App';
-  export { mergeLatest, prependOlder } from './src/chatPages';
+  export { mergeLatest, prependOlder, startLabel } from './src/chatPages';
 `);
 const { React } = m;
 const noop = () => {};
@@ -192,4 +192,12 @@ test('33k: merging pages keeps each message once, and a latest page with a gap b
   assert.equal(m.mergeLatest(msgs.slice(0, 41), short), short);
   // An earlier page in front, with an overlap, keeps each id once.
   assert.deepEqual(m.prependOlder(msgs.slice(100, 200), msgs.slice(0, 101)).map((x) => x.id), msgs.slice(0, 200).map((x) => x.id));
+});
+
+test('33k: a thread starts with "Start of this conversation", a channel names itself, a direct chat names the bot', () => {
+  assert.equal(m.startLabel({ thread: true, channel: false, title: 'Ada' }), 'Start of this conversation', 'never "your chat with Ada" in a thread');
+  assert.equal(m.startLabel({ thread: true, channel: true, title: '#general' }), 'Start of this conversation');
+  assert.equal(m.startLabel({ thread: false, channel: true, title: '#general' }), 'Start of #general');
+  assert.equal(m.startLabel({ thread: false, channel: true, title: '@helpers' }), 'Start of @helpers');
+  assert.equal(m.startLabel({ thread: false, channel: false, title: 'Ada' }), 'Start of your chat with Ada');
 });

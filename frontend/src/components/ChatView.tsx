@@ -371,6 +371,8 @@ export interface ChatViewProps {
   onJumpToLatest?: () => void;
   /** 33k: whether earlier messages exist ('more'), are loading, or the first message is shown ('start'). Unset: neither line. */
   earlier?: EarlierState;
+  /** 33k: the start line's words ("Start of this conversation" in a thread); defaults to the direct-chat line. */
+  startLabel?: string;
   /** 33k: loads the page before the first message and puts it in front of `messages`; true when messages came in front. */
   onLoadEarlier?: () => boolean | Promise<boolean>;
   /** Under the header: the bot's conversations and the open thread's controls. */
@@ -665,6 +667,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   viewingHistory,
   onJumpToLatest,
   earlier,
+  startLabel,
   onLoadEarlier,
   subHeader,
   threadLine,
@@ -2713,7 +2716,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {!viewingHistory && messages.length > 0 && (earlier === 'more' || earlier === 'loading') && (
           <EarlierButton ref={earlierBtnRef} loading={earlier === 'loading'} onLoad={loadEarlier} />
         )}
-        {!viewingHistory && messages.length > 0 && earlier === 'start' && <ChatStartLine ref={chatStartRef} title={title} firstAt={messages[0].created_at} />}
+        {!viewingHistory && messages.length > 0 && earlier === 'start' && <ChatStartLine ref={chatStartRef} label={startLabel ?? `Start of your chat with ${title}`} firstAt={messages[0].created_at} />}
         {continuedFrom && <ContinuedLine text={continuedFrom.text} onOpen={continuedFrom.onOpen} />}
         {welcome && messages.length === 0 && welcome}
         {showHome && home && (

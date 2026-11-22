@@ -104,7 +104,7 @@ import { type H4Status, type HeldSend, afterRelease, applyBotStatusEvent, h4Api,
 import { HeldLine } from './components/HeldLine';
 import { type BrowsingMap, expireBrowsing, globeRows, noteBrowser, ownerStillRunning, pruneBrowsing, seedBrowsing, switchEntries } from './watchLive';
 import { LiveMissPage } from './components/WatchLive';
-import { PAGE, mergeLatest, prependOlder, reachedStart } from './chatPages';
+import { PAGE, mergeLatest, prependOlder, reachedStart, startLabel } from './chatPages';
 import {
   ChatLoads,
   Delegation,
@@ -4602,6 +4602,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           viewingHistory={viewingHistory}
           onJumpToLatest={() => setHistoryWindow(null)}
           earlier={!openCtx || viewingHistory ? undefined : chatStart[openCtx] ? 'start' : olderLoading === openCtx ? 'loading' : 'more'}
+          startLabel={startLabel({ thread: !!openThreadId, channel: isChannel, title: chatTitle })}
           onLoadEarlier={() => loadOlder(openCtx)}
           stream={isCurrentContextStreaming ? streamStore : NO_STREAM}
           pendingApprovals={approvalsHere}

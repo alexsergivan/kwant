@@ -32,3 +32,12 @@ export function prependOlder<M extends HasId>(cached: readonly M[] | undefined, 
 
 /** Whether a chat is at its start after a page came back: a short page has nothing before it. */
 export const reachedStart = (page: readonly unknown[]) => page.length < PAGE;
+
+/**
+ * The start line's words: a thread is "this conversation" (its chat title is the bot's name), a channel or team
+ * names itself ("Start of #general"), a direct chat names the bot.
+ */
+export function startLabel(where: { thread: boolean; channel: boolean; title: string }): string {
+  if (where.thread) return 'Start of this conversation';
+  return where.channel ? `Start of ${where.title}` : `Start of your chat with ${where.title}`;
+}
