@@ -3,7 +3,9 @@
 //! server's `/api/app/update` routes read and drive the hub. Anywhere else (`kwnt serve`, Docker, a
 //! VPS, the Windows beta) the server registers [`release_check`] instead: it reads the same
 //! `latest.json` the Mac app does, on start and every 6 hours, and says how this install updates
-//! ([`How`]) with `can_install: false`. `KWNT_UPDATE_CHECK=off` turns that off (`supported: false`).
+//! ([`How`]) with `can_install: false`. `KWNT_UPDATE_CHECK=off` turns that off (`supported: false`),
+//! and so does building with `--features no-update-check` ([`BUILT_WITHOUT_UPDATE_CHECK`]), for
+//! package managers such as Homebrew that update kwant themselves.
 //!
 //! The hub owns the state machine: idle → checking → available → downloading → ready, with error
 //! from checking or downloading. The updater only does the work (fetch, verify, install, relaunch)
@@ -21,6 +23,11 @@ use tokio::sync::watch;
 pub const LATEST_JSON: &str =
     "https://github.com/alexsergivan/kwant/releases/latest/download/latest.json";
 pub const RELEASES: &str = "https://github.com/alexsergivan/kwant/releases";
+/// Built with `--features no-update-check`: the release check never runs, exactly as with
+/// `KWNT_UPDATE_CHECK=off`, whatever the environment says. For package managers that update kwant
+/// themselves (Homebrew: https://docs.brew.sh/Acceptable-Formulae#self-updating-software).
+pub const BUILT_WITHOUT_UPDATE_CHECK: bool = cfg!(feature = "no-update-check");
+
 /// How often the server looks again on its own; "Check again" looks at once.
 pub const RECHECK_EVERY: Duration = Duration::from_secs(6 * 60 * 60);
 /// A check that takes longer than this says it couldn't check, never "latest".
@@ -113,6 +120,9 @@ pub enum Refused {
 impl Refused {
     pub fn message(&self) -> &'static str {
         match self {
+            Refused::Unsupported if BUILT_WITHOUT_UPDATE_CHECK => {
+                "this kwant doesn't check for updates: its package manager updates it"
+            }
             Refused::Unsupported => "this kwant doesn't check for updates (KWNT_UPDATE_CHECK=off)",
             Refused::CannotInstall => {
                 "this kwant updates with a command, not from the app: see How to update"
@@ -517,12 +527,17 @@ impl Updater for ReleaseCheck {
 
 /// Starts the release check on `hub` when the app's own updater isn't there: one look a few
 /// seconds after start, then every [`RECHECK_EVERY`] (wall clock, so a sleeping laptop looks
-/// again when it wakes). Stops if the app's updater takes over. `KWNT_UPDATE_CHECK=off` skips it.
+/// again when it wakes). Stops if the app's updater takes over. `KWNT_UPDATE_CHECK=off` and a
+/// `no-update-check` build skip it.
 pub fn start_release_check(hub: Arc<UpdateHub>) {
-    if std::env::var("KWNT_UPDATE_CHECK")
-        .is_ok_and(|v| matches!(v.trim(), "off" | "0" | "false" | "no"))
-    {
-        tracing::info!("update check off (KWNT_UPDATE_CHECK)");
+    let env = std::env::var("KWNT_UPDATE_CHECK").ok();
+    start_release_check_unless(hub, update_check_off(BUILT_WITHOUT_UPDATE_CHECK, env.as_deref()));
+}
+
+/// [`start_release_check`], or nothing when `off` says why not.
+fn start_release_check_unless(hub: Arc<UpdateHub>, off: Option<&str>) {
+    if let Some(why) = off {
+        tracing::info!("update check off ({why})");
         return;
     }
     let client = reqwest::Client::builder()
@@ -559,6 +574,19 @@ pub fn start_release_check(hub: Arc<UpdateHub>) {
             tokio::time::sleep(Duration::from_secs(5 * 60)).await;
         }
     });
+}
+
+/// Why the release check doesn't run, or `None` when it does: a `no-update-check` build
+/// (`built_without`), or `KWNT_UPDATE_CHECK` (`env`) set to `off`, `0`, `false` or `no`. Either way
+/// nothing is registered on the hub, so it reports `supported: false`.
+fn update_check_off(built_without: bool, env: Option<&str>) -> Option<&'static str> {
+    if built_without {
+        Some("built with no-update-check")
+    } else if env.is_some_and(|v| matches!(v.trim(), "off" | "0" | "false" | "no")) {
+        Some("KWNT_UPDATE_CHECK")
+    } else {
+        None
+    }
 }
 
 /// `x.y.z` as numbers; `None` for anything else, including prereleases (`0.2.0-rc.1`).
@@ -644,6 +672,59 @@ mod tests {
         assert_eq!(s.state, State::Idle);
         assert_eq!(hub.check(), Err(Refused::Unsupported));
         assert_eq!(hub.install(), Err(Refused::Unsupported));
+    }
+
+    #[test]
+    fn a_no_update_check_build_is_off_like_kwnt_update_check_off() {
+        // The env switch, in a normal build
+        assert_eq!(update_check_off(false, None), None);
+        for on in ["on", "1", "yes", "", "Off "] {
+            assert_eq!(update_check_off(false, Some(on)), None, "{on:?}");
+        }
+        for off in ["off", "0", "false", "no", " off "] {
+            assert_eq!(update_check_off(false, Some(off)), Some("KWNT_UPDATE_CHECK"), "{off:?}");
+        }
+        // A no-update-check build: off whatever the environment says, also when it asks for on
+        for env in [None, Some("on"), Some("1"), Some("off")] {
+            assert_eq!(update_check_off(true, env), Some("built with no-update-check"), "{env:?}");
+        }
+        // This build: off by itself only with the feature (`cargo test` runs without it)
+        assert_eq!(BUILT_WITHOUT_UPDATE_CHECK, cfg!(feature = "no-update-check"));
+        assert_eq!(update_check_off(BUILT_WITHOUT_UPDATE_CHECK, None).is_some(), BUILT_WITHOUT_UPDATE_CHECK);
+    }
+
+    #[tokio::test]
+    async fn a_no_update_check_build_reports_off_exactly_like_the_env_switch() {
+        // On: the release check registers and reports (it never installs)
+        let on = Arc::new(UpdateHub::new());
+        start_release_check_unless(on.clone(), update_check_off(false, None));
+        let s = on.status();
+        assert!(s.supported);
+        assert!(!s.can_install);
+        assert!(s.how.is_some());
+        // Off by KWNT_UPDATE_CHECK=off, and off by the build even with KWNT_UPDATE_CHECK=on: the
+        // same status as each other and as a server where nothing registered
+        let by_env = Arc::new(UpdateHub::new());
+        start_release_check_unless(by_env.clone(), update_check_off(false, Some("off")));
+        let by_build = Arc::new(UpdateHub::new());
+        start_release_check_unless(by_build.clone(), update_check_off(true, Some("on")));
+        for hub in [&by_env, &by_build] {
+            let s = hub.status();
+            assert!(!s.supported);
+            assert!(!s.can_install);
+            assert_eq!(s.how, None);
+            assert_eq!(s.state, State::Idle);
+            assert_eq!(s.checked_at, None, "never looked");
+            assert_eq!(s, UpdateHub::new().status());
+            assert_eq!(hub.check(), Err(Refused::Unsupported));
+            assert_eq!(hub.install(), Err(Refused::Unsupported));
+        }
+        let message = Refused::Unsupported.message();
+        if BUILT_WITHOUT_UPDATE_CHECK {
+            assert!(message.contains("package manager"), "{message}");
+        } else {
+            assert!(message.contains("KWNT_UPDATE_CHECK=off"), "{message}");
+        }
     }
 
     #[test]
