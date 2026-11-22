@@ -125,6 +125,22 @@ async fn mend_goal(e: &Env, id: &str) {
     on_change(&e.state, &before, &after, &[], owed).await;
 }
 
+/// [`break_goal`] that also logs the `not_met` event the runner logs, so the incident starts here.
+async fn break_logged(e: &Env, id: &str) {
+    let before = e.state.db.get_goal(id).await.unwrap().unwrap().status;
+    let after = e.state.db.set_goal_status(id, "not_met", "failing", &[], Some(("not_met", json!({"failing": ["a check"]})))).await.unwrap().unwrap();
+    on_change(&e.state, &before, &after, &["a check".to_string()], false).await;
+}
+
+/// [`mend_goal`] that also logs the `met` event the runner logs, which closes the incident (and
+/// what the person was told about it), as in `goals::runner`.
+async fn mend_logged(e: &Env, id: &str) {
+    let before = e.state.db.get_goal(id).await.unwrap().unwrap().status;
+    let owed = e.state.db.told_broken(id).await.unwrap();
+    let after = e.state.db.set_goal_status(id, "met", "", &[], Some(("met", json!({})))).await.unwrap().unwrap();
+    on_change(&e.state, &before, &after, &[], owed).await;
+}
+
 /// The kind of the newest notice sent about the goal.
 async fn last_notice(e: &Env, id: &str) -> Option<String> {
     e.state.db.goal_events(id, 100).await.unwrap().into_iter().find(|ev| ev.kind == "notified").and_then(|ev| ev.detail_value()["kind"].as_str().map(str::to_string))
@@ -767,8 +783,8 @@ async fn g_q_29_a_goal_that_keeps_breaking_never_sends_more_than_three_broken_no
     let e = setup().await;
     let g = goal(&e, "Site is up", "watch").await;
     for _ in 0..5 {
-        break_goal(&e, &g.id).await;
-        mend_goal(&e, &g.id).await;
+        break_logged(&e, &g.id).await;
+        mend_logged(&e, &g.id).await;
     }
     // Each break the person heard about gets its "OK again"; the fourth and fifth are held back,
     // and a recovery nobody was told about stays quiet
@@ -784,23 +800,34 @@ async fn g_q_29_a_goal_that_keeps_breaking_never_sends_more_than_three_broken_no
 async fn g_q_30_a_second_incident_the_same_day_still_tells_the_person() {
     let e = setup().await;
     let g = goal(&e, "Site is up", "suggest").await;
-    // Incident 1: broken, the decision, then it recovers on its own
-    diagnosed(&e, &g).await;
-    mend_goal(&e, &g.id).await;
+    // Incident 1: broken, the decision, then it recovers on its own. The status changes log
+    // their events as the runner does, so each incident starts and ends where it really would.
+    break_logged(&e, &g.id).await;
     tick_at(&e.state, now()).await;
+    let l1 = open_link(&e, &g.id).await;
+    investigated(&e, &l1).await;
+    tick_at(&e.state, now()).await;
+    mend_logged(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    assert_eq!(e.state.db.goal_links(&g.id, 5).await.unwrap()[0].outcome.as_deref(), Some("not_needed"));
     assert_eq!(notified(&e, &g.id).await, ["broken", "decision", "recovered"]);
     // Incident 2, the same day: broken and the decision go out again
-    break_goal(&e, &g.id).await;
+    break_logged(&e, &g.id).await;
     let t0 = now();
     tick_at(&e.state, t0).await;
     let l = open_link(&e, &g.id).await;
+    assert_eq!(l.attempt, 1, "a new incident starts its own attempts");
     investigated(&e, &l).await;
     tick_at(&e.state, t0).await;
     assert_eq!(status(&e, &g.id).await, ("needs_you".into(), "fix_ready".into()));
     assert_eq!(notified(&e, &g.id).await, ["broken", "decision", "recovered", "broken", "decision"]);
-    // The person runs the fix; it fails, the replan's investigation fails too, and kwant stops
+    // The person runs the fix (as g_r_20: its bot picks it up, the tick sees it running); it
+    // fails, the replan's investigation fails too, and kwant stops
     let (s, v) = send(&e, "POST", &format!("/api/tasks/{}/run", l.fix_task_id), None, None, None).await;
     assert!(s.is_success(), "{v}");
+    e.state.db.claim_task(&l.fix_task_id, &e.bot, None, None, 60_000, false, &e.bot).await.unwrap().unwrap();
+    tick_at(&e.state, t0).await;
+    assert_eq!(status(&e, &g.id).await.0, "fixing");
     fail(&e, &l.fix_task_id).await;
     tick_at(&e.state, t0 + MIN).await;
     tick_at(&e.state, t0 + 12 * MIN).await;
