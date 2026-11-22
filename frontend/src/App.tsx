@@ -186,7 +186,7 @@ import { requestSpendStopFocus } from './spendStop';
 import { SpendStopNeedsYou } from './components/SpendStop';
 import { BudgetNeedsYou } from './components/BotBudget';
 import { GoalsNeedYou } from './components/GoalsNeedYou';
-import { openGoalOnBoard, parseGoalDraftFailed } from './goals';
+import { dropGoalIfNoBoard, openGoalNotice, openGoalOnBoard, parseGoalDraftFailed } from './goals';
 import { budgetStore, isBudgetMessage, requestBudgetFocus, sendWaitsForBudget } from './botBudget';
 import { EMPTY_PILL, NUDGES_SETTING_EVENT, browserIconDoc, createArrivals, createNudgeIcon, nudgesEnabled, pillAdd, pillPrune, setAppBadgeCount, shouldPill, type Nudge, type PillState } from './attention';
 import { NeedsYouPill } from './components/NeedsYouPill';
@@ -810,10 +810,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // kind (an app update, a loose-end reminder) opens home. 0.8.1 F6: an approval, and anything else
   // about a chat, opens the exact chat it came from (a thread, a channel or team chat, the 1:1) at
   // its card; when that chat is gone, the bot's direct chat.
-  const openNotified = (n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id' | 'thread_id' | 'card_id'>) => {
+  const openNotified = (n: Pick<NotifyEvent, 'kind' | 'kwant_id' | 'channel_id' | 'thread_id' | 'card_id' | 'goal_id'>) => {
     const place = placeOfNotification(n);
     if (place === 'spend_stop') openSpendStop();
     else if (place === 'home') openHome();
+    else if (openGoalNotice(n, missionBoard, showPage)) {
+      // 34d: a goal notice opens the Mission board with the goal's drawer (the bot's chat when the board is off)
+    }
     else if (n.kind === 'skill_proposed') openSkillsRef.current(n.kwant_id);
     // A suggested routine is decided in Routines, not in the bot's chat
     else if (n.kind === 'automation_suggested') openSpaceSettings('routines');
@@ -855,6 +858,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         channel_id: m.channel_id,
         thread_id: m.thread_id ?? null,
         card_id: m.card_id ?? null,
+        goal_id: m.goal_id ?? null,
       });
     };
     sw.addEventListener('message', onMessage);
@@ -867,9 +871,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       .then((r) => (r.ok ? r.json() : null))
       .then((d) => {
         const on = parseMissionBoardSetting(d);
-        if (live && on !== null) setMissionBoard(on);
+        if (!live) return;
+        if (on !== null) setMissionBoard(on);
+        dropGoalIfNoBoard(on);
       })
-      .catch(() => {});
+      .catch(() => {
+        if (live) dropGoalIfNoBoard(null);
+      });
     const onSetting = (e: Event) => setMissionBoard(Boolean((e as CustomEvent<boolean>).detail));
     window.addEventListener(MISSION_BOARD_SETTING_EVENT, onSetting);
     return () => {

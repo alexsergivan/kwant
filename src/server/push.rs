@@ -77,6 +77,9 @@ pub struct Payload {
     /// The card to show there: an approval's id (0.8.1 F6).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub card_id: Option<String>,
+    /// The goal a goal notice is about (34d): a tap opens it on the Mission board. Old service workers ignore it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub goal_id: Option<String>,
 }
 
 impl Payload {
@@ -115,6 +118,7 @@ impl Payload {
             tag,
             thread_id: None,
             card_id: None,
+            goal_id: None,
         }
     }
 
@@ -135,6 +139,22 @@ impl Payload {
                 self.url.push_str(&format!("&card={}", enc(c)));
                 self.card_id = Some(c.to_string());
             }
+        }
+        self
+    }
+
+    /// The same notification about one goal (34d): `&goal=<id>`, kept with `kwant=` so an older page
+    /// still opens the bot, as [`Payload::at`] does for a thread. The tag names the goal, so one goal's
+    /// notice doesn't replace another's, and its next one replaces the last.
+    pub fn about_goal(mut self, goal_id: Option<String>) -> Self {
+        let enc = |s: &str| percent_encoding::utf8_percent_encode(s, QUERY_VALUE).to_string();
+        if self.url.contains("notify=") {
+            return self;
+        }
+        if let Some(g) = goal_id.as_deref().filter(|g| !g.is_empty()) {
+            self.url.push_str(&format!("&goal={}", enc(g)));
+            self.tag = format!("kwnt-{}-{}-{g}", self.space_id.as_deref().unwrap_or("none"), self.kind);
+            self.goal_id = Some(g.to_string());
         }
         self
     }
@@ -938,5 +958,32 @@ mod tests {
         // About no bot: no thread or card to open
         let p = Payload::new("spend_stopped", "t", "b", None, None, String::new()).at(Some("t1".into()), Some("x".into()));
         assert_eq!(p.url, "/?notify=spend_stopped");
+    }
+
+    /// 34d: a goal notice names its goal, so a tap opens the goal on the Mission board, not the bot's empty chat.
+    #[test]
+    fn a_goal_notice_names_its_goal() {
+        let p = Payload::new("goal_alert", "kwant.si stays up is failing", "b", Some("s1".into()), None, "k1".into()).about_goal(Some("g 1".into()));
+        assert_eq!(p.url, "/?space=s1&kwant=k1&goal=g%201", "kwant= stays, so an older page still opens the bot");
+        assert_eq!(p.goal_id.as_deref(), Some("g 1"));
+        let json: serde_json::Value = serde_json::from_slice(&p.to_bytes()).unwrap();
+        assert_eq!(json["goal_id"].as_str(), Some("g 1"));
+        // One tag per goal: two goals' notices don't replace each other, one goal's next notice does
+        let other = Payload::new("goal_alert", "t", "b", Some("s1".into()), None, "k1".into()).about_goal(Some("g2".into()));
+        assert_eq!((p.tag.as_str(), other.tag.as_str()), ("kwnt-s1-goal_alert-g 1", "kwnt-s1-goal_alert-g2"));
+        // No goal (or an empty one): unchanged, and no new key for old service workers
+        let plain = Payload::new("goal_alert", "t", "b", Some("s1".into()), None, "k1".into());
+        assert_eq!(plain.clone().about_goal(None), plain);
+        assert_eq!(plain.clone().about_goal(Some(String::new())), plain);
+        let json: serde_json::Value = serde_json::from_slice(&plain.to_bytes()).unwrap();
+        assert!(json.get("goal_id").is_none());
+        // Other kinds' urls and tags are as before
+        let p = Payload::new("approval_needed", "t", "b", Some("s1".into()), None, "k1".into()).at(Some("t1".into()), Some("ap1".into()));
+        assert_eq!((p.url.as_str(), p.tag.as_str(), p.goal_id), ("/?space=s1&kwant=k1&thread=t1&card=ap1", "kwnt-s1-approval_needed-t1", None));
+        let p = Payload::new("turn_finished", "t", "b", None, None, "k1".into());
+        assert_eq!((p.url.as_str(), p.tag.as_str()), ("/?kwant=k1", "kwnt-none-turn_finished-k1"));
+        // About no bot: nothing to add to
+        let p = Payload::new("spend_stopped", "t", "b", None, None, String::new()).about_goal(Some("g1".into()));
+        assert_eq!((p.url.as_str(), p.goal_id), ("/?notify=spend_stopped", None));
     }
 }

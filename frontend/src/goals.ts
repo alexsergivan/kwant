@@ -1037,6 +1037,24 @@ export const takePendingGoal = (): string | null => {
   return id;
 };
 
+/** 34d: the Mission board is off here (or the server can't say): drop a goal held for it, so a notice's goal
+ *  can't open its drawer by surprise if the board is turned on later. */
+export const dropGoalIfNoBoard = (boardOn: boolean | null): void => {
+  if (boardOn !== true) pendingGoal = null;
+};
+
+/**
+ * 34d: a tap on a goal notice opens the Mission board with that goal's drawer. false when it names no goal or the
+ * board is off: the caller opens the bot's chat, as before.
+ */
+export function openGoalNotice(n: { goal_id?: string | null }, boardOn: boolean, show: (page: 'board') => void): boolean {
+  const id = typeof n.goal_id === 'string' && n.goal_id ? n.goal_id : null;
+  if (!id || !boardOn) return false;
+  show('board');
+  openGoalOnBoard(id);
+  return true;
+}
+
 /**
  * A mission's goal: `goal_link {id, title}`, or `goal` when the server sends it as an object. `goal` as text
  * is the mission's own goal line (0.6.x), not a link.
