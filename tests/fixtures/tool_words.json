@@ -1,0 +1,268 @@
+[
+ {
+  "tool": "Read",
+  "ing": "reading a file",
+  "base": "read a file",
+  "push": true
+ },
+ {
+  "tool": "Write",
+  "ing": "writing a file",
+  "base": "write a file",
+  "push": true
+ },
+ {
+  "tool": "Edit",
+  "ing": "changing a file",
+  "base": "change a file",
+  "push": true
+ },
+ {
+  "tool": "MultiEdit",
+  "ing": "changing a file",
+  "base": "change a file",
+  "push": true
+ },
+ {
+  "tool": "read_file",
+  "ing": "reading a file",
+  "base": "read a file",
+  "push": true
+ },
+ {
+  "tool": "write_file",
+  "ing": "writing a file",
+  "base": "write a file",
+  "push": true
+ },
+ {
+  "tool": "edit_file",
+  "ing": "changing a file",
+  "base": "change a file",
+  "push": true
+ },
+ {
+  "tool": "Bash",
+  "ing": "running a command",
+  "base": "run a command",
+  "push": true
+ },
+ {
+  "tool": "Bash",
+  "ing": "running a command",
+  "base": "run a command",
+  "push": true,
+  "source": "claude_builtin"
+ },
+ {
+  "tool": "execute_shell",
+  "ing": "running a command on your computer",
+  "base": "run a command on your computer",
+  "push": true
+ },
+ {
+  "tool": "WebFetch",
+  "ing": "opening a page",
+  "base": "open a page",
+  "push": true
+ },
+ {
+  "tool": "WebSearch",
+  "ing": "searching the web",
+  "base": "search the web",
+  "push": true
+ },
+ {
+  "tool": "browser_navigate",
+  "ing": "opening a page",
+  "base": "open a page",
+  "push": false
+ },
+ {
+  "tool": "browser_click",
+  "ing": "using the browser",
+  "base": "use the browser",
+  "push": false
+ },
+ {
+  "tool": "browser_upload",
+  "ing": "uploading a file to a website",
+  "base": "upload a file to a website",
+  "push": false
+ },
+ {
+  "tool": "browser_snapshot",
+  "ing": "reading the browser page",
+  "base": "read the browser page",
+  "push": false
+ },
+ {
+  "tool": "browser_screenshot",
+  "ing": "looking at the browser page",
+  "base": "look at the browser page",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_snapshot",
+  "ing": "reading the browser page",
+  "base": "read the browser page",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_screenshot",
+  "ing": "looking at the browser page",
+  "base": "look at the browser page",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_click",
+  "ing": "using the browser",
+  "base": "use the browser",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_type",
+  "ing": "using the browser",
+  "base": "use the browser",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_fill",
+  "ing": "using the browser",
+  "base": "use the browser",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_upload",
+  "ing": "uploading a file to a website",
+  "base": "upload a file to a website",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_open",
+  "ing": "opening a page",
+  "base": "open a page",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_back",
+  "ing": "opening a page",
+  "base": "open a page",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_reload",
+  "ing": "opening a page",
+  "base": "open a page",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_read",
+  "ing": "reading the browser page",
+  "base": "read the browser page",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_get_text",
+  "ing": "reading the browser page",
+  "base": "read the browser page",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_get_url",
+  "ing": "reading the browser page",
+  "base": "read the browser page",
+  "push": false
+ },
+ {
+  "tool": "mcp__browser__agent_browser_tab_new",
+  "ing": "using the browser",
+  "base": "use the browser",
+  "push": false
+ },
+ {
+  "tool": "agent_browser_snapshot",
+  "ing": "reading the browser page",
+  "base": "read the browser page",
+  "push": false
+ },
+ {
+  "tool": "agent_browser_snapshot",
+  "ing": "reading the browser page",
+  "base": "read the browser page",
+  "push": false,
+  "server": "browser"
+ },
+ {
+  "tool": "mcp__slack__send_message",
+  "ing": "sending a message on Slack",
+  "base": "send a message on Slack",
+  "push": false
+ },
+ {
+  "tool": "send_message",
+  "ing": "sending a message on Slack",
+  "base": "send a message on Slack",
+  "push": false,
+  "server": "slack"
+ },
+ {
+  "tool": "mcp__github__create_pull_request",
+  "ing": "opening a pull request on GitHub",
+  "base": "open a pull request on GitHub",
+  "push": false
+ },
+ {
+  "tool": "mcp__srv__foo_bar",
+  "ing": "using foo bar (srv)",
+  "base": "use foo bar (srv)",
+  "push": false
+ },
+ {
+  "tool": "mcp__fs__read",
+  "ing": "using read (fs)",
+  "base": "use read (fs)",
+  "push": false
+ },
+ {
+  "tool": "write",
+  "ing": "using write (fs)",
+  "base": "use write (fs)",
+  "push": false,
+  "server": "fs"
+ },
+ {
+  "tool": "mcp__shell__bash",
+  "ing": "running a command",
+  "base": "run a command",
+  "push": false
+ },
+ {
+  "tool": "bash",
+  "ing": "running a command",
+  "base": "run a command",
+  "push": false,
+  "server": "shell"
+ },
+ {
+  "tool": "Bash",
+  "ing": "running a command",
+  "base": "run a command",
+  "push": false,
+  "server": "",
+  "source": "mcp",
+  "note": "33g QA Finding 3: an MCP card named Bash with an empty server; the push and Telegram name it (use Bash), never claude's Bash"
+ },
+ {
+  "tool": "Task",
+  "ing": "using Task",
+  "base": "use Task",
+  "push": false
+ },
+ {
+  "tool": "",
+  "ing": "using a tool",
+  "base": "use a tool",
+  "push": false
+ }
+]

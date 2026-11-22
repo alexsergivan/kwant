@@ -156,6 +156,17 @@ export function askLine(item: Pick<AwayItem, 'kind' | 'title' | 'summary' | 'que
   return bare(title);
 }
 
+/** The advice a stopped notice ends with (`src/server/stopped.rs`), which the band's hint already gives by its button. */
+const RETRY_IN_CHAT = /\s*Retry in the chat sends your message again\.\s*$/;
+
+/** The band's line: the whole line, minus a trailing "Retry in the chat…" when the band has its own Retry (33h, minor d). */
+export function bandLine(item: Pick<AwayItem, 'kind' | 'title' | 'summary' | 'question'>, action: AskAction | null): string {
+  const line = askLine(item);
+  if (action !== 'retry') return line;
+  const cut = line.replace(RETRY_IN_CHAT, '');
+  return cut ? cut : line;
+}
+
 /** The place a chat is: what the pane shows now, or where an item lives. */
 export type Here = { thread: string; kwant: string } | { channel: string } | { direct: string };
 

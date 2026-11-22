@@ -471,7 +471,12 @@ const WAITED_RESULT_CHARS: usize = 4000;
 ///
 /// Returns how many started.
 pub(super) async fn release_dependents(state: &AppState, prereq_id: &str) -> usize {
+    pause_point(prereq_id).await;
     let mut started = 0;
+    // The tasks this ends: parked behind each of them, a task is on its way too until we're done.
+    // Only when the caller holds `prereq_id` (see [`Releasing`]): its report of the batch follows
+    let held = Releasing::holds(prereq_id);
+    let mut ending = Releasing::default();
     let mut work = vec![prereq_id.to_string()];
     while let Some(id) = work.pop() {
         let Ok(Some(p)) = state.db.get_delegation(&id).await else { continue };
@@ -547,6 +552,9 @@ pub(super) async fn release_dependents(state: &AppState, prereq_id: &str) -> usi
                         format!("not started: it waited for {who}'s result, and {who}'s task was {status}")
                     };
                     let ended = if stopped { "cancelled" } else { "failed" };
+                    if held {
+                        ending.add(&d.id);
+                    }
                     if !state.db.finish_delegation(&d.id, ended, Some(&why), None).await.unwrap_or(false) {
                         continue;
                     }
@@ -575,6 +583,84 @@ pub(super) async fn release_dependents(state: &AppState, prereq_id: &str) -> usi
 /// Whether `d` is parked behind another delegation and hasn't started.
 pub(super) fn is_parked(d: &Delegation) -> bool {
     d.status == "queued" && d.after_delegation_id.is_some()
+}
+
+/// Hand-offs that ended (or are ending) and whose parked tasks [`release_dependents`] hasn't
+/// started or ended yet, with how many callers hold each (see [`Releasing`]).
+static RELEASING: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, usize>>> = std::sync::OnceLock::new();
+
+/// Holds hand-offs as releasing while it lives: a task parked behind one of them is on its way
+/// (to start, or to end with it) and counts as still running for [`finished_batch`]. Taken before
+/// the hand-off is saved as ended and dropped once [`release_dependents`] is done, before that
+/// hand-off's own report, which then sees the parked tasks as they are now. Only callers whose
+/// report of the batch follows hold one (a Stop, a run's end, a restart's cut-short tasks):
+/// elsewhere a waiting report would have nobody to report for it.
+///
+/// 33s: without it, another result of the batch reported in that moment saw the batch without
+/// the parked task (parked tasks don't count), the ended one's report a moment later saw it with
+/// that task (now started or stopped): two different batches, so the lead was resumed twice.
+#[derive(Default)]
+struct Releasing(Vec<String>);
+
+impl Releasing {
+    fn hold(id: &str) -> Self {
+        let mut r = Self::default();
+        r.add(id);
+        r
+    }
+
+    fn add(&mut self, id: &str) {
+        *RELEASING.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()).entry(id.to_string()).or_default() += 1;
+        self.0.push(id.to_string());
+    }
+
+    fn holds(id: &str) -> bool {
+        RELEASING.get().is_some_and(|r| r.lock().unwrap_or_else(|e| e.into_inner()).contains_key(id))
+    }
+}
+
+impl Drop for Releasing {
+    fn drop(&mut self) {
+        let Some(r) = RELEASING.get() else { return };
+        let mut r = r.lock().unwrap_or_else(|e| e.into_inner());
+        for id in self.0.drain(..) {
+            if let Some(n) = r.get_mut(&id) {
+                *n -= 1;
+                if *n == 0 {
+                    r.remove(&id);
+                }
+            }
+        }
+    }
+}
+
+/// Whether `d` is parked behind a hand-off whose end is being released right now (see [`Releasing`]).
+fn on_its_way(d: &Delegation) -> bool {
+    is_parked(d) && d.after_delegation_id.as_deref().is_some_and(Releasing::holds)
+}
+
+type Pause = (std::sync::Arc<tokio::sync::Notify>, std::sync::Arc<tokio::sync::Notify>);
+
+/// Pauses armed by [`pause_release`], by hand-off id.
+static RELEASE_PAUSES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Pause>>> = std::sync::OnceLock::new();
+
+/// Test hook (33s): the next [`release_dependents`] for hand-off `id` (right after `id` ended,
+/// before the tasks parked behind it move on and before its report) notifies the first `Notify`
+/// and waits for the second, so a test can run another report in that moment.
+#[doc(hidden)]
+pub fn pause_release(id: &str) -> Pause {
+    let pause: Pause = Default::default();
+    RELEASE_PAUSES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), pause.clone());
+    pause
+}
+
+async fn pause_point(id: &str) {
+    let Some(pauses) = RELEASE_PAUSES.get() else { return };
+    let pause = pauses.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+    if let Some((reached, go)) = pause {
+        reached.notify_one();
+        go.notified().await;
+    }
 }
 
 /// The background part: the specialist's turn in the thread, then the report in the origin chat.
@@ -817,6 +903,8 @@ async fn finish(
     failover: Option<Value>,
 ) {
     let (status, error) = ended_as(&outcome);
+    // A carried-on result goes to the lead on its own, not with its batch: nothing to hold for
+    let releasing = (!carried_on).then(|| Releasing::hold(&d.id));
     // Someone may have cancelled it meanwhile; then the cancel already reported it
     if !state.db.finish_delegation(&d.id, status, error.as_deref(), None).await.unwrap_or(false) {
         return;
@@ -869,6 +957,7 @@ async fn finish(
     )
     .await;
     release_dependents(state, &done.id).await;
+    drop(releasing);
     if !carried_on {
         // Teammates the result @mentions start first, so the lead's batch waits for them too
         if let Ok(reply) = &outcome {
@@ -1137,8 +1226,10 @@ async fn finished_batch(state: &AppState, d: &Delegation) -> Option<Vec<Delegati
         .ok()?
         .into_iter()
         // A task parked behind one that waits for the person isn't running: the lead reports
-        // the rest now, and that task comes back with its own batch once it ran
-        .filter(|s| s.continue_lead && s.origin_context() == d.origin_context() && !is_parked(s))
+        // the rest now, and that task comes back with its own batch once it ran. One whose wait
+        // just ended is on its way and counts as running: the report of the task it waited for
+        // follows once it started or ended (33s)
+        .filter(|s| s.continue_lead && s.origin_context() == d.origin_context() && (!is_parked(s) || on_its_way(s)))
         .collect();
     // One still running hasn't ended yet: its run reaches to now, so it overlaps everything
     // after its start
@@ -1500,6 +1591,7 @@ fn status_guidance(status: &str) -> Option<&'static str> {
 pub async fn cancel(state: &AppState, id: &str) -> Option<Delegation> {
     let d = state.db.get_delegation(id).await.ok().flatten()?;
     state.turns.cancel(Some(&d.id));
+    let releasing = Releasing::hold(&d.id);
     if !state.db.finish_delegation(&d.id, "cancelled", Some("stopped by the user"), None).await.unwrap_or(false) {
         return None;
     }
@@ -1519,6 +1611,7 @@ pub async fn cancel(state: &AppState, id: &str) -> Option<Delegation> {
     }
     emit_delegation(state, &done);
     release_dependents(state, &done.id).await;
+    drop(releasing);
     // A stopped task alone doesn't wake the lead, but other results of its batch must not be lost
     spawn_report_to_lead(state, done.clone());
     Some(done)
@@ -1571,6 +1664,12 @@ pub async fn interrupt_open(state: &AppState) {
     let Ok((again, cut)) = state.db.restart_open_delegations().await else {
         return;
     };
+    // Every one of them ended at once: each reports once all of their parked tasks moved on
+    let mut releasing = Releasing::default();
+    for d in &cut {
+        releasing.add(&d.id);
+    }
+    let mut ended = Vec::new();
     for d in cut {
         let specialist = name_of(state, &d.specialist_kwant_id).await;
         let Ok(Some(done)) = state.db.get_delegation(&d.id).await else {
@@ -1586,6 +1685,10 @@ pub async fn interrupt_open(state: &AppState) {
         )
         .await;
         release_dependents(state, &done.id).await;
+        ended.push(done);
+    }
+    drop(releasing);
+    for done in ended {
         spawn_report_to_lead(state, done);
     }
     // Tasks parked behind one that ended while kwnt was down go on (or give up) now

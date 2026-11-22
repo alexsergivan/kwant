@@ -72,6 +72,24 @@ const clean = (s: string) => s.replace(/\s+/g, ' ').trim();
  * Nothing beyond its role means none: the role is already the subtitle, so echoing it adds nothing.
  * Phrases that only repeat the role are dropped for the same reason.
  */
+/** 33r: what a hero chip says about its bot. Thinking is a working turn (the same violet dot as the sidebar). */
+export type HeroState = 'needs you' | 'working';
+export function heroState(mood: string | undefined): HeroState | null {
+  return mood === 'needs_you' ? 'needs you' : mood === 'working' || mood === 'thinking' ? 'working' : null;
+}
+
+/**
+ * 33r: #general's and a team's faces: who needs you first, then who is working, then everyone else, each group in
+ * the list's own order (stable), so a quiet space keeps today's order.
+ */
+export function heroOrder<T extends { id: string }>(team: T[], moodOf: (id: string) => string | undefined): T[] {
+  const rank = (k: T) => {
+    const s = heroState(moodOf(k.id));
+    return s === 'needs you' ? 0 : s === 'working' ? 1 : 2;
+  };
+  return team.map((k, i) => ({ k, i, r: rank(k) })).sort((a, b) => a.r - b.r || a.i - b.i).map((x) => x.k);
+}
+
 export function goodAt(bot: Pick<HomeBot, 'title' | 'covers'>): string[] {
   const role = clean(bot.title || '').toLowerCase();
   const parts = (bot.covers ?? []).map(clean).filter((p) => p && p.toLowerCase() !== role);

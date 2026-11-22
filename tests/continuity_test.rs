@@ -365,6 +365,88 @@ async fn search_ranks_filters_and_marks() {
     }
 }
 
+/// 33i: a hit inside a thread names its thread, so search can open it. Before, a person's thread
+/// message came back with `kwant_id` null (only the sender bot was looked up) and no thread, so the
+/// app said "That chat no longer exists."; a bot's thread reply opened the bot's direct chat.
+#[tokio::test]
+async fn search_hits_in_a_thread_carry_the_thread() {
+    use kwnt::db::models::MessageExtra;
+    let (app, state, _tmp) = setup().await;
+    let db = &state.db;
+    let kwants = db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let (k1, k2) = (&kwants[0], &kwants[1]);
+    let general = db
+        .list_channels(&kwnt::db::spaces::SpaceId::default_space())
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|c| c.name == "general")
+        .unwrap();
+    let thread = db.create_thread(&k1.id, "2025 tax return", "chat", None, "user").await.unwrap();
+    let in_thread = MessageExtra { thread_id: Some(thread.id.clone()), meta: None };
+    let ask = db
+        .insert_message_with(&msg(None, None, "user", "you", "please file my tax return"), &in_thread)
+        .await
+        .unwrap();
+    let answer = db
+        .insert_message_with(&msg(None, None, "kwant", &k1.name, "your tax return is filed"), &in_thread)
+        .await
+        .unwrap();
+    // A teammate's reply in k1's thread opens k1's thread too
+    let helper = db
+        .insert_message_with(&msg(None, None, "kwant", &k2.name, "tax receipts attached"), &in_thread)
+        .await
+        .unwrap();
+    let direct = db
+        .insert_message(&msg(None, Some(&k1.id), "user", "you", "tax question in the direct chat"))
+        .await
+        .unwrap();
+    let channel = db
+        .insert_message(&msg(Some(&general.id), None, "kwant", &k2.name, "tax day in general"))
+        .await
+        .unwrap();
+
+    let (status, hits) = req(&app, "GET", "/api/search?q=tax", None).await;
+    assert_eq!(status, StatusCode::OK);
+    let hits = hits.as_array().unwrap();
+    assert_eq!(hits.len(), 5, "{hits:?}");
+    let hit = |id: &str| hits.iter().find(|h| h["message_id"] == id).unwrap_or_else(|| panic!("no hit {id}"));
+
+    for (label, id, author) in [("ask", &ask.id, "you"), ("answer", &answer.id, k1.name.as_str()), ("helper", &helper.id, k2.name.as_str())] {
+        let h = hit(id);
+        assert_eq!(h["kwant_id"], k1.id.as_str(), "{label}: the thread's bot");
+        assert_eq!(h["thread_id"], thread.id.as_str(), "{label}");
+        assert_eq!(h["thread_title"], "2025 tax return", "{label}");
+        assert_eq!(h["channel_id"], Value::Null, "{label}");
+        assert_eq!(h["author"], author, "{label}");
+    }
+
+    // A direct chat and a channel are no thread, and otherwise unchanged
+    let h = hit(&direct.id);
+    assert_eq!(h["kwant_id"], k1.id.as_str());
+    assert_eq!(h["channel_id"], Value::Null);
+    for key in ["thread_id", "thread_title"] {
+        assert!(h.get(key).is_some_and(Value::is_null), "direct {key}: {h}");
+    }
+    let h = hit(&channel.id);
+    assert_eq!(h["channel_id"], general.id.as_str());
+    assert_eq!(h["channel_name"], "general");
+    assert_eq!(h["kwant_id"], k2.id.as_str(), "a channel hit still names its sender");
+    for key in ["thread_id", "thread_title"] {
+        assert!(h.get(key).is_some_and(Value::is_null), "channel {key}: {h}");
+    }
+
+    // The store returns the same fields
+    let hits = db
+        .search_messages(&kwnt::db::spaces::SpaceId::default_space(), "filed", &SearchFilter { limit: 10, ..Default::default() })
+        .await
+        .unwrap();
+    assert_eq!(hits.len(), 1);
+    let h = serde_json::to_value(&hits[0]).unwrap();
+    assert_eq!(h["thread_id"], thread.id.as_str());
+    assert_eq!(h["thread_title"], "2025 tax return");
+}
+
 // Memory
 
 #[tokio::test]
@@ -2049,4 +2131,95 @@ async fn a_quiet_turn_in_a_thread_notifies_with_the_thread() {
     assert_eq!(n.thread_id, None, "the direct chat is no thread");
     let n = continuity::turn_quiet(&state, &k.id, Some("no-such-thread")).await;
     assert_eq!(n.thread_id, None, "an unknown id is never sent as a thread");
+}
+
+/// The body of the `approval_needed` notification an `ApprovalRequired` event for card `id` makes.
+async fn approval_push_body(state: &AppState, id: &str, tool_name: &str, details: Value) -> String {
+    let mut rx = state.event_sender.subscribe();
+    let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired { id: id.into(), tool_name: tool_name.into(), details });
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Ok(RuntimeEvent::Notify { kind, card_id, title, body, .. })) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await
+        {
+            if kind == "approval_needed" && card_id.as_deref() == Some(id) {
+                assert_eq!(title, "Concierge needs your approval", "the title doesn't change");
+                return body;
+            }
+        }
+    }
+    panic!("{id}: no notification");
+}
+
+/// 33g approval-notice-plain-words: a push for an approval says what the tool does ("wants to run
+/// a command"), with the bot's own one-line description of the call when it gave one (clipped to
+/// 120, keys masked). The push is encrypted to the person's own device; Telegram never gets it.
+#[tokio::test]
+async fn approval_push_says_what_the_tool_does_with_the_bots_description() {
+    let (_app, state, _tmp) = setup().await;
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let k = &kwants[0];
+    state.db.set_setting("notify_on", r#"["approval_needed"]"#).await.unwrap();
+    let handle = continuity::spawn_notifier(state.clone());
+    let builtin = |tool: &str, arguments: Value| {
+        json!({"source": "claude_builtin", "tool": tool, "arguments": arguments, "kwant_id": k.id, "kwant_name": "Concierge"})
+    };
+
+    // Mira's case: Bash with Claude's description of the command
+    let bash = builtin(
+        "Bash",
+        json!({"command": "python3 send_reminder.py --to billing@acme.example", "description": "Send the overdue-invoice reminder for #2291 to Acme billing"}),
+    );
+    assert_eq!(
+        approval_push_body(&state, "g1", "Bash", bash).await,
+        "Concierge wants to run a command: Send the overdue-invoice reminder for #2291 to Acme billing"
+    );
+
+    // No description: the plain words and where to answer
+    let bare = builtin("Bash", json!({"command": "ls"}));
+    assert_eq!(approval_push_body(&state, "g2", "Bash", bare).await, "Concierge wants to run a command. Open kwant bots to allow or deny it.");
+
+    // A blank or multi-line description is one trimmed line; a blank one counts as none
+    let blank = builtin("Bash", json!({"command": "ls", "description": "  \n "}));
+    assert_eq!(approval_push_body(&state, "g3", "Bash", blank).await, "Concierge wants to run a command. Open kwant bots to allow or deny it.");
+    let lines = builtin("Edit", json!({"file_path": "/a", "description": "  Fix the\n  typo  "}));
+    assert_eq!(approval_push_body(&state, "g4", "Edit", lines).await, "Concierge wants to change a file: Fix the typo");
+
+    // 300 characters, multi-byte: clipped to 120 on a character, never mid-UTF-8
+    let long = "Résumé ü ".repeat(34);
+    let body = approval_push_body(&state, "g5", "Bash", builtin("Bash", json!({"command": "x", "description": long}))).await;
+    let said = body.strip_prefix("Concierge wants to run a command: ").unwrap_or_else(|| panic!("{body}"));
+    assert_eq!(said.chars().count(), 120, "{said}");
+    assert!(said.ends_with('…') && said.starts_with("Résumé ü Résumé"), "{said}");
+
+    // A key in the description is masked, as a Blocked line's is (33e)
+    let keyed = builtin("Bash", json!({"command": "x", "description": "Push with ghp_abcdefghijklmnop1234 to the repo"}));
+    let body = approval_push_body(&state, "g6", "Bash", keyed).await;
+    assert!(!body.contains("ghp_abcdefghijklmnop1234"), "{body}");
+    assert_eq!(body, "Concierge wants to run a command: Push with [redacted] to the repo");
+
+    // The other built-ins in plain words, matched case-insensitively
+    for (tool, words) in [("Write", "write a file"), ("MultiEdit", "change a file"), ("WebFetch", "open a page"), ("websearch", "search the web")] {
+        let body = approval_push_body(&state, &format!("g-{tool}"), tool, builtin(tool, json!({}))).await;
+        assert_eq!(body, format!("Concierge wants to {words}. Open kwant bots to allow or deny it."), "{tool}");
+    }
+
+    // An unknown built-in keeps its name
+    let foo = builtin("Foo", json!({"description": "Do the foo"}));
+    let body = approval_push_body(&state, "g7", "Foo", foo).await;
+    assert!(body.starts_with("Concierge wants to use Foo"), "{body}");
+
+    // An MCP tool names the tool and its server, and its arguments never reach the push (a
+    // `description` there is the tool's own input, not the bot's line about the call)
+    let mcp = json!({"source": "mcp", "server": "github", "tool": "create_issue", "arguments": {"description": "ISSUE-BODY-33G"}, "kwant_id": k.id, "kwant_name": "Concierge"});
+    let body = approval_push_body(&state, "g8", "mcp__github__create_issue", mcp).await;
+    assert!(body.contains("create_issue") && body.contains("github"), "{body}");
+    assert!(!body.contains("ISSUE-BODY-33G"), "{body}");
+    assert!(body.ends_with("Open kwant bots to allow or deny it."), "{body}");
+
+    // 33u (33g QA Finding 3): an MCP card named `Bash` with an empty server isn't claude's Bash
+    let mcp_bash = json!({"source": "mcp", "server": "", "tool": "Bash", "arguments": {"description": "MCP-BASH-33U"}, "kwant_id": k.id, "kwant_name": "Concierge"});
+    let body = approval_push_body(&state, "g9", "Bash", mcp_bash).await;
+    assert_eq!(body, "Concierge wants to use Bash. Open kwant bots to allow or deny it.");
+    handle.abort();
 }

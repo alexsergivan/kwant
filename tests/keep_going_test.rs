@@ -553,6 +553,8 @@ async fn a_blocked_line_becomes_a_card_not_a_keep_going_turn() {
     assert_eq!(open.len(), 1, "{open:?}");
     assert_eq!(open[0].question, format!("Blocked: {text}"));
     assert_eq!(card_meta(&env, &open[0]).await[keep_going::ASK_KEY], true);
+    // 33f: exactly one Needs-you item, the card's (the turn's own plain "Blocked:" entry is replaced)
+    assert_eq!(live_waiting(&env, &env.lead).await.iter().map(|w| w.question_id.clone()).collect::<Vec<_>>(), [Some(open[0].id.clone())]);
 
     // The person unblocks it: the chain resumes
     answer(&env, &open[0].id, "Allowed. Continue").await;
@@ -561,6 +563,49 @@ async fn a_blocked_line_becomes_a_card_not_a_keep_going_turn() {
     let msgs = messages(&env).await;
     let last = *lead_replies(&env, &msgs).last().unwrap();
     assert_eq!(meta_of(last)[keep_going::DONE_KEY]["text"], "rendered the intro and checked its length.");
+}
+
+/// What still waits on the person from `kwant`.
+async fn live_waiting(env: &Env, kwant: &str) -> Vec<kwnt::db::waiting::WaitingItem> {
+    env.state.db.list_waiting(None).await.unwrap().into_iter().filter(|w| w.kwant_id == kwant && w.status != "closed").collect()
+}
+
+/// 33f: a member's `Blocked:` inside its hand-off (depth 1) goes to its lead in the result, not to
+/// Needs you: the member opens no waiting item.
+#[tokio::test]
+async fn a_members_blocked_line_in_its_hand_off_opens_nothing_for_the_person() {
+    let env = setup().await;
+    person_asks(&env, "Back up the manuscript.").await;
+    env.queue("other", &["Blocked: the backup drive isn't mounted. Plug it in and tell me to try again."]);
+    let id = hand_off(&env, &format!("Back it up {}", env.marker()), false).await;
+    wait_for("the hand-off to end", || async { delegations(&env).await.iter().any(|d| d.id == id && !d.is_open()) }).await;
+    settled(&env).await;
+    let d = delegations(&env).await.into_iter().find(|d| d.id == id).unwrap();
+    let thread = env.state.db.list_messages(&d.thread_id, 200).await.unwrap();
+    assert!(thread.iter().any(|m| m.text.starts_with("Blocked: the backup drive")), "the member's reply: {thread:?}");
+    let live = live_waiting(&env, &env.checker).await;
+    assert!(live.is_empty(), "{live:?}");
+}
+
+/// 33f: a reply whose `Blocked:` line hands on to a teammate (`@Checker …`) is the teammate's to
+/// unblock: it opens nothing for the person.
+#[tokio::test]
+async fn a_blocked_line_that_hands_on_to_a_teammate_opens_nothing() {
+    let env = setup().await;
+    env.queue("other", &["Blocked: the backup drive isn't mounted. @Checker please mount it on the build box."]);
+    env.queue("res", &["Checker mounted it and I backed it up.\\nDone: backed up the manuscript."]);
+    let prompt = format!("@{} Back up the manuscript. {}please", env.lead_name, env.marker());
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"channel_id": env.channel, "prompt": prompt, "sender_id": "user"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_for("the mention's hand-off to end", || async {
+        delegations(&env).await.iter().any(|d| d.specialist_kwant_id == env.checker && !d.is_open())
+    })
+    .await;
+    wait_for("the lead's results turn", || async { !env.prompts("res").is_empty() }).await;
+    settled(&env).await;
+    assert!(lead_replies(&env, &messages(&env).await).iter().any(|m| m.text.starts_with("Blocked: the backup drive")));
+    let live = live_waiting(&env, &env.lead).await;
+    assert!(live.is_empty(), "{live:?}");
 }
 
 /// 13a: a lead whose last tool step failed and whose reply waits on the person in prose, with no

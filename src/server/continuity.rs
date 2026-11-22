@@ -2348,10 +2348,7 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
                 kind: "approval_needed",
                 kwant_id,
                 title: format!("{name} needs your approval"),
-                body: format!(
-                    "{name} wants to use {}. Open kwant bots to allow or deny it.",
-                    clip(tool_name, 80)
-                ),
+                body: approval_body(&name, tool_name, details),
                 kwant_name: name,
                 channel_id,
                 thread_id,
@@ -2360,6 +2357,34 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
         }
         _ => None,
     }
+}
+
+/// An approval's push body (33g): what the tool does in plain words ("Concierge wants to run a
+/// command"), then the bot's own one-line description of the call when it gave one; else where to
+/// answer. The push is encrypted to the person's own device, so the description may go there (keys
+/// masked, one line, 120 characters); Telegram never gets it (see `telegram::bridge::on_approval`).
+/// An MCP tool, or a built-in kwant has no words for, is named as before.
+fn approval_body(name: &str, tool_name: &str, details: &serde_json::Value) -> String {
+    let action = match super::tool_words::action(tool_name, details["server"].as_str(), details["source"].as_str()) {
+        Some(plain) => plain.to_string(),
+        None => format!("use {}", clip(tool_name, 80)),
+    };
+    match bot_description(details) {
+        Some(said) => format!("{name} wants to {action}: {said}"),
+        None => format!("{name} wants to {action}. Open kwant bots to allow or deny it."),
+    }
+}
+
+/// The bot's own one-line description of a call to one of claude's built-in tools (Bash's
+/// `description`), masked, flattened and clipped to 120. Never an MCP tool's arguments: a
+/// `description` there is the tool's input (an issue body, a message), not a line about the call.
+fn bot_description(details: &serde_json::Value) -> Option<String> {
+    if details["source"].as_str() != Some("claude_builtin") {
+        return None;
+    }
+    let said = details["arguments"]["description"].as_str()?;
+    let said = clip(&super::missions::autofix::redact(said), 120);
+    (!said.is_empty()).then_some(said)
 }
 
 /// Where approval `id`'s card is: `(channel, thread)` from the chat stored with the ticket, both

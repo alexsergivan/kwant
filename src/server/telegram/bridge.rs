@@ -497,11 +497,17 @@ async fn on_approval(state: &AppState, id: &str, tool_name: &str, details: &Valu
     }
     let Some(approval) = state.db.get_approval(id).await.ok().flatten() else { return };
     let who = details["kwant_name"].as_str().map(str::to_string).unwrap_or(kwant_name(state, &approval.kwant_id).await);
-    // What is asked: the bot, the tool and where it runs. Never the arguments: a Telegram chat
-    // isn't end-to-end encrypted, and they can hold anything the bot typed.
+    // What is asked: the bot, what the tool does ("wants to run a command", 33g) or the tool and
+    // where it runs. Never the arguments, nor the bot's description of the call (the push has
+    // that): a Telegram chat isn't end-to-end encrypted, and they can hold anything the bot typed.
     let tool = details["tool"].as_str().unwrap_or(tool_name);
-    let mut body = format!("<b>{}</b> wants to use <code>{}</code>", text::escape(&who), text::escape(&clip(tool, 80)));
-    if let Some(server) = details["server"].as_str() {
+    // A blank server is no server: never an empty " on <code></code>" (33u)
+    let server = details["server"].as_str().filter(|s| !s.trim().is_empty());
+    let mut body = match crate::server::tool_words::action(tool, server, details["source"].as_str()) {
+        Some(plain) => format!("<b>{}</b> wants to {}", text::escape(&who), text::escape(plain)),
+        None => format!("<b>{}</b> wants to use <code>{}</code>", text::escape(&who), text::escape(&clip(tool, 80))),
+    };
+    if let Some(server) = server {
         body.push_str(&format!(" on <code>{}</code>", text::escape(&clip(server, 60))));
     }
     body.push('.');

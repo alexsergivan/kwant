@@ -1,0 +1,56 @@
+{
+  "version": "0.9.42",
+  "date": "2026-11-22",
+  "highlights": [
+    {
+      "id": "solo-blocked-needs-you",
+      "title": "Blocked bots show under Needs you",
+      "text": "When a bot working on its own ends its reply with a Blocked line, the thing only you can do now shows under Needs you in the Inbox, with a reminder a day later. It clears when you write back.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "search-opens-the-thread",
+      "title": "Search opens the right thread",
+      "text": "Search finds your messages inside a bot's threads and groups them under the thread's title. Click one and that thread opens with the message highlighted, instead of an error that the chat is gone.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "long-chat-typing-stays-quick",
+      "title": "Typing stays quick in long chats",
+      "text": "In a chat with hundreds of messages, each key used to redraw every message above it. Now only the box you type in changes, so letters show up as fast as in a new chat.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "desktop-shows-who-is-working",
+      "title": "See who is working at a glance",
+      "text": "On a computer, a Working block now sits right under Needs you in the sidebar. It shows up to 3 busy bots and a link to the rest, so you no longer scroll the list to find them.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "long-chat-loads-earlier",
+      "title": "Long chats load their earlier messages",
+      "text": "A long chat used to stop at its newest 100 messages. Now scrolling up loads the earlier ones and keeps your place, and a line shows where the chat starts.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "script-with-address-asks",
+      "title": "Scripts that send things out ask first",
+      "text": "In Ask only when risky, a bot's script given an email address or a web address now asks you first, the way curl already did. Addresses on this computer still run.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Done while you were away shows a finished answer's tables and lists formatted, and a one-bot job shows the bot's name instead of \"1 bot\".",
+    "Search lists the thread whose title matches what you typed first, and Enter opens it.",
+    "Stopping one teammate while others finish no longer makes the lead report back twice.",
+    "A project script started with npm, uv, cargo or make now asks before it is given an email or web address.",
+    "After a restart mid-reply, the note says the cut-off step in plain words, like \"running a command\", not a tool id.",
+    "The app, phone alerts and Telegram name a step the same way; built-in Write and Edit read as writing or changing a file."
+  ]
+}

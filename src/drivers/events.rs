@@ -418,7 +418,8 @@ pub enum RuntimeEvent {
     IdeaUpdated { id: String, status: String, space_id: String },
     /// Something the user asked to be told about. `kind` is one of `continuity::NOTIFY_KINDS`
     /// ("turn_finished", "approval_needed", "human_step", …). `body` never holds chat text, tool arguments or secrets,
-    /// except a reply's own closing `Blocked:` / `Done:` line (33e), clipped.
+    /// except a reply's own closing `Blocked:` / `Done:` line (33e) and the bot's one-line description of a
+    /// built-in tool call it asks approval for (33g), clipped and masked.
     #[serde(rename = "notify", alias = "Notify")]
     Notify {
         kind: String,
