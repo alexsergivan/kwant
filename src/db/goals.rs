@@ -899,14 +899,23 @@ impl Database {
         .await?)
     }
 
-    /// Notices sent about the goal since `since` (the cap counts a rolling 24 hours).
+    /// "It broke" notices (`broken`, `cant_check`) sent about the goal since `since`: what the
+    /// flapping cap counts over a rolling 24 hours. A decision, needs-you or recovered notice
+    /// doesn't count, so one normal incident is one notice toward the cap.
     pub async fn goal_notices_since(&self, goal_id: &str, since: i64) -> Result<i64, DbError> {
-        let (n,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM goal_events WHERE goal_id = ? AND kind = 'notified' AND created_at >= ?")
-            .bind(goal_id)
-            .bind(since)
-            .fetch_one(&self.pool)
-            .await?;
-        Ok(n)
+        Ok(self.goal_notice_counts_since(goal_id, since).await?.0)
+    }
+
+    /// `(broken + cant_check, every kind)`: the notices sent about the goal since `since`, in one read.
+    pub async fn goal_notice_counts_since(&self, goal_id: &str, since: i64) -> Result<(i64, i64), DbError> {
+        let (alarms, all): (Option<i64>, i64) = sqlx::query_as(
+            "SELECT SUM(json_extract(detail, '$.kind') IN ('broken', 'cant_check')), COUNT(*) FROM goal_events WHERE goal_id = ? AND kind = 'notified' AND created_at >= ?",
+        )
+        .bind(goal_id)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok((alarms.unwrap_or(0), all))
     }
 
     /// Whether the person was told the goal broke, or that kwant can't check it, since it was last

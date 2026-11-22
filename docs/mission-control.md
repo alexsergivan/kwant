@@ -1431,7 +1431,7 @@ A goal that stops being met opens a **remediation mission** on the Mission Contr
 
 ### What happens when a goal breaks
 
-- The goal loop (`goals::on_change`) sends one `broken` notice through `goals::notice`. Notices are counted from `goal_events`: at most 3 per goal per rolling 24 hours, and a held-back one is logged as `notice_capped`.
+- The goal loop (`goals::on_change`) sends one `broken` notice through `goals::notice`. Notices are counted from `goal_events`: at most 3 "it broke" notices (`broken`, `cant_check`) per goal per rolling 24 hours, so a flapping goal goes quiet; `decision`, `needs_you` and `recovered` don't count toward that and aren't held back by it (each goes out at most once per incident, so one normal incident never uses up the day). A ceiling of 12 notices of every kind per goal per rolling 24 hours backs them up. A held-back one is logged as `notice_capped`.
 - The remediation tick (`goals_remediation::tick_at`, run by the scheduler) settles open links, settles re-checks, sweeps orphans, then opens remediations.
 - Goals in the same folder that break within 10 minutes (`GROUP_MS`) join one mission: one `broken` notice, one mission, one decision, one `recovered`. The folder of a goal with no folder is its bot's workspace.
 - The mission is "Restore: <goal title>" with two tasks, "Investigate: <check label> failing" and "Fix: <goal title>". Investigate starts on its own (not in `watch` mode), is read-only by its brief, and never raises an approval card. The Fix is held in `suggest` mode and ready in `fix` mode.
