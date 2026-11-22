@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- Package-manager builds can turn off the update check: `cargo install --features no-update-check` makes the server report updates off, exactly as `KWNT_UPDATE_CHECK=off` does, so it never looks for a new release (the package manager updates kwant). The Homebrew formula builds with it and needs `openssl@4` on Linux instead of `openssl@3` (#1054)
+
+## [Mac 0.9.42] - 2026-11-22
+
+kwant 0.9.42: formatted answers in Done while you were away, blocked solo bots under Needs you, search opens the thread, quick typing in long chats, a Working block in the sidebar, earlier messages in long chats, scripts given an address ask first, matching threads first in search, one report after a Stop, busy bots first on a space's home, project scripts given an address ask first, Done rows show what was done first, approval alerts say what the bot wants to do, restart notes name the cut-off step in plain words, steps read the same in the app, alerts and Telegram, long chats open faster and a stopped job's Inbox row names your request.
+
+### Added
+- On a computer, the sidebar shows the bots that are working in a Working block right under Needs you, up to 3 with a link to the rest (#1025)
+
+### Changed
+- On a space's home, bots that need you or are working move to the front of the row and the big faces, with a small amber (needs you) or violet (working) dot, instead of hiding in "+N more" (#1035)
+- In the Inbox, a Done row that wasn't checked now shows just what was done, without "Not checked" in front, so Checked rows stand out; a screen reader still hears "Not checked" and the open row still says it (#1042)
+- A phone alert or Telegram message asking you to approve a step now says what the bot wants to do, like "run a command" or "change a file", instead of a tool name like Bash; the phone alert adds the bot's own line about the step, with keys masked, and Telegram never shows it (#1019)
+- When kwant restarts mid-reply, the chat note and the Needs you item say the cut-off step in plain words, like "in the middle of running a command" or "sending a message on Slack", instead of a tool id; a step that only read things says so, and the bot carries on (#1028)
+- A chat with hundreds of messages opens faster: each message draws only the picture its window width shows, rows out of view wait to be drawn, and a narrow window now opens right at the newest message instead of short of it (#1036)
+- In the Inbox, a job that stopped is now titled with the request you gave it, with the reason it stopped on the line under it, so you can tell which job needs you; with no request to show, the row stays as before (#1022)
+
+### Fixed
+- In the Inbox's "Done while you were away", a finished job's answer now shows its tables, lists and links formatted, with its line breaks kept, instead of raw Markdown; a job done by one bot shows that bot's name instead of "1 bot", and "What <bot> did" when nothing was handed on; and a stopped reply with a Retry button says "Retry in the chat sends your message again." once, by the button (#1010)
+- A single bot whose reply ends with a "Blocked: …" line now shows under Needs you in the Inbox, with that line as the row's title, and gets the usual reminder a day later; it clears when you write in that chat (#1013)
+- Search now finds your messages inside a bot's threads: hits are grouped under the bot and the thread's title ("Ledger · 2025 tax return"), and clicking one opens that thread with the message highlighted, instead of "That chat no longer exists." (#1018, #1016)
+- Typing in a long chat no longer redraws every message on each key, so letters show up as fast as in a short chat (about 7-12 ms a key instead of about 45 ms in a 100-message chat) (#1017)
+- A long chat no longer stops at its newest 100 messages: scrolling up loads the earlier ones and keeps your place, and a line marks where the chat starts (#1026)
+- In Ask only when risky, a bot's script given an email address or a web address that isn't this computer now asks first, and the card names the address; local addresses and file names with an @ still run (#1029)
+- Search lists a thread whose title matches what you typed first, so searching "tax" shows the "2025 tax return" thread above older one-line mentions, and Enter opens it (#1031)
+- When a teammate's result lands just as you stop another teammate, or as a task waiting on it starts, the lead now reports back once instead of twice (#1032)
+- In Ask only when risky, a project script started with npm, pnpm, yarn, bun, uv, poetry, cargo, go, dotnet, gradle, mvn or make now asks before it is given an email or web address, as a bot's own script already did; a local address under /api/ asks too, since it may reach kwnt's own server (#1038)
+- The approval card, the working strip, phone alerts, Telegram and restart notes now name a step the same way: built-in Read, Write, Edit and MultiEdit read as reading, writing or changing a file, and browser tools read as the browser, not a tool name (#1041)
+
 ## [Mac 0.9.41] - 2026-11-22
 
 kwant 0.9.41: "Done while you were away" for a single bot's job, away notifications that say when a bot stopped or is blocked and a clear reply when your AI provider can't be reached.

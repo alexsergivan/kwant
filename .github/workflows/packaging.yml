@@ -7,7 +7,10 @@ name: packaging
 #
 # - homebrew (macOS and Linux, both run in homebrew-core's CI): the formula goes into a shallow
 #   homebrew/core tap, so `brew audit --new` runs the same new-formula checks a homebrew-core PR gets.
-#   Then a from-source install, `brew test`, `brew style` and `brew livecheck`.
+#   Then a from-source install, `brew test`, `brew style` and `brew livecheck`. The install and
+#   `brew test` build this commit's source (a `git archive` tarball in place of the formula's release
+#   URL), so a formula line that needs this commit, such as `features: "no-update-check"`, is tested
+#   before a release has it. Style, audit and livecheck read the formula exactly as committed.
 # - windows: `winget validate` and a silent `winget install --manifest`, then a Scoop install from
 #   packaging/scoop/kwant.json, the installed app's /api/health, and checkver plus an autoupdate dry
 #   run to an older release (its URL and hash must match that release's own files).
@@ -61,6 +64,18 @@ jobs:
           cp packaging/homebrew/kwnt.rb "$core/Formula/k/kwnt.rb"
       - name: brew style
         run: brew style kwnt
+      - name: Build this commit's source
+        # The formula's release tarball can't have features this commit adds: point the tap copy at
+        # a tarball of this checkout, named and laid out like the release one (same version)
+        run: |
+          set -euo pipefail
+          core="$(brew --repository)/Library/Taps/homebrew/homebrew-core"
+          v=$(sed -n 's/^version = "\(.*\)"$/\1/p' Cargo.toml | head -1)
+          tarball="$RUNNER_TEMP/mac-v$v.tar.gz"
+          git archive --format=tar.gz --prefix="kwant-mac-v$v/" -o "$tarball" HEAD
+          sum=$(shasum -a 256 "$tarball" | cut -d' ' -f1)
+          URL="file://$tarball" SUM="$sum" perl -pi -e 's|^  url ".*"|  url "$ENV{URL}"|; s|^  sha256 ".*"|  sha256 "$ENV{SUM}"|' "$core/Formula/k/kwnt.rb"
+          grep -nE '^  (url|sha256) ' "$core/Formula/k/kwnt.rb"
       - name: brew install --build-from-source
         run: brew install --build-from-source --verbose kwnt
       - name: brew test
@@ -70,6 +85,8 @@ jobs:
           set -euo pipefail
           kwnt --version
           brew linkage --test kwnt
+      - name: Back to the formula as committed
+        run: cp packaging/homebrew/kwnt.rb "$(brew --repository)/Library/Taps/homebrew/homebrew-core/Formula/k/kwnt.rb"
       - name: brew audit --new --strict --online
         # One audit problem is allowed until Nov 22, 2026 only: homebrew-core turns away a GitHub
         # repository under 30 days old (kwant's was created Oct 22, 2026). Every other problem fails.

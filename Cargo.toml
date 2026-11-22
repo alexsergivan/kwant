@@ -1,6 +1,6 @@
 [package]
 name = "kwnt"
-version = "0.9.41"
+version = "0.9.42"
 edition = "2021"
 description = "A self-hosted team of AI bots: spaces, multiple accounts, handoffs, approvals and routines, in one binary"
 license = "AGPL-3.0-only"
@@ -86,6 +86,9 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 # address (KWNT_TELEGRAM_API_BASE). Never on by default and never in a shipped or `make run` build;
 # `cargo test` turns it on through the dev-dependency on this crate below.
 test-seams = []
+# Package-manager builds (Homebrew: `std_cargo_args(features: "no-update-check")`): the server never
+# looks for a new kwant release, exactly as with KWNT_UPDATE_CHECK=off. The package manager updates it.
+no-update-check = []
 
 [dev-dependencies]
 tempfile = "3"
