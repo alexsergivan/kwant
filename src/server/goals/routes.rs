@@ -20,6 +20,9 @@ use serde_json::{json, Value};
 const LIST_EXCERPT: usize = 200;
 const PAGE_EXCERPT: usize = 2000;
 const PAGE_EVENTS: i64 = 50;
+/// As many squares as the heartbeat draws (`heartbeatDots`, frontend/src/signature.ts): the newest
+/// `checked` events the page adds to the story, and the heartbeat events each list row carries.
+const BEATS: i64 = 7;
 
 fn err(status: StatusCode, msg: impl Into<String>) -> Response {
     (status, Json(json!({ "error": msg.into() }))).into_response()
@@ -58,13 +61,19 @@ pub async fn list_goals(State(state): State<AppState>, Scope(space): Scope) -> R
     };
     let mut out = Vec::new();
     for g in &goals {
-        out.push(goal_json(&state, g, LIST_EXCERPT).await);
+        let mut v = goal_json(&state, g, LIST_EXCERPT).await;
+        // The row's heartbeat: a healthy goal's row never reads the detail, so the list brings its squares
+        let beats = state.db.goal_beat_events(&g.id, BEATS).await.unwrap_or_default();
+        v["heartbeat"] = beats.iter().map(event_json).collect();
+        out.push(v);
     }
     Json(json!({ "goals": out })).into_response()
 }
 
 pub async fn page(state: &AppState, g: &Goal) -> Value {
-    let events = state.db.goal_events(&g.id, PAGE_EVENTS).await.unwrap_or_default();
+    let mut events = state.db.goal_events(&g.id, PAGE_EVENTS).await.unwrap_or_default();
+    events.extend(state.db.goal_checked_events(&g.id, BEATS).await.unwrap_or_default());
+    events.sort_by_key(|e| std::cmp::Reverse(e.id));
     let fixes = state.db.goal_fix_links(&g.id).await.unwrap_or_default();
     let spent: i64 = fixes.iter().filter_map(|f| f.spent_tokens).sum::<i64>() + state.db.goal_spent_tokens(&g.id).await.unwrap_or(0);
     json!({

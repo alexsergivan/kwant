@@ -5,7 +5,7 @@
 
 use super::{decide, emit, emit_goal, jitter_ms, next_interval_minutes, notice, on_change, predicate, predicate_of, Judged, RunSays};
 use super::{DRAFT_TTL_MS, UNKNOWN_NOTICE_MS};
-use crate::db::goals::{Goal, NewObservation, RunUpdate};
+use crate::db::goals::{Goal, NewObservation, RunUpdate, CHECKED};
 use crate::db::missions::now_ms;
 use crate::server::AppState;
 use serde_json::json;
@@ -145,6 +145,16 @@ pub async fn run_goal(state: &AppState, g: Goal) -> Option<Goal> {
             _ => {}
         }
     }
+    // Every run logs what it saw, changed or not: the heartbeat draws one square per check. A held
+    // blip still says it couldn't tell. Only required checks count, as they decide the status.
+    let required = judged.iter().filter(|j| j.required);
+    let verdict = match says {
+        RunSays::Met => predicate::MET,
+        RunSays::Failed => predicate::NOT_MET,
+        RunSays::Unknown => predicate::UNKNOWN,
+    };
+    let passed = required.clone().filter(|j| j.verdict == predicate::MET).count();
+    events.push((CHECKED, json!({ "verdict": verdict, "passed": passed, "total": required.count() })));
     // Read before this run logs `met`, which closes the stretch the person was told about
     let owed_recovery = status == "met" && g.status != "met" && state.db.told_broken(&g.id).await.unwrap_or(false);
     let next = now + next_interval_minutes(g.interval_minutes, error_runs) * 60_000 + jitter_ms(g.interval_minutes);
