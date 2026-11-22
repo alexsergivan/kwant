@@ -574,11 +574,14 @@ async fn open_remediations(state: &AppState, now: i64) {
         }
         let key = incident_key(state, &goal);
         match holders.get(&key) {
-            None => {
-                if let Some(h) = open_mission(state, &goal, incident_at, attempts, now).await {
+            None => match open_mission(state, &goal, incident_at, attempts, now).await {
+                Ok(h) => {
                     holders.insert(key, h);
                 }
-            }
+                // None of its required checks is one a Fix can test: the person hears why, once
+                Err(NoMission::NoFixCheck) => stop(state, &goal, "no_fix_check", incident_at).await,
+                Err(NoMission::NotNow) => {}
+            },
             Some(h) if (incident_at - h.incident_at).abs() <= GROUP_MS && h.joinable => {
                 join_mission(state, &goal, incident_at, attempts, h, now).await;
             }
@@ -598,13 +601,18 @@ async fn stop(state: &AppState, goal: &Goal, reason: &'static str, incident_at: 
     if told_this_incident(state, goal, &["needs_you"], incident_at).await {
         return;
     }
-    let why = match reason {
+    notice(state, goal, "needs_you", format!("{} needs you", goal.title), stop_why(reason).into()).await;
+}
+
+/// The Needs you notice's one line for a stop reason.
+fn stop_why(reason: &str) -> &'static str {
+    match reason {
         "max_attempts" | "fix_failed" => "Two attempts did not restore it.",
         "max_fixes" => "It has used today's fix allowance.",
         "budget" => "Its fix budget is used up.",
+        "no_fix_check" => "A fix can't be tested against this goal's checks, so none will be tried. It's yours to fix.",
         _ => "It can't be fixed automatically.",
-    };
-    notice(state, goal, "needs_you", format!("{} needs you", goal.title), why.into()).await;
+    }
 }
 
 async fn wait_for(state: &AppState, goal: &Goal, holder: &str) {
@@ -615,14 +623,22 @@ async fn wait_for(state: &AppState, goal: &Goal, holder: &str) {
     }
 }
 
-async fn open_mission(state: &AppState, goal: &Goal, incident_at: i64, attempts: i64, now: i64) -> Option<Holder> {
+/// Why [`open_mission`] opened nothing.
+enum NoMission {
+    /// None of the goal's required checks is one a Fix can test ([`plan_checks`] is empty).
+    NoFixCheck,
+    /// Anything else (no lead bot, a read failed, someone else opened one): try again next tick.
+    NotNow,
+}
+
+async fn open_mission(state: &AppState, goal: &Goal, incident_at: i64, attempts: i64, now: i64) -> Result<Holder, NoMission> {
     let space = SpaceId::new(goal.space_id.as_str());
-    let lead = missions::bot_in_space(state, &space, &goal.kwant_id).await?;
-    let checks = state.db.goal_checks(&goal.id).await.ok()?;
+    let lead = missions::bot_in_space(state, &space, &goal.kwant_id).await.ok_or(NoMission::NotNow)?;
+    let checks = state.db.goal_checks(&goal.id).await.map_err(|_| NoMission::NotNow)?;
     let obs = state.db.recent_observations(&goal.id, 1).await.unwrap_or_default();
     let fix_checks = plan_checks(&checks);
     if fix_checks.is_empty() {
-        return None;
+        return Err(NoMission::NoFixCheck);
     }
     let attempt = attempts + 1;
     let mission_budget = if goal.budget_tokens > 0 {
@@ -679,9 +695,9 @@ async fn open_mission(state: &AppState, goal: &Goal, incident_at: i64, attempts:
         PlanPlace { workspace_path: folder_of(state, goal), ..PlanPlace::default() },
     )
     .await
-    .ok()?;
-    let inv = tasks.iter().find(|t| t.title.starts_with("Investigate:"))?;
-    let fix = tasks.iter().find(|t| t.title.starts_with("Fix:"))?;
+    .map_err(|_| NoMission::NotNow)?;
+    let inv = tasks.iter().find(|t| t.title.starts_with("Investigate:")).ok_or(NoMission::NotNow)?;
+    let fix = tasks.iter().find(|t| t.title.starts_with("Fix:")).ok_or(NoMission::NotNow)?;
     let new = NewLink {
         goal_id: goal.id.clone(),
         mission_id: mission.id.clone(),
@@ -694,14 +710,14 @@ async fn open_mission(state: &AppState, goal: &Goal, incident_at: i64, attempts:
     if state.db.open_goal_link(&new, now).await.ok().flatten().is_none() {
         // Someone else opened one meanwhile: this mission is not wanted
         let _ = state.db.set_mission_status(&mission.id, "active", "cancelled", Some("kwant")).await;
-        return None;
+        return Err(NoMission::NotNow);
     }
     if attempt > 1 {
         let _ = state.db.add_goal_event(&goal.id, "replanned", "kwant", &json!({"attempt": attempt, "mission_id": mission.id, "previous": previous.as_deref().map(|p| untrusted(p, 400))})).await;
     }
     let _ = state.db.add_goal_event(&goal.id, "mission_opened", "kwant", &json!({"mission_id": mission.id, "attempt": attempt})).await;
     missions::emit_mission(state, &mission.id).await;
-    Some(Holder { goal_id: goal.id.clone(), mission_id: mission.id, incident_at, investigate_task_id: inv.id.clone(), fix_task_id: fix.id.clone(), joinable: true })
+    Ok(Holder { goal_id: goal.id.clone(), mission_id: mission.id, incident_at, investigate_task_id: inv.id.clone(), fix_task_id: fix.id.clone(), joinable: true })
 }
 
 async fn join_mission(state: &AppState, goal: &Goal, incident_at: i64, attempts: i64, h: &Holder, now: i64) {
@@ -1204,6 +1220,14 @@ mod tests {
         let mut adv = gc("http", url, Some("body_contains"), None, Some("ok"));
         adv.severity = "advisory".into();
         assert!(plan_checks(&[adv]).is_empty());
+    }
+
+    #[test]
+    fn a_goal_no_fix_can_test_says_why_in_its_notice() {
+        assert_eq!(stop_why("no_fix_check"), "A fix can't be tested against this goal's checks, so none will be tried. It's yours to fix.");
+        // the other reasons keep their words
+        assert_eq!(stop_why("budget"), "Its fix budget is used up.");
+        assert_eq!(stop_why("something_new"), "It can't be fixed automatically.");
     }
 
     #[test]
