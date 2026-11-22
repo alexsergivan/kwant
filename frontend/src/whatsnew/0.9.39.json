@@ -1,0 +1,24 @@
+{
+  "version": "0.9.39",
+  "date": "2026-11-22",
+  "highlights": [
+    {
+      "id": "sell-step-needs-an-answer",
+      "title": "The sales step waits for your answer",
+      "text": "In a ready-made Sales team, \"Tell the team what you sell\" is ticked only once you say it: a line starting \"What we sell:\" with your answer. A first question or a suggested prompt no longer ticks it.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "ready-team-tile-comes-back",
+      "title": "Undo a ready-made team, then make it again",
+      "text": "After you undo a ready-made team, its tile comes straight back without reloading. If its handle is already taken, the sheet says so and suggests a free one before you press Create.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Renaming a bot or the team handle before creating a ready-made team now reaches its instructions, skills and routine too.",
+    "When a teammate's reply hands over to another bot, its words keep their author's name until the next bot starts."
+  ]
+}

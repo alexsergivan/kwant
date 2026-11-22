@@ -1,8 +1,8 @@
 import React, { useState } from 'react';
-import { ArrowRightLeft, CheckCircle2, Clock, ExternalLink, Hand, Loader2, Square, XCircle, AlertTriangle } from 'lucide-react';
+import { ArrowRightLeft, CheckCircle2, Clock, ExternalLink, Hand, Loader2, Repeat, Square, XCircle, AlertTriangle } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ModernAvatar } from './ModernAvatar';
-import { Delegation, DelegationMeta, DelegationStatus, DelegationWaiting, delegationStatusLine, isOpenDelegation } from '../threads';
+import { Delegation, DelegationMeta, DelegationStatus, DelegationWaiting, delegationStatusLine, failoverText, isOpenDelegation } from '../threads';
 
 export interface DelegationCardProps {
   meta: DelegationMeta;
@@ -54,6 +54,9 @@ export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, mess
   const line = delegationStatusLine(status, meta.specialist_name, { queuePos, error: live?.error, waiting: waitingOn, action: waitingAction });
   const headingId = `dlg-${messageId}`;
   const long = isResult && text.length > LONG_RESULT;
+  // 32m: only a finished result says it ran on another account; started, stalled, failed and stopped cards never do.
+  const failover = isResult && status === 'completed' && meta.failover ? meta.failover : null;
+  const failoverLabel = failover ? failoverText(meta.specialist_name, failover) : '';
 
   const stop = async () => {
     setStopping(true);
@@ -82,6 +85,17 @@ export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, mess
             {isResult ? 'Result from' : meta.kind === 'delegation_stalled' ? 'Still running at' : 'Delegated to'}{' '}
             <span className="text-zinc-200">{meta.specialist_name}</span>
           </span>
+          {failover && (
+            <span
+              data-failover-chip
+              title={failoverLabel}
+              className="inline-flex items-center gap-1 min-w-0 max-w-full px-1.5 py-px rounded-md border border-zinc-700/70 bg-zinc-800/40 text-[11px] text-zinc-400"
+            >
+              <Repeat size={10} className="flex-shrink-0" aria-hidden="true" />
+              <span aria-hidden="true" className="min-w-0 [overflow-wrap:anywhere]">on {failover.to_name}</span>
+              <span className="sr-only">{failoverLabel}</span>
+            </span>
+          )}
           <h3 id={headingId} className="basis-full text-sm font-semibold text-zinc-100 break-words">
             {meta.title}
           </h3>
