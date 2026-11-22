@@ -471,6 +471,7 @@ const WAITED_RESULT_CHARS: usize = 4000;
 ///
 /// Returns how many started.
 pub(super) async fn release_dependents(state: &AppState, prereq_id: &str) -> usize {
+    pause_point(prereq_id).await;
     let mut started = 0;
     let mut work = vec![prereq_id.to_string()];
     while let Some(id) = work.pop() {
@@ -575,6 +576,30 @@ pub(super) async fn release_dependents(state: &AppState, prereq_id: &str) -> usi
 /// Whether `d` is parked behind another delegation and hasn't started.
 pub(super) fn is_parked(d: &Delegation) -> bool {
     d.status == "queued" && d.after_delegation_id.is_some()
+}
+
+type Pause = (std::sync::Arc<tokio::sync::Notify>, std::sync::Arc<tokio::sync::Notify>);
+
+/// Pauses armed by [`pause_release`], by hand-off id.
+static RELEASE_PAUSES: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<String, Pause>>> = std::sync::OnceLock::new();
+
+/// Test hook (33s): the next [`release_dependents`] for hand-off `id` (right after `id` ended,
+/// before the tasks parked behind it move on and before its report) notifies the first `Notify`
+/// and waits for the second, so a test can run another report in that moment.
+#[doc(hidden)]
+pub fn pause_release(id: &str) -> Pause {
+    let pause: Pause = Default::default();
+    RELEASE_PAUSES.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner()).insert(id.to_string(), pause.clone());
+    pause
+}
+
+async fn pause_point(id: &str) {
+    let Some(pauses) = RELEASE_PAUSES.get() else { return };
+    let pause = pauses.lock().unwrap_or_else(|e| e.into_inner()).remove(id);
+    if let Some((reached, go)) = pause {
+        reached.notify_one();
+        go.notified().await;
+    }
 }
 
 /// The background part: the specialist's turn in the thread, then the report in the origin chat.

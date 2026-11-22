@@ -478,3 +478,140 @@ async fn without_a_stop_the_summary_and_its_review_run() {
     assert!(prompts_of("Ld4", "kg").is_empty(), "a Done line needs no keep-going turn");
     assert!(card_in_review(&env, lead, ck).await.is_some(), "the fake lead never calls task_review: the card stays in Review");
 }
+
+/// Whether `lead`'s own turn still runs (it holds the hand-offs it started until it ends).
+fn lead_at_work(env: &Env, lead: &str) -> bool {
+    env.state.turns.active_turns().iter().any(|t| t.kwant_id == lead)
+}
+
+/// 33s: the lead's Ck result is reported in the moment after a task ended and before what waits
+/// for it moved on: `pause` (from `pause_release`, armed before that task ended) holds that
+/// moment, `ck_go` lets Ck reply. Waits until Ck's report ran (its run is over) or the lead was
+/// already resumed, then lets the release go on.
+async fn report_ck_while_releasing(env: &Env, lead: &str, ck: &str, pause: Pause, ck_go: &str) {
+    let (reached, go) = pause;
+    reached.notified().await;
+    let ck_id = delegation_to(env, lead, ck).await.unwrap().id;
+    std::fs::write(release_file(ck_go), "").unwrap();
+    let lead_name = env.state.db.get_kwant(lead).await.unwrap().unwrap().name;
+    wait_for("Ck's report", || async {
+        (status_to(env, lead, ck).await == "completed" && !env.state.turns.has_job(&ck_id)) || !prompts_of(&lead_name, "res").is_empty()
+    })
+    .await;
+    go.notify_one();
+}
+
+type Pause = (std::sync::Arc<tokio::sync::Notify>, std::sync::Arc<tokio::sync::Notify>);
+
+/// 33s: (C) made certain. Ck6's result is reported in the moment after the person stopped Rs6 and
+/// before Wr6, parked behind it, is stopped too. The lead still gets one results turn, which
+/// hears all three. Before 33s Ck6's report took the batch without Wr6 (a parked task doesn't
+/// count), the Stop's report a moment later took it with Wr6, and the lead was resumed twice
+/// (CI on #1006 and #992: "one results turn for the batch, left: 2, right: 1").
+#[tokio::test]
+async fn a_result_reported_while_a_stop_ends_the_task_parked_behind_it_resumes_the_lead_once() {
+    let env = setup(false).await;
+    let (channel, ids) = team(&env, "stop-r", &["Ld6", "Ck6", "Rs6", "Wr6"]).await;
+    let (lead, ck, rs, wr) = (&ids[0], &ids[1], &ids[2], &ids[3]);
+    behave("Ld6", "", "On it. @Ck6 please check the sources. @Wr6, once @Rs6 has the facts, write the draft. @Rs6 please research the facts.");
+    behave("Ld6", "res", "Ck6 checked the sources. Rs6 was stopped, so there is no draft yet.");
+    behave("Ld6", "kg", "Doing the next step now: researching the facts myself.");
+    behave("Ck6", "", &format!("WAIT:{}\nSources checked.", release_file("ck6-go").display()));
+    behave("Rs6", "", &format!("WAIT:{}\nFacts found.", release_file("rs6-never").display()));
+    behave("Wr6", "", "Draft written.");
+    say_in(&env, &channel, "@Ld6 write the report").await;
+
+    wait_for("Ck6 and Rs6 at work, the lead's turn over", || async {
+        status_to(&env, lead, ck).await == "running" && status_to(&env, lead, rs).await == "running" && !lead_at_work(&env, lead)
+    })
+    .await;
+    assert_eq!(status_to(&env, lead, wr).await, "queued", "Wr6 waits for Rs6");
+    let rs_id = delegation_to(&env, lead, rs).await.unwrap().id;
+    let pause = kwnt::server::delegation::pause_release(&rs_id);
+    let (app, uri) = (env.app.clone(), format!("/api/delegations/{rs_id}/cancel"));
+    let stop = tokio::spawn(async move { call(&app, "POST", &uri, None).await });
+    // The Stop pauses right after Rs6 is saved as stopped
+    wait_for("Rs6 stopped", || async { status_to(&env, lead, rs).await == "cancelled" }).await;
+    assert_eq!(status_to(&env, lead, wr).await, "queued", "Wr6 is still parked in that moment");
+    report_ck_while_releasing(&env, lead, ck, pause, "ck6-go").await;
+    let (s, v) = stop.await.unwrap();
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_for("Wr6's task to end", || async { delegation_to(&env, lead, wr).await.is_some_and(|d| !d.is_open()) }).await;
+    wait_for("the lead's results turn", || async { !prompts_of("Ld6", "res").is_empty() }).await;
+    settle(&env, &channel).await;
+
+    assert_eq!(prompts_of("Ld6", "res").len(), 1, "one results turn for the batch");
+    nothing_restarted(&env, &channel, "Ld6").await;
+    let res = &prompts_of("Ld6", "res")[0];
+    assert!(res.contains("Sources checked."), "the lead hears Ck6's result: {res}");
+    assert!(res.matches("It was stopped. Don't restart it unless the person asks.").count() >= 2, "Rs6 and Wr6 read as stopped: {res}");
+    assert_eq!(status_to(&env, lead, wr).await, "cancelled");
+    assert_eq!(all_prompts_of("Wr6"), 0, "Wr6 never ran");
+}
+
+/// 33s: the same moment without a Stop. Rs7 finishes, and Ck7's result is reported before Wr7,
+/// which waited for Rs7, starts. The lead hears all three once, after Wr7. Before 33s it was
+/// resumed with Ck7's and Rs7's results, then again with all three once Wr7 ended.
+#[tokio::test]
+async fn a_result_reported_while_a_finished_task_starts_the_one_parked_behind_it_resumes_the_lead_once() {
+    let env = setup(false).await;
+    let (channel, ids) = team(&env, "stop-r2", &["Ld7", "Ck7", "Rs7", "Wr7"]).await;
+    let (lead, ck, rs, wr) = (&ids[0], &ids[1], &ids[2], &ids[3]);
+    behave("Ld7", "", "On it. @Ck7 please check the sources. @Wr7, once @Rs7 has the facts, write the draft. @Rs7 please research the facts.");
+    behave("Ld7", "res", "Here is the draft, with checked sources.");
+    behave("Ck7", "", &format!("WAIT:{}\nSources checked.", release_file("ck7-go").display()));
+    behave("Rs7", "", &format!("WAIT:{}\nFacts found.", release_file("rs7-go").display()));
+    behave("Wr7", "", "Draft written.");
+    say_in(&env, &channel, "@Ld7 write the report").await;
+
+    wait_for("Ck7 and Rs7 at work, the lead's turn over", || async {
+        status_to(&env, lead, ck).await == "running" && status_to(&env, lead, rs).await == "running" && !lead_at_work(&env, lead)
+    })
+    .await;
+    let rs_id = delegation_to(&env, lead, rs).await.unwrap().id;
+    let pause = kwnt::server::delegation::pause_release(&rs_id);
+    std::fs::write(release_file("rs7-go"), "").unwrap();
+    // Rs7's run pauses right after its result is saved
+    wait_for("Rs7's result", || async { status_to(&env, lead, rs).await == "completed" }).await;
+    assert_eq!(status_to(&env, lead, wr).await, "queued", "Wr7 is still parked in that moment");
+    report_ck_while_releasing(&env, lead, ck, pause, "ck7-go").await;
+    wait_for("Wr7's result", || async { status_to(&env, lead, wr).await == "completed" }).await;
+    wait_for("the lead's results turn", || async { !prompts_of("Ld7", "res").is_empty() }).await;
+    settle(&env, &channel).await;
+
+    assert_eq!(prompts_of("Ld7", "res").len(), 1, "one results turn for the batch");
+    let res = &prompts_of("Ld7", "res")[0];
+    for r in ["Sources checked.", "Facts found.", "Draft written."] {
+        assert!(res.contains(r), "the lead hears {r:?}: {res}");
+    }
+}
+
+/// The rule of 2026-10-24 still holds around that moment: Rs8 and Ck8 end close together, Ck8's
+/// report runs after Rs8's result is saved but before Rs8's own report. The lead is resumed
+/// once, with both (not twice, and not never).
+#[tokio::test]
+async fn two_results_ending_close_together_resume_the_lead_once_with_both() {
+    let env = setup(false).await;
+    let (channel, ids) = team(&env, "stop-r3", &["Ld8", "Ck8", "Rs8"]).await;
+    let (lead, ck, rs) = (&ids[0], &ids[1], &ids[2]);
+    behave("Ld8", "", "On it. @Ck8 please check the sources. @Rs8 please research the facts.");
+    behave("Ld8", "res", "Both are in.");
+    behave("Ck8", "", &format!("WAIT:{}\nSources checked.", release_file("ck8-go").display()));
+    behave("Rs8", "", &format!("WAIT:{}\nFacts found.", release_file("rs8-go").display()));
+    say_in(&env, &channel, "@Ld8 write the report").await;
+
+    wait_for("Ck8 and Rs8 at work, the lead's turn over", || async {
+        status_to(&env, lead, ck).await == "running" && status_to(&env, lead, rs).await == "running" && !lead_at_work(&env, lead)
+    })
+    .await;
+    let rs_id = delegation_to(&env, lead, rs).await.unwrap().id;
+    let pause = kwnt::server::delegation::pause_release(&rs_id);
+    std::fs::write(release_file("rs8-go"), "").unwrap();
+    report_ck_while_releasing(&env, lead, ck, pause, "ck8-go").await;
+    wait_for("the lead's results turn", || async { !prompts_of("Ld8", "res").is_empty() }).await;
+    settle(&env, &channel).await;
+
+    assert_eq!(prompts_of("Ld8", "res").len(), 1, "one results turn for the batch");
+    let res = &prompts_of("Ld8", "res")[0];
+    assert!(res.contains("Sources checked.") && res.contains("Facts found."), "the lead hears both: {res}");
+}
