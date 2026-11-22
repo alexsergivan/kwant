@@ -270,8 +270,24 @@ export function threadLabel(botName: string | undefined, title: string | null | 
   return botName ? `${botName} · ${t}` : t;
 }
 
-/** Groups hits by where they were said, keeping the server's ranking (best group first). */
-export function groupHits(hits: SearchHit[], kwantName: (id: string) => string | undefined): HitGroup[] {
+/**
+ * 33p: does a thread title match what was searched? Every query word of 2+ characters must start some word of the
+ * title, ignoring case ("tax ret" matches "2025 tax return"; "taxes" doesn't match "tax return").
+ */
+export function titleMatches(title: string | null | undefined, query: string | null | undefined): boolean {
+  const words = queryWords(query);
+  if (!words.length || !title) return false;
+  const titleWords = title.toLowerCase().split(/\s+/).filter(Boolean);
+  return words.every((w) => titleWords.some((t) => t.startsWith(w)));
+}
+
+const queryWords = (query: string | null | undefined) => (query ?? '').toLowerCase().split(/\s+/).filter((w) => w.length >= 2);
+
+/**
+ * Groups hits by where they were said, keeping the server's ranking (best group first). 33p: with a query, thread
+ * groups whose title matches it move to the front; both parts keep their order.
+ */
+export function groupHits(hits: SearchHit[], kwantName: (id: string) => string | undefined, query?: string): HitGroup[] {
   const groups = new Map<string, HitGroup>();
   for (const h of hits) {
     const thread = !h.channel_id && h.thread_id ? h.thread_id : null;
@@ -289,7 +305,10 @@ export function groupHits(hits: SearchHit[], kwantName: (id: string) => string |
     }
     g.hits.push(h);
   }
-  return Array.from(groups.values());
+  const all = Array.from(groups.values());
+  if (!queryWords(query).length) return all;
+  const first = all.filter((g) => g.thread_id && titleMatches(g.hits[0].thread_title, query));
+  return first.length ? [...first, ...all.filter((g) => !first.includes(g))] : all;
 }
 
 /**
