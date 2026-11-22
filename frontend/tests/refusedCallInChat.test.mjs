@@ -93,7 +93,7 @@ test('an allowed_once Telegram row still reads "Allowed once from Telegram", and
   const here = a.settledByTime(a.approvalsForChat(settled, customerThread));
   assert.deepEqual(here.map((r) => r.id), ['ap_r1', 'ap_t1'], 'the 21:00 refusal before the 21:30 Telegram allow');
   const html = ui.chat(chatProps(here));
-  assert.match(html, /Shop: Bash · <b[^>]*>✓ Allowed once from Telegram<\/b>/);
+  assert.match(html, /Shop wanted to run a command · <b[^>]*>✓ Allowed once from Telegram<\/b>/); // 33a: the card's own words
   assert.ok(html.indexOf('data-refused-call') < html.indexOf('data-resolved-via="telegram"'));
   // Lines without a time keep their order after the timed ones.
   assert.deepEqual(a.settledByTime([{ id: 'x' }, { id: 'y', asked_at: '2026-11-15T21:00:00Z' }, { id: 'z' }]).map((r) => r.id), ['y', 'x', 'z']);

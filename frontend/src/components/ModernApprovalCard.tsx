@@ -9,6 +9,7 @@ import { isPhoneLayout } from '../layout';
 import { parseProdFloor, type BackupResult, type FloorBackup, type FloorResolveOpts } from '../dev/types';
 import { ProdFloorCard } from './dev/ProdFloorCard';
 import { DENY_REASON_MAX } from '../away';
+import { plainPath } from '../paths';
 
 export interface PendingApproval {
   id: string;
@@ -339,6 +340,11 @@ const SayWhy: React.FC<{ botName: string | null; disabled: boolean; stack?: bool
   );
 };
 
+/** 33a: a folder in plain words (~/… under a home); hover gives the exact folder. */
+const Folder: React.FC<{ path: string; className?: string }> = ({ path, className = '' }) => (
+  <span className={`font-mono text-zinc-200 ${className}`.trim()} title={path}>{plainPath(path)}</span>
+);
+
 const PRE = 'font-mono text-xs leading-[18px] whitespace-pre-wrap break-words [overflow-wrap:anywhere] max-h-[240px] overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950/70 p-2';
 
 export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
@@ -439,7 +445,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   const details: React.ReactNode = shell ? (
     shell.cwd ? (
       <p className="text-xs leading-[18px] text-[#a39dcc] break-words [overflow-wrap:anywhere]">
-        In folder: <span className="font-mono text-zinc-200">{shell.cwd}</span>
+        In folder: <Folder path={shell.cwd} />
       </p>
     ) : null
   ) : summary ? (
@@ -447,7 +453,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
   ) : builtin?.kind === 'shell' ? (
     builtin.cwd ? (
       <p className="text-xs leading-[18px] text-[#a39dcc] break-words [overflow-wrap:anywhere]">
-        In folder: <span className="font-mono text-zinc-200">{builtin.cwd}</span>
+        In folder: <Folder path={builtin.cwd} />
       </p>
     ) : null
   ) : builtin?.kind === 'file' ? (
@@ -456,7 +462,7 @@ export const ModernApprovalCard: React.FC<ModernApprovalCardProps> = ({
       {builtin.cwd && (
         <>
           {' · '}
-          <span className="text-[#a39dcc]">Its folder:</span> <span className="font-mono text-zinc-200 [overflow-wrap:anywhere]">{builtin.cwd}</span>
+          <span className="text-[#a39dcc]">Its folder:</span> <Folder path={builtin.cwd} className="[overflow-wrap:anywhere]" />
         </>
       )}
     </p>

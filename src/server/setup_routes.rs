@@ -11,6 +11,7 @@
 //! come back as `manual` commands for the person.
 
 use super::AppState;
+use crate::drivers::engines::{EngineId, EngineReport, EngineStatus};
 use crate::setup::{self, ItemId, Step};
 use axum::{
     extract::{Path, Query, State},
@@ -239,11 +240,17 @@ pub async fn install(State(state): State<AppState>, Json(body): Json<InstallBody
         let log_jobs = jobs.clone();
         let log_id = job_id.clone();
         let log = move |line: String| log_jobs.push(&log_id, line);
-        let result = setup::run_plan(&run, &st.config, &log).await;
+        let mut result = setup::run_plan(&run, &st.config, &log).await;
         if result.is_ok() && item.engine().is_some() {
             crate::drivers::forget_cli_binaries();
             let env = super::engine_routes::probe_env(&st).await;
-            st.engines.recheck(&env).await;
+            let mut reports = st.engines.recheck(&env).await;
+            // A check that was already running may have started before the CLI landed: one
+            // fresh look before calling it missing
+            if cli_found(item, &reports).is_err() {
+                reports = st.engines.recheck(&env).await;
+            }
+            result = cli_found(item, &reports);
         }
         match &result {
             Ok(()) => tracing::info!(item = item.as_str(), "setup: installed"),
@@ -252,6 +259,20 @@ pub async fn install(State(state): State<AppState>, Json(body): Json<InstallBody
         jobs.finish(&job_id, result);
     });
     (StatusCode::ACCEPTED, Json(json!({ "job_id": id, "item": item, "steps": steps, "manual": manual }))).into_response()
+}
+
+/// An installer that exits 0 without leaving its CLI behind is a failed install, so Get started
+/// shows Try again instead of "Getting Claude ready…" forever (32w). Only "not installed" counts:
+/// signed out, an error or turned off in Settings still means the CLI is there.
+fn cli_found(item: ItemId, reports: &[EngineReport]) -> Result<(), String> {
+    let Some(engine) = item.engine() else { return Ok(()) };
+    let (cli, _) = EngineId::of_family(engine);
+    match reports.iter().find(|r| r.id == cli) {
+        Some(r) if r.status == EngineStatus::NotInstalled => {
+            Err(format!("Installed, but {} still isn't found on this computer.", cli.as_str()))
+        }
+        _ => Ok(()),
+    }
 }
 
 #[derive(Deserialize)]
@@ -281,6 +302,53 @@ pub async fn job(State(state): State<AppState>, Path(id): Path<String>, Query(q)
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn report(id: EngineId, status: EngineStatus) -> EngineReport {
+        EngineReport {
+            id,
+            name: String::new(),
+            kind: crate::drivers::engines::EngineKind::Cli,
+            enabled: status != EngineStatus::Disabled,
+            status,
+            detail: None,
+            version: None,
+            models: Vec::new(),
+            checked_at: None,
+            ready: false,
+            uses: None,
+        }
+    }
+
+    // 32w: an install that "succeeds" without its CLI ends the job failed, so Try again shows
+    #[test]
+    fn an_install_without_its_cli_is_a_failed_install() {
+        use EngineStatus::{Checking, Disabled, NotInstalled, Ready, SignedOut};
+        let all = |claude, codex, grok| {
+            vec![report(EngineId::Claude, claude), report(EngineId::AnthropicApi, NotInstalled), report(EngineId::Codex, codex), report(EngineId::Grok, grok)]
+        };
+        assert_eq!(
+            cli_found(ItemId::Claude, &all(NotInstalled, Ready, Ready)),
+            Err("Installed, but claude still isn't found on this computer.".into())
+        );
+        assert_eq!(
+            cli_found(ItemId::Grok, &all(Ready, Ready, NotInstalled)),
+            Err("Installed, but grok still isn't found on this computer.".into())
+        );
+        assert_eq!(
+            cli_found(ItemId::Codex, &all(Ready, NotInstalled, Ready)),
+            Err("Installed, but codex still isn't found on this computer.".into())
+        );
+        // Only its own CLI counts: the API engine of the same family, or another CLI, doesn't
+        assert_eq!(cli_found(ItemId::Claude, &all(Ready, NotInstalled, NotInstalled)), Ok(()));
+        // There, just not ready yet: signing in is the next step, not a failed install
+        for status in [SignedOut, EngineStatus::Error, Disabled, Checking, Ready] {
+            assert_eq!(cli_found(ItemId::Claude, &all(status, Ready, Ready)), Ok(()), "{status:?}");
+        }
+        // No report for it, or a part without a CLI: nothing to check
+        assert_eq!(cli_found(ItemId::Claude, &[]), Ok(()));
+        assert_eq!(cli_found(ItemId::Laya, &all(NotInstalled, NotInstalled, NotInstalled)), Ok(()));
+        assert_eq!(cli_found(ItemId::Browser, &[]), Ok(()));
+    }
 
     #[test]
     fn one_job_at_a_time_and_lines_page_by_index() {

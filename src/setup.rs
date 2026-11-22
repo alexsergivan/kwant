@@ -189,8 +189,10 @@ impl Cmd {
         Self { label: label.into(), argv: argv.iter().map(|s| s.to_string()).collect(), env: Vec::new() }
     }
 
-    fn sh(label: impl Into<String>, script: &str) -> Self {
-        Self::new(label, &["sh", "-c", script])
+    /// A pipeline that fails when any command in it fails. `curl -fsSL … | bash` under plain
+    /// `sh -c` exits 0 when the download fails, because bash then runs an empty script (32w).
+    fn pipe(label: impl Into<String>, script: &str) -> Self {
+        Self::new(label, &["bash", "-c", &format!("{PIPEFAIL}{script}")])
     }
 
     fn env(mut self, k: &str, v: impl Into<String>) -> Self {
@@ -202,11 +204,16 @@ impl Cmd {
     pub fn display(&self) -> String {
         let env: String = self.env.iter().map(|(k, v)| format!("{k}={} ", shell_quote(v))).collect();
         match self.argv.as_slice() {
-            [sh, c, script] if sh == "sh" && c == "-c" => format!("{env}{script}"),
+            [bash, c, script] if bash == "bash" && c == "-c" => {
+                format!("{env}{}", script.strip_prefix(PIPEFAIL).unwrap_or(script))
+            }
             argv => format!("{env}{}", argv.iter().map(|a| shell_quote(a)).collect::<Vec<_>>().join(" ")),
         }
     }
 }
+
+/// Put before a [`Cmd::pipe`] script; left out of what the person sees.
+const PIPEFAIL: &str = "set -o pipefail; ";
 
 fn shell_quote(s: &str) -> String {
     if !s.is_empty() && s.chars().all(|c| c.is_ascii_alphanumeric() || "-_./:=@,+".contains(c)) {
@@ -316,7 +323,8 @@ pub fn laya_commands(data_dir: &Path, uv: Option<&Path>, python: Option<&Path>, 
         (None, None) => {
             let bin = data_dir.join("bin");
             let own = bin.join("uv").display().to_string();
-            let mut cmds = vec![Cmd::sh(
+            // pipefail: a failed download fails this step, not the next one's "couldn't start uv" (33b)
+            let mut cmds = vec![Cmd::pipe(
                 format!("Install uv {UV_VERSION} (it brings Python) into kwant's data folder"),
                 &format!("curl -LsSf https://astral.sh/uv/{UV_VERSION}/install.sh | sh"),
             )
@@ -396,7 +404,7 @@ pub fn plan(item: ItemId, p: &Probe) -> Plan {
                 _ => ("Install the Grok CLI into ~/.grok", "https://x.ai/cli/install.sh"),
             };
             steps.push(if p.curl {
-                Step::Run(Cmd::sh(label, &format!("curl -fsSL {url} | bash")))
+                Step::Run(Cmd::pipe(label, &format!("curl -fsSL {url} | bash")))
             } else {
                 Step::Manual { label: format!("{label} (needs curl)"), command: format!("curl -fsSL {url} | bash") }
             });
@@ -1489,6 +1497,102 @@ mod tests {
         let mut installed = bare(Platform::Linux);
         installed.clis[0].1 = Some("/home/u/.local/bin/claude".into());
         assert!(plan(ItemId::Claude, &installed).steps.is_empty());
+    }
+
+    // 32w: a download that fails (offline, proxy, firewall) fails the step. Under plain `sh -c`,
+    // `curl … | bash` exited 0 because bash ran the empty script, so Get started spun forever.
+    #[cfg(unix)]
+    #[test]
+    fn cli_installs_run_with_pipefail_under_bash() {
+        let p = bare(Platform::Linux);
+        for (item, url) in [(ItemId::Claude, "https://claude.ai/install.sh"), (ItemId::Grok, "https://x.ai/cli/install.sh")] {
+            let pl = plan(item, &p);
+            let [Step::Run(c)] = pl.steps.as_slice() else { panic!("{pl:?}") };
+            assert_eq!(c.argv, vec!["bash".to_string(), "-c".into(), format!("set -o pipefail; curl -fsSL {url} | bash")]);
+            // What the person reads in the log and copies stays the plain command
+            assert_eq!(c.display(), format!("curl -fsSL {url} | bash"));
+        }
+        // Without curl it's still shown to the person to run, unchanged
+        let mut no_curl = bare(Platform::Linux);
+        no_curl.curl = false;
+        assert_eq!(shown(&plan(ItemId::Claude, &no_curl)), vec!["curl -fsSL https://claude.ai/install.sh | bash"]);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn a_failed_pipe_fails_the_step() {
+        let quiet = |_: String| {};
+        let failed = run_cmd(&Cmd::new("x", &["bash", "-c", "set -o pipefail; false | bash"]), &quiet).await;
+        assert_eq!(failed, Err("exited with exit status: 1".into()));
+        assert_eq!(run_cmd(&Cmd::new("x", &["bash", "-c", "set -o pipefail; true | bash"]), &quiet).await, Ok(()));
+    }
+
+    // The real Claude step, pointed at a port nothing listens on: curl's own error ends the job,
+    // which Get started reads as a network failure and shows Try again.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unreachable_claude_download_fails_the_step() {
+        if which("curl").is_none() || which("bash").is_none() {
+            return;
+        }
+        let pl = plan(ItemId::Claude, &bare(Platform::Linux));
+        let [Step::Run(c)] = pl.steps.as_slice() else { panic!("{pl:?}") };
+        let mut c = c.clone().env("no_proxy", "*").env("NO_PROXY", "*");
+        for a in &mut c.argv {
+            *a = a.replace("https://claude.ai/install.sh", "http://127.0.0.1:9/install.sh");
+        }
+        let lines = std::sync::Mutex::new(Vec::new());
+        let result = run_cmd(&c, &|l: String| lines.lock().unwrap().push(l)).await;
+        let e = result.expect_err("a download that never started must fail the step");
+        assert!(e.starts_with("exited with exit status: 7"), "{e}");
+        assert!(e.contains("curl: (7)"), "{e}");
+    }
+
+    // 33b: Laya's uv install is the same kind of pipe. Under plain `sh -c` a failed download
+    // left "Install uv" done, and the next step failed with "couldn't start …/bin/uv".
+    #[cfg(unix)]
+    #[test]
+    fn the_uv_install_runs_with_pipefail_under_bash() {
+        let url = format!("https://astral.sh/uv/{UV_VERSION}/install.sh");
+        for p in [bare(Platform::Linux), mac()] {
+            // Get started's plan and the sidecar's own install use the same commands
+            let from_plan = match plan(ItemId::Laya, &p).steps.first() {
+                Some(Step::Run(c)) => c.clone(),
+                other => panic!("{other:?}"),
+            };
+            let cmds = laya_commands(&p.data_dir, None, None, p.platform == Platform::Linux);
+            assert_eq!(cmds[0], from_plan);
+            let c = &cmds[0];
+            assert_eq!(c.label, format!("Install uv {UV_VERSION} (it brings Python) into kwant's data folder"));
+            assert_eq!(c.argv, vec!["bash".to_string(), "-c".into(), format!("set -o pipefail; curl -LsSf {url} | sh")]);
+            let bin = p.data_dir.join("bin").display().to_string();
+            assert_eq!(c.env, vec![("UV_INSTALL_DIR".to_string(), bin.clone()), ("UV_NO_MODIFY_PATH".to_string(), "1".to_string())]);
+            // What the person reads in the log stays the plain command
+            assert_eq!(c.display(), format!("UV_INSTALL_DIR={bin} UV_NO_MODIFY_PATH=1 curl -LsSf {url} | sh"));
+        }
+    }
+
+    // The real uv step, pointed at a port nothing listens on: curl's own error ends the step,
+    // instead of a "done" step followed by "couldn't start …/bin/uv".
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn an_unreachable_uv_download_fails_the_step() {
+        if which("curl").is_none() || which("bash").is_none() {
+            return;
+        }
+        let data = tempfile::tempdir().unwrap();
+        let cmds = laya_commands(data.path(), None, None, false);
+        let mut c = cmds[0].clone().env("no_proxy", "*").env("NO_PROXY", "*");
+        let url = format!("https://astral.sh/uv/{UV_VERSION}/install.sh");
+        for a in &mut c.argv {
+            *a = a.replace(&url, "http://127.0.0.1:9/install.sh");
+        }
+        assert!(c.argv.iter().any(|a| a.contains("127.0.0.1:9")), "{:?}", c.argv);
+        let result = run_cmd(&c, &|_: String| {}).await;
+        let e = result.expect_err("a uv download that never started must fail the step");
+        assert!(e.starts_with("exited with exit status: 7"), "{e}");
+        assert!(e.contains("curl: (7)"), "{e}");
+        assert!(!data.path().join("bin").join("uv").exists());
     }
 
     #[test]

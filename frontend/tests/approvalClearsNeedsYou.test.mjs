@@ -25,6 +25,7 @@ const m = await loadBundled(`
   export { asksHere } from './src/askHere';
   export { needsYouRows } from './src/chatsTab';
   export { NeedsYouStrip } from './src/components/NeedsYouStrip';
+  export { keepAllowedOnce } from './src/approvals';
 `);
 
 // App.tsx's handleResolveApproval, as written, made callable with App's pieces passed in.
@@ -33,7 +34,7 @@ const start = app.indexOf('const handleResolveApproval = async (');
 assert.ok(start > 0, 'App.tsx has handleResolveApproval');
 const end = app.indexOf('\n  };\n', start) + '\n  };\n'.length;
 const { code: handlerJs } = await transform(`${app.slice(start, end)}\n`, { loader: 'ts' });
-const DEPS = ['haptic', 'fetch', 'resolveBody', 'pushToast', 'pendingApprovals', 'dropApproval', 'lateAnswerText', 'refreshAwayCount', 'setClearedAsks', 'clearAnswered', 'console'];
+const DEPS = ['haptic', 'fetch', 'resolveBody', 'pushToast', 'pendingApprovals', 'dropApproval', 'lateAnswerText', 'refreshAwayCount', 'setClearedAsks', 'clearAnswered', 'console', 'setSettledApprovals', 'keepAllowedOnce'];
 const makeHandler = new Function(...DEPS, `${handlerJs}\nreturn handleResolveApproval;`);
 
 const NOW = Date.parse('2026-11-21T03:30:00Z');
@@ -48,12 +49,13 @@ const HERE = { direct: 'tl' };
 
 /** App's state for one chat: the away list, the cleared set, the cards; and the handler wired to it. */
 function rig(awayList, respond) {
-  const s = { awayList, cleared: new Set(), cards: awayList.filter((i) => i.kind === 'approval').map((i) => card(i.id)), toasts: [], refetches: [] };
+  const s = { awayList, cleared: new Set(), cards: awayList.filter((i) => i.kind === 'approval').map((i) => card(i.id)), toasts: [], refetches: [], settled: [] };
+  const setSettledApprovals = (fn) => { s.settled = typeof fn === 'function' ? fn(s.settled) : fn; };
   const setClearedAsks = (fn) => { s.cleared = typeof fn === 'function' ? fn(s.cleared) : fn; };
   const fetch = async () => respond();
   const handler = makeHandler(() => {}, fetch, m.away.resolveBody, (t, b) => s.toasts.push([t, b]), s.cards,
     (id) => { s.cards = s.cards.filter((c) => c.id !== id); }, () => null, (ms) => s.refetches.push(ms), setClearedAsks, m.away.clearAnswered,
-    { error: () => {} });
+    { error: () => {} }, setSettledApprovals, m.keepAllowedOnce);
   // App.tsx: awayItems = awayList minus clearedAsks; the strip is asksHere(awayItems, here); the sidebar rows needsYouRows(awayItems, ...).
   const items = () => s.awayList.filter((i) => !s.cleared.has(i.id));
   s.asks = () => m.asksHere(items(), HERE);
@@ -149,4 +151,21 @@ test('31y: the clear is in the same update as dropApproval, before any await in 
   assert.ok(drop > 0 && clear > drop, 'cleared right after the card is dropped');
   assert.doesNotMatch(fn.slice(drop, clear), /await/, 'no await between them');
   assert.equal(fn.split('clearAnswered(').length - 1, 1, 'only the answered/lapsed branch clears');
+});
+
+// 33a: the same handler keeps "✓ You allowed once" in the chat after a successful Allow once, and nothing else.
+test('33a: only a successful allow_once keeps the card as an app line', async () => {
+  const ok = rig([approval('ap1')], () => json(200, { status: 'resolved' }));
+  await ok.answer('allow_once');
+  assert.deepEqual(ok.settled.map((c) => [c.id, c.via]), [['ap1', 'app']]);
+  for (const decision of ['always_allow', 'deny']) {
+    const s = rig([approval('ap1')], () => json(200, { status: 'resolved' }));
+    await s.answer(decision);
+    assert.deepEqual(s.settled, [], decision);
+  }
+  for (const status of [409, 404, 500]) {
+    const s = rig([approval('ap1')], () => json(status, {}));
+    await s.answer('allow_once');
+    assert.deepEqual(s.settled, [], `HTTP ${status}`);
+  }
 });

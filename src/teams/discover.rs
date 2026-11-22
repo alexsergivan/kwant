@@ -1594,7 +1594,7 @@ pub fn folders_line(owns: &[String]) -> String {
 }
 
 /// A suggested team's pinned instructions (Q-D11, A16): fixed text, the stack line, and the
-/// Coding template's "How we work" and "Never without the person".
+/// Coding template's "How we work" and "Never without you".
 pub fn team_instructions(stack_line: Option<&str>) -> String {
     let coding = super::templates::get("coding").expect("the Coding template exists");
     let rules = coding.instructions.split_once("\n\n").map(|(_, rest)| rest).unwrap_or(&coding.instructions);

@@ -55,14 +55,18 @@ fn find<'a>(v: &'a Value, id: &str) -> Option<&'a Value> {
     v["items"].as_array().unwrap().iter().find(|i| i["id"] == id)
 }
 
-/// Sets a timestamp column the way kwnt writes it (sqlx's encoding), so comparisons line up.
+/// Sets a timestamp column the way kwnt writes it, so comparisons line up: sqlx's encoding, but
+/// `messages.created_at` is SQLite's `CURRENT_TIMESTAMP` text (33d: `2026-11-21 10:00:00`).
 async fn set_time(state: &AppState, table: &str, column: &str, id: &str, t: DateTime<Utc>) {
     let pool = SqlitePoolOptions::new()
         .max_connections(1)
         .connect(&format!("sqlite://{}", state.config.data_dir.join("kwnt.db").display()))
         .await
         .unwrap();
-    sqlx::query(&format!("UPDATE {table} SET {column} = ? WHERE id = ?")).bind(t).bind(id).execute(&pool).await.unwrap();
+    let sql = format!("UPDATE {table} SET {column} = ? WHERE id = ?");
+    let q = sqlx::query(&sql);
+    let q = if table == "messages" && column == "created_at" { q.bind(t.format("%Y-%m-%d %H:%M:%S").to_string()) } else { q.bind(t) };
+    q.bind(id).execute(&pool).await.unwrap();
     pool.close().await;
 }
 

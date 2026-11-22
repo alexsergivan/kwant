@@ -39,7 +39,7 @@ test('a Bash approval shows who, the command and the folder, with the three choi
   assert.match(t, /Frontend wants to run a command/);
   assert.match(t, /Run the strategy tests/);
   assert.match(html, /<pre[^>]*>go test \.\/internal\/strategy\/<\/pre>/);
-  assert.match(t, /In folder: \/Users\/alex\/trader/);
+  assert.match(t, /In folder: ~\/trader/); // 33a
   assert.deepEqual(buttons(html), ['Hide details', 'Allow once', 'Deny', 'Always this session', 'Say why']);
   assert.doesNotMatch(html, /&quot;source&quot;|claude_builtin|kwant_name/);
 });
@@ -50,7 +50,7 @@ test('a Write outside its folder names the file, the size and its own folder', (
   assert.match(t, /Frontend wants to write a file outside its own folder/);
   assert.match(t, /\/Users\/alex\/trader\/internal\/strategy\/smacross\.go/);
   assert.match(t, /Write 4 lines/);
-  assert.match(t, /Its folder: \/Users\/alex\/bots\/frontend/);
+  assert.match(t, /Its folder: ~\/bots\/frontend/); // 33a: under a home it reads ~/…
   assert.doesNotMatch(t, /package strategy/, 'file contents are not dumped on the card');
 });
 
