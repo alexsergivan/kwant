@@ -590,6 +590,7 @@ const NEEDS_YOU_REASONS: Record<string, string> = {
   declined: 'you chose Not now',
   fix_ready: 'a fix is ready for your OK',
   unknown_24h: 'it couldn’t be checked for a day',
+  no_fix_check: 'no fix can be tested against its checks',
 };
 
 /** "Needs you: <why>" from a reason code, or the server's own words when it sends text. */

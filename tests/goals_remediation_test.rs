@@ -1266,3 +1266,101 @@ async fn g_r_33w_a_fix_that_worked_still_passes_the_goals_test_and_is_verified()
     assert_eq!(finish(&e, &l.fix_task_id).await, StatusCode::OK);
     assert_eq!(task(&e, &l.fix_task_id).await.state, "verified");
 }
+
+// 34b: a goal kwant can't fix on its own says so (follow-up to 33w)
+
+fn http_check(label: &str, metric: &str, op: Option<&str>, target: &str) -> NewGoalCheck {
+    NewGoalCheck {
+        label: label.into(),
+        kind: "http".into(),
+        spec: json!({"url": "http://127.0.0.1:9/"}),
+        metric: Some(metric.into()),
+        operator: op.map(str::to_string),
+        target: Some(target.into()),
+        severity: "required".into(),
+        freshness_minutes: 180,
+    }
+}
+
+/// A fix-mode goal with these required checks, led by `bot`.
+async fn goal_checked_by(e: &Env, bot: &str, checks: Vec<NewGoalCheck>) -> Goal {
+    let new = NewGoal {
+        space_id: SpaceId::default_space().as_str().into(),
+        title: "The site answers fast".into(),
+        description: String::new(),
+        kwant_id: bot.into(),
+        folder: e.folder.to_string_lossy().into_owned(),
+        mode: "fix".into(),
+        interval_minutes: 60,
+        confirm_failures: 2,
+        budget_tokens: 0,
+        max_fixes_per_day: 3,
+        priority: 2,
+        created_by: "person".into(),
+        draft: false,
+        checks,
+    };
+    match e.state.db.create_goal(&new, now()).await.unwrap() {
+        Created::Goal(g) => *g,
+        Created::TooManyDrafts => panic!("draft"),
+    }
+}
+
+/// Logs the `not_met` event a real check run writes when the goal goes failing; the incident
+/// starts at the first one since it was last met.
+async fn logged_not_met(e: &Env, id: &str) {
+    e.state.db.add_goal_event(id, "not_met", "kwant", &json!({"failing": ["answers in 500 ms"], "confirmed_after": 2})).await.unwrap();
+}
+
+async fn needs_you_sent(e: &Env, id: &str) -> usize {
+    e.state.db.goal_events(id, 100).await.unwrap().into_iter().filter(|x| x.kind == "notified" && x.detail_value()["kind"] == json!("needs_you")).count()
+}
+
+#[tokio::test]
+async fn g_r_34b_a_goal_no_fix_can_test_goes_to_needs_you_once_and_says_why() {
+    let e = setup().await;
+    let bot = e.bot.clone();
+    let g = goal_checked_by(&e, &bot, vec![http_check("answers in 500 ms", "latency_ms", Some("lt"), "500")]).await;
+    logged_not_met(&e, &g.id).await;
+    break_goal(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    assert_eq!(status(&e, &g.id).await, ("needs_you".into(), "no_fix_check".into()), "it says why nothing is fixing it");
+    assert_eq!(needs_you_sent(&e, &g.id).await, 1, "one Needs you notice");
+    assert!(e.state.db.open_goal_link_of(&g.id).await.unwrap().is_none(), "no Restore mission");
+    assert!(e.state.db.list_missions(&SpaceId::default_space(), None).await.unwrap().is_empty());
+    // More ticks in the same incident, even with the status put back to failing, tell no one again
+    tick_at(&e.state, now()).await;
+    // The next run sees it failing again (needs_you to not_met logs another not_met, same incident)
+    logged_not_met(&e, &g.id).await;
+    break_quiet(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    assert_eq!(status(&e, &g.id).await, ("needs_you".into(), "no_fix_check".into()));
+    assert_eq!(needs_you_sent(&e, &g.id).await, 1, "still one Needs you notice for this incident");
+    assert!(e.state.db.list_missions(&SpaceId::default_space(), None).await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn g_r_34b_one_check_a_fix_can_test_still_opens_the_mission() {
+    let e = setup().await;
+    let bot = e.bot.clone();
+    let g = goal_checked_by(&e, &bot, vec![http_check("answers in 500 ms", "latency_ms", Some("lt"), "500"), http_check("says ok", "body_contains", None, "ok")]).await;
+    break_goal(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    let l = open_link(&e, &g.id).await;
+    assert_ne!(status(&e, &g.id).await.1, "no_fix_check");
+    assert_eq!(needs_you_sent(&e, &g.id).await, 0);
+    let fix_checks = e.state.db.list_checks(&l.fix_task_id).await.unwrap();
+    assert_eq!(fix_checks.len(), 1, "only the check the Fix can test: {fix_checks:?}");
+    assert_eq!(fix_checks[0].spec_value()["contains"], json!("ok"));
+}
+
+#[tokio::test]
+async fn g_r_34b_a_goal_whose_bot_is_gone_is_not_called_unfixable() {
+    let e = setup().await;
+    let g = goal_checked_by(&e, "a-bot-that-is-gone", vec![http_check("answers in 500 ms", "latency_ms", Some("lt"), "500")]).await;
+    break_goal(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    assert_ne!(status(&e, &g.id).await.1, "no_fix_check", "no lead bot is a different problem");
+    assert_eq!(needs_you_sent(&e, &g.id).await, 0);
+    assert!(e.state.db.list_missions(&SpaceId::default_space(), None).await.unwrap().is_empty());
+}
