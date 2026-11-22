@@ -749,6 +749,45 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const wideRows = useMedia(SM_QUERY);
 
   const [composerFocused, setComposerFocused] = useState(false);
+  // 34c: a tap elsewhere takes the focus on its press (mousedown), and leaving keyboard mode reflows the chat (the
+  // header grows, the thread bar comes back, the list pins to the bottom). Done inside the tap, that moved what the
+  // finger pressed before the release, so the click hit something else ("Show details" took two taps). A blur during
+  // a press leaves keyboard mode once that press is released (after its click); any other blur leaves at once.
+  const pressingRef = useRef(false);
+  const leaveAfterPressRef = useRef<(() => void) | null>(null);
+  useEffect(() => {
+    const down = () => { pressingRef.current = true; };
+    const up = () => {
+      pressingRef.current = false;
+      const leave = leaveAfterPressRef.current;
+      leaveAfterPressRef.current = null;
+      // After the click this release sends, which comes in the same task.
+      if (leave) window.setTimeout(leave, 0);
+    };
+    window.addEventListener('mousedown', down, true);
+    window.addEventListener('mouseup', up, true);
+    // A press that turns into a drag or a scroll never sends mouseup.
+    window.addEventListener('dragstart', up, true);
+    window.addEventListener('touchcancel', up, true);
+    return () => {
+      window.removeEventListener('mousedown', down, true);
+      window.removeEventListener('mouseup', up, true);
+      window.removeEventListener('dragstart', up, true);
+      window.removeEventListener('touchcancel', up, true);
+      leaveAfterPressRef.current = null;
+    };
+  }, []);
+  const composerBlurred = () => {
+    if (!pressingRef.current) {
+      setComposerFocused(false);
+      return;
+    }
+    leaveAfterPressRef.current = () => setComposerFocused(!!textareaRef.current && document.activeElement === textareaRef.current);
+  };
+  const composerFocusedIn = () => {
+    leaveAfterPressRef.current = null;
+    setComposerFocused(true);
+  };
   const kbd = keyboardMode({ phone, touch, focused: composerFocused });
   const [fieldWidth, setFieldWidth] = useState(0);
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
@@ -3296,8 +3335,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-autocomplete="list"
             rows={1}
             value={inputVal}
-            onFocus={() => setComposerFocused(true)}
-            onBlur={() => setComposerFocused(false)}
+            onFocus={composerFocusedIn}
+            onBlur={composerBlurred}
             onChange={(e) => {
               const val = e.target.value;
               setInputVal(val);
