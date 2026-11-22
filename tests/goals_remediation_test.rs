@@ -892,6 +892,130 @@ async fn g_d_03_no_draft_turn_when_three_drafts_already_wait() {
     assert_eq!(s, StatusCode::CONFLICT);
 }
 
+// 34f goal-draft-says-why: a draft turn that saved no draft says why, once, in its own space
+
+/// Every `GoalDraftFailed` sent so far, as (space, bot, reason).
+fn draft_failures(rx: &mut tokio::sync::broadcast::Receiver<kwnt::drivers::events::RuntimeEvent>) -> Vec<(String, String, String)> {
+    let mut out = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if let kwnt::drivers::events::RuntimeEvent::GoalDraftFailed { space_id, kwant_id, reason } = ev {
+            out.push((space_id, kwant_id, reason));
+        }
+    }
+    out
+}
+
+/// The bot's own `goal_propose`, as its draft turn calls it.
+async fn propose(e: &Env, args: Value) -> (String, bool) {
+    let scope = kwnt::server::continuity::SelfScope { kwant_id: e.bot.clone(), ..Default::default() };
+    kwnt::server::goals::tool::call(&e.state, &scope, &args).await
+}
+
+#[tokio::test]
+async fn g_d_04_a_refused_draft_says_the_refusal_once_and_saves_nothing() {
+    let e = setup().await;
+    let space = SpaceId::default_space().as_str().to_string();
+    let mut rx = e.state.event_sender.subscribe();
+    let bad = json!({"title": "The site answers", "checks": [{"kind": "http", "spec": {"url": "example.com"}}]});
+    let reason = kwnt::server::goals_remediation::run_draft(&e.state, &space, &e.bot, async {
+        let (text, err) = propose(&e, bad.clone()).await;
+        assert!(err, "{text}");
+        assert_eq!(text, "check 1: spec.url must start with http:// or https://");
+        Ok("I proposed it.".to_string())
+    })
+    .await;
+    assert_eq!(reason.as_deref(), Some("check 1: spec.url must start with http:// or https://"));
+    assert_eq!(draft_failures(&mut rx), vec![(space.clone(), e.bot.clone(), "check 1: spec.url must start with http:// or https://".to_string())]);
+    assert!(e.state.db.list_goals(&space).await.unwrap().is_empty(), "no draft goal");
+}
+
+#[tokio::test]
+async fn g_d_05_the_last_refusal_wins_and_a_later_save_sends_nothing() {
+    let e = setup().await;
+    let space = SpaceId::default_space().as_str().to_string();
+    let mut rx = e.state.event_sender.subscribe();
+    // Two refusals: the reason is the last one, without the checks' raw text
+    let reason = kwnt::server::goals_remediation::run_draft(&e.state, &space, &e.bot, async {
+        propose(&e, json!({"title": "Up", "checks": [{"kind": "http", "spec": {"url": "example.com"}}]})).await;
+        propose(&e, json!({"title": "Up", "checks": "secret-looking text the bot sent"})).await;
+        Ok(String::new())
+    })
+    .await;
+    assert_eq!(reason.as_deref(), Some("the checks weren’t in a shape kwant takes"));
+    let sent = draft_failures(&mut rx);
+    assert_eq!(sent.len(), 1, "{sent:?}");
+    assert!(!sent[0].2.contains("secret-looking"), "tool arguments never go in the reason");
+
+    // A refusal, then a saved draft: nothing to say
+    let reason = kwnt::server::goals_remediation::run_draft(&e.state, &space, &e.bot, async {
+        propose(&e, json!({"title": "Up", "checks": [{"kind": "http", "spec": {"url": "example.com"}}]})).await;
+        let (text, err) = propose(&e, json!({"title": "Report exists", "checks": [{"kind": "file_exists", "spec": {"path": "report.md"}}]})).await;
+        assert!(!err, "{text}");
+        Ok("Proposed.".to_string())
+    })
+    .await;
+    assert_eq!(reason, None);
+    assert!(draft_failures(&mut rx).is_empty(), "a turn that saved a draft sends no failure");
+    assert_eq!(e.state.db.count_draft_goals(&space).await.unwrap(), 1);
+}
+
+#[tokio::test]
+async fn g_d_06_no_call_or_a_failed_turn_still_says_why() {
+    let e = setup().await;
+    let space = SpaceId::default_space().as_str().to_string();
+    let mut rx = e.state.event_sender.subscribe();
+    let reason = kwnt::server::goals_remediation::run_draft(&e.state, &space, &e.bot, async { Ok("Looks fine to me.".to_string()) }).await;
+    assert_eq!(reason.as_deref(), Some("it didn’t propose any checks"));
+    let reason = kwnt::server::goals_remediation::run_draft(&e.state, &space, &e.bot, async {
+        Err(format!("the engine stopped:\n{}.", "x".repeat(400)))
+    })
+    .await
+    .unwrap();
+    assert!(reason.starts_with("the engine stopped: xxx"), "one line: {reason}");
+    assert!(reason.chars().count() <= 200, "{}", reason.chars().count());
+    assert!(reason.ends_with('…'));
+    let sent = draft_failures(&mut rx);
+    assert_eq!(sent.len(), 2, "one per turn: {sent:?}");
+    assert_eq!(sent[0].2, "it didn’t propose any checks");
+    // A refusal beats the turn's error
+    let reason = kwnt::server::goals_remediation::run_draft(&e.state, &space, &e.bot, async {
+        propose(&e, json!({"title": "", "checks": [{"kind": "file_exists", "spec": {"path": "a"}}]})).await;
+        Err("the draft took longer than ten minutes".to_string())
+    })
+    .await;
+    assert_eq!(reason.as_deref(), Some("title must be 1–200 characters"));
+}
+
+#[tokio::test]
+async fn g_d_07_the_failure_stays_in_its_space_and_other_bots_calls_dont_count() {
+    let e = setup().await;
+    let space = SpaceId::default_space().as_str().to_string();
+    let other_bot = e.state.db.list_kwants(&SpaceId::default_space()).await.unwrap()[1].id.clone();
+    let mut rx = e.state.event_sender.subscribe();
+    let reason = kwnt::server::goals_remediation::run_draft(&e.state, &space, &e.bot, async {
+        // Another bot in the space saves a goal while this one drafts: it isn't this draft
+        let scope = kwnt::server::continuity::SelfScope { kwant_id: other_bot.clone(), ..Default::default() };
+        let (text, err) = kwnt::server::goals::tool::call(&e.state, &scope, &json!({"title": "Report exists", "checks": [{"kind": "file_exists", "spec": {"path": "report.md"}}]})).await;
+        assert!(!err, "{text}");
+        Ok(String::new())
+    })
+    .await;
+    assert_eq!(reason.as_deref(), Some("it didn’t propose any checks"));
+    let mut seen = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        if matches!(ev, kwnt::drivers::events::RuntimeEvent::GoalDraftFailed { .. }) {
+            seen.push(ev);
+        }
+    }
+    assert_eq!(seen.len(), 1);
+    let wire = kwnt::server::sse::wire_event(&e.state.db, &mut Default::default(), &seen[0]).await;
+    assert_eq!(wire["type"], "goal_draft_failed");
+    assert_eq!(wire["space_id"], json!(space));
+    assert_eq!(wire["kwant_id"], json!(e.bot));
+    assert!(kwnt::server::sse::in_space(&wire, Some(&space)));
+    assert!(!kwnt::server::sse::in_space(&wire, Some("spc_elsewhere")), "never on another space's stream");
+}
+
 // Post-0.6.5 (Rigel's remediation Minor 1): deleting a goal closes its open Restore mission
 
 #[tokio::test]
