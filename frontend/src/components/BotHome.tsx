@@ -1,10 +1,10 @@
 import React from 'react';
 import { ArrowRight, AtSign, Clock, Lightbulb, ListChecks, MessageSquareText, Plug, Sparkles, Wand2 } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { useKwantMood } from './AvatarMood';
+import { AvatarMoodMark, useKwantMood, useKwantMoods } from './AvatarMood';
 import { NewTag } from './NewTag';
 import { markNewSeen } from '../whatsNew';
-import { ChatHome, ago, goodAt, starterCards, teamHomeLine } from '../botHome';
+import { ChatHome, ago, goodAt, heroOrder, heroState, starterCards, teamHomeLine } from '../botHome';
 import { ACCOUNT_WAYS } from '../firstScreen';
 
 const ICONS = [Sparkles, ListChecks, Lightbulb, Wand2];
@@ -74,7 +74,9 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
   const crew = home.kind === 'team' ? home.team : undefined;
   const cards = starterCards(prompts, crew ? 3 : 4);
   const chips = bot ? goodAt(bot) : [];
-  const shown = team.slice(0, 8);
+  // 33r: who needs you, then who is working, then the rest (stable), from the same mood store as the sidebar.
+  const moods = useKwantMoods(bot ? [] : team.map((k) => k.id));
+  const shown = heroOrder(team, (id) => moods[id]).slice(0, 8);
   const extra = team.length - shown.length;
   // Breathing is the working signal: only a working bot's glow moves (violet, like its dot).
   const working = useKwantMood(bot?.id) === 'working';
@@ -131,10 +133,25 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
           <div className="mt-4 flex flex-wrap items-center justify-center gap-1.5" role="list" aria-label={crew ? `Who is in ${crew.name}` : 'Bots that can answer here'}>
             {shown.map((k) => {
               const leads = !!crew?.lead && k.name === crew.lead;
+              const state = heroState(moods[k.id]);
+              const tip = leads ? `${k.title}, leads the team` : k.title;
               return (
-                <span key={k.id} role="listitem" className="kw-chip pl-1" title={leads ? `${k.title}, leads the team` : k.title} data-lead={leads ? '' : undefined}>
-                  <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} />
+                <span key={k.id} role="listitem" className="kw-chip pl-1" title={state ? `${k.name}, ${state}${tip ? ` · ${tip}` : ''}` : tip} data-lead={leads ? '' : undefined} data-hero-state={state ?? undefined}>
+                  {/* The mark sits on the face's corner, inside the chip's padding: the chip never changes size. */}
+                  <span className="relative inline-flex" style={state ? ({ '--kw-avatar-cut': 'var(--kw-surface-main)' } as React.CSSProperties) : undefined}>
+                    <ModernAvatar role={k.avatar_sprite} name={k.name} size={18} />
+                    {state === 'needs you' && <AvatarMoodMark mood="needs_you" size={18} />}
+                    {state === 'working' && (
+                      <span
+                        className="kw-pulse pointer-events-none absolute rounded-full bg-sky-400"
+                        style={{ top: -1, right: -1, width: 6, height: 6, boxShadow: '0 0 0 1.5px var(--kw-avatar-cut)' }}
+                        aria-hidden="true"
+                        data-working-dot=""
+                      />
+                    )}
+                  </span>
                   {k.name}
+                  {state && <span className="sr-only">, {state}</span>}
                   {leads && <span className="text-zinc-400">· lead</span>}
                 </span>
               );
