@@ -1729,8 +1729,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const matchedChannel = teamChannelOf(channelsRef.current, { id: teamId ?? '', name: event.data?.team_name ?? '' });
             const contextId = matchedChannel ? matchedChannel.id : (teamId || selectedIdRef.current);
 
+            // 32s: a reply-mention handoff starts after the replying bot is done, with its words still the live text. Those
+            // words keep their author's name (band "<author> is replying · 1 of N") until DiscussionTurnStarted's swap
+            // moves name and text together. A discussion, or a handoff with no live text, names the next speaker at once.
+            const author = liveRef.current[contextId];
+            const keepAuthor =
+              event.data?.kind === 'handoff' && !!author && author !== initialSpeakerName && !!streamsRef.current[contextId]?.text;
+            const shownSpeaker = keepAuthor ? author : initialSpeakerName;
+
             streamingContextIdRef.current = contextId;
-            markLive(contextId, initialSpeakerName);
+            markLive(contextId, shownSpeaker);
 
             setDiscussionState({
               inProgress: true,
@@ -1738,7 +1746,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               contextId,
               teamName: event.data?.team_name,
               totalTurns: event.data?.total_turns,
-              currentSpeaker: initialSpeakerName,
+              currentSpeaker: shownSpeaker,
               currentTurn: 1,
               kind: event.data?.kind,
             });

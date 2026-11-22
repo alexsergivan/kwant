@@ -1,7 +1,8 @@
 //! 32h: Stop on a teammate stops the team (Mira's UX pass at 0.9.35, fix #1). Stopping a hand-off
 //! that another teammate waits for leaves that teammate Stopped (not Failed, not in Needs you),
 //! and nothing restarts the work: no keep-going turn and no "Keep going?" card. Stopping the
-//! lead's summary of its hand-offs' results runs no review turn after it, now or from the sweep.
+//! lead's summary of its hand-offs' results runs no review turn after it, now or from the sweep,
+//! also after a server restart (32o): the Stop is kept on the card, not only in memory.
 //!
 //! A fake claude CLI on PATH answers as the bot named in its system prompt ("You are <name>, …"),
 //! from files under `$KWNT_TEST_BEHAVE`: `<name>.<kind>` if it exists, else `<name>` for a turn of
@@ -381,6 +382,11 @@ async fn stopping_the_leads_summary_runs_no_review_turn() {
     // The sweep for cards whose review was lost (after a restart) leaves a stopped one alone
     missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
     settle(&env, &channel).await;
+    // 32o: kwnt restarts (what it kept in memory is gone) and the sweep runs at once: the Stop
+    // still holds, read from the card
+    kwnt::server::delegation::forget_stopped_reviews();
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
+    settle(&env, &channel).await;
     std::fs::write(&release, "").unwrap();
 
     let reviews = prompts_of("Ld3", "review");
@@ -389,6 +395,66 @@ async fn stopping_the_leads_summary_runs_no_review_turn() {
     assert_eq!(prompts_of("Ld3", "res").len(), 1, "the stopped summary isn't run again");
     assert!(card_in_review(&env, lead, ck).await.is_some(), "the card waits in Review for the person");
     assert!(!messages(&env, &channel).await.iter().any(|m| m.text.contains("SUMMARK3")), "the stopped summary isn't posted");
+}
+
+/// (S, 32o) After the person stopped the lead's summary and kwnt restarted, the sweep leaves the
+/// card alone. Then the card is sent back and its fix ends in Review again: that is a new stay, the
+/// old Stop no longer holds, and the sweep asks the lead to review it (once, then one reminder at
+/// most).
+#[tokio::test]
+async fn a_card_back_in_review_after_a_stopped_summary_is_reviewed_again() {
+    let env = setup(true).await;
+    let (channel, ids) = team(&env, "stop-s5", &["Ld5", "Ck5"]).await;
+    let (lead, ck) = (&ids[0], &ids[1]);
+    let release = release_file("ld5-summary");
+    behave("Ld5", "", "On it. @Ck5 please check the parser.");
+    behave("Ld5", "res", &format!("WAIT:{}\nCk5 checked the parser SUMMARK5.", release.display()));
+    behave("Ck5", "", "Parser checked.");
+    say_in(&env, &channel, "@Ld5 check the parser").await;
+
+    wait_for("the card in Review", || async { card_in_review(&env, lead, ck).await.is_some() }).await;
+    wait_for("the lead's summary turn", || async {
+        !prompts_of("Ld5", "res").is_empty() && env.state.turns.active_turns().iter().any(|t| &t.kwant_id == lead)
+    })
+    .await;
+    let (s, v) = call(&env.app, "POST", "/api/chat/cancel", Some(json!({"channel_id": channel}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    settle(&env, &channel).await;
+    std::fs::write(&release, "").unwrap();
+
+    // kwnt restarts, then the sweep: the Stop holds
+    kwnt::server::delegation::forget_stopped_reviews();
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
+    settle(&env, &channel).await;
+    assert!(prompts_of("Ld5", "review").is_empty(), "a review turn ran after the Stop and a restart: {:?}", prompts_of("Ld5", "review").first());
+    let card = card_in_review(&env, lead, ck).await.expect("the card waits in Review");
+    let events = env.state.db.task_events(&card.id, 500).await.unwrap();
+    assert!(events.iter().any(|e| e.kind == "lead_review_stopped"), "the Stop is kept on the card: {:?}", events.iter().map(|e| &e.kind).collect::<Vec<_>>());
+
+    // The card was sent back and its fix ended in Review again: its moves as the card records
+    // them (straight in the database, so no board path asks the lead on its own and only the
+    // sweep can)
+    for (from, to) in [("review", "ready"), ("ready", "review")] {
+        let change = kwnt::db::missions::TaskChange { kind: "state".into(), reason: Some("sent back and fixed".into()), ..Default::default() };
+        assert!(env.state.db.move_task(&card.id, from, to, "kwant", &change).await.unwrap(), "{from} -> {to}");
+    }
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
+    wait_for("the lead's review turn", || async { !prompts_of("Ld5", "review").is_empty() }).await;
+    settle(&env, &channel).await;
+    // The asks are capped per stay: another sweep starts nothing more
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
+    settle(&env, &channel).await;
+
+    let reviews = prompts_of("Ld5", "review");
+    assert!(
+        (1..=missions::listener::MAX_REVIEW_ASKS).contains(&reviews.len()),
+        "the sweep asks once (and reminds once at most): {} review turns",
+        reviews.len()
+    );
+    assert!(reviews[0].contains("Parser checked."), "the review sees the result: {}", reviews[0]);
+    assert_eq!(prompts_of("Ld5", "res").len(), 1, "the stopped summary isn't run again");
+    assert!(prompts_of("Ld5", "kg").is_empty(), "no keep-going turn");
+    assert!(card_in_review(&env, lead, ck).await.is_some(), "the fake lead never calls task_review: the card stays in Review");
 }
 
 /// (A) No Stop: the lead's summary is posted and its review turn runs after it, as before.
