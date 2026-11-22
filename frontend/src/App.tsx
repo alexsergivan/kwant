@@ -78,6 +78,7 @@ import { IdeaDropToast, type IdeaDropToastState } from './components/IdeaDropToa
 import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar } from './ideaShell';
 import { Bot, HelpCircle, Inbox, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
+import { approvalAction } from './components/ModernApprovalCard';
 import { ChatApproval, OpenChat, addSettled, refusedFromRecords, settledByTime, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, awayTitle, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
@@ -118,6 +119,8 @@ import {
   isStaleDelegationFetch,
   messageContextId,
   parseDelegationMeta,
+  delegationWaiting,
+  delegationWaitingApproval,
   queuePosition,
   queuedInChat,
   reloadOnTurnEnd,
@@ -1711,8 +1714,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const matchedChannel = teamChannelOf(channelsRef.current, { id: teamId ?? '', name: event.data?.team_name ?? '' });
             const contextId = matchedChannel ? matchedChannel.id : (teamId || selectedIdRef.current);
 
+            // 32s: a reply-mention handoff starts after the replying bot is done, with its words still the live text. Those
+            // words keep their author's name (band "<author> is replying · 1 of N") until DiscussionTurnStarted's swap
+            // moves name and text together. A discussion, or a handoff with no live text, names the next speaker at once.
+            const author = liveRef.current[contextId];
+            const keepAuthor =
+              event.data?.kind === 'handoff' && !!author && author !== initialSpeakerName && !!streamsRef.current[contextId]?.text;
+            const shownSpeaker = keepAuthor ? author : initialSpeakerName;
+
             streamingContextIdRef.current = contextId;
-            markLive(contextId, initialSpeakerName);
+            markLive(contextId, shownSpeaker);
 
             setDiscussionState({
               inProgress: true,
@@ -1720,7 +1731,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               contextId,
               teamName: event.data?.team_name,
               totalTurns: event.data?.total_turns,
-              currentSpeaker: initialSpeakerName,
+              currentSpeaker: shownSpeaker,
               currentTurn: 1,
               kind: event.data?.kind,
             });
@@ -2975,6 +2986,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   const renderDelegation = (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => {
     const queued = turnsIn(turns, meta.thread_id).find((t) => t.state === 'queued');
+    // 32j: a teammate blocked on the person's OK or answer says so here, not "working on it",
+    // naming the approval's action in the approval card's own words.
+    const ask = delegationWaitingApproval(meta, pendingApprovals);
     return (
       <DelegationCard
         meta={meta}
@@ -2982,6 +2996,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         messageId={msg.id}
         live={delegations[meta.delegation_id]}
         queuePos={queued ? queuePosition(turns, queued.turn_id) : null}
+        waiting={delegationWaiting(meta, pendingApprovals, questions)}
+        waitingAction={ask ? approvalAction(ask) : null}
         onOpenThread={(m) => openThread(m.specialist_id, m.thread_id)}
         onCancel={handleCancelDelegation}
         flash={flash}

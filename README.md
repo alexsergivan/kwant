@@ -85,6 +85,9 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **New in 0.9.34.** **Long logs fold**: a code block or log over 20 lines shows 16 with a "Show all" button, and Copy still copies it all. **Shared files preview again**: a CSV or text file a bot shares shows its table or text in the chat, not only a download button.
 - **New in 0.9.35.** **Copy tells you when it fails**: a blocked clipboard shows "Couldn't copy" instead of "Copied". **Unpair clears Telegram buttons**: cards already in the chat lose their buttons when you unpair.
 - **New in 0.9.36.** **Replies start clean**: no internal routing line flashes before a bot's answer. **Reply cards appear in one piece**: no empty card flashes before a bot's words.
+- **New in 0.9.37.** **Stop stops the team**: a stopped teammate's work isn't restarted, and whoever waited on it shows Stopped. **Add-ons wait their turn**: what you add while a teammate works reaches them after their current task. **Team cards say when it's your turn**: a teammate waiting for your OK or answer says so in the team chat.
+- **New in 0.9.38.** **One card per handoff**: a teammate that waits on another shows its handoff card once, not twice. **See when a teammate switched accounts**: a result that ran on another account says so in the team chat.
+- **New in 0.9.39.** **The sales step waits for your answer**: a Sales team's "Tell the team what you sell" is ticked only once you write "What we sell:" and your answer. **Undo a ready-made team, then make it again**: its tile comes straight back, and a taken handle is flagged before you press Create.
 
 0.8 added bots that show their work, approvals off reaching every engine, drag and drop into any chat, import from more places, fresh-eyes reviews with the pre-push card, and Claude kept away from your secrets on a Mac. Every change is in the [CHANGELOG](CHANGELOG.md).
 
