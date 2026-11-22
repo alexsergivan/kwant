@@ -25,8 +25,18 @@ const matches = (q) => {
   return false;
 };
 dom.window.matchMedia = (q) => ({ matches: matches(q), media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
-if (!('ResizeObserver' in dom.window)) dom.window.ResizeObserver = class { observe() {} unobserve() {} disconnect() {} };
+// Records every observer, so a test can report a row's new height the way the browser would.
+const observers = new Set();
+dom.window.ResizeObserver = class {
+  constructor(cb) { this.cb = cb; this.targets = new Set(); observers.add(this); }
+  observe(t) { this.targets.add(t); }
+  unobserve(t) { this.targets.delete(t); }
+  disconnect() { this.targets.clear(); observers.delete(this); }
+};
 g.ResizeObserver = dom.window.ResizeObserver;
+const resize = (el, h) => {
+  for (const o of [...observers]) if (o.targets.has(el)) o.cb([{ target: el, contentRect: { height: h }, borderBoxSize: [{ blockSize: h }] }], o);
+};
 if (!g.CSS) g.CSS = { escape: (s) => String(s).replace(/["\\]/g, '\\$&') };
 
 const m = await loadBundled(`
@@ -86,4 +96,44 @@ test('33q: kw-row-lazy skips far rows with content-visibility, only with scroll 
   }
   assert.match(body, /content-visibility:\s*auto/);
   assert.match(body, /contain-intrinsic-size:\s*auto\s+\d+px/, 'rows remember their last real height (auto) after the first draw');
+});
+
+test('33q: a smooth jump is not pulled back to the bottom by a row settling, and lands again on real heights when it ends', () => {
+  width = 1440;
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = m.createRoot(host);
+  const calls = [];
+  const proto = dom.window.HTMLElement.prototype;
+  const was = proto.scrollIntoView;
+  proto.scrollIntoView = function (o) { calls.push({ id: this.getAttribute('data-message-id'), behavior: o?.behavior }); };
+  try {
+    m.flushSync(() => root.render(m.React.createElement(m.ChatView, base)));
+    const log = host.querySelector('[role="log"]');
+    let pins = 0;
+    Object.defineProperty(log, 'scrollHeight', { configurable: true, get: () => 5000 });
+    Object.defineProperty(log, 'scrollTop', { configurable: true, get: () => 0, set: (v) => { if (v === 5000) pins++; } });
+    const row = log.querySelector('[data-message-id="a5"]');
+    const old = log.querySelector('[data-message-id="a1"]');
+    resize(row, 160);
+    resize(row, 300);
+    assert.ok(pins > 0, 'following the bottom, a row that changes height re-pins (the chart and lazy rows settle after the first pin)');
+    pins = 0;
+    resize(row, 300);
+    assert.equal(pins, 0, 'the same height again (a fresh observation) does not re-pin');
+    m.flushSync(() => root.render(m.React.createElement(m.ChatView, { ...base, highlightMessageId: 'a1' })));
+    assert.deepEqual(calls.at(-1), { id: 'a1', behavior: 'smooth' }, 'the search hit scrolls smoothly');
+    resize(old, 160);
+    resize(old, 420);
+    resize(row, 360);
+    assert.equal(pins, 0, 'rows settling while the jump runs never pull the view back to the bottom');
+    log.dispatchEvent(new dom.window.Event('scrollend'));
+    assert.deepEqual(calls.at(-1), { id: 'a1', behavior: 'auto' }, 'when the smooth scroll ends, it lands once more on the real heights');
+    resize(row, 400);
+    assert.ok(pins > 0, 'after the jump, the re-pin works again (only while following)');
+  } finally {
+    proto.scrollIntoView = was;
+    root.unmount();
+    host.remove();
+  }
 });

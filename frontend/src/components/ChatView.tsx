@@ -1010,6 +1010,36 @@ export const ChatView: React.FC<ChatViewProps> = ({
     el.scrollTop = homeShowingRef.current ? 0 : el.scrollHeight;
     lastScrollTopRef.current = el.scrollTop;
   };
+  // 33q: a jump (search hit, quote, waiting card) scrolls smoothly from the bottom. While it runs, rows it passes settle
+  // from their kw-row-lazy estimate, and the row re-pin below must not pull the view back. When it ends, one instant
+  // scroll lands it on the real heights (the smooth scroll set off from the estimates). Reduced motion is instant already.
+  const jumpingRef = useRef(false);
+  const jumpEndRef = useRef<(() => void) | null>(null);
+  const jumpTo = (target: HTMLElement, block: ScrollLogicalPosition) => {
+    jumpEndRef.current?.();
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    const box = scrollRef.current;
+    if (reduce || !box) {
+      target.scrollIntoView({ block, behavior: 'auto' });
+      return;
+    }
+    jumpingRef.current = true;
+    let t = 0;
+    const end = (settle: boolean) => {
+      box.removeEventListener('scrollend', onEnd);
+      window.clearTimeout(t);
+      if (jumpEndRef.current === stop) jumpEndRef.current = null;
+      if (settle && target.isConnected) target.scrollIntoView({ block, behavior: 'auto' });
+      jumpingRef.current = false;
+    };
+    const onEnd = () => end(true);
+    const stop = () => end(false);
+    jumpEndRef.current = stop;
+    box.addEventListener('scrollend', onEnd);
+    // No scrollend where the browser lacks it, or when the target was already in place.
+    t = window.setTimeout(onEnd, 1500);
+    target.scrollIntoView({ block, behavior: 'smooth' });
+  };
   // A waiting card whose buttons are off screen while the person reads further up.
   const [approvalOffscreen, setApprovalOffscreen] = useState(false);
   // 29w: some card's Allow / Deny row is fully on screen (the same measurement), so the strip need not repeat it.
@@ -1126,15 +1156,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
   }, [approvalKey]);
   // 33q: rows settle to their real height after the first paint (kw-row-lazy rows start at an estimate, a chart
   // measures its width), so while the person follows the bottom a row changing height keeps the newest in view.
+  // Only a real change of height counts (not a row's first observation), and never during a jump.
+  const rowHeightsRef = useRef(new WeakMap<Element, number>());
   useEffect(() => {
     const el = scrollRef.current;
     if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => {
-      if (stickRef.current) pinToBottom(el);
+    const heights = rowHeightsRef.current;
+    const ro = new ResizeObserver((entries) => {
+      let grew = false;
+      for (const e of entries) {
+        const h = e.borderBoxSize?.[0]?.blockSize ?? e.contentRect.height;
+        const was = heights.get(e.target);
+        heights.set(e.target, h);
+        if (was !== undefined && Math.abs(was - h) > 0.5) grew = true;
+      }
+      if (grew && stickRef.current && !jumpingRef.current) pinToBottom(el);
     });
     el.querySelectorAll('[data-message-id]').forEach((r) => ro.observe(r));
     return () => ro.disconnect();
   }, [messages, contextKey]);
+  useEffect(() => () => jumpEndRef.current?.(), []);
   useEffect(() => {
     stickRef.current = true;
   }, [contextKey]);
@@ -1206,8 +1247,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (pendingApprovals.some((a) => a.id === highlightMessageId)) {
       const card = scrollRef.current?.querySelector<HTMLElement>(`[data-approval-card="${CSS.escape(highlightMessageId)}"]`);
       if (!card) return;
-      const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-      card.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+      jumpTo(card, 'center');
       // 30a: the strip's "Go to the approval" pressed from the keyboard lands focus on the card (as the question
       // card's first choice does), never on Allow / Deny. A tap, an Inbox row or a notification leaves focus alone.
       const from = document.activeElement;
@@ -1226,8 +1266,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
     const el = scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(highlightMessageId)}"]`);
     if (!el) return;
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+    jumpTo(el, 'center');
     restartFlash(highlightMessageId, highlightRing ? 'ask' : 'search');
     onHighlightDone?.();
   }, [highlightMessageId, highlightRing, messages, openThoughts, onHighlightDone, pendingApprovals]);
@@ -1336,8 +1375,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const el = scrollRef.current?.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(quoteJump.id)}"]`);
     setQuoteJump(null);
     if (!el) return;
-    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-    el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+    jumpTo(el, 'center');
     if (el.tabIndex < 0 || el.hasAttribute('tabindex')) el.focus({ preventScroll: true });
     // 30q: same race-free restart as search and approvals, so a second click on a quote always rings again.
     restartFlash(quoteJump.id, 'quote');
