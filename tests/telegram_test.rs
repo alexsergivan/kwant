@@ -478,7 +478,7 @@ async fn allow_once_only_with_the_switch_on_and_an_approvable_kind() {
 
     // A command on the computer: never approvable from Telegram (A25)
     let (_, _shell) = approval(&env, json!({"source": "local_shell", "tool": "Bash"})).await;
-    let shell = tg.wait_send(&bot, |c| c.text().contains("<code>Bash</code>")).await;
+    let shell = tg.wait_send(&bot, |c| c.text().contains("wants to run a command.")).await;
     assert!(shell.callbacks().is_empty());
     assert!(shell.text().contains("This is a command on your computer. Approve it in kwant."), "{}", shell.text());
 
@@ -572,13 +572,13 @@ async fn bash_production_marks_and_crossed_taps_stay_link_only() {
 
     // Lin's M2: Claude's own Bash is a command on the computer too
     let (_, _b) = approval(&env, json!({"source": "claude_builtin", "tool": "Bash", "outside_folder": false})).await;
-    let bash = tg.wait_send(&bot, |c| c.text().contains("<code>Bash</code>")).await;
+    let bash = tg.wait_send(&bot, |c| c.text().contains("wants to run a command.")).await;
     assert!(bash.callbacks().is_empty(), "{:?}", bash.buttons());
     assert!(bash.text().contains("This is a command on your computer. Approve it in kwant."), "{}", bash.text());
 
     // A write outside the bot's folder
     let (_, _w) = approval(&env, json!({"source": "claude_builtin", "tool": "Write", "outside_folder": true})).await;
-    let w = tg.wait_send(&bot, |c| c.text().contains("<code>Write</code>")).await;
+    let w = tg.wait_send(&bot, |c| c.text().contains("wants to write a file.")).await;
     assert!(w.callbacks().is_empty() && w.text().contains("This changes files outside the bot's folder."), "{}", w.text());
 
     // A connection marked production, outside Dev mode (no prod_floor on the card)
@@ -857,7 +857,7 @@ async fn unpair_clears_the_buttons_on_cards_already_in_the_chat() {
     assert!(!qmsg.callbacks().is_empty(), "it went out with answer buttons");
     // Sent link-only (a command is never allowed from Telegram): nothing on it to take back
     let (shell_id, _shell_rx) = approval(&env, json!({"source": "local_shell", "tool": "Bash"})).await;
-    let shell = tg.wait_send(&bot, |c| c.text().contains("<code>Bash</code>")).await;
+    let shell = tg.wait_send(&bot, |c| c.text().contains("wants to run a command.")).await;
     assert!(shell.callbacks().is_empty(), "{:?}", shell.buttons());
     for (kind, ref_id) in [("approval", &id), ("question", &q.id), ("approval", &shell_id)] {
         wait_for("the card's id stored", || async { asks_of(&env, kind, ref_id).await.iter().all(|a| a.message_id.is_some()) }).await;
@@ -947,7 +947,7 @@ async fn a_new_bot_clears_the_buttons_on_the_old_bot_s_cards() {
     let qmsg = tg.wait_send(&old, |c| c.text().contains("Swap question?")).await;
     assert!(!qmsg.callbacks().is_empty(), "it went out with answer buttons");
     let (shell_id, _shell_rx) = approval(&env, json!({"source": "local_shell", "tool": "Bash"})).await;
-    let shell = tg.wait_send(&old, |c| c.text().contains("<code>Bash</code>")).await;
+    let shell = tg.wait_send(&old, |c| c.text().contains("wants to run a command.")).await;
     assert!(shell.callbacks().is_empty(), "{:?}", shell.buttons());
     for (kind, ref_id) in [("approval", &id), ("question", &q.id), ("approval", &shell_id)] {
         wait_for("the card's id stored", || async { asks_of(&env, kind, ref_id).await.iter().all(|a| a.message_id.is_some()) }).await;
@@ -1610,4 +1610,42 @@ async fn a_routine_tripping_the_stop_inside_the_reply_window_keeps_the_plain_lin
     assert_eq!(n.len(), 1, "{n:?}");
     tokio::time::sleep(Duration::from_millis(500)).await;
     assert!(!tg.sent(&bot).iter().any(|c| c.text().contains("your message wasn't run")), "never the held-message line");
+}
+
+/// 33g approval-notice-plain-words: an approval says what the tool does ("wants to run a command"),
+/// never what the bot typed: no description, no command. A Telegram chat isn't end-to-end
+/// encrypted, so the bot's description goes to the push only. An MCP tool still names the tool and
+/// its server; a built-in tool kwant has no words for keeps its name.
+#[tokio::test]
+async fn an_approval_says_what_the_tool_does_and_never_its_arguments() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 80).await;
+    let first_line = |text: &str| text.split("\n\n").next().unwrap_or_default().to_string();
+
+    let arguments = json!({
+        "command": "python3 send_reminder.py --to billing@acme.example",
+        "description": "Send the overdue-invoice reminder for #2291 to Acme billing",
+    });
+    let (_, _b) = approval(&env, json!({"source": "claude_builtin", "tool": "Bash", "arguments": arguments, "outside_folder": false, "kwant_name": "Concierge"})).await;
+    let bash = tg.wait_send(&bot, |c| c.text().starts_with("<b>Concierge</b>")).await;
+    assert_eq!(first_line(bash.text()), "<b>Concierge</b> wants to run a command.", "{}", bash.text());
+
+    // An MCP tool: the tool and its server, as before
+    let (_, _m) = approval(&env, json!({"source": "mcp", "server": "github", "tool": "create_issue", "arguments": {"description": "ISSUE-BODY-80"}, "kwant_name": "Concierge"})).await;
+    let mcp = tg.wait_send(&bot, |c| c.text().contains("create_issue")).await;
+    assert_eq!(first_line(mcp.text()), "<b>Concierge</b> wants to use <code>create_issue</code> on <code>github</code>.", "{}", mcp.text());
+
+    // A built-in kwant has no words for keeps its name
+    let (_, _f) = approval(&env, json!({"source": "claude_builtin", "tool": "Foo", "arguments": {"description": "Do the foo"}, "kwant_name": "Concierge"})).await;
+    let foo = tg.wait_send(&bot, |c| c.text().contains("Foo")).await;
+    assert_eq!(first_line(foo.text()), "<b>Concierge</b> wants to use <code>Foo</code>.", "{}", foo.text());
+
+    // Nothing the bot typed went to Telegram, on any call
+    for c in tg.calls(&bot) {
+        let body = c.body.to_string();
+        for typed in ["overdue-invoice", "Acme billing", "send_reminder", "billing@acme", "ISSUE-BODY-80", "Do the foo"] {
+            assert!(!body.contains(typed), "{typed} reached Telegram: {body}");
+        }
+    }
 }

@@ -2050,3 +2050,89 @@ async fn a_quiet_turn_in_a_thread_notifies_with_the_thread() {
     let n = continuity::turn_quiet(&state, &k.id, Some("no-such-thread")).await;
     assert_eq!(n.thread_id, None, "an unknown id is never sent as a thread");
 }
+
+/// The body of the `approval_needed` notification an `ApprovalRequired` event for card `id` makes.
+async fn approval_push_body(state: &AppState, id: &str, tool_name: &str, details: Value) -> String {
+    let mut rx = state.event_sender.subscribe();
+    let _ = state.event_sender.send(RuntimeEvent::ApprovalRequired { id: id.into(), tool_name: tool_name.into(), details });
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while tokio::time::Instant::now() < deadline {
+        if let Ok(Ok(RuntimeEvent::Notify { kind, card_id, title, body, .. })) =
+            tokio::time::timeout(std::time::Duration::from_millis(200), rx.recv()).await
+        {
+            if kind == "approval_needed" && card_id.as_deref() == Some(id) {
+                assert_eq!(title, "Concierge needs your approval", "the title doesn't change");
+                return body;
+            }
+        }
+    }
+    panic!("{id}: no notification");
+}
+
+/// 33g approval-notice-plain-words: a push for an approval says what the tool does ("wants to run
+/// a command"), with the bot's own one-line description of the call when it gave one (clipped to
+/// 120, keys masked). The push is encrypted to the person's own device; Telegram never gets it.
+#[tokio::test]
+async fn approval_push_says_what_the_tool_does_with_the_bots_description() {
+    let (_app, state, _tmp) = setup().await;
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let k = &kwants[0];
+    state.db.set_setting("notify_on", r#"["approval_needed"]"#).await.unwrap();
+    let handle = continuity::spawn_notifier(state.clone());
+    let builtin = |tool: &str, arguments: Value| {
+        json!({"source": "claude_builtin", "tool": tool, "arguments": arguments, "kwant_id": k.id, "kwant_name": "Concierge"})
+    };
+
+    // Mira's case: Bash with Claude's description of the command
+    let bash = builtin(
+        "Bash",
+        json!({"command": "python3 send_reminder.py --to billing@acme.example", "description": "Send the overdue-invoice reminder for #2291 to Acme billing"}),
+    );
+    assert_eq!(
+        approval_push_body(&state, "g1", "Bash", bash).await,
+        "Concierge wants to run a command: Send the overdue-invoice reminder for #2291 to Acme billing"
+    );
+
+    // No description: the plain words and where to answer
+    let bare = builtin("Bash", json!({"command": "ls"}));
+    assert_eq!(approval_push_body(&state, "g2", "Bash", bare).await, "Concierge wants to run a command. Open kwant bots to allow or deny it.");
+
+    // A blank or multi-line description is one trimmed line; a blank one counts as none
+    let blank = builtin("Bash", json!({"command": "ls", "description": "  \n "}));
+    assert_eq!(approval_push_body(&state, "g3", "Bash", blank).await, "Concierge wants to run a command. Open kwant bots to allow or deny it.");
+    let lines = builtin("Edit", json!({"file_path": "/a", "description": "  Fix the\n  typo  "}));
+    assert_eq!(approval_push_body(&state, "g4", "Edit", lines).await, "Concierge wants to change a file: Fix the typo");
+
+    // 300 characters, multi-byte: clipped to 120 on a character, never mid-UTF-8
+    let long = "Résumé ü ".repeat(34);
+    let body = approval_push_body(&state, "g5", "Bash", builtin("Bash", json!({"command": "x", "description": long}))).await;
+    let said = body.strip_prefix("Concierge wants to run a command: ").unwrap_or_else(|| panic!("{body}"));
+    assert_eq!(said.chars().count(), 120, "{said}");
+    assert!(said.ends_with('…') && said.starts_with("Résumé ü Résumé"), "{said}");
+
+    // A key in the description is masked, as a Blocked line's is (33e)
+    let keyed = builtin("Bash", json!({"command": "x", "description": "Push with ghp_abcdefghijklmnop1234 to the repo"}));
+    let body = approval_push_body(&state, "g6", "Bash", keyed).await;
+    assert!(!body.contains("ghp_abcdefghijklmnop1234"), "{body}");
+    assert_eq!(body, "Concierge wants to run a command: Push with [redacted] to the repo");
+
+    // The other built-ins in plain words, matched case-insensitively
+    for (tool, words) in [("Write", "write a file"), ("MultiEdit", "change a file"), ("WebFetch", "open a page"), ("websearch", "search the web")] {
+        let body = approval_push_body(&state, &format!("g-{tool}"), tool, builtin(tool, json!({}))).await;
+        assert_eq!(body, format!("Concierge wants to {words}. Open kwant bots to allow or deny it."), "{tool}");
+    }
+
+    // An unknown built-in keeps its name
+    let foo = builtin("Foo", json!({"description": "Do the foo"}));
+    let body = approval_push_body(&state, "g7", "Foo", foo).await;
+    assert!(body.starts_with("Concierge wants to use Foo"), "{body}");
+
+    // An MCP tool names the tool and its server, and its arguments never reach the push (a
+    // `description` there is the tool's own input, not the bot's line about the call)
+    let mcp = json!({"source": "mcp", "server": "github", "tool": "create_issue", "arguments": {"description": "ISSUE-BODY-33G"}, "kwant_id": k.id, "kwant_name": "Concierge"});
+    let body = approval_push_body(&state, "g8", "mcp__github__create_issue", mcp).await;
+    assert!(body.contains("create_issue") && body.contains("github"), "{body}");
+    assert!(!body.contains("ISSUE-BODY-33G"), "{body}");
+    assert!(body.ends_with("Open kwant bots to allow or deny it."), "{body}");
+    handle.abort();
+}
