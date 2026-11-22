@@ -1,0 +1,26 @@
+{
+  "version": "0.9.41",
+  "date": "2026-11-22",
+  "highlights": [
+    {
+      "id": "solo-done-shows-in-inbox",
+      "title": "Come back to what your bots finished",
+      "text": "When one bot finishes a job while you're away (its reply ends \"Done: …\"), it now shows in the Inbox under Done while you were away, titled with the request you gave it.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "notice-says-stopped-or-blocked",
+      "title": "Notifications say stopped or blocked",
+      "text": "While you're away, a bot that can't finish now tells you it stopped, and one waiting on you says it's blocked and why, instead of \"replied\" or nothing at all.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "When the AI provider can't be reached, the reply names it (\"Couldn't reach Anthropic from this computer\") and says what to check.",
+    "Approval cards show folders in your home as ~/…, and Allow once leaves a short line in the chat where the bot asked.",
+    "A failed uv download for the Laya router now fails its own Install uv step, with the real error.",
+    "A lead's hand-off cards (\"Delegated to …\" and a follow-up to that teammate) now show in the team chat right away, without a reload."
+  ]
+}

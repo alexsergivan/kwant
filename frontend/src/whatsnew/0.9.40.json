@@ -1,0 +1,25 @@
+{
+  "version": "0.9.40",
+  "date": "2026-11-22",
+  "highlights": [
+    {
+      "id": "install-fail-shows-try-again",
+      "title": "A failed AI download offers Try again",
+      "text": "If the Claude or Grok download fails in Get started (no internet, say), the step now stops with \"Couldn't get Claude ready.\" and a Try again button instead of spinning forever.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "gmail-card-opens-connect-sheet",
+      "title": "Connect an app right from the bot's card",
+      "text": "When a bot suggests connecting Gmail, the card's Connect Gmail button opens the Connect sheet for Gmail with that bot already ticked. Once it's connected, the card says so.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "New ready-made teams' instructions now speak to you directly, and each teammate's persona starts with its own name and role.",
+    "In Get started, Add account for an API key stays off until you paste a key, so no empty account is made.",
+    "Renaming a bot or the handle of a suggested team before creating it now reaches its instructions, skills and rules too."
+  ]
+}
