@@ -1641,6 +1641,12 @@ async fn an_approval_says_what_the_tool_does_and_never_its_arguments() {
     let foo = tg.wait_send(&bot, |c| c.text().contains("Foo")).await;
     assert_eq!(first_line(foo.text()), "<b>Concierge</b> wants to use <code>Foo</code>.", "{}", foo.text());
 
+    // 33u (33g QA Finding 3): an MCP card named `Bash` with an empty server keeps its name, and a
+    // blank server is no server
+    let (_, _s) = approval(&env, json!({"source": "mcp", "server": "", "tool": "Bash", "arguments": {}, "kwant_name": "Concierge"})).await;
+    let mcp_bash = tg.wait_send(&bot, |c| c.text().contains("<code>Bash</code>")).await;
+    assert_eq!(first_line(mcp_bash.text()), "<b>Concierge</b> wants to use <code>Bash</code>.", "{}", mcp_bash.text());
+
     // Nothing the bot typed went to Telegram, on any call
     for c in tg.calls(&bot) {
         let body = c.body.to_string();

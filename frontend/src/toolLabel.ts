@@ -55,6 +55,41 @@ const VERBS: Record<string, Verb> = {
   edit_file: ['changing a file', 'change a file'],
 };
 
+/**
+ * Claude's own built-in names and the key they read as (tool_words.rs `BUILT_IN_ALIASES`, 33u). Only for a
+ * built-in (no server): an MCP server's own `read` tool isn't Claude's Read.
+ */
+const BUILT_IN_ALIASES: Record<string, string> = { read: 'read_file', write: 'write_file', edit: 'edit_file', multiedit: 'edit_file' };
+
+/**
+ * Claude Code's bundled browser tools, `agent_browser_<x>` (seen as `mcp__browser__agent_browser_snapshot`), 33u:
+ * `<x>` reads as `browser_<x>` when that key exists, else as the key here, else as `browser_act` ("using the
+ * browser"). Never the raw name. tool_words.rs `AGENT_BROWSER`.
+ */
+const AGENT_BROWSER: Record<string, string> = {
+  back: 'browser_open',
+  forward: 'browser_open',
+  reload: 'browser_open',
+  read: 'browser_snapshot',
+  get_text: 'browser_snapshot',
+  get_title: 'browser_snapshot',
+  get_url: 'browser_snapshot',
+};
+
+const has = (o: object, k: string) => Object.prototype.hasOwnProperty.call(o, k);
+const own = (o: Record<string, Verb>, k: string): Verb | undefined => (has(o, k) ? o[k] : undefined);
+
+/** The words for a tool, as tool_words.rs `verb` finds them. The same list is pinned on both sides (tests/fixtures/tool_words.json). */
+function known(tool: string, builtIn: boolean): Verb | undefined {
+  const lower = tool.trim().toLowerCase();
+  if (builtIn && has(BUILT_IN_ALIASES, lower)) return own(VERBS, BUILT_IN_ALIASES[lower]);
+  const direct = own(VERBS, lower);
+  if (direct) return direct;
+  if (!lower.startsWith('agent_browser_')) return undefined;
+  const x = lower.slice('agent_browser_'.length);
+  return own(VERBS, `browser_${x}`) ?? (has(AGENT_BROWSER, x) ? own(VERBS, AGENT_BROWSER[x]) : undefined) ?? VERBS.browser_act;
+}
+
 /** `mcp__github__create_pull_request` → the tool and its server; other names as given. */
 function split(name: string, server?: string | null): { tool: string; server: string | null } {
   const m = /^mcp__(.+?)__(.+)$/.exec(name ?? '');
@@ -67,10 +102,10 @@ const spaced = (t: string) => t.replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').trim
 
 function verb(name: string, server: string | null | undefined, form: 0 | 1): string {
   const p = split(name, server);
-  const known = VERBS[p.tool.toLowerCase()];
-  if (known) {
-    const words = known[form];
-    return known[2] && p.server ? `${words} on ${serverName(p.server)}` : words;
+  const v = known(p.tool, !p.server);
+  if (v) {
+    const words = v[form];
+    return v[2] && p.server ? `${words} on ${serverName(p.server)}` : words;
   }
   const head = form === 0 ? 'using' : 'use';
   const tool = spaced(p.tool) || 'a tool';

@@ -2365,7 +2365,7 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
 /// masked, one line, 120 characters); Telegram never gets it (see `telegram::bridge::on_approval`).
 /// An MCP tool, or a built-in kwant has no words for, is named as before.
 fn approval_body(name: &str, tool_name: &str, details: &serde_json::Value) -> String {
-    let action = match super::tool_words::action(tool_name, details["server"].as_str()) {
+    let action = match super::tool_words::action(tool_name, details["server"].as_str(), details["source"].as_str()) {
         Some(plain) => plain.to_string(),
         None => format!("use {}", clip(tool_name, 80)),
     };

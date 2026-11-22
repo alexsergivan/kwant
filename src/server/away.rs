@@ -339,19 +339,30 @@ async fn space_of(state: &AppState, cache: &mut HashMap<String, SpaceId>, kwant_
 /// `POST /api/waiting/:id/retry` rather than the chat's own. A bot's reply that ended
 /// `Blocked: …` outside a team chain (33f) is one too: its line already says what is blocked and
 /// what unblocks it, and Retry in the chat sends the person's message again.
-pub(super) async fn stopped_items(state: &AppState, space: &SpaceId) -> Vec<Value> {
+///
+/// 33m: with `by_request` (the Inbox), a stopped job is titled with the person's request it was
+/// working on ([`stopped_request`]), so the row says *which* job stopped; `summary` stays the
+/// reason and `title_is_request` is set. With no request found the title is the reason, as
+/// before. /api/away and /api/waiting (Home's needs-you strip, whose line says what resumes it)
+/// keep the reason as title.
+pub(super) async fn stopped_items(state: &AppState, space: &SpaceId, by_request: bool) -> Vec<Value> {
     close_gone_places(state, space).await;
     let rows = state.db.list_waiting(Some(space)).await.unwrap_or_default();
     let mut out = Vec::new();
     let listed = |w: &crate::db::waiting::WaitingItem| w.kind.as_deref() == Some(crate::db::waiting::STOPPED) || super::waiting::is_blocked_reply(w);
     for w in rows.into_iter().filter(listed) {
         let name = state.db.get_kwant(&w.kwant_id).await.ok().flatten().map(|k| k.name);
-        out.push(json!({
+        let request = match by_request {
+            true => stopped_request(state, &w).await,
+            false => None,
+        };
+        let title = request.clone().unwrap_or_else(|| super::stopped::title(&w.question, TITLE_CHARS));
+        let mut card = json!({
             "kind": "stopped",
             "id": w.id,
             "kwant_id": w.kwant_id,
             "kwant_name": name.unwrap_or_else(|| "A bot".into()),
-            "title": super::stopped::title(&w.question, TITLE_CHARS),
+            "title": title,
             "summary": w.question,
             "status": "open",
             "timestamp": rfc3339(w.created_at),
@@ -362,7 +373,11 @@ pub(super) async fn stopped_items(state: &AppState, space: &SpaceId) -> Vec<Valu
                 "channel_id": w.channel_id,
                 "direct_kwant_id": w.direct_kwant_id,
             },
-        }));
+        });
+        if request.is_some() {
+            card["title_is_request"] = json!(true);
+        }
+        out.push(card);
     }
     // A sign-in, code or CAPTCHA step the person hasn't done: the bot's work waits on it (0.9.5,
     // #9), so it is in Needs you too, not only a card in its chat
@@ -388,6 +403,16 @@ pub(super) async fn stopped_items(state: &AppState, space: &SpaceId) -> Vec<Valu
         }));
     }
     out
+}
+
+/// 33m: the person's request a stopped job was working on, as a one-line row title: their last
+/// message in that chat (thread, else channel, else direct chat) at or before the stop. `None`
+/// when there is none or it is blank (stops only come from a person's own chat, see
+/// `stopped::for_turn`, so a routine or hand-off adds no row here to misname).
+async fn stopped_request(state: &AppState, w: &crate::db::waiting::WaitingItem) -> Option<String> {
+    let context = w.thread_id.as_deref().or(w.channel_id.as_deref()).or(w.direct_kwant_id.as_deref())?;
+    let asked = state.db.last_person_message_before(context, w.created_at).await.ok().flatten()?;
+    super::inbox_done::request_title(&asked.text)
 }
 
 /// 22i: an item whose bot, channel or thread is gone has nowhere to open, and the client fell back
@@ -500,7 +525,7 @@ pub(super) async fn waiting_with(state: &AppState, space: &SpaceId, approvals: V
     rows.extend(approvals);
     rows.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| b.id.cmp(&a.id)));
     rows.truncate(MAX_ITEMS as usize);
-    let stopped = stopped_items(state, space).await;
+    let stopped = stopped_items(state, space, false).await;
     let count = count + watch.len() as i64 + stopped.len() as i64;
     let mut waiting: Vec<Value> = rows.into_iter().map(item).collect();
     waiting.extend(watch);

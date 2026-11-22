@@ -93,6 +93,7 @@ import { ApproveRow } from './ApproveRow';
 import { CopyGhost } from './CopyGhost';
 import { copyText } from '../copyText';
 import { ContinuedLine, MessageMore, MessageMoreError } from './MessageMore';
+import { ChatStartLine, EarlierButton, type EarlierState } from './ChatStart';
 import { CONTINUE_LABEL, canContinueFrom } from '../continueChat';
 import { RoutineRow } from './RoutineRow';
 import { routineOf } from '../routineRow';
@@ -372,6 +373,12 @@ export interface ChatViewProps {
   viewingHistory?: boolean;
   /** Leaves that window for the latest messages. */
   onJumpToLatest?: () => void;
+  /** 33k: whether earlier messages exist ('more'), are loading, or the first message is shown ('start'). Unset: neither line. */
+  earlier?: EarlierState;
+  /** 33k: the start line's words ("Start of this conversation" in a thread); defaults to the direct-chat line. */
+  startLabel?: string;
+  /** 33k: loads the page before the first message and puts it in front of `messages`; true when messages came in front. */
+  onLoadEarlier?: () => boolean | Promise<boolean>;
   /** Under the header: the bot's conversations and the open thread's controls. */
   subHeader?: React.ReactNode;
   /** Phone only: the header's second line in place of the subtitle (the thread picker in a bot's chat). */
@@ -588,6 +595,24 @@ const StreamPart = React.memo(function StreamPart({ stream, part, onGrow }: { st
   );
 });
 
+/** 33j: one empty list, so a chat without reroute targets doesn't hand the rows a new array on every render. */
+const NO_REROUTE_TARGETS: Array<{ id: string; name: string; title: string }> = [];
+/** 33j: likewise for kept approval lines, which the rows place among the messages (33a). */
+const NO_SETTLED: NonNullable<ChatViewProps['settledApprovals']> = [];
+
+/**
+ * 33j: the loaded message rows, drawn by ChatView through a ref so a keystroke in the composer doesn't redraw them.
+ * `deps` lists every ChatView value the rows read (directly or through the handlers they hold); the rows redraw
+ * only when one of them changes. The composer's own state (its text, focus, dictation, uploads) is never in it.
+ * A fragment: no box of its own, so the log's spacing and layout are as before.
+ */
+const MessageRows = React.memo(
+  function MessageRows({ draw }: { draw: React.MutableRefObject<() => React.ReactNode>; deps: readonly unknown[] }) {
+    return <>{draw.current()}</>;
+  },
+  (a, b) => a.draw === b.draw && a.deps.length === b.deps.length && a.deps.every((v, i) => Object.is(v, b.deps[i])),
+);
+
 export const ChatView: React.FC<ChatViewProps> = ({
   heldNotes,
   dropOff = false,
@@ -601,7 +626,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   streamingThinking: streamingThinkingProp = '',
   pendingApprovals,
   prepush,
-  settledApprovals = [],
+  settledApprovals = NO_SETTLED,
   isStreaming,
   streamingSpeakerName,
   onSendMessage,
@@ -663,6 +688,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onHighlightDone,
   viewingHistory,
   onJumpToLatest,
+  earlier,
+  startLabel,
+  onLoadEarlier,
   subHeader,
   threadLine,
   notice,
@@ -682,7 +710,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   renderWatchReport,
   renderHire,
   renderRouteChoice,
-  rerouteTargets = [],
+  rerouteTargets = NO_REROUTE_TARGETS,
   onSendToOtherBot,
   onOpenAccounts,
   spaceId,
@@ -1203,6 +1231,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => () => jumpEndRef.current?.(), []);
   useEffect(() => {
     stickRef.current = true;
+    // 33k: an earlier page for the chat left behind never lands here.
+    earlierAnchorRef.current = null;
+    focusStartRef.current = false;
+    if (scrollRef.current) scrollRef.current.style.overflowAnchor = '';
   }, [contextKey]);
   // Phone: the field's width picks the placeholder (A1), and its height follows when it moves between
   // one row and two. Keyboard mode keeps the last message in view while the chat follows the bottom.
@@ -1224,6 +1256,80 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
     if (scrollRef.current && stickRef.current) pinToBottom(scrollRef.current);
   }, [kbd, stacked]);
+  // 33k: "Earlier messages". The page comes in above what the person reads; the first message shown before it stays
+  // where it was on screen (the browser's own scroll anchoring is off meanwhile, so it doesn't move it twice).
+  const earlierBtnRef = useRef<HTMLButtonElement>(null);
+  const chatStartRef = useRef<HTMLParagraphElement>(null);
+  const earlierAnchorRef = useRef<{ id: string; top: number; fromBottom: number; hadFocus: boolean } | null>(null);
+  /** The button had focus and the chat reached its start with nothing new: focus goes to the start line once drawn. */
+  const focusStartRef = useRef(false);
+  const firstId = messages[0]?.id;
+  const loadEarlier = () => {
+    const el = scrollRef.current;
+    if (!onLoadEarlier || earlier !== 'more' || !firstId || !el) return;
+    stickRef.current = false;
+    const row = el.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(firstId)}"]`);
+    earlierAnchorRef.current = {
+      id: firstId,
+      top: row ? row.getBoundingClientRect().top - el.getBoundingClientRect().top : 0,
+      fromBottom: el.scrollHeight - el.scrollTop,
+      hadFocus: document.activeElement === earlierBtnRef.current,
+    };
+    el.style.overflowAnchor = 'none';
+    // When messages came in front, the layout effect below puts the view back once they're drawn. When nothing
+    // did (an error, an empty last page, another chat), the browser gets its own anchoring back now.
+    const nothingCame = () => {
+      const a = earlierAnchorRef.current;
+      if (a?.id !== firstId) return;
+      earlierAnchorRef.current = null;
+      if (scrollRef.current) scrollRef.current.style.overflowAnchor = '';
+      // An empty last page (an exact multiple of 100): the start line replaces the button with no new first
+      // message, so the layout effect below never runs. Focus follows to the line now, or once it's drawn.
+      if (!a.hadFocus) return;
+      if (chatStartRef.current?.isConnected && !earlierBtnRef.current?.isConnected) chatStartRef.current.focus({ preventScroll: true });
+      else focusStartRef.current = true;
+    };
+    void Promise.resolve(onLoadEarlier()).then((came) => {
+      if (!came) nothingCame();
+    }, nothingCame);
+  };
+  useLayoutEffect(() => {
+    const a = earlierAnchorRef.current;
+    const el = scrollRef.current;
+    if (!a || !el || firstId === a.id) return;
+    earlierAnchorRef.current = null;
+    const row = el.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(a.id)}"]`);
+    if (row) el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - a.top;
+    else el.scrollTop = el.scrollHeight - a.fromBottom;
+    lastScrollTopRef.current = el.scrollTop;
+    el.style.overflowAnchor = '';
+    // At the start the button gives way to the start line: focus follows it there.
+    if (a.hadFocus && !earlierBtnRef.current?.isConnected) chatStartRef.current?.focus({ preventScroll: true });
+  }, [firstId]);
+  useLayoutEffect(() => {
+    if (!focusStartRef.current) return;
+    if (earlier !== 'start') {
+      if (earlier !== 'loading') focusStartRef.current = false;
+      return;
+    }
+    focusStartRef.current = false;
+    if (!earlierBtnRef.current?.isConnected) chatStartRef.current?.focus({ preventScroll: true });
+  }, [earlier]);
+  // Scrolled up to the button: it loads by itself (only once the person has left the bottom, never on open).
+  useEffect(() => {
+    const btn = earlierBtnRef.current;
+    const root = scrollRef.current;
+    if (earlier !== 'more' || !btn || !root || typeof IntersectionObserver === 'undefined') return;
+    const io = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((e) => e.isIntersecting) && !stickRef.current) loadEarlier();
+      },
+      { root },
+    );
+    io.observe(btn);
+    return () => io.disconnect();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [earlier, firstId, viewingHistory]);
   // Back from an older window: land on the newest message
   useEffect(() => {
     if (!viewingHistory) stickRef.current = true;
@@ -1714,7 +1820,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     }
   };
 
-  const retries = retryTargets(messages);
+  // 33j: memoized, so the message rows (MessageRows' deps) don't see a new map on every render
+  const retries = useMemo(() => retryTargets(messages), [messages]);
   const retrySend = async (target: { text: string; attachments: AttachmentRef[] }) => {
     stickRef.current = true;
     if ((await onSendMessage(target.text, target.attachments)) === false) throw new Error('not sent');
@@ -2282,6 +2389,92 @@ export const ChatView: React.FC<ChatViewProps> = ({
     );
   };
 
+  // 33a: the chat's items, and where each kept approval line sits among them (Mira's fix 1).
+  const chatItems = groupDiscussionThreads(listed, { foldOpen: askOnly });
+  const itemTime = (item: (typeof chatItems)[number]) => (item.kind === 'message' ? item.message.created_at : item.turns[item.turns.length - 1]?.created_at);
+  const settledPlaced = placeSettled(chatItems.map(itemTime), settledApprovals);
+  const renderSettled = (approval: (typeof settledApprovals)[number]) =>
+    approval.refused ? (
+      <RefusedCustomerCall key={approval.id} approval={approval} />
+    ) : approval.via === 'app' ? (
+      <AllowedInApp key={approval.id} lead={approvalLead(approval)} />
+    ) : (
+      <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
+    );
+  const renderItem = (item: (typeof chatItems)[number], n: number, items: typeof chatItems) => {
+    if (item.kind === 'message') {
+      const trial = trialCards.get(item.message.id);
+      const above = items[n - 1];
+      // A kept line between two messages starts the next one's header again.
+      const prev = above?.kind === 'message' && !trialCards.has(above.message.id) && !settledPlaced.after.has(n - 1) ? above.message : undefined;
+      if (!trial) return renderMessage(item.message, prev);
+      return (
+        <Fragment key={item.message.id}>
+          {renderMessage(item.message, prev)}
+          <TrialWaitsCard key={`trial:${trial.skill_id}`} skillId={trial.skill_id} kwantId={item.message.sender_role === 'kwant' ? item.message.sender_id : (item.message.direct_kwant_id ?? item.message.sender_id)} onOpenSkills={onOpenSkills} />
+        </Fragment>
+      );
+    }
+      const threadKey = `thread:${item.id}`;
+      const isThreadOpen = !!openThoughts[threadKey];
+      return (
+        <div key={threadKey} className="w-full max-w-5xl">
+          <button
+            type="button"
+            onClick={() => toggleThought(threadKey)}
+            className="sm:ml-[48px] max-w-full flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer"
+          >
+            {isThreadOpen ? <ChevronDown size={13} className="text-zinc-500" /> : <ChevronRight size={13} className="text-zinc-500" />}
+            <span className="flex -space-x-1.5">
+              {item.speakers.map((name) => (
+                <ModernAvatar key={name} role={name} name={name} size={18} />
+              ))}
+            </span>
+            <span className="min-w-0 truncate">
+              Team discussed • {item.turns.length} {item.turns.length === 1 ? 'turn' : 'turns'} • {item.speakers.join(', ')}
+            </span>
+          </button>
+          {isThreadOpen && (
+            <div className="mt-4 ml-2 pl-3 sm:ml-[30px] sm:pl-4 border-l border-zinc-800 space-y-6">
+              {item.turns.map((t, i, all) => renderMessage(t, all[i - 1]))}
+            </div>
+          )}
+        </div>
+      );
+  };
+  // 33j: the rows live in MessageRows, which redraws only when something they read changes, never on a keystroke.
+  // Everything renderMessage and the list read (and the handlers they hand the rows use), minus the composer's state
+  // and React's own setters and refs, which never change. A value missing here leaves a row stale: add it.
+  const rowDeps = [
+    // props
+    messages, canRun, title, spaceName, home, threadKind, isStreaming, budgetBotId, ollamaReady, recheckingEngines,
+    rerouteTargets, settledApprovals, heldNotes, renderDelegation, renderQuestion, renderHumanStep, renderMcpSuggestion,
+    renderConnectionSuggestion, renderWatchReport, renderBotAction, renderHire, renderRouteChoice, onSendMessage,
+    onOpenComputerSettings, onOpenAccounts, onChangeTeamFolder, onEditBot, onOpenConnections, onOpenToolNote,
+    onRecheckEngines, onRaiseBudget, onOpenUsage, onSendToOtherBot, onChangeDecision, onReact, onOpenSkills,
+    onContinueFrom, onVmOpenByPerson, onToggleVmPane,
+    // ChatView's own
+    listed, askOnly, trialCards, openThoughts, retries, flashId, flashKind, repeatStarts, knownBots, chatBudget,
+    approveId, doneItems, questionId, answered, activeKwants, arranged, liveShareIds, detailsAsk, switchNoteFor,
+    questionOf, approving, phone, replyTo, copiedId, continueError, continuing, newestId, vmOpen,
+  ];
+  const drawRows = () => (
+    <>
+      {settledPlaced.after.get(-1)?.map(renderSettled)}
+      {chatItems.map((item, n, items) => {
+        // 33a: kept approval lines sit after the item that came before their card.
+        const linesAfter = settledPlaced.after.get(n);
+        if (linesAfter) return <Fragment key={`settled-after:${item.kind === 'message' ? item.message.id : item.id}`}>{renderItem(item, n, items)}{linesAfter.map(renderSettled)}</Fragment>;
+        return renderItem(item, n, items);
+      })}
+    </>
+  );
+  const drawRowsRef = useRef(drawRows);
+  drawRowsRef.current = drawRows;
+  const drawLiveShares = () => arranged.live.map((m) => renderMessage(m));
+  const drawLiveSharesRef = useRef(drawLiveShares);
+  drawLiveSharesRef.current = drawLiveShares;
+
   // The empty chat shows a home (a bot's own chat, #general, or a team's chat) instead of a bare pane and a row of chips
   // Nothing in the chat yet and nothing on its way: no message, reply, queued turn, routing or waiting card.
   const chatIsEmpty = messages.length === 0 && !isStreaming && !queued && !deciding && pendingApprovals.length === 0;
@@ -2501,59 +2694,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
     </>
   );
   const headPhone = 'max-sm:flex-col max-sm:gap-0.5 max-sm:h-11 max-sm:min-w-11 max-sm:px-1';
-  // 33a: the chat's items, and where each kept approval line sits among them (Mira's fix 1).
-  const chatItems = groupDiscussionThreads(listed, { foldOpen: askOnly });
-  const itemTime = (item: (typeof chatItems)[number]) => (item.kind === 'message' ? item.message.created_at : item.turns[item.turns.length - 1]?.created_at);
-  const settledPlaced = placeSettled(chatItems.map(itemTime), settledApprovals);
-  const renderSettled = (approval: (typeof settledApprovals)[number]) =>
-    approval.refused ? (
-      <RefusedCustomerCall key={approval.id} approval={approval} />
-    ) : approval.via === 'app' ? (
-      <AllowedInApp key={approval.id} lead={approvalLead(approval)} />
-    ) : (
-      <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
-    );
-  const renderItem = (item: (typeof chatItems)[number], n: number, items: typeof chatItems) => {
-    if (item.kind === 'message') {
-      const trial = trialCards.get(item.message.id);
-      const above = items[n - 1];
-      // A kept line between two messages starts the next one's header again.
-      const prev = above?.kind === 'message' && !trialCards.has(above.message.id) && !settledPlaced.after.has(n - 1) ? above.message : undefined;
-      if (!trial) return renderMessage(item.message, prev);
-      return (
-        <Fragment key={item.message.id}>
-          {renderMessage(item.message, prev)}
-          <TrialWaitsCard key={`trial:${trial.skill_id}`} skillId={trial.skill_id} kwantId={item.message.sender_role === 'kwant' ? item.message.sender_id : (item.message.direct_kwant_id ?? item.message.sender_id)} onOpenSkills={onOpenSkills} />
-        </Fragment>
-      );
-    }
-      const threadKey = `thread:${item.id}`;
-      const isThreadOpen = !!openThoughts[threadKey];
-      return (
-        <div key={threadKey} className="w-full max-w-5xl">
-          <button
-            type="button"
-            onClick={() => toggleThought(threadKey)}
-            className="sm:ml-[48px] max-w-full flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer"
-          >
-            {isThreadOpen ? <ChevronDown size={13} className="text-zinc-500" /> : <ChevronRight size={13} className="text-zinc-500" />}
-            <span className="flex -space-x-1.5">
-              {item.speakers.map((name) => (
-                <ModernAvatar key={name} role={name} name={name} size={18} />
-              ))}
-            </span>
-            <span className="min-w-0 truncate">
-              Team discussed • {item.turns.length} {item.turns.length === 1 ? 'turn' : 'turns'} • {item.speakers.join(', ')}
-            </span>
-          </button>
-          {isThreadOpen && (
-            <div className="mt-4 ml-2 pl-3 sm:ml-[30px] sm:pl-4 border-l border-zinc-800 space-y-6">
-              {item.turns.map((t, i, all) => renderMessage(t, all[i - 1]))}
-            </div>
-          )}
-        </div>
-      );
-  };
   return (
     <div
       ref={rootRef}
@@ -2772,6 +2912,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
             aria-busy={isStreaming}
           >
         {topCard}
+        {!viewingHistory && messages.length > 0 && (earlier === 'more' || earlier === 'loading') && (
+          <EarlierButton ref={earlierBtnRef} loading={earlier === 'loading'} onLoad={loadEarlier} />
+        )}
+        {!viewingHistory && messages.length > 0 && earlier === 'start' && <ChatStartLine ref={chatStartRef} label={startLabel ?? `Start of your chat with ${title}`} firstAt={messages[0].created_at} />}
         {continuedFrom && <ContinuedLine text={continuedFrom.text} onOpen={continuedFrom.onOpen} />}
         {welcome && messages.length === 0 && welcome}
         {showHome && home && (
@@ -2789,13 +2933,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             />
           </div>
         )}
-        {settledPlaced.after.get(-1)?.map(renderSettled)}
-        {chatItems.map((item, n, items) => {
-          // 33a: kept approval lines sit after the item that came before their card.
-          const linesAfter = settledPlaced.after.get(n);
-          if (linesAfter) return <Fragment key={`settled-after:${item.kind === 'message' ? item.message.id : item.id}`}>{renderItem(item, n, items)}{linesAfter.map(renderSettled)}</Fragment>;
-          return renderItem(item, n, items);
-        })}
+        <MessageRows draw={drawRowsRef} deps={rowDeps} />
 
         {/* Laya routing: which agent will answer */}
         {isStreaming && routingState && !discussionState?.inProgress && (
@@ -2901,7 +3039,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         )}
 
         {/* P4: the running bot's shares, already in the place its saved reply will give them */}
-        {liveRowShown && arranged.live.map((m) => renderMessage(m))}
+        {liveRowShown && <MessageRows draw={drawLiveSharesRef} deps={rowDeps} />}
 
         {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload;
             33a: allowed once here, "✓ You allowed once"; 22d: a customer's call nobody allowed, in that customer's chat.
