@@ -79,7 +79,7 @@ import { JAR_DROPPED, JAR_SEND_FAILED, ideaSendOutcome, useJarWobble, wobbleJar 
 import { Bot, HelpCircle, Inbox, ListChecks, Loader2, MessageSquare, Settings } from 'lucide-react';
 import { TG_EVENT, TelegramEventDetail, forThisSpace } from './telegram';
 import { approvalAction } from './components/ModernApprovalCard';
-import { ChatApproval, OpenChat, addSettled, refusedFromRecords, settledByTime, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, awayTitle, syncApprovals, upsertApproval, withoutApproval } from './approvals';
+import { ChatApproval, OpenChat, addSettled, keepAllowedOnce, refusedFromRecords, settledByTime, settledFromRecords, withdrawApproval, approvalFromEvent, lateAnswerText, approvalsForChat, approvalsFromAway, awayTitle, syncApprovals, upsertApproval, withoutApproval } from './approvals';
 import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
@@ -961,7 +961,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const refreshContext = (ctx: string | null | undefined): Promise<void> => {
     if (!ctx) return Promise.resolve();
     // Resolves once the newest load of this chat has landed (22r), so a settle after it never ends the turn on an older list.
-    return chatLoadsRef.current.run(ctx, async (isLatest) => {
+    return chatLoadsRef.current.run(ctx, async (isLatest, keepLive) => {
       try {
         let data: ChatMessage[];
         if (knownThreadsRef.current.has(ctx)) {
@@ -973,6 +973,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         }
         // A newer load of this chat started meanwhile: it has the newer messages
         if (!isLatest()) return;
+        // 33c: plus what came live after this load started and isn't in it (the lead's hand-off card)
+        data = keepLive(data);
         messagesCacheRef.current[ctx] = data;
         if (openCtxRef.current === ctx) {
           // 22r: on screen now, so a settle after this load (which clears the streamed words) never paints before the saved reply.
@@ -1414,6 +1416,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const ctx = m ? messageContextId(m) : null;
             if (!m?.id || !ctx) break;
             if (m.thread_id) knownThreadsRef.current.add(m.thread_id);
+            // 33c: a load of this chat that is still running may have read it before this message was saved
+            chatLoadsRef.current.noteLive(ctx, m);
             const list = messagesCacheRef.current[ctx];
             if (!list) {
               if (ctx === openCtxRef.current) refreshContext(ctx);
@@ -2170,6 +2174,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         dropApproval(ticketId);
         // 31y: its "Needs you" strip and sidebar row go with the card, not on the refetch.
         setClearedAsks((prev) => clearAnswered(prev, ticketId));
+        // 33a: Allow once leaves "✓ You allowed once" in the chat, as Telegram's Allow once does.
+        if (res.ok) setSettledApprovals((prev) => keepAllowedOnce(prev, card, decision));
         if (!res.ok) pushToast('This request expired', 'The bot is no longer waiting for this answer.');
         else if (card?.waiting && decision !== 'deny') {
           const bot = typeof card.details.kwant_name === 'string' ? card.details.kwant_name : null;

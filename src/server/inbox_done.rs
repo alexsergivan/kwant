@@ -561,10 +561,13 @@ pub async fn team_jobs(state: &AppState, space: &SpaceId, since: DateTime<Utc>, 
             "group": Group::Finished.key(),
             "sort_key": sort_key(Group::Finished, None, at.timestamp_millis(), unread, &lead.name, &r.id),
             "lead": {"kwant_id": lead.id, "kwant_name": lead.name},
-            "members": members,
             "handoffs": handoffs.len(),
             "done_line": away::mask_words(&done_text),
         });
+        // 33d: a bot that did the job alone names no members, so the row doesn't read "1 bot"
+        if !handoffs.is_empty() {
+            v["members"] = json!(members);
+        }
         let source = json!({"kind": "team_job", "delegation_id": handoffs.first().map(|d| d.id.clone())});
         let facts = DoneFacts { message: Some(msg), why: why.clone(), why_kind: why.as_ref().map(|_| "request"), ledger_changed: None, more, source, tasks };
         apply(&mut v, &facts, unread);
