@@ -111,6 +111,12 @@ pub fn why_of(text: &str, whole: bool) -> Option<String> {
     (!text.is_empty()).then(|| cut(&text, WHY_CHARS))
 }
 
+/// A row titled with the person's request (a team job, 33m a stopped job): its first non-blank
+/// line as plain text, masked, at most [`TITLE_CHARS`]. `None` for a blank request.
+pub fn request_title(request: &str) -> Option<String> {
+    why_of(request, false).map(|t| cut(&t, TITLE_CHARS))
+}
+
 /// A tool's own name without kwnt's `mcp__kwnt__` prefix; other servers keep theirs.
 fn own_tool(tool: &str) -> &str {
     tool.strip_prefix("mcp__kwnt__").or_else(|| tool.strip_prefix("mcp__kwant__")).unwrap_or(tool)
@@ -546,7 +552,7 @@ pub async fn team_jobs(state: &AppState, space: &SpaceId, since: DateTime<Utc>, 
         let request_text = request.as_ref().map(|m| m.text.as_str()).unwrap_or("");
         let why = why_of(request_text, false);
         let done_text = meta[DONE_KEY]["text"].as_str().unwrap_or("").to_string();
-        let title = why_of(request_text, false).map(|t| cut(&t, TITLE_CHARS)).unwrap_or_else(|| format!("Team job led by {}", lead.name));
+        let title = request_title(request_text).unwrap_or_else(|| format!("Team job led by {}", lead.name));
         let unread = seen.is_none_or(|s| at > s);
         let mut v = json!({
             "kind": "team_job",
@@ -561,10 +567,13 @@ pub async fn team_jobs(state: &AppState, space: &SpaceId, since: DateTime<Utc>, 
             "group": Group::Finished.key(),
             "sort_key": sort_key(Group::Finished, None, at.timestamp_millis(), unread, &lead.name, &r.id),
             "lead": {"kwant_id": lead.id, "kwant_name": lead.name},
-            "members": members,
             "handoffs": handoffs.len(),
             "done_line": away::mask_words(&done_text),
         });
+        // 33d: a bot that did the job alone names no members, so the row doesn't read "1 bot"
+        if !handoffs.is_empty() {
+            v["members"] = json!(members);
+        }
         let source = json!({"kind": "team_job", "delegation_id": handoffs.first().map(|d| d.id.clone())});
         let facts = DoneFacts { message: Some(msg), why: why.clone(), why_kind: why.as_ref().map(|_| "request"), ledger_changed: None, more, source, tasks };
         apply(&mut v, &facts, unread);

@@ -148,6 +148,7 @@ import {
   channelLabel,
   continuityApi,
   emitContinuity,
+  jumpRoute,
   notificationPermission,
   shouldShowOsNotification,
 } from './continuity';
@@ -961,7 +962,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const refreshContext = (ctx: string | null | undefined): Promise<void> => {
     if (!ctx) return Promise.resolve();
     // Resolves once the newest load of this chat has landed (22r), so a settle after it never ends the turn on an older list.
-    return chatLoadsRef.current.run(ctx, async (isLatest) => {
+    return chatLoadsRef.current.run(ctx, async (isLatest, keepLive) => {
       try {
         let data: ChatMessage[];
         if (knownThreadsRef.current.has(ctx)) {
@@ -973,6 +974,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         }
         // A newer load of this chat started meanwhile: it has the newer messages
         if (!isLatest()) return;
+        // 33c: plus what came live after this load started and isn't in it (the lead's hand-off card)
+        data = keepLive(data);
         messagesCacheRef.current[ctx] = data;
         if (openCtxRef.current === ctx) {
           // 22r: on screen now, so a settle after this load (which clears the streamed words) never paints before the saved reply.
@@ -1414,6 +1417,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             const ctx = m ? messageContextId(m) : null;
             if (!m?.id || !ctx) break;
             if (m.thread_id) knownThreadsRef.current.add(m.thread_id);
+            // 33c: a load of this chat that is still running may have read it before this message was saved
+            chatLoadsRef.current.noteLive(ctx, m);
             const list = messagesCacheRef.current[ctx];
             if (!list) {
               if (ctx === openCtxRef.current) refreshContext(ctx);
@@ -3023,39 +3028,51 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     );
   };
 
-  // Search result picked: open its chat and scroll to the message, loading the messages around it
-  // when it's older than the latest page.
+  // Search result picked: open its chat (33i: or its thread) and scroll to the message, loading the
+  // messages around it when it's older than the latest page.
   const handleJump = async (hit: SearchHit) => {
-    const targetId = hit.channel_id ?? hit.kwant_id;
-    if (!targetId || !openTarget(hit)) {
+    const route = jumpRoute(hit);
+    if (route?.kind === 'thread') {
+      if (!kwants.some((k) => k.id === route.kwant_id)) {
+        pushToast('That chat no longer exists.');
+        return;
+      }
+      openThread(route.kwant_id, route.thread_id);
+      setPhoneView('chat');
+    } else if (!route || !openTarget(hit)) {
       pushToast('That chat no longer exists.');
       return;
     }
+    const { ctx } = route;
+    const what = route.kind === 'thread' ? 'conversation' : 'chat';
     try {
-      const res = await fetch(`/api/channels/${encodeURIComponent(targetId)}/messages`);
+      const res = await fetch(route.latest);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data: ChatMessage[] = await res.json();
-      messagesCacheRef.current[targetId] = data;
-      if (selectedIdRef.current === targetId) setMessages(data);
+      messagesCacheRef.current[ctx] = data;
+      if (openCtxRef.current === ctx) setMessages(data);
       if (data.some((m) => m.id === hit.message_id)) {
         setHistoryWindow(null);
         setHighlightMessageId(hit.message_id);
         return;
       }
-      const around = await fetch(
-        `/api/channels/${encodeURIComponent(targetId)}/messages?around=${encodeURIComponent(hit.message_id)}`,
-      );
+      const around = await fetch(route.around);
       if (around.status === 404) {
-        pushToast('Opened the chat', 'That message is no longer there.');
+        pushToast(`Opened the ${what}`, 'That message is no longer there.');
         return;
       }
       if (!around.ok) throw new Error(`HTTP ${around.status}`);
       const older: ChatMessage[] = await around.json();
-      if (selectedIdRef.current !== targetId) return;
-      setHistoryWindow({ ctx: targetId, messages: older });
+      if (openCtxRef.current !== ctx) return;
+      // An older server's thread route ignores `around`: no window without the message in it.
+      if (!older.some((m) => m.id === hit.message_id)) {
+        pushToast(`Opened the ${what}`, 'That message is no longer there.');
+        return;
+      }
+      setHistoryWindow({ ctx, messages: older });
       setHighlightMessageId(hit.message_id);
     } catch {
-      pushToast('Could not load that chat.');
+      pushToast(`Could not load that ${what}.`);
     }
   };
 

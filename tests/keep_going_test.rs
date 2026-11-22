@@ -28,7 +28,7 @@ use tower::ServiceExt;
 /// prompt has it too). A prompt is a keep-going turn ("isn't marked done", queue `<dir>/kg`), a
 /// lead's results turn ("finished the task you delegated" / "tasks you delegated have ended",
 /// queue `<dir>/res`), or anything else (the lead's first turn, a teammate's task, a turn on an
-/// answer), which replies "ok"; a teammate's task with "SPECHOLD:<file>" waits for that file
+/// answer), which replies "ok" (or the next line of queue `<dir>/other`, 33d); a teammate's task with "SPECHOLD:<file>" waits for that file
 /// first. Each queue line is one reply (`\n` for a line break); an empty queue replies "Here is
 /// where things stand.". A line "HOLD:<file> <reply>" waits for the file, then replies; a line
 /// "FAILED:<reply>" runs a Bash step that fails first, then replies; "TFAILED:<reply>" runs a
@@ -57,6 +57,11 @@ if [ "$kind" = other ]; then
   if [ -n "$hold" ]; then
     i=0
     while [ ! -f "$hold" ] && [ $i -lt 600 ]; do sleep 0.1; i=$((i+1)); done
+  fi
+  if [ -n "$dir" ] && [ -s "$dir/other" ]; then
+    out=$(head -n 1 "$dir/other")
+    tail -n +2 "$dir/other" > "$dir/other.rest"
+    mv "$dir/other.rest" "$dir/other"
   fi
 elif [ -n "$dir" ] && [ -s "$dir/$kind" ]; then
   out=$(head -n 1 "$dir/$kind")
@@ -394,6 +399,84 @@ async fn a_done_line_is_stored_and_needs_no_keep_going_turn() {
     assert_eq!(meta_of(done)[keep_going::DONE_KEY]["text"], "checked the build, the tests and the copy");
     assert!(open_questions(&env).await.is_empty());
     assert_eq!(delegations(&env).await.iter().map(|d| d.id.as_str()).collect::<Vec<_>>(), vec![id.as_str()]);
+    // 33d: the save step leaves a lead with hand-offs to its chain: one Finished row, the results
+    // reply, with its member
+    let jobs = team_jobs(&env).await;
+    assert_eq!(jobs.iter().map(|j| j["id"].as_str().unwrap()).collect::<Vec<_>>(), [done.id.as_str()], "{jobs:?}");
+    assert_eq!(jobs[0]["members"].as_array().map(Vec::len), Some(1), "{jobs:?}");
+}
+
+/// The Inbox's Finished team jobs (`kind: team_job`).
+async fn team_jobs(env: &Env) -> Vec<Value> {
+    let (s, v) = call(&env.app, "GET", "/api/inbox", None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    v["items"].as_array().unwrap().iter().filter(|i| i["kind"] == "team_job").cloned().collect()
+}
+
+/// The person writes to the lead in its direct chat (no team there); waits for a reply to it.
+async fn person_writes_direct(env: &Env, first_line: &str) {
+    let replies = || async { env.state.db.list_messages(&env.lead, 200).await.unwrap().iter().filter(|m| m.sender_role == "kwant").count() };
+    let before = replies().await;
+    let prompt = format!("{first_line}\n{}", env.marker());
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"kwant_id": env.lead, "prompt": prompt, "sender_id": "user"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_for("the bot's reply", || async { replies().await > before }).await;
+    wait_for("the turn to end", || async { env.state.turns.active_turns().is_empty() }).await;
+}
+
+/// 33d (Mira's UX pass at 0.9.38, fix #1): one bot doing one job in its own chat ends with
+/// `Done: …`. The reply gets the Done mark at save, and the Inbox's "Done while you were away"
+/// lists it, titled with the request it closed even when the person wrote again later that day,
+/// with no members (nobody was handed work). A later plain reply adds nothing.
+#[tokio::test]
+async fn a_solo_bots_done_reply_is_marked_and_listed_with_its_own_request() {
+    let env = setup().await;
+    env.queue("other", &["Saved the plan to trip.md.\\nDone: 3-day plan saved", "Here is a packing list."]);
+    person_writes_direct(&env, "Plan a 3-day trip to Lisbon").await;
+    let msgs = env.state.db.list_messages(&env.lead, 200).await.unwrap();
+    let done = msgs.iter().find(|m| m.sender_role == "kwant" && m.text.starts_with("Saved the plan")).expect("the Done reply").clone();
+    assert_eq!(meta_of(&done)[keep_going::DONE_KEY]["text"], "3-day plan saved", "{:?}", done.meta);
+    assert!(meta_of(&done)[keep_going::DONE_KEY]["at"].is_string());
+    // The person writes again later the same day; that reply ends with no Done line
+    tokio::time::sleep(Duration::from_millis(1100)).await;
+    person_writes_direct(&env, "Thanks! And a packing list?").await;
+    let msgs = env.state.db.list_messages(&env.lead, 200).await.unwrap();
+    let plain = msgs.iter().find(|m| m.text == "Here is a packing list.").expect("the plain reply");
+    assert!(meta_of(plain).get(keep_going::DONE_KEY).is_none(), "{:?}", plain.meta);
+
+    let jobs = team_jobs(&env).await;
+    assert_eq!(jobs.iter().map(|j| j["id"].as_str().unwrap()).collect::<Vec<_>>(), [done.id.as_str()], "{jobs:?}");
+    let job = &jobs[0];
+    assert_eq!(job["title"], "Plan a 3-day trip to Lisbon", "{job}");
+    assert_eq!(job["done_line"], "3-day plan saved", "{job}");
+    assert_eq!(job["group"], "finished", "{job}");
+    assert_eq!(job["lead"]["kwant_id"], json!(env.lead), "{job}");
+    // A solo job names no members, so it doesn't read "1 bot"
+    assert!(job.get("members").is_none(), "{job}");
+    assert_eq!(job["handoffs"], 0, "{job}");
+}
+
+/// 33d: a member's `Done:` inside its hand-off (depth 1) is no Finished row of its own, and a
+/// lead's first reply without a Done line isn't either.
+#[tokio::test]
+async fn a_members_done_in_its_hand_off_and_a_plain_reply_add_no_finished_row() {
+    let env = setup().await;
+    person_asks(&env, "Check the build.").await;
+    env.queue("other", &["Built it and ran the tests.\\nDone: build checked, 212 tests pass"]);
+    let id = hand_off(&env, &format!("Run the build {}", env.marker()), false).await;
+    wait_for("the hand-off to end", || async {
+        delegations(&env).await.iter().any(|d| d.id == id && !d.is_open())
+    })
+    .await;
+    settled(&env).await;
+    let d = delegations(&env).await.into_iter().find(|d| d.id == id).unwrap();
+    let thread = env.state.db.list_messages(&d.thread_id, 200).await.unwrap();
+    let member = thread.iter().find(|m| m.text.starts_with("Built it")).unwrap_or_else(|| panic!("the member's reply: {thread:?}"));
+    assert!(meta_of(member).get(keep_going::DONE_KEY).is_none(), "{:?}", member.meta);
+    for m in messages(&env).await {
+        assert!(meta_of(&m).get(keep_going::DONE_KEY).is_none(), "{m:?}");
+    }
+    assert!(team_jobs(&env).await.is_empty());
 }
 
 /// The lead asked with the question tool (an open card in the chat): it waits on the person, so
@@ -470,6 +553,8 @@ async fn a_blocked_line_becomes_a_card_not_a_keep_going_turn() {
     assert_eq!(open.len(), 1, "{open:?}");
     assert_eq!(open[0].question, format!("Blocked: {text}"));
     assert_eq!(card_meta(&env, &open[0]).await[keep_going::ASK_KEY], true);
+    // 33f: exactly one Needs-you item, the card's (the turn's own plain "Blocked:" entry is replaced)
+    assert_eq!(live_waiting(&env, &env.lead).await.iter().map(|w| w.question_id.clone()).collect::<Vec<_>>(), [Some(open[0].id.clone())]);
 
     // The person unblocks it: the chain resumes
     answer(&env, &open[0].id, "Allowed. Continue").await;
@@ -478,6 +563,49 @@ async fn a_blocked_line_becomes_a_card_not_a_keep_going_turn() {
     let msgs = messages(&env).await;
     let last = *lead_replies(&env, &msgs).last().unwrap();
     assert_eq!(meta_of(last)[keep_going::DONE_KEY]["text"], "rendered the intro and checked its length.");
+}
+
+/// What still waits on the person from `kwant`.
+async fn live_waiting(env: &Env, kwant: &str) -> Vec<kwnt::db::waiting::WaitingItem> {
+    env.state.db.list_waiting(None).await.unwrap().into_iter().filter(|w| w.kwant_id == kwant && w.status != "closed").collect()
+}
+
+/// 33f: a member's `Blocked:` inside its hand-off (depth 1) goes to its lead in the result, not to
+/// Needs you: the member opens no waiting item.
+#[tokio::test]
+async fn a_members_blocked_line_in_its_hand_off_opens_nothing_for_the_person() {
+    let env = setup().await;
+    person_asks(&env, "Back up the manuscript.").await;
+    env.queue("other", &["Blocked: the backup drive isn't mounted. Plug it in and tell me to try again."]);
+    let id = hand_off(&env, &format!("Back it up {}", env.marker()), false).await;
+    wait_for("the hand-off to end", || async { delegations(&env).await.iter().any(|d| d.id == id && !d.is_open()) }).await;
+    settled(&env).await;
+    let d = delegations(&env).await.into_iter().find(|d| d.id == id).unwrap();
+    let thread = env.state.db.list_messages(&d.thread_id, 200).await.unwrap();
+    assert!(thread.iter().any(|m| m.text.starts_with("Blocked: the backup drive")), "the member's reply: {thread:?}");
+    let live = live_waiting(&env, &env.checker).await;
+    assert!(live.is_empty(), "{live:?}");
+}
+
+/// 33f: a reply whose `Blocked:` line hands on to a teammate (`@Checker …`) is the teammate's to
+/// unblock: it opens nothing for the person.
+#[tokio::test]
+async fn a_blocked_line_that_hands_on_to_a_teammate_opens_nothing() {
+    let env = setup().await;
+    env.queue("other", &["Blocked: the backup drive isn't mounted. @Checker please mount it on the build box."]);
+    env.queue("res", &["Checker mounted it and I backed it up.\\nDone: backed up the manuscript."]);
+    let prompt = format!("@{} Back up the manuscript. {}please", env.lead_name, env.marker());
+    let (s, v) = call(&env.app, "POST", "/api/chat/send", Some(json!({"channel_id": env.channel, "prompt": prompt, "sender_id": "user"}))).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    wait_for("the mention's hand-off to end", || async {
+        delegations(&env).await.iter().any(|d| d.specialist_kwant_id == env.checker && !d.is_open())
+    })
+    .await;
+    wait_for("the lead's results turn", || async { !env.prompts("res").is_empty() }).await;
+    settled(&env).await;
+    assert!(lead_replies(&env, &messages(&env).await).iter().any(|m| m.text.starts_with("Blocked: the backup drive")));
+    let live = live_waiting(&env, &env.lead).await;
+    assert!(live.is_empty(), "{live:?}");
 }
 
 /// 13a: a lead whose last tool step failed and whose reply waits on the person in prose, with no

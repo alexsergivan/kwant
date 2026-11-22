@@ -180,7 +180,7 @@ test('strip, one ask in each state A1–A8: eyebrow, kind, the whole line, hint,
     assert.equal(head.textContent, 'Quant needs you', 'named by its eyebrow');
     assert.match(s.querySelector('[data-strip-kind]').textContent, new RegExp(`^${kind} · `));
     assert.doesNotMatch(s.querySelector('[data-strip-kind]').textContent, /Quant/, 'one bot in view: no name in the kind line');
-    assert.equal(s.querySelector('[data-strip-line]').textContent, m.askLine(it), 'the whole line');
+    assert.equal(s.querySelector('[data-strip-line]').textContent, m.bandLine(it, m.askAction(it)), 'the whole line');
     assert.doesNotMatch(s.querySelector('[data-strip-line]').getAttribute('class'), /truncate|line-clamp/, 'never cut');
     assert.equal(s.querySelector('[data-strip-hint]').textContent, m.askHint(it, m.askAction(it), 'Quant'));
     const buttons = [...s.querySelectorAll('[data-strip-buttons] button')];
@@ -202,7 +202,8 @@ test('strip, one ask in each state A1–A8: eyebrow, kind, the whole line, hint,
 test('strip: it reads the list, not the chat, so it shows when the notice is not rendered', () => {
   // No messages anywhere: the strip still says the ask (Oleks's row opened onto nothing)
   const d = parse(h(m.NeedsYouStrip, { asks: [stopped], onAction: noop, onDismiss: async () => {} }));
-  assert.equal(d.querySelector('[data-strip-line]').textContent, STALL);
+  // 33h: the band's own hint says Retry, so the line drops its trailing copy of it.
+  assert.equal(d.querySelector('[data-strip-line]').textContent, 'The model sent nothing for 120 s, so this reply was stopped.');
 });
 
 test('strip: steps through several asks (M1, M2), rings each one shown, and goes live when they close', async () => {
@@ -754,4 +755,32 @@ test('30h: the approval flash box is as wide as the card, and adds nothing to it
   // Top and bottom: the card's my-3 collapses through the wrapper only while the wrapper has no margin, padding,
   // border or its own formatting context, so none of those may join the wrapper (its one margin class is !mt-0).
   for (const c of onCls.filter((c) => c !== '!mt-0')) assert.doesNotMatch(c, /^!?(-?m[trblxy]?|p[trblxy]?|border|ring|flex|grid|inline|overflow|flow-root|w)-|^!?(flex|grid|inline-block|flow-root|border|contents)$/, c);
+});
+
+// 33h minor d (autonomy/done-pane-polish/brief.md): a stopped reply's Retry advice shows once in the band.
+test('33h: a stopped ask with Retry says the Retry advice once in the band; the line keeps the cause', () => {
+  const RETRY_IN_CHAT = 'Retry in the chat sends your message again.';
+  const crash = item('stopped', {
+    id: 'w-crash', title: '', retry: null, message_id: 'm-crash',
+    summary: `Couldn’t finish this reply: its model stopped without an answer. Try again, or switch its model. ${RETRY_IN_CHAT}`,
+  });
+  for (const it of [crash, stopped]) {
+    const d = parse(h(m.NeedsYouStrip, { asks: [it], onAction: noop, onDismiss: async () => {}, onShow: noop, now: NOW }));
+    const s = d.querySelector('[data-needs-you-strip]');
+    assert.equal(s.getAttribute('data-action'), 'retry');
+    const line = s.querySelector('[data-strip-line]').textContent;
+    const hint = s.querySelector('[data-strip-hint]').textContent;
+    const said = (line + ' ' + hint).match(/Retry[^.]* sends your (last )?message/g) ?? [];
+    assert.equal(said.length, 1, `the advice once, not twice: ${line} | ${hint}`);
+    assert.equal(hint, 'Retry sends your last message to Quant again.', 'the hint by the button keeps it');
+    assert.doesNotMatch(line, /Retry in the chat/, 'the line drops its trailing copy');
+  }
+  assert.equal(
+    m.bandLine(crash, 'retry'),
+    'Couldn’t finish this reply: its model stopped without an answer. Try again, or switch its model.',
+  );
+  // Only with a Retry button in the band: with no button, the line still says where Retry is.
+  assert.equal(m.bandLine(crash, null), m.askLine(crash));
+  // A line that is nothing but the advice keeps it.
+  assert.equal(m.bandLine(item('stopped', { title: RETRY_IN_CHAT }), 'retry'), RETRY_IN_CHAT);
 });

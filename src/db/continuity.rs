@@ -196,7 +196,12 @@ pub struct SearchHit {
     pub message_id: String,
     pub channel_id: Option<String>,
     pub channel_name: Option<String>,
+    /// The bot whose chat holds the hit: the direct chat's bot, else the thread's bot, else the
+    /// sender bot (a channel message a bot wrote).
     pub kwant_id: Option<String>,
+    /// The thread holding the hit, null outside threads (33i: so search opens the thread).
+    pub thread_id: Option<String>,
+    pub thread_title: Option<String>,
     pub author: String,
     pub snippet: String,
     pub created_at: Option<DateTime<Utc>>,
@@ -532,7 +537,8 @@ impl Database {
         };
         let mut qb: QueryBuilder<Sqlite> = QueryBuilder::new(
             "SELECT m.id AS message_id, m.channel_id, c.name AS channel_name, \
-             COALESCE(m.direct_kwant_id, k.id) AS kwant_id, m.sender_id AS author, \
+             COALESCE(m.direct_kwant_id, tk.id, k.id) AS kwant_id, m.thread_id, \
+             t.title AS thread_title, m.sender_id AS author, \
              snippet(messages_fts, 0, '<mark>', '</mark>', '…', 16) AS snippet, m.created_at \
              FROM messages_fts JOIN messages m ON m.rowid = messages_fts.rowid \
              LEFT JOIN channels c ON c.id = m.channel_id \

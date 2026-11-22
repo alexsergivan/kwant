@@ -37,6 +37,12 @@ const click = async (b) => {
   await settle();
 };
 const text = (e) => e.textContent.replace(/\s+/g, ' ').trim();
+/** What a sighted person sees: the text without visually hidden (sr-only) parts. */
+const seen = (e) => {
+  const c = e.cloneNode(true);
+  for (const x of c.querySelectorAll('.sr-only')) x.remove();
+  return text(c);
+};
 
 async function mount(node) {
   document.body.innerHTML = '';
@@ -244,20 +250,27 @@ test('list row: the marker comes before the summary; the holo sticker only for c
     ['checked', cx.CHECKED_OK, 'Checked No change since last week. Beanline still cheapest.'],
     ['partly', cx.CHECKED_PARTLY, 'Partly checked · No change since last week. Beanline still cheapest.'],
     ['failed', cx.CHECKED_FAILED, 'Check failed · No change since last week. Beanline still cheapest.'],
-    ['not_checked', cx.CHECKED_NONE, 'Not checked · No change since last week. Beanline still cheapest.'],
+    ['not_checked', cx.CHECKED_NONE, 'No change since last week. Beanline still cheapest.'],
   ];
   for (const [state, c, want] of cases) {
     const r = await mountInbox({ doneDetails: { 'r-prices': fx.AWAY_DETAIL } }, withChecked('r-prices', c));
     const sum = r.q('[data-row="r-prices"] [data-done-summary]');
-    assert.equal(text(sum), want, state);
+    assert.equal(seen(sum), want, state);
     const holo = sum.querySelector('[data-sticker="holo"]');
     if (state === 'checked') {
       assert.ok(holo, 'checked is the holo sticker');
       assert.equal(sum.firstElementChild, holo, 'the marker comes first');
+    } else if (state === 'not_checked') {
+      // 33v: no "Not checked ·" in sight, but the row's accessible text still starts with the state.
+      assert.equal(holo, null, 'never holographic');
+      assert.equal(sum.firstElementChild.className, 'sr-only');
+      assert.equal(sum.firstElementChild.getAttribute('data-check-marker'), 'not_checked');
+      assert.equal(text(sum), 'Not checked: No change since last week. Beanline still cheapest.');
+      assert.match(text(r.q('[data-option="r-prices"]')), /Not checked: No change since last week/);
     } else {
       assert.equal(holo, null, `${state} is never holographic`);
       assert.equal(sum.firstElementChild.getAttribute('data-check-marker'), state);
-      assert.match(sum.firstElementChild.className, { partly: /text-warn/, failed: /text-bad/, not_checked: /text-zinc-300/ }[state]);
+      assert.match(sum.firstElementChild.className, { partly: /text-warn/, failed: /text-bad/ }[state]);
     }
     assert.equal(r.qa('[data-sticker]').length, state === 'checked' ? 1 : 0, 'the only sticker on the list');
     r.root.unmount();
@@ -267,6 +280,29 @@ test('list row: the marker comes before the summary; the holo sticker only for c
   data.items.find((i) => i.id === 'tj-spring').summary = '';
   const r = await mountInbox({}, data);
   assert.equal(text(r.q('[data-row="tj-spring"] [data-done-summary]')), 'Check failed');
+  r.root.unmount();
+});
+
+test('33v: a Not checked row with no summary keeps the word, visible, so the line is never empty', async () => {
+  const data = withChecked('tj-spring', cx.CHECKED_NONE);
+  data.items.find((i) => i.id === 'tj-spring').summary = '';
+  const r = await mountInbox({}, data);
+  const sum = r.q('[data-row="tj-spring"] [data-done-summary]');
+  assert.equal(seen(sum), 'Not checked');
+  const word = sum.querySelector('[data-check-marker="not_checked"]');
+  assert.doesNotMatch(word.className, /sr-only/);
+  assert.match(word.className, /text-zinc-300/);
+  r.root.unmount();
+});
+
+test('33v: many Not checked rows read as their Done lines; the pane still says Not checked', async () => {
+  const data = withChecked('r-prices', cx.CHECKED_NONE);
+  const r = await mountInbox({ doneDetails: { 'r-prices': fx.AWAY_DETAIL } }, data);
+  for (const sum of r.qa('[data-done-summary]')) assert.doesNotMatch(seen(sum), /^Not checked ·/);
+  await click(r.q('[data-option="r-prices"]'));
+  const boxEl = r.q('[data-done-check="not_checked"]');
+  assert.ok(boxEl, 'the pane keeps its check section');
+  assert.match(text(boxEl), /Not checked/);
   r.root.unmount();
 });
 

@@ -33,6 +33,15 @@ const list = (i: number) =>
 // Streamed only (15a): a table, so the live reply carries a list, a table and a code block.
 const table = (i: number) =>
   `Totals for run ${i}:\n\n| Month | Invoices | Total |\n|---|---:|---:|\n| January | 14 | 2,310.00 |\n| February | 11 | 1,980.50 |\n| March | 9 | 1,402.75 |\n\nMarch is short one receipt.`;
+// The bot replies that carry a smart result: one table and one chart by default; ?results=10 spreads ten
+// (tables and charts first) evenly over the chat, like a long chat with charts in it (33j typing run).
+const RICH: Array<keyof typeof FIXTURES> = ['comparison', 'chartLine', 'chartBar', 'metrics', 'comparison', 'chartLine', 'findings', 'chartBar', 'comparison', 'timeline'];
+const richCount = Number(q.get('results') ?? 0);
+const richAt = new Map<number, keyof typeof FIXTURES>(
+  richCount > 0
+    ? Array.from({ length: richCount }, (_, k) => [2 * Math.floor(((k + 0.5) * N) / (2 * richCount)) + 1, RICH[k % RICH.length]])
+    : [[41, 'comparison'], [83, 'chartLine']],
+);
 const messages: unknown[] = [];
 for (let i = 0; i < N; i++) {
   if (i % 2 === 0) {
@@ -41,8 +50,8 @@ for (let i = 0; i < N; i++) {
   }
   let text: string;
   let results: unknown = null;
-  if (i === 41) ({ reply: text, results } = FIXTURES.comparison as { reply: string; results: unknown });
-  else if (i === 83) ({ reply: text, results } = FIXTURES.chartLine as { reply: string; results: unknown });
+  const rich = richAt.get(i);
+  if (rich) ({ reply: text, results } = FIXTURES[rich] as { reply: string; results: unknown });
   else text = [prose, code, list][Math.floor(i / 2) % 3](i);
   messages.push({ id: `m${i}`, sender_role: 'kwant', sender_id: 'Ada', text, results, channel_id: CTX, created_at: at(i), tokens_used: 400 });
 }
