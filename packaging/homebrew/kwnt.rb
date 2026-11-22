@@ -16,7 +16,7 @@ class Kwnt < Formula
 
   on_linux do
     depends_on "pkgconf" => :build
-    depends_on "openssl@3"
+    depends_on "openssl@4"
   end
 
   def install
@@ -25,7 +25,8 @@ class Kwnt < Formula
       system "npm", "install", *std_npm_args(prefix: false)
       system "npm", "run", "build"
     end
-    system "cargo", "install", *std_cargo_args
+    # Homebrew updates kwnt: the build never looks for a new release (as with KWNT_UPDATE_CHECK=off)
+    system "cargo", "install", *std_cargo_args(features: "no-update-check")
   end
 
   test do
@@ -33,7 +34,6 @@ class Kwnt < Formula
 
     ENV["KWNT_DATA_DIR"] = (testpath/"data").to_s
     ENV["KWNT_LAYA_MANAGED"] = "0"
-    ENV["KWNT_UPDATE_CHECK"] = "off"
     assert_match "not created yet", shell_output("#{bin}/kwnt status")
 
     port = free_port
@@ -47,6 +47,9 @@ class Kwnt < Formula
       end
       assert_match '"app":"kwnt"', health
       assert_match version.to_s, health
+      # Built with no-update-check: the server reports updates off without KWNT_UPDATE_CHECK
+      update = shell_output("curl -s http://127.0.0.1:#{port}/api/app/update")
+      assert_match '"supported":false', update
     ensure
       Process.kill("TERM", pid)
       Process.wait(pid)
