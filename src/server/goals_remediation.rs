@@ -607,7 +607,7 @@ fn stop_why(reason: &str) -> &'static str {
         "max_attempts" | "fix_failed" => "Two attempts did not restore it.",
         "max_fixes" => "It has used today's fix allowance.",
         "budget" => "Its fix budget is used up.",
-        "no_fix_check" => "kwant can't test a fix the way this goal is checked, so it won't try one on its own.",
+        "no_fix_check" => "kwant can't test a fix against this goal's checks, so it won't try one. It's yours to fix.",
         _ => "It can't be fixed automatically.",
     }
 }
@@ -1221,7 +1221,7 @@ mod tests {
 
     #[test]
     fn a_goal_no_fix_can_test_says_why_in_its_notice() {
-        assert_eq!(stop_why("no_fix_check"), "kwant can't test a fix the way this goal is checked, so it won't try one on its own.");
+        assert_eq!(stop_why("no_fix_check"), "kwant can't test a fix against this goal's checks, so it won't try one. It's yours to fix.");
         // the other reasons keep their words
         assert_eq!(stop_why("budget"), "Its fix budget is used up.");
         assert_eq!(stop_why("something_new"), "It can't be fixed automatically.");

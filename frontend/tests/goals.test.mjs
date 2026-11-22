@@ -790,7 +790,7 @@ test('server shape: needs_you / fix_ready with a held task is the Fix it decisio
   assert.equal(b.goalDecision(none, [], NOW, null).kind, 'needs_you');
   assert.match(b.needsYouText('fix_ready'), /^Needs you: a fix is ready/);
   // 34b: a goal no fix can test says so in words, not "no fix check"
-  assert.equal(b.needsYouText('no_fix_check'), 'Needs you: kwant can’t test a fix the way this goal is checked');
+  assert.equal(b.needsYouText('no_fix_check'), 'Needs you: kwant can’t test a fix against its checks');
   // The other Needs you reasons are unchanged.
   assert.equal(b.goalDecision(fixReady({ status_reason: 'budget_spent' }), [], NOW, null).kind, 'needs_you');
 });
