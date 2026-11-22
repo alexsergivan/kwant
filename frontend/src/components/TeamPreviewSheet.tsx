@@ -56,6 +56,7 @@ import {
   partialHead,
   plural,
   readLine,
+  nextFree,
   resolveClashes,
   roleOf,
   safeFolder,
@@ -484,7 +485,11 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
   // Decisions 11-12 §4: a team from the person's words has no handle field; the server picks a free one
   // (free_team_handle), which can be changed later in the team's settings.
   const askHandle = !manage && !isN;
-  const handleBad = askHandle && !cleanHandle(handle);
+  // Minor a (32r): a handle already used here is caught before Create, in the same words as a taken bot name.
+  // The server's 409 rename stays as the backstop.
+  const handleTaken = askHandle && !!cleanHandle(handle) && takenHandles.some((x) => x.toLowerCase() === cleanHandle(handle).toLowerCase());
+  const handleErr = !askHandle ? null : !cleanHandle(handle) ? 'Give the team a handle.' : handleTaken ? `@${cleanHandle(handle)} is taken. Try ${nextFree(cleanHandle(handle), takenHandles)}.` : null;
+  const handleBad = !!handleErr;
   const minBots = manage ? 1 : MIN_BOTS;
   const dSizeBad = isD && (ticked < minBots || ticked > MAX_BOTS);
   const creating = phase === 'creating';
@@ -745,8 +750,8 @@ const Sheet: React.FC<TeamPreviewSheetProps> = ({
             <Note>{handleNote}</Note>
           </span>
         ) : (
-          <span id={`${titleId}-hh`} className={`text-xs ${handleBad ? 'text-rose-300' : 'text-zinc-400'}`}>
-            {handleBad ? 'Give the team a handle.' : 'How you and your bots mention the team.'}
+          <span id={`${titleId}-hh`} aria-live="polite" className={`text-xs ${handleBad ? 'text-rose-300' : 'text-zinc-400'}`}>
+            {handleErr ?? 'How you and your bots mention the team.'}
           </span>
         )}
       </div>
