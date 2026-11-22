@@ -8,8 +8,10 @@
 //! - at most [`MAX_ATTEMPTS`] attempts per incident, a [`COOLDOWN_MS`] pause between them, at most
 //!   `max_fixes_per_day` attempts per rolling day (one Investigate + Fix counts as one) and the
 //!   goal's token budget; past any of them the goal is `needs_you`, never retried;
-//! - at most [`NOTICE_CAP`] notifications per goal per rolling 24 hours, sent only when its state
-//!   changes (broken, decision ready, needs you, recovered/fixed), each once per incident;
+//! - notifications only when its state changes (broken, decision ready, needs you, recovered/fixed),
+//!   each once per incident; at most [`NOTICE_CAP`] broken ones per goal per rolling 24 hours (a
+//!   decision or needs-you is never held back by that) and [`crate::server::goals::NOTICE_CEILING`]
+//!   of every kind;
 //! - one remediation per folder at a time: goals that break within [`GROUP_MS`] of each other share
 //!   one mission and one decision, the rest wait by priority;
 //! - after a verified fix the folder's other approved goals are re-checked; one that flipped from
@@ -68,7 +70,8 @@ pub fn gate(attempts: i64, fixes_today: i64, max_fixes: i64, budget: i64, spent:
     Gate::Go
 }
 
-/// Whether one more notification about a goal may go out, given how many went in the last 24 h.
+/// Whether one more broken notification about a goal may go out, given how many broken ones went
+/// in the last 24 h.
 pub fn notice_allowed(sent_in_day: i64) -> bool {
     sent_in_day < NOTICE_CAP
 }
@@ -158,8 +161,8 @@ fn plan_checks(checks: &[GoalCheck]) -> Vec<PlanCheck> {
 
 // -- notices ----------------------------------------------------------------------------------
 
-/// Sends a notice about a goal through the goal loop's own sender, so one cap (three per goal per
-/// rolling 24 hours) and one record (`notified`, or `notice_capped` when the cap held it back)
+/// Sends a notice about a goal through the goal loop's own sender, so one set of caps (three
+/// broken per goal per rolling 24 hours, a ceiling over every kind) and one record (`notified`, or `notice_capped` when the cap held it back)
 /// cover every notice. Callers ask [`told_this_incident`] first, which counts a held-back notice
 /// as settled, so a capped one never goes out late and is logged once.
 async fn notice(state: &AppState, goal: &Goal, kind: &'static str, title: String, body: String) {
