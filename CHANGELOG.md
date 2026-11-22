@@ -12,7 +12,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - Package-manager builds can turn off the update check: `cargo install --features no-update-check` makes the server report updates off, exactly as `KWNT_UPDATE_CHECK=off` does, so it never looks for a new release (the package manager updates kwant). The Homebrew formula builds with it and needs `openssl@4` on Linux instead of `openssl@3` (#1054)
 
 ### Fixed
-- When a bot can't draft a goal's checks, the Mission board now says why instead of waiting: "Patch couldn't draft it: check 1: spec.url must start with http:// or https://. Write the checks yourself.", and Write the checks yourself opens the form with your words still in it. Before, it said "is drafting checks" for up to ten minutes
+- When a bot can't draft a goal's checks, the Mission board now says why instead of waiting: "Patch couldn't draft it: check 1: spec.url must start with http:// or https://. Write the checks yourself.", and Write the checks yourself opens the form with your words still in it. Before, it said "is drafting checks" for up to ten minutes (#1067)
 
 ## [Mac 0.9.42] - 2026-11-22
 
