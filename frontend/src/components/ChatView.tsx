@@ -24,7 +24,8 @@ import { PHONE_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
 import { composerStacked, fitPlaceholder, keyboardMode, measureText16, phonePlaceholder } from '../composer';
 import { isNewThing, markNewSeen, subscribeNew } from '../whatsNew';
-import { ModernApprovalCard, PendingApproval } from './ModernApprovalCard';
+import { ModernApprovalCard, PendingApproval, approvalAction } from './ModernApprovalCard';
+import { placeSettled } from '../settledPlace';
 import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { StreamMarkdown } from './StreamMarkdown';
@@ -36,7 +37,7 @@ import { PinnedInstructions, PinnedItem } from './Instructions';
 import { DelegationMeta, parseDelegationMeta } from '../threads';
 import { QuestionMeta, foldedAnswerIds, parseMetaObject, parseQuestionMeta } from '../questions';
 import { fromTelegram, sentToTelegram } from '../telegram';
-import { AllowedFromTelegram, ViaTelegram } from './TelegramMarks';
+import { AllowedFromTelegram, AllowedInApp, ViaTelegram } from './TelegramMarks';
 import { RefusedCustomerCall } from './RefusedCustomerCall';
 import { HumanStep, HumanStepMeta, parseHumanStepMeta } from '../humanSteps';
 import { LiveActivity, foldLiveSteps, hasThinkingText, parseActivityMeta } from '../activity';
@@ -169,12 +170,15 @@ export interface QueuedState {
   named?: boolean;
 }
 
-/** "Drafter: Write" for a resolved approval row; the card's own words, nothing computed. */
+/**
+ * 33a: "Drafter wanted to run a command" for a kept approval line (app or Telegram): the card's own
+ * "<Bot> wants to …" words (approvalAction), in the past.
+ */
 function approvalLead(a: PendingApproval): string {
   const d = (a.details ?? {}) as Record<string, unknown>;
   const who = typeof d.kwant_name === 'string' && d.kwant_name ? d.kwant_name : null;
-  const what = typeof d.summary === 'string' && d.summary ? d.summary : a.tool_name;
-  return who ? `${who}: ${what}` : what;
+  const action = approvalAction(a);
+  return who ? `${who} wanted to ${action}` : `Wanted to ${action}`;
 }
 
 export interface DiscussionState {
@@ -267,7 +271,7 @@ export interface ChatViewProps {
   /** 0.8.0 B3: this bot's pre-push cards (Dev mode), shown above its approvals. */
   prepush?: React.ReactNode;
   /** Approvals answered in Telegram (G4), kept as a resolved row; `refused` marks a customer's call nobody allowed (22d). */
-  settledApprovals?: (PendingApproval & { refused?: true })[];
+  settledApprovals?: (PendingApproval & { refused?: true; via?: 'app' })[];
   isStreaming: boolean;
   streamingSpeakerName?: string;
   /** `attachments` are files already uploaded from the composer. */
@@ -2425,6 +2429,59 @@ export const ChatView: React.FC<ChatViewProps> = ({
     </>
   );
   const headPhone = 'max-sm:flex-col max-sm:gap-0.5 max-sm:h-11 max-sm:min-w-11 max-sm:px-1';
+  // 33a: the chat's items, and where each kept approval line sits among them (Mira's fix 1).
+  const chatItems = groupDiscussionThreads(listed, { foldOpen: askOnly });
+  const itemTime = (item: (typeof chatItems)[number]) => (item.kind === 'message' ? item.message.created_at : item.turns[item.turns.length - 1]?.created_at);
+  const settledPlaced = placeSettled(chatItems.map(itemTime), settledApprovals);
+  const renderSettled = (approval: (typeof settledApprovals)[number]) =>
+    approval.refused ? (
+      <RefusedCustomerCall key={approval.id} approval={approval} />
+    ) : approval.via === 'app' ? (
+      <AllowedInApp key={approval.id} lead={approvalLead(approval)} />
+    ) : (
+      <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
+    );
+  const renderItem = (item: (typeof chatItems)[number], n: number, items: typeof chatItems) => {
+    if (item.kind === 'message') {
+      const trial = trialCards.get(item.message.id);
+      const above = items[n - 1];
+      // A kept line between two messages starts the next one's header again.
+      const prev = above?.kind === 'message' && !trialCards.has(above.message.id) && !settledPlaced.after.has(n - 1) ? above.message : undefined;
+      if (!trial) return renderMessage(item.message, prev);
+      return (
+        <Fragment key={item.message.id}>
+          {renderMessage(item.message, prev)}
+          <TrialWaitsCard key={`trial:${trial.skill_id}`} skillId={trial.skill_id} kwantId={item.message.sender_role === 'kwant' ? item.message.sender_id : (item.message.direct_kwant_id ?? item.message.sender_id)} onOpenSkills={onOpenSkills} />
+        </Fragment>
+      );
+    }
+      const threadKey = `thread:${item.id}`;
+      const isThreadOpen = !!openThoughts[threadKey];
+      return (
+        <div key={threadKey} className="w-full max-w-5xl">
+          <button
+            type="button"
+            onClick={() => toggleThought(threadKey)}
+            className="sm:ml-[48px] max-w-full flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer"
+          >
+            {isThreadOpen ? <ChevronDown size={13} className="text-zinc-500" /> : <ChevronRight size={13} className="text-zinc-500" />}
+            <span className="flex -space-x-1.5">
+              {item.speakers.map((name) => (
+                <ModernAvatar key={name} role={name} name={name} size={18} />
+              ))}
+            </span>
+            <span className="min-w-0 truncate">
+              Team discussed • {item.turns.length} {item.turns.length === 1 ? 'turn' : 'turns'} • {item.speakers.join(', ')}
+            </span>
+          </button>
+          {isThreadOpen && (
+            <div className="mt-4 ml-2 pl-3 sm:ml-[30px] sm:pl-4 border-l border-zinc-800 space-y-6">
+              {item.turns.map((t, i, all) => renderMessage(t, all[i - 1]))}
+            </div>
+          )}
+        </div>
+      );
+  };
   return (
     <div
       ref={rootRef}
@@ -2660,45 +2717,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
             />
           </div>
         )}
-        {groupDiscussionThreads(listed, { foldOpen: askOnly }).map((item, n, items) => {
-          if (item.kind === 'message') {
-            const trial = trialCards.get(item.message.id);
-            const above = items[n - 1];
-            const prev = above?.kind === 'message' && !trialCards.has(above.message.id) ? above.message : undefined;
-            if (!trial) return renderMessage(item.message, prev);
-            return (
-              <Fragment key={item.message.id}>
-                {renderMessage(item.message, prev)}
-                <TrialWaitsCard key={`trial:${trial.skill_id}`} skillId={trial.skill_id} kwantId={item.message.sender_role === 'kwant' ? item.message.sender_id : (item.message.direct_kwant_id ?? item.message.sender_id)} onOpenSkills={onOpenSkills} />
-              </Fragment>
-            );
-          }
-          const threadKey = `thread:${item.id}`;
-          const isThreadOpen = !!openThoughts[threadKey];
-          return (
-            <div key={threadKey} className="w-full max-w-5xl">
-              <button
-                type="button"
-                onClick={() => toggleThought(threadKey)}
-                className="sm:ml-[48px] max-w-full flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer"
-              >
-                {isThreadOpen ? <ChevronDown size={13} className="text-zinc-500" /> : <ChevronRight size={13} className="text-zinc-500" />}
-                <span className="flex -space-x-1.5">
-                  {item.speakers.map((name) => (
-                    <ModernAvatar key={name} role={name} name={name} size={18} />
-                  ))}
-                </span>
-                <span className="min-w-0 truncate">
-                  Team discussed • {item.turns.length} {item.turns.length === 1 ? 'turn' : 'turns'} • {item.speakers.join(', ')}
-                </span>
-              </button>
-              {isThreadOpen && (
-                <div className="mt-4 ml-2 pl-3 sm:ml-[30px] sm:pl-4 border-l border-zinc-800 space-y-6">
-                  {item.turns.map((t, i, all) => renderMessage(t, all[i - 1]))}
-                </div>
-              )}
-            </div>
-          );
+        {settledPlaced.after.get(-1)?.map(renderSettled)}
+        {chatItems.map((item, n, items) => {
+          // 33a: kept approval lines sit after the item that came before their card.
+          const linesAfter = settledPlaced.after.get(n);
+          if (linesAfter) return <Fragment key={`settled-after:${item.kind === 'message' ? item.message.id : item.id}`}>{renderItem(item, n, items)}{linesAfter.map(renderSettled)}</Fragment>;
+          return renderItem(item, n, items);
         })}
 
         {/* Laya routing: which agent will answer */}
@@ -2808,14 +2832,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {liveRowShown && arranged.live.map((m) => renderMessage(m))}
 
         {/* Approvals allowed in Telegram (G4): "✓ Allowed once from Telegram", live and after a reload;
-            22d: a customer's call nobody allowed, in that customer's chat */}
-        {settledApprovals.map((approval) =>
-          approval.refused ? (
-            <RefusedCustomerCall key={approval.id} approval={approval} />
-          ) : (
-            <AllowedFromTelegram key={approval.id} lead={approvalLead(approval)} />
-          ),
-        )}
+            33a: allowed once here, "✓ You allowed once"; 22d: a customer's call nobody allowed, in that customer's chat.
+            33a: a line whose card came before a later message sits among the messages (renderSettled above); these are
+            the newest ones and the ones with no time. */}
+        {settledPlaced.end.map(renderSettled)}
 
         {/* 0.8.0 B3: checks before this bot pushes */}
         {prepush}
