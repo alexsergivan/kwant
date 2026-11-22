@@ -9,7 +9,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## Unreleased
 
 ### Changed
-- Package-manager builds can turn off the update check: `cargo install --features no-update-check` makes the server report updates off, exactly as `KWNT_UPDATE_CHECK=off` does, so it never looks for a new release (the package manager updates kwant). The Homebrew formula builds with it and needs `openssl@4` on Linux instead of `openssl@3`
+- Package-manager builds can turn off the update check: `cargo install --features no-update-check` makes the server report updates off, exactly as `KWNT_UPDATE_CHECK=off` does, so it never looks for a new release (the package manager updates kwant). The Homebrew formula builds with it and needs `openssl@4` on Linux instead of `openssl@3` (#1054)
 
 ## [Mac 0.9.41] - 2026-11-22
 
