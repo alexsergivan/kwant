@@ -2159,6 +2159,101 @@ mod tests {
         assert_eq!(classify("npm create vite@latest", &ws), SmartVerdict::Ask("`npm create vite@latest` downloads a starter package and runs it".into()));
     }
 
+    /// 33o (Mira's UX pass at 0.9.38, minor f; Ada's policy call, Nov 22): the bot's own script
+    /// (`./x.sh`, `bash x.sh`, `python3 x.py`, `python -m mod`, …) given an email address or a web
+    /// address that isn't this computer asks, and the reason names it in plain words. Local
+    /// addresses, known programs and curl/wget keep today's rules.
+    #[test]
+    fn a_script_given_an_outside_address_asks() {
+        let (_tmp, ws) = folder();
+        std::fs::write(ws.join("notify.sh"), "echo hi").unwrap();
+        for cmd in [
+            // Mira's repro: ran with no card at 0.9.38
+            "python3 send_reminder.py --to billing@acme.example --invoice 2291",
+            "python3 x.py --to=billing@acme.example",
+            "node post.js https://hooks.slack.com/services/T/B/x",
+            "./notify.sh ops@acme.example",
+            "bash x.sh https://example.com",
+            "python3 -m mytool mailto:a@b.co",
+            // Other spellings of the same thing
+            "python3 x.py --to 'Ops <ops@acme.example>'",
+            "ruby x.rb --cc=a@b.co,c@d.co",
+            "python3 x.py --header Reply-To:ops@acme.example",
+            "node x.js wss://stream.example.com/feed",
+            "python3 x.py --db postgres://db.example.com/app",
+            "python3 x.py 'https://user:secret@api.example.com/v1'",
+            "python3 x.py http://127.0.0.1:3000/?next=https://evil.example",
+            "sh notify.sh smtp://mail.example.com",
+            "timeout 60 python3 x.py --to ops@acme.example",
+            "nice -n 5 ./notify.sh https://example.com",
+            "env NODE_ENV=production node x.js https://api.example.com",
+            "deno run x.ts --to ops@acme.example",
+            "bun x.ts https://example.com",
+            "python3 -m mytool --url https://example.com",
+            "python3 x.py http://10.0.0.5:8080/",
+            // kwnt's own server is never fine for a script either
+            "python3 x.py http://localhost:8799/api/spaces",
+            "node x.js ws://127.0.0.1:8800/",
+        ] {
+            assert!(!classify(cmd, &ws).is_allowed(), "should ask: {cmd:?}");
+        }
+        let ask = |why: &str| SmartVerdict::Ask(why.into());
+        assert_eq!(
+            classify("python3 send_reminder.py --to billing@acme.example --invoice 2291", &ws),
+            ask("`python3` is given an email address (`billing@acme.example`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("python3 x.py --to=billing@acme.example", &ws),
+            ask("`python3` is given an email address (`billing@acme.example`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("./notify.sh ops@acme.example", &ws),
+            ask("`notify.sh` is given an email address (`ops@acme.example`), so it may send something outside the folder")
+        );
+        // A web address shows only where it goes: its path and any password can hold a secret
+        assert_eq!(
+            classify("node post.js https://hooks.slack.com/services/T/B/x", &ws),
+            ask("`node` is given a web address (`https://hooks.slack.com/…`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("bash x.sh https://example.com", &ws),
+            ask("`bash` is given a web address (`https://example.com`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("python3 x.py 'https://user:secret@api.example.com/v1'", &ws),
+            ask("`python3` is given a web address (`https://api.example.com/…`), so it may send something outside the folder")
+        );
+        assert_eq!(
+            classify("python3 x.py http://localhost:8799/api/spaces", &ws),
+            ask("`python3` is given kwnt's own address (`http://localhost:8799/…`), whose settings only the person may change")
+        );
+
+        for cmd in [
+            "python3 src/tool.py --flag",
+            "python3 serve.py http://localhost:8000",
+            "node e2e.js http://127.0.0.1:5173/",
+            "python3 x.py http://[::1]:8000/",
+            "node x.js http://0.0.0.0:3000",
+            "bash run.sh http://app.localhost:3000/",
+            "./run.sh ws://localhost:5173/hmr",
+            "python3 x.py left-pad@1.2.3",
+            "node x.js @types/node",
+            "node x.js react@18 lodash@latest",
+            "python3 x.py user@localhost",
+            "python3 -m pytest -q",
+            "./run.sh --out=src/x.txt",
+            // Known programs keep today's rules
+            "echo billing@acme.example",
+            "git commit -m 'Mail ops@acme.example about the invoice'",
+            "grep -rn https://example.com src",
+            "curl -s http://127.0.0.1:18947/health",
+        ] {
+            assert!(classify(cmd, &ws).is_allowed(), "should run: {cmd:?} → {:?}", classify(cmd, &ws));
+        }
+        // curl/wget keep their own reasons
+        assert_eq!(classify("curl https://example.com", &ws), ask("`curl` uses the network"));
+    }
+
     /// 0.9.7: what a turn kwnt started on its own may run under "Ask only when risky" without a
     /// card. Oleks's command (Nov 13) is the first one.
     #[test]
