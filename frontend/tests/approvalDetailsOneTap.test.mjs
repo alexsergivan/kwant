@@ -58,6 +58,8 @@ const props = (extra = {}) => ({
   ...extra,
 });
 const tick = (ms = 20) => new Promise((r) => setTimeout(r, ms));
+/** Waits until `cond()` holds or 3 s pass (a fixed wait flaked on a busy machine: Rigel's 34c QA, F1). */
+const until = async (cond) => { for (const t0 = Date.now(); !cond() && Date.now() - t0 < 3000; ) await tick(10); return cond(); };
 const kbdOn = (h) => !!h.querySelector('[data-keyboard-mode="on"]');
 const toggle = (h) => h.querySelector('[data-approval-details-toggle]');
 const opened = (h) => !!h.querySelector('[data-approval-details]');
@@ -88,8 +90,7 @@ test('34c: on a phone, one tap on Show details while typing opens it: keyboard m
     assert.equal(opened(v.host), true, 'one tap opened the details');
     assert.equal(toggle(v.host).getAttribute('aria-expanded'), 'true');
 
-    await tick();
-    assert.equal(kbdOn(v.host), false, 'keyboard mode ends right after the tap');
+    assert.equal(await until(() => !kbdOn(v.host)), true, 'keyboard mode ends right after the tap');
     assert.ok(v.host.querySelector('[data-chat-header]').textContent.includes('Direct chat'), 'the header line is back');
     assert.equal(opened(v.host), true, 'still open once the layout settles');
 
@@ -113,7 +114,7 @@ test('34c: focus coming back to the composer within the tap keeps keyboard mode 
     ui.act(() => { mouse(toggle(v.host), 'mousedown'); ta.blur(); });
     ui.act(() => ta.focus());
     ui.act(() => mouse(document.body, 'mouseup'));
-    await tick();
+    await tick(150); // long enough for the deferred leave to have run, even on a busy machine
     assert.equal(kbdOn(v.host), true, 'the composer has focus again, so keyboard mode stays');
   } finally {
     v.unmount();
