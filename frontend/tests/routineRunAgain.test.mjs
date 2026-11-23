@@ -210,3 +210,45 @@ test('Routines: the run focus opens the row’s History, highlights it and focus
   assert.doesNotMatch(el.textContent, /Turn the switch off/);
   root.unmount();
 });
+
+// Mira's design check on #1121 (design-check.md, fixes 1-3).
+const SKIPPED = 'It’s already running, so nothing new started. Clear this once that run is done.';
+
+test('strip: a skipped Run again says so in the hint, not as an error, and the button comes back; Started shows a Check', async () => {
+  const s = mountStrip({ asks: [failedRun()], onAction: async () => 'skipped', sentWaitMs: 60_000 });
+  await click(s.host.querySelector('[data-strip-action="run_again"]'));
+  assert.equal(s.host.querySelector('[data-strip-hint]').textContent, SKIPPED);
+  assert.equal(s.host.querySelector('[data-strip-hint]').className.includes('text-zinc-400'), true);
+  assert.equal(s.host.querySelector('[data-strip-error]'), null, 'not an error line');
+  assert.equal(s.host.querySelector('[data-needs-you-strip]').getAttribute('data-strip-state'), 'skipped');
+  assert.equal(s.host.querySelector('[data-needs-you-live]').textContent, SKIPPED);
+  const again = s.host.querySelector('[data-strip-action="run_again"]');
+  assert.equal(again.disabled, false, 'Run again is back');
+  assert.equal(again.textContent, 'Run again');
+  s.unmount();
+
+  const ok = mountStrip({ asks: [failedRun()], onAction: async () => 'started', sentWaitMs: 60_000 });
+  await click(ok.host.querySelector('[data-strip-action="run_again"]'));
+  const done = ok.host.querySelector('[data-strip-action="run_again"]');
+  assert.equal(done.textContent, 'Started');
+  assert.ok(done.querySelector('svg.lucide-check'), 'a Check on the disabled Started button');
+  ok.unmount();
+});
+
+test('Inbox row: a skipped Run again is an info notice in Mira’s words', async () => {
+  const prev = g.fetch;
+  g.fetch = async (url, init = {}) =>
+    /\/api\/routines\/[^/]+\/run$/.test(String(url))
+      ? { ok: true, status: 200, json: async () => ({ id: 'run-new', status: 'skipped' }), text: async () => '' }
+      : prev(url, init);
+  try {
+    const v = await mountInbox([failedRun()]);
+    await click(v.q('[data-run-again="run-5b0c"]'));
+    const p = v.q('[data-inbox-status] p');
+    assert.equal(p.textContent, '“Weekly report” is already running, so nothing new started.');
+    assert.ok(p.className.includes('bg-zinc-500/10'), 'tone info, not the teal success banner');
+    v.unmount();
+  } finally {
+    g.fetch = prev;
+  }
+});
