@@ -546,12 +546,16 @@ impl Santa {
                 let mut row = Self::person(p);
                 row["looked"] = json!(s.looked.contains_key(&p.id));
                 row["gift_ready"] = json!(s.ready.contains(&p.id));
+                // RED PROOF ONLY: leaks each person's match to the host
+                row["buys_for_name"] = json!(s.receiver_of(&p.id).and_then(|r| ctx.player(r)).map(|r| r.name.clone()));
                 row
             })
             .collect();
         let overdue = s.phase == COLLECTING && ctx.spec.get("draw_at").and_then(spec_date).is_some_and(|t| t <= ctx.now);
         let needs_you = s.block.as_ref().is_some_and(|b| b.code != "too_few" || overdue);
         v["people"] = json!(people);
+        // RED PROOF ONLY: leaks the latest question's words to the host
+        v["latest_question"] = json!(s.asks.last().map(|a| a.q.clone()));
         v["waiting_for"] = json!(waiting_for);
         v["keep_apart"] = json!(s.apart);
         v["late_allowed"] = json!(s.late.values().collect::<Vec<_>>());
