@@ -1384,8 +1384,9 @@ mod tests {
         assert_eq!(rows, vec![("a".into(), "schedule".into(), Some("Ran late".into())), ("b".into(), "manual".into(), None)]);
         let run = db.start_routine_run("r1", "retry", "running", None).await.unwrap();
         assert_eq!(run.trigger, "retry");
+        // The named indexes are back (SQLite's own primary-key index has no sql)
         let idx: Vec<(String,)> =
-            sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'routine_runs' ORDER BY name").fetch_all(&db.pool).await.unwrap();
+            sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'routine_runs' AND sql IS NOT NULL ORDER BY name").fetch_all(&db.pool).await.unwrap();
         assert_eq!(idx, vec![("routine_runs_by_end".into(),), ("routine_runs_by_routine".into(),)]);
         // Once is enough
         db.migrate_run_triggers().await.unwrap();
