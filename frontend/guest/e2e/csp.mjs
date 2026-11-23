@@ -308,6 +308,130 @@ for (const name of order) {
   }
 }
 
+// pa5b: the big screen at 1920x1080 (and letterboxed at 4:3), same CSP checks, from the fake screen box
+// (fake/screen.mjs). Each load opens /p/screen-<scene>#screen=<token>: the token must be gone from the address bar
+// before the page's first request, the screen must never call a host write, and no text may render under 32 px.
+{
+  const { scenes } = await import('../fake/screen.mjs');
+  const screenPage = async ({ width = 1920, height = 1080, reduced = false } = {}) => {
+    const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, locale: 'en-US', reducedMotion: reduced ? 'reduce' : 'no-preference' });
+    await ctx.addInitScript(() => {
+      window.__violations = [];
+      document.addEventListener('securitypolicyviolation', (e) => window.__violations.push(`${e.violatedDirective} ${e.blockedURI || ''} ${e.sourceFile || ''}:${e.lineNumber || ''}`.trim()));
+      // What the address bar held at each request the page made (fetch and WebSocket).
+      window.__hashAt = [];
+      const f = window.fetch;
+      window.fetch = (...a) => {
+        window.__hashAt.push(`${location.hash} ${String(a[0])}`);
+        return f(...a);
+      };
+      const W = window.WebSocket;
+      window.WebSocket = class extends W {
+        constructor(u, p) {
+          window.__hashAt.push(`${location.hash} ${String(u)}`);
+          super(u, p);
+        }
+      };
+    });
+    const page = await ctx.newPage();
+    const log = [];
+    page.on('console', (m) => {
+      if (/Content.Security.Policy|Refused to/i.test(m.text())) log.push(`console: ${m.text()}`);
+    });
+    page.on('pageerror', (e) => log.push(`pageerror: ${e.message}`));
+    page.on('request', (r) => {
+      const u = r.url();
+      if (!u.startsWith('http://127.0.0.1:') && !u.startsWith('ws://127.0.0.1:') && !u.startsWith('data:')) log.push(`third-party request: ${u}`);
+    });
+    return { ctx, page, log };
+  };
+  const screenCheck = async (name, page, log, { width = 1920, height = 1080 } = {}) => {
+    for (const x of await page.evaluate(() => window.__violations)) problems.push(`${name}: CSP violation: ${x}`);
+    for (const x of log) problems.push(`${name}: ${x}`);
+    const hashes = await page.evaluate(() => ({ now: location.href, at: window.__hashAt }));
+    if (hashes.now.includes('#')) problems.push(`${name}: the address bar still has a fragment (${hashes.now})`);
+    for (const x of hashes.at) if (x.startsWith('#')) problems.push(`${name}: a request went out with the token still in the address bar: ${x}`);
+    const m = await page.evaluate(() => {
+      const tv = document.querySelector('.tv');
+      const s = Number(getComputedStyle(tv).getPropertyValue('--s')) || 1;
+      const small = [];
+      for (const el of tv.querySelectorAll('*')) {
+        if (el.closest('.vh, svg')) continue;
+        const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        if (!own) continue;
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) continue;
+        // The sticker's own 12 px type is drawn at scale(3.2) (38.4 px at 1920).
+        const k = el.closest('.bigsticker') ? 3.2 : 1;
+        const px = parseFloat(getComputedStyle(el).fontSize) * k;
+        if (px < 32) small.push(`${el.tagName.toLowerCase()}.${el.className} "${el.textContent.trim().slice(0, 24)}" ${px}px`);
+      }
+      const box = tv.getBoundingClientRect();
+      const unfilled = [...document.querySelectorAll('svg rect')].filter((r) => {
+        const f = r.getAttribute('fill');
+        return f !== 'currentColor' && !/^#[0-9a-f]{6}$/i.test(f ?? '');
+      }).length;
+      return { s, small, box: [box.left, box.top, box.width, box.height].map(Math.round), sw: document.documentElement.scrollWidth, sh: document.documentElement.scrollHeight, unfilled };
+    });
+    for (const x of m.small) problems.push(`${name}: text under 32 px at 1920: ${x}`);
+    if (m.sw > width || m.sh > height) problems.push(`${name}: the page scrolls (${m.sw}x${m.sh})`);
+    if (m.box[2] > width + 1 || m.box[3] > height + 1) problems.push(`${name}: the stage overflows the window (${m.box.join(' ')})`);
+    if (m.unfilled) problems.push(`${name}: ${m.unfilled} svg rect(s) with no real fill`);
+    return m;
+  };
+  const shots = [['lobby', 'lobby'], ['question', 'question'], ['locked', 'question'], ['reveal', 'reveal'], ['leaderboard', 'leaderboard'], ['winners', 'winners'], ['paused', 'paused'], ['away', 'away'], ['ended', 'winners'], ['expired', 'signed-out'], ['solo', 'leaderboard']];
+  results.screen = {};
+  for (const [i, [scene, screen]] of shots.entries()) {
+    const code = `screen-${scene}`;
+    const { ctx, page, log } = await screenPage();
+    await page.goto(`${origin}/p/${code}#screen=tok-${scene}`);
+    await ready(page, screen);
+    await page.waitForTimeout(400);
+    const file = `screen-${String(i + 1).padStart(2, '0')}-${scene}`;
+    const mm = await screenCheck(file, page, log);
+    await page.screenshot({ path: path.join(out, `${file}.png`) });
+    results.screen[scene] = { screen, scale: mm.s, stage: mm.box };
+    const b = fake.box(code);
+    if (b.writes?.length) problems.push(`${file}: the screen called a host write: ${b.writes.join(', ')}`);
+    if (scene !== 'away' && scene !== 'expired' && !(b.signins?.length === 1 && b.signins[0].key === `tok-${scene}`)) problems.push(`${file}: signed in ${JSON.stringify(b.signins)}`);
+    await ctx.close();
+  }
+  // A new player drops in on the live lobby (ws push); a reload of the tab stays a screen (cookie, no token).
+  {
+    const { ctx, page, log } = await screenPage();
+    await page.goto(`${origin}/p/screen-lobby#screen=tok-again`);
+    await ready(page, 'lobby');
+    await page.waitForTimeout(300);
+    fake.push('screen-lobby', { ...scenes.lobby, lobby: [...scenes.lobby.lobby, { name: 'Eli', team: 'Brain Freeze' }], players: 15 });
+    await page.waitForSelector('.player.drop-in', { timeout: 5000 }).catch(() => problems.push('screen-lobby: no drop-in after a ws push'));
+    await page.reload();
+    await ready(page, 'lobby');
+    await screenCheck('screen-lobby-reload', page, log);
+    if (!(await page.textContent('.tvcount')).includes('15 players')) problems.push('screen-lobby-reload: not the live lobby');
+    await ctx.close();
+  }
+  // Letterbox at 4:3 and on an ultra-wide.
+  for (const [w, hgt, scene] of [[1024, 768, 'lobby'], [2560, 1080, 'leaderboard']]) {
+    const { ctx, page, log } = await screenPage({ width: w, height: hgt });
+    await page.goto(`${origin}/p/screen-${scene}#screen=tok-lb`);
+    await ready(page, scene);
+    await page.waitForTimeout(300);
+    await screenCheck(`screen-letterbox-${w}x${hgt}`, page, log, { width: w, height: hgt });
+    await page.screenshot({ path: path.join(out, `screen-letterbox-${w}x${hgt}-${scene}.png`) });
+    await ctx.close();
+  }
+  // Reduced motion: the winners' stars hold still, the timer bar and new players don't move.
+  {
+    const { ctx, page, log } = await screenPage({ reduced: true });
+    await page.goto(`${origin}/p/screen-winners#screen=tok-rm`);
+    await ready(page, 'winners');
+    const anim = await page.evaluate(() => [...document.querySelectorAll('.tvstar')].map((s) => getComputedStyle(s).animationName));
+    if (anim.some((a) => a !== 'none')) problems.push(`screen reduced motion: stars animate (${anim.join(' ')})`);
+    await screenCheck('screen-reduced-motion', page, log);
+    await ctx.close();
+  }
+}
+
 // First paint on throttled networks. DevTools "Slow 4G" (562.5 ms, 180 KB/s down) and Lighthouse's slow 4G
 // (150 ms, 1.6 Mbps). Reported in pa5/impl.md, not gated: loopback plus CDP throttling is a model, not a phone.
 const presets = {

@@ -826,20 +826,26 @@ const dist = new URL('../dist/pocket/', import.meta.url);
 const built = existsSync(new URL('index.html', dist));
 const needBuild = { skip: !built && !process.env.CI ? 'dist/pocket not built here (npm run build:guest)' : false };
 
-test('built: at most 80 KB gzipped (JS + CSS + HTML + font)', needBuild, () => {
+test('built: phone files at most 80 KB gzipped (JS + CSS + HTML + font); the big screen chunk at most 40 KB on its own', needBuild, () => {
   const files = readdirSync(dist).filter((f) => statSync(new URL(f, dist)).isFile());
-  let total = 0;
+  let phone = 0;
+  let screen = 0;
   const rows = [];
   for (const f of files) {
     const buf = readFileSync(new URL(f, dist));
     const gz = gzipSync(buf, { level: 9 }).length;
-    total += gz;
+    // pa5b: the big screen's lazy chunk and its CSS (g-screen-*) load only on /p/<code>#screen=, never on a phone.
+    if (f.startsWith('g-screen-')) screen += gz;
+    else phone += gz;
     rows.push(`${f} ${buf.length} B raw, ${gz} B gz`);
   }
-  console.log(`guest bundle: ${total} B gzipped\n  ${rows.join('\n  ')}`);
-  assert.ok(total <= 80 * 1024, `guest page is ${total} B gzipped, budget 81920`);
+  console.log(`guest bundle: phone ${phone} B gzipped, big screen ${screen} B gzipped, total ${phone + screen}\n  ${rows.join('\n  ')}`);
+  assert.ok(phone <= 80 * 1024, `guest page is ${phone} B gzipped, budget 81920`);
+  assert.ok(screen > 0 && screen <= 40 * 1024, `big screen chunk is ${screen} B gzipped, budget 40960`);
   assert.ok(files.some((f) => f.endsWith('.woff2')), 'the font ships as a file');
-  assert.ok(files.every((f) => /^(index\.html|g-[\w-]+\.(js|css)|inter-guest-[\w-]+\.woff2)$/.test(f)), files.join(' '));
+  assert.ok(files.every((f) => /^(index\.html|g-(screen-)?[\w-]+\.(js|css)|inter-guest-[\w-]+\.woff2)$/.test(f)), files.join(' '));
+  // The phone's page never links the screen's files; only the entry's lazy import names them.
+  assert.doesNotMatch(readFileSync(new URL('index.html', dist), 'utf8'), /g-screen-/);
 });
 
 test('built: index.html fits the CSP with no inline script or style; the app is not in it', needBuild, () => {
