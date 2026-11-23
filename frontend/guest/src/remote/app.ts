@@ -366,7 +366,8 @@ export class RemoteApp {
     return h(
       'header',
       { class: 'rhead', inert: !!this.sheet },
-      quizmaster(48, over ? 'finished' : 'thinking'),
+      // Moods (pa0a): the host drives a live quiz, so no badge; thinking only while the box is away.
+      quizmaster(48, over ? 'finished' : this.isAway ? 'thinking' : undefined),
       h('div', { class: 'rtitle' }, h('h1', null, v?.title ? `Remote · ${v.title}` : 'Remote'), h('p', null, 'Only you see this')),
       chip,
     );
@@ -445,6 +446,8 @@ export class RemoteApp {
           this.later('skip', 'tile', LATER.skip, ic('skip', 'ri md'), h('span', null, 'Skip question')),
           this.later('voice', 'tile', LATER.voice, ic('voice', 'ri md'), h('span', null, 'Voice off')),
         ),
+        // Touch has no hover, so the reason for the two dead tiles is said out loud (Mira round 1, fix 1).
+        h('p', { class: 'small center rlater', 'data-k': 'later-line' }, 'Skip and Voice come in a later update.'),
       );
     }
     if (!over && v.pending.length && v.can.includes('judge')) out.push(this.nearMiss(v));
@@ -461,7 +464,7 @@ export class RemoteApp {
       return h('section', { class: 'rnow mid' }, h('h2', null, 'Paused'), h('p', { class: 'soft' }, `The timer stopped at ${clock(v.time?.remaining_ms ?? 0)}. Phones and the big screen say "Back in a moment".`));
     if (v.phase === 'lobby') {
       const n = v.players.filter((p) => !p.removed).length;
-      return h('section', { class: 'rnow' }, h('p', { class: 'meta' }, 'Lobby'), h('p', { class: 'qt' }, n ? `${plural(n, 'player is', 'players are')} in.` : 'Nobody has joined yet.'), h('p', { class: 'small' }, n ? 'Press Start when everyone is in. Late arrivals can still join.' : 'Start opens once the first player joins.'));
+      return h('section', { class: 'rnow' }, h('p', { class: 'meta' }, 'Lobby'), h('p', { class: 'qt' }, n ? `${plural(n, 'player is', 'players are')} in.` : 'Nobody has joined yet.'), h('p', { class: 'small' }, n ? 'Press Start when everyone is in. Late arrivals can still join.' : 'Players show up here as they scan the code. Start when everyone is in.'));
     }
     const q = v.question;
     const meta = [v.round ? `Round ${v.round.number}` : null, q ? `question ${q.number} of ${q.of}` : null].filter(Boolean).join(' · ');

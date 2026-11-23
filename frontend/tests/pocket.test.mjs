@@ -252,8 +252,13 @@ test('buttons whose route comes later are disabled and say why', async () => {
   await later('writing', [['Edit questions', m.LATER.edit]]);
   await later('checking', [['Edit questions', m.LATER.edit]]);
   await later('ready', [['Edit questions', m.LATER.edit]]);
-  await later('live', [['Pause', m.LATER.pause]]);
-  await later('paused', [['Resume', m.LATER.pause]]);
+  // No dead Pause or Resume on the live card: the remote pauses (Mira round 1, fix 1).
+  for (const name of ['live', 'paused']) {
+    const v = await card(name);
+    assert.equal(button(v, 'Pause'), undefined, `${name}: no Pause`);
+    assert.equal(button(v, 'Resume'), undefined, `${name}: no Resume`);
+    v.done();
+  }
   await later('ended', [['Keep the results', m.LATER.keep]]);
   await later('results', [['Keep the results', m.LATER.keep]]);
 });
@@ -452,6 +457,27 @@ test('card: Open the remote mints a host link and shows a private QR; every pres
   await click(v.host.querySelector('[data-link-close]'));
   assert.equal(v.host.querySelector('[data-link-panel]'), null);
   assert.equal(document.activeElement, button(v, 'Open the remote'), 'focus goes back to the button');
+});
+
+test('card on a phone (under 640 px): Open here leads, primary, and the host line says a phone cannot scan itself', async () => {
+  linkBox();
+  const real = window.matchMedia;
+  window.matchMedia = g.matchMedia = (q) => ({ matches: q === '(max-width: 639px)', addEventListener() {}, removeEventListener() {} });
+  try {
+    const v = await card('live');
+    await click(button(v, 'Open the remote'));
+    const panel = v.host.querySelector('[data-link-panel="host"]');
+    assert.equal(panel.querySelector('[data-where]').textContent, 'Only you see this · press Open here, or scan from another phone');
+    const acts = [...panel.querySelectorAll('[data-action]')].map((b) => b.getAttribute('data-action'));
+    assert.deepEqual(acts, ['open-here', 'new-link'], 'Open here comes first');
+    assert.match(panel.querySelector('[data-action="open-here"]').className, /kw-btn-primary/);
+    assert.match(panel.querySelector('[data-qr]').className, /w-\[200px\]/, 'QR stays 200 px');
+    await click(button(v, 'Big screen'));
+    assert.match(v.host.querySelector('[data-link-panel="screen"] [data-where]').textContent, /press Open here on the computer plugged into the TV, or scan it with the tablet or laptop/);
+    v.done();
+  } finally {
+    window.matchMedia = g.matchMedia = real;
+  }
 });
 
 test('card: Big screen mints a screen link on ready and live; Open here mints its own and opens it in a new tab', async () => {

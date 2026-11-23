@@ -137,6 +137,44 @@ for (const [scene, screen, token] of [['expired', 'expired'], ['question', 'scre
   await ctx.close();
 }
 
+// Widths (Rigel round 1, D1): the longest legal names (player MAX_NAME 20, team MAX_TEAM_NAME 20) at 390 and
+// 320 px. Every button, status and score must sit inside the window, not only the page's scrollWidth: the list
+// clips, so overflow there never shows up as page scroll.
+{
+  const b = fake.box('remote-wide');
+  b.players = Array.from({ length: 8 }, (_, i) => ({ id: `p${i + 1}`, name: i < 4 ? 'W'.repeat(20) : 'Mia', team: i < 4 ? `M${i}`.padEnd(20, 'M') : 'Fact Hunters', connected: true, removed: false, score: 123456, avatar: null, joined_at: null }));
+  b.answers = new Set(['p1']);
+  b.pending = [{ q: 3, player: 'p1', question: 'What?', answer: 'W'.repeat(40), accept: [], guess: 'M'.repeat(40) }];
+  results.widths = [];
+  for (const w of [390, 320]) {
+    const { ctx, page, log } = await open('wide');
+    await page.setViewportSize({ width: w, height: 844 });
+    await settled(page, 'live');
+    for (const tab of ['game', 'teams', 'players']) {
+      await page.click(`[data-k="tab-${tab}"]`);
+      await page.waitForTimeout(150);
+      const m = await page.evaluate((w) => ({
+        sw: document.documentElement.scrollWidth,
+        off: [...document.querySelectorAll('.rm button, .rm .st, .rm .sc')]
+          .filter((e) => { const r = e.getBoundingClientRect(); return r.width && (r.right > w + 1 || r.left < -1); })
+          .map((e) => e.getAttribute('data-k') || e.className).slice(0, 6),
+        // Text in a row must end before the row's next control (the status or the button), not run under it.
+        overlap: [...document.querySelectorAll('.rrowi .who')].filter((who) => {
+          const next = who.nextElementSibling; if (!next) return false;
+          const end = Math.max(...[...who.children].map((c) => c.getBoundingClientRect().right));
+          return end > next.getBoundingClientRect().left + 1;
+        }).length,
+      }), w);
+      const ok = m.sw <= w && !m.off.length && !m.overlap;
+      results.widths.push({ width: w, tab, ok, ...m });
+      if (!ok) problems.push(`widths ${w} ${tab}: ${m.sw > w ? `scrolls sideways (${m.sw} px)` : ''} off-screen: ${m.off.join(', ')}${m.overlap ? ` · ${m.overlap} rows with text under the next control` : ''}`);
+      if (w === 320 || tab !== 'game') await page.screenshot({ path: path.join(out, `remote-wide-${tab}-${w}.png`), fullPage: true });
+    }
+    for (const x of log) problems.push(`widths ${w}: ${x}`);
+    await ctx.close();
+  }
+}
+
 results.problems = problems;
 fs.writeFileSync(path.join(out, 'remote-e2e.json'), JSON.stringify(results, null, 2));
 await browser.close();

@@ -265,6 +265,9 @@ test('game: Start, then Pause and Resume; paused shows the stopped clock and no 
 test('game: nobody joined yet: Start is disabled and says why', async () => {
   const t = await open('empty');
   assert.ok(t.text().includes('Nobody has joined yet.'));
+  // Words only: the kit allows Start with nobody, so the copy never promises it is locked (Mira round 1, fix 3).
+  assert.ok(t.text().includes('Players show up here as they scan the code. Start when everyone is in.'));
+  assert.ok(!t.text().includes('first player joins'));
   // host_can says start; the engine refuses with nobody: the box's words show.
   await t.click('[data-k="next"]');
   assert.ok(t.text().includes('Nobody has joined yet.'));
@@ -278,9 +281,33 @@ test('game: Skip question and Voice are drawn but disabled with the reason (not 
     assert.equal(b.getAttribute('aria-disabled'), 'true');
     assert.equal(b.getAttribute('data-later'), m.LATER[k]);
   }
+  // Touch has no hover: the reason is also a visible line under the row.
+  assert.equal(t.$('[data-k="later-line"]').textContent, 'Skip and Voice come in a later update.');
   await t.click('[data-k="skip"]');
   assert.deepEqual(t.writes(), []);
   t.app.gone(401);
+});
+
+test('Quizmaster mood: no badge in lobby, live and paused; thinking only while the box is away; finished when ended', async () => {
+  const badge = (t) => t.$('.rhead .mood')?.getAttribute('class') ?? null;
+  const lobby = await open('lobby');
+  assert.equal(badge(lobby), null, 'lobby');
+  assert.equal(lobby.$('[data-k="later-line"]'), null, 'no later line in the lobby');
+  lobby.app.gone(401);
+  for (const scene of ['question', 'paused']) {
+    const t = await open(scene);
+    assert.equal(badge(t), null, scene);
+    t.app.gone(401);
+  }
+  const a = await open('question', { ws: false });
+  a.box.down = true;
+  await a.advance(3000);
+  assert.ok(a.$('.raway'));
+  assert.match(badge(a), /mood-thinking/);
+  a.app.gone(401);
+  const f = await open('final');
+  assert.match(badge(f), /mood-finished/);
+  f.app.gone(401);
 });
 
 test('near miss: Needs you box; Accept sends judge yes with q and player, Not right sends no', async () => {

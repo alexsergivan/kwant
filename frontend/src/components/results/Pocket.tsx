@@ -39,6 +39,7 @@ import { Sticker } from '../Sticker';
 import { QrImage } from '../DeviceSignIn';
 import { TEAM_PALETTES, isPalette, paletteCreature, renderCreature } from '../ModernAvatar';
 import { linkUrl, pocketApi, PocketApiError } from '../../pocketApi';
+import { useMedia } from '../../useMedia';
 import type { PocketLinkRole } from '../../pocketApi';
 import type { RendererProps } from './registry';
 
@@ -224,7 +225,6 @@ export function budgetLine(b: PocketBlock): string {
 /** Hover reasons for buttons whose route comes later (impl.md "Disabled until pa4b"). */
 export const LATER = {
   edit: 'Comes with question editing',
-  pause: 'Pause and resume from the remote for now',
   keep: 'Comes with a later update',
   editRound1: 'Edit opens when round 1 is written',
 } as const;
@@ -745,14 +745,28 @@ type Link =
   | { role: PocketLinkRole; phase: 'old' }
   | { role: PocketLinkRole; phase: 'error'; text: string };
 
-const LINK_TEXT: Record<PocketLinkRole, { title: string; where: string; qr: string }> = {
-  host: { title: 'Your remote', where: 'Only you see this · scan with your phone', qr: 'QR code that opens your remote' },
-  screen: { title: 'Big screen', where: 'Only you see this · scan with the TV’s browser, or press Open here on the computer plugged into it', qr: 'QR code that opens the big screen' },
+const LINK_TEXT: Record<PocketLinkRole, { title: string; where: string; wherePhone: string; qr: string }> = {
+  host: {
+    title: 'Your remote',
+    where: 'Only you see this · scan with your phone',
+    // A phone can't scan its own screen, so on a phone Open here leads (Mira round 1, fix 4).
+    wherePhone: 'Only you see this · press Open here, or scan from another phone',
+    qr: 'QR code that opens your remote',
+  },
+  screen: {
+    title: 'Big screen',
+    where: 'Only you see this · press Open here on the computer plugged into the TV, or scan it with the tablet or laptop that’s on the TV.',
+    wherePhone: 'Only you see this · press Open here on the computer plugged into the TV, or scan it with the tablet or laptop that’s on the TV.',
+    qr: 'QR code that opens the big screen',
+  },
 };
+/** The card's phone breakpoint: under Tailwind's sm. */
+const PHONE = '(max-width: 639px)';
 const LINK_MINUTES = 10;
 
 const LinkPanel: React.FC<{ id: string; link: Link; name: string; onOpenHere: () => void; onAgain: () => void; onClose: () => void }> = ({ id, link, name, onOpenHere, onAgain, onClose }) => {
   const t = LINK_TEXT[link.role];
+  const phone = useMedia(PHONE);
   return (
     <div id={id} role="region" aria-label={`${t.title} for ${name}`} className="flex flex-col gap-3.5 rounded-2xl border border-sky-800/70 bg-surface-rail/40 p-3.5 sm:flex-row" data-link-panel={link.role} data-link={link.phase}>
       {link.phase === 'ready' ? (
@@ -769,7 +783,7 @@ const LinkPanel: React.FC<{ id: string; link: Link; name: string; onOpenHere: ()
           <Lock size={15} className={`${ICON} text-sky-300`} aria-hidden="true" />
           <div className="min-w-0 flex-1">
             <div className="text-[15px] font-semibold text-zinc-50 sm:text-[14px]">{t.title}</div>
-            <p className="text-[13px] leading-5 text-zinc-300 sm:text-meta">{t.where}</p>
+            <p className="text-[13px] leading-5 text-zinc-300 sm:text-meta" data-where>{phone ? t.wherePhone : t.where}</p>
           </div>
           <button type="button" onClick={onClose} className="-mr-1 -mt-1 grid h-11 w-11 shrink-0 place-items-center rounded-lg text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-100 kw-focus sm:h-9 sm:w-9" aria-label={`Close ${t.title.toLowerCase()}`} data-link-close>
             <X size={16} aria-hidden="true" />
@@ -785,11 +799,11 @@ const LinkPanel: React.FC<{ id: string; link: Link; name: string; onOpenHere: ()
                 : link.text}
         </p>
         <div className="mt-auto grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-          <button type="button" onClick={onOpenHere} disabled={link.phase === 'busy'} className={`${GHOST} disabled:opacity-50`} data-action="open-here">
+          <button type="button" onClick={onOpenHere} disabled={link.phase === 'busy'} className={`${phone ? `${PRIMARY} col-span-2` : GHOST} disabled:opacity-50`} data-action="open-here">
             {link.role === 'host' ? <Smartphone size={14} aria-hidden="true" /> : <Monitor size={14} aria-hidden="true" />}
             Open here
           </button>
-          <button type="button" onClick={onAgain} disabled={link.phase === 'busy'} className={`${GHOST} disabled:opacity-50`} data-action="new-link">
+          <button type="button" onClick={onAgain} disabled={link.phase === 'busy'} className={`${GHOST} ${phone ? 'col-span-2' : ''} disabled:opacity-50`} data-action="new-link">
             <Repeat size={14} aria-hidden="true" />
             New code
           </button>
@@ -880,10 +894,8 @@ const Actions: React.FC<{
             <Smartphone size={14} aria-hidden="true" />
             Open the remote
           </button>
-          {bigScreen}
-          <LaterButton half icon={<Pause size={14} aria-hidden="true" />} why={LATER.pause}>
-            {block.paused ? 'Resume' : 'Pause'}
-          </LaterButton>
+          {/* No dead Pause here: the remote pauses (Mira round 1, fix 1). */}
+          {React.cloneElement(bigScreen, { className: `${GHOST} ${full}` })}
           <button type="button" onClick={onEnd} className={`${STOP} col-span-2 justify-self-center sm:ml-auto`} data-action="end">
             <Square size={14} aria-hidden="true" />
             End quiz
@@ -1099,13 +1111,15 @@ export const Pocket: React.FC<RendererProps<PocketBlock>> = ({ block, ask }) => 
   const openHere = async (role: PocketLinkRole) => {
     const tab = window.open('', '_blank');
     if (tab) tab.opener = null;
+    // A panel closed or reopened meanwhile bumps linkSeq: then a late failure doesn't reopen it (Rigel N2).
+    const seq = linkSeq.current;
     try {
       const { url: page } = await mint(role);
       if (tab) tab.location.href = page;
-      else setLink({ role, phase: 'error', text: 'Your browser blocked the new tab. Scan the code instead, or allow pop-ups for this page.' });
+      else if (seq === linkSeq.current) setLink({ role, phase: 'error', text: 'Your browser blocked the new tab. Scan the code instead, or allow pop-ups for this page.' });
     } catch (e) {
       tab?.close();
-      setLink({ role, phase: 'error', text: linkError(role, e) });
+      if (seq === linkSeq.current) setLink({ role, phase: 'error', text: linkError(role, e) });
     }
   };
   const closeLink = () => {
