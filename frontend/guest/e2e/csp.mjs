@@ -384,8 +384,15 @@ for (const name of order) {
   for (const [i, [scene, screen]] of shots.entries()) {
     const code = `screen-${scene}`;
     const { ctx, page, log } = await screenPage();
+    // The solo board's creatures come from the lobby roster, so that screen first sees its lobby, as a real TV does.
+    const solo = scene === 'solo';
+    if (solo) fake.push(code, { ...scenes.lobby, teams: false, lobby: scenes.solo.leaderboard.map((r) => ({ name: r.name, team: null })), players: scenes.solo.leaderboard.length });
     await page.goto(`${origin}/p/${code}#screen=tok-${scene}`);
-    await ready(page, screen);
+    await ready(page, solo ? 'lobby' : screen);
+    if (solo) {
+      fake.push(code, scenes.solo);
+      await ready(page, screen);
+    }
     await page.waitForTimeout(400);
     const file = `screen-${String(i + 1).padStart(2, '0')}-${scene}`;
     const mm = await screenCheck(file, page, log);
@@ -419,6 +426,58 @@ for (const name of order) {
     await screenCheck(`screen-letterbox-${w}x${hgt}`, page, log, { width: w, height: hgt });
     await page.screenshot({ path: path.join(out, `screen-letterbox-${w}x${hgt}-${scene}.png`) });
     await ctx.close();
+  }
+  // pa5b round 2 (Rigel D1): the validator allows 2 to 6 answers, a 300-character question, 80-character answers and a
+  // 280-character line. No answer may sit under the answered row or the Quizmaster, and every block stays on the stage.
+  {
+    const words = (n) => {
+      const w = 'the quick brown fox jumps over a lazy dog while seven wizards quietly box'.split(' ');
+      let t = '';
+      for (let i = 0; t.length < n; i++) t += (t ? ' ' : '') + w[i % w.length];
+      return t.slice(0, n).trim();
+    };
+    const q = scenes.question.question;
+    const cases = [
+      ['5 short answers', 'question', { ...scenes.question, question: { ...q, options: ['One', 'Two', 'Three', 'Four', 'Five'] } }],
+      ['6 short answers', 'question', { ...scenes.question, question: { ...q, options: ['One', 'Two', 'Three', 'Four', 'Five', 'Six'] } }],
+      ['140-character question, 4x30', 'question', { ...scenes.question, question: { ...q, text: words(140), options: [30, 30, 30, 30].map(words) } }],
+      ['locked, 6 answers', 'locked', { ...scenes.locked, question: { ...q, options: ['One', 'Two', 'Three', 'Four', 'Five', 'Six'] } }],
+      ['limits: 300 + 6x80', 'question', { ...scenes.question, question: { ...q, text: words(300), options: Array.from({ length: 6 }, () => words(80)) } }],
+      ['reveal 6 short answers', 'reveal', { ...scenes.reveal, question: { ...q, options: ['One', 'Two', 'Three', 'Four', 'Five', 'Six'] }, reveal: { ...scenes.reveal.reveal, picks: [1, 14, 5, 2, 0, 1] } }],
+      ['reveal limits: 300 + 4x80 + 280 line', 'reveal', { ...scenes.reveal, question: { ...q, text: words(300), options: [80, 80, 80, 80].map(words) }, reveal: { ...scenes.reveal.reveal, source_quote: words(300), line: words(280) } }],
+    ];
+    for (const [name, scene, view] of cases) {
+      const code = `screen-${scene}`;
+      fake.push(code, scenes[scene]);
+      const { ctx, page, log } = await screenPage();
+      await page.goto(`${origin}/p/${code}#screen=tok-limits`);
+      await ready(page, scene === 'locked' ? 'question' : scene);
+      fake.push(code, view);
+      await page.waitForTimeout(400);
+      await screenCheck(`screen-limits ${name}`, page, log);
+      const bad = await page.evaluate(() => {
+        const out = [];
+        const tv = document.querySelector('.tv').getBoundingClientRect();
+        const ans = [...document.querySelectorAll('.tv .ans, .tv .tvsolo')].map((e) => e.getBoundingClientRect());
+        for (const sel of ['.tvanswered', '.tvq > .tvhost', '.tvsrc']) {
+          const b = document.querySelector(sel)?.getBoundingClientRect();
+          if (b && ans.some((a) => a.bottom > b.top + 1 && a.top < b.bottom - 1)) out.push(`an answer overlaps ${sel}`);
+        }
+        for (const e of document.querySelectorAll('.tv .ans, .tv .tvanswered, .tv .tvhost, .tv .tvsrc, .tv .qbig, .tv .tvclock')) {
+          const r = e.getBoundingClientRect();
+          if (r.bottom > tv.bottom + 1 || r.right > tv.right + 1 || r.top < tv.top - 1) out.push(`${e.className} leaves the stage`);
+        }
+        const clock = document.querySelector('.tvclock')?.getBoundingClientRect();
+        const head = document.querySelector('.tvtop')?.getBoundingClientRect();
+        const q = document.querySelector('.tvq')?.getBoundingClientRect();
+        if (clock && q && clock.bottom > q.top) out.push('the clock runs into the question');
+        if (clock && head && head.right > clock.left) out.push('the header runs under the clock');
+        return out;
+      });
+      for (const x of bad) problems.push(`screen-limits ${name}: ${x}`);
+      await page.screenshot({ path: path.join(out, `screen-limits-${name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.png`) });
+      await ctx.close();
+    }
   }
   // Reduced motion: the winners' stars hold still, the timer bar and new players don't move.
   {

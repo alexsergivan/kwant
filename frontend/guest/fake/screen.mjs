@@ -52,7 +52,7 @@ export class ScreenBox {
     const { ended, players, ...view } = v;
     return {
       api: 'pocket/1', version: this.version, viewer: 'screen',
-      pocket: { code: this.code, kit: 'quiz', title: view.title, state: ended ? 'ended' : 'open', opens_at: null, closes_at: null, ended_at: null, expires_at: null, players: players ?? view.lobby.length, max_players: 60, needs_pin: false },
+      pocket: { code: this.code, kit: 'quiz', title: view.title, state: ended ? 'ended' : 'open', opens_at: null, closes_at: null, ended_at: null, expires_at: null, players: players ?? view.lobby?.length ?? 0, max_players: 60, needs_pin: false },
       me: null,
       view,
     };
@@ -71,7 +71,7 @@ export class ScreenBox {
       this.signins.push(body);
       if (method !== 'POST') return err(405, 'method');
       const token = body.key ?? body.token;
-      if (this.scene === 'expired' || !token || token === 'used') return err(401, 'link_used_or_expired', 'This screen link was used already or has expired.');
+      if (this.scene === 'expired' || !token || token === 'used') return err(401, 'link_used_or_expired', 'This link was already used or is too old. Open a new one from the card.');
       return { status: 200, body: this.env(), cookie: true };
     }
     if (what === 'host/state') {
@@ -83,7 +83,7 @@ export class ScreenBox {
     }
     if (what.startsWith('host/')) {
       this.writes.push(`${method} ${path}`);
-      return err(403, 'screen_only', 'The big screen can only watch.');
+      return err(403, 'screen_only', 'This screen can only show the game.');
     }
     return err(404, 'not_found');
   }

@@ -27,6 +27,7 @@ html.tvpage, html.tvpage body { height: 100%; overflow: hidden; background: var(
 .tv ol, .tv ul { margin: 0; padding: 0; list-style: none; }
 .tv .tvtop { position: absolute; left: 72px; right: 72px; top: 48px; display: flex; justify-content: space-between; align-items: center; gap: 48px; font-size: 34px; font-weight: 600; color: var(--zinc-200); }
 .tv .tvtop b { color: var(--zinc-50); }
+.tv .tvtop > p:first-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tv .tvright { white-space: nowrap; }
 .tv .tvfoot { position: absolute; left: 72px; right: 72px; bottom: 44px; display: flex; justify-content: space-between; align-items: flex-end; gap: 48px; font-size: 32px; color: var(--zinc-300); }
 .tv .made { color: var(--zinc-400); font-size: 32px; font-weight: 600; white-space: nowrap; }
@@ -69,9 +70,15 @@ html.tvpage, html.tvpage body { height: 100%; overflow: hidden; background: var(
 @keyframes tv-drop { from { transform: translateY(-36px); opacity: 0.5; } }
 
 /* ---- question and reveal ---- */
-.tv .tvclock { position: absolute; right: 72px; top: 104px; font-size: 120px; line-height: 1; font-weight: 800; }
-.tv .tvq { position: absolute; left: 72px; right: 72px; top: 250px; display: flex; flex-direction: column; gap: 40px; }
+/* The clock sits in the header row (pa0a): right-aligned, its centre in line with .tvtop's text. */
+.tv .tvclock { position: absolute; right: 72px; top: 22px; font-size: 96px; line-height: 1; font-weight: 800; }
+.tv .tvtop.withclock { right: 340px; }
+/* The question screen is one column from under the header to the stage's bottom margin. The answered row and the
+   reveal's Quizmaster are in the flow at its end, so long questions and 5 or 6 answers push them down instead of
+   running under them. Denser content gets the compact (.c1) or tight (.c2) sizes below, never under 32 px. */
+.tv .tvq { position: absolute; left: 72px; right: 72px; top: 170px; bottom: 44px; display: flex; flex-direction: column; gap: 40px; }
 .tv .tvq.rv { top: 140px; gap: 32px; }
+.tv .tvq > .tvanswered, .tv .tvq > .tvhost { margin-top: auto; }
 .tv .tvtimer { height: 22px; border-radius: 11px; background: var(--kw-surface-main); border: 2px solid var(--kw-hairline-strong); overflow: hidden; }
 .tv .tvtimer i { display: block; height: 100%; background: var(--sky-300); transform-origin: left; transition: transform 1s linear; }
 .tv .tvtimer.low i { background: var(--kw-warn); }
@@ -83,7 +90,9 @@ html.tvpage, html.tvpage body { height: 100%; overflow: hidden; background: var(
 .tv .ans .k { display: grid; place-items: center; flex-shrink: 0; width: 76px; height: 76px; border-radius: 18px; border: 3px solid var(--zinc-600); background: var(--kw-surface-main); font-size: 40px; font-weight: 800; color: var(--zinc-200); }
 .tv .ans .o { min-width: 0; overflow-wrap: anywhere; }
 .tv .ans .pct { margin-left: auto; font-size: 44px; color: var(--zinc-300); white-space: nowrap; }
-.tv .ans.dim { opacity: 0.4; box-shadow: none; }
+.tv .ans.dim { box-shadow: none; background: var(--kw-surface-main); border-color: var(--kw-hairline-strong); color: var(--zinc-500); }
+.tv .ans.dim .k { color: var(--zinc-500); border-color: var(--zinc-700); }
+.tv .ans.dim .pct { color: var(--zinc-400); }
 .tv .ans.right { border-color: var(--kw-ok); background: color-mix(in srgb, var(--kw-ok) 16%, var(--kw-surface-raised)); }
 .tv .ans.right .k { background: var(--kw-ok); border-color: var(--kw-ok); color: var(--kw-surface-rail); }
 .tv .ans.right .pct { color: var(--zinc-50); }
@@ -91,7 +100,23 @@ html.tvpage, html.tvpage body { height: 100%; overflow: hidden; background: var(
 .tv .tvsolo.right { border-color: var(--kw-ok); color: var(--zinc-50); background: color-mix(in srgb, var(--kw-ok) 16%, var(--kw-surface-raised)); }
 .tv .tvsrc { display: flex; gap: 16px; align-items: flex-start; font-size: 34px; line-height: 46px; color: var(--zinc-300); }
 .tv .tvsrc svg.pi { margin-top: 5px; }
-.tv .tvanswered { position: absolute; left: 72px; right: 72px; bottom: 44px; display: flex; align-items: center; gap: 36px; }
+.tv .tvanswered { display: flex; align-items: center; gap: 36px; flex-shrink: 0; }
+/* compact: 5 or 6 answers, a question over 120 characters or an answer over 30: smaller boxes, same type. */
+.tv .tvq.c1 { gap: 28px; }
+.tv .tvq.c1 .tvans { gap: 20px; }
+.tv .tvq.c1 .ans { min-height: 104px; padding: 12px 26px; gap: 22px; }
+.tv .tvq.c1 .ans .k { width: 64px; height: 64px; font-size: 34px; }
+/* tight: the validator's limits (300-character question, 80-character answers, 280-character line). */
+.tv .tvq.c2 { gap: 22px; }
+.tv .tvq.c2 .qbig { font-size: 48px; line-height: 58px; }
+.tv .tvq.c2 .qbig.small { font-size: 40px; line-height: 50px; }
+.tv .tvq.c2 .tvans { gap: 16px; }
+.tv .tvq.c2 .ans { min-height: 88px; padding: 10px 22px; gap: 18px; font-size: 36px; line-height: 44px; }
+.tv .tvq.c2 .ans .k { width: 52px; height: 52px; font-size: 32px; border-radius: 14px; }
+.tv .tvq.c2 .ans .pct { font-size: 36px; }
+.tv .tvq.c2 .tvsrc > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
+.tv .tvq.c2 .tvhost .b { max-width: 1500px; font-size: 34px; line-height: 44px; padding: 16px 26px; }
+.tv .tvq.c2 .tvhost .tvqm { width: 120px; height: 120px; }
 .tv .tvn { font-size: 40px; line-height: 46px; font-weight: 800; white-space: nowrap; }
 .tv .who { display: flex; flex-wrap: wrap; gap: 10px; height: 65px; overflow: hidden; }
 .tv .who svg.wc { width: 52px; height: 65px; }
@@ -100,11 +125,13 @@ html.tvpage, html.tvpage body { height: 100%; overflow: hidden; background: var(
 /* ---- leaderboard ---- */
 .tv .lbt { position: absolute; left: 72px; right: 72px; top: 140px; display: grid; gap: 12px; }
 .tv .lbt .row { display: grid; grid-template-columns: 90px 1fr 260px 230px 130px; align-items: center; gap: 24px; height: 88px; padding: 0 36px; border-radius: 26px; background: var(--kw-surface-raised); border: 2px solid var(--kw-hairline-strong); font-size: 52px; font-weight: 700; }
+.tv .lbt.nomove .row { grid-template-columns: 90px 1fr 260px 230px; }
 .tv .lbt .row.first { border-color: var(--sky-300); background: color-mix(in srgb, var(--sky-500) 20%, var(--kw-surface-raised)); }
 .tv .lbt .row.moving { transition: transform 200ms var(--kw-ease); }
 .tv .lbt .n { color: var(--zinc-400); }
 .tv .lbt .nm { display: flex; align-items: center; gap: 20px; min-width: 0; }
 .tv .lbt .nm .tx { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tv .lbt svg.sc { width: 56px; height: 70px; flex-shrink: 0; }
 .tv .lbt .sw { width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0; }
 /* Defaults at :where() weight, so a team colour class (.t0-.t7) always wins. */
 :where(.tv .lbt .sw) { background: var(--zinc-600); }
@@ -121,7 +148,7 @@ html.tvpage, html.tvpage body { height: 100%; overflow: hidden; background: var(
 .tv .bigsticker { display: inline-block; margin-top: 40px; transform: rotate(-3deg) scale(3.2); transform-origin: center; }
 .tv .winner { font-size: 76px; line-height: 92px; font-weight: 800; text-align: center; }
 .tv .podium { position: absolute; left: 0; right: 0; bottom: 0; display: flex; gap: 56px; align-items: flex-end; justify-content: center; }
-.tv .pod { display: flex; flex-direction: column; align-items: center; gap: 18px; width: 380px; }
+.tv .pod { display: flex; flex-direction: column; align-items: center; gap: 18px; width: auto; min-width: 380px; max-width: 560px; }
 .tv .pod .crew { display: flex; gap: 6px; }
 .tv .pod svg.cc { width: 76px; height: 96px; }
 .tv .pod .tn { font-size: 54px; line-height: 62px; font-weight: 800; text-align: center; max-width: 100%; overflow-wrap: anywhere; }

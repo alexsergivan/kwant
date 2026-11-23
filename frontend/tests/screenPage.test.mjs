@@ -379,3 +379,110 @@ test('solo board: no team swatch, players have no team colour; the team board ke
   assert.equal(t.$$('.lbt .sw').length, 6);
   t.app.gone(401);
 });
+
+// ---------- pa5b round 2 (Mira's design check, Rigel's D1 and notes, Lin's v1.1 notes) ----------
+
+test('question: the clock sits in the header row; the answered row is in the flow after the answers, never pinned over them', async () => {
+  const t = await open('question');
+  assert.ok(t.$('.tvtop').classList.contains('withclock'));
+  assert.equal(t.$('.tvanswered').parentElement, t.$('.tvq'));
+  assert.equal(t.$('.tvq').lastElementChild, t.$('.tvanswered'));
+  const css = readFileSync(new URL('../guest/src/screen/screen.css', import.meta.url), 'utf8');
+  assert.match(css, /\.tv \.tvclock \{[^}]*top: 22px; font-size: 96px;/);
+  assert.match(css, /\.tv \.tvq \{[^}]*top: 170px; bottom: 44px;/);
+  assert.doesNotMatch(css, /\.tvanswered \{[^}]*position: absolute/);
+  t.push({ ...scenes.locked });
+  assert.equal(t.$('.tvclock'), null);
+  assert.equal(t.$('.tvtop').classList.contains('withclock'), false);
+  t.app.gone(401);
+});
+
+test('question: 5 or 6 answers or a long question get the compact size; the validator limits get the tight one', async () => {
+  const t = await open('question');
+  const q = scenes.question.question;
+  assert.equal(t.$('.tvq').className, 'tvq');
+  t.push({ ...scenes.question, question: { ...q, options: ['A1', 'B2', 'C3', 'D4', 'E5', 'F6'] } });
+  assert.equal(t.$('.tvq').className, 'tvq c1');
+  assert.equal(t.$$('.ans').length, 6);
+  t.push({ ...scenes.question, question: { ...q, text: 'x'.repeat(140) } });
+  assert.equal(t.$('.tvq').className, 'tvq c1');
+  t.push({ ...scenes.question, question: { ...q, text: 'x '.repeat(150), options: Array.from({ length: 6 }, () => 'y'.repeat(80)) } });
+  assert.equal(t.$('.tvq').className, 'tvq c2');
+  t.app.gone(401);
+});
+
+test('reveal: dimmed answers keep readable text (the card is dimmed, not the text); the Quizmaster is in the flow', async () => {
+  const t = await open('reveal');
+  assert.ok(t.$('.tvq.rv > .tvhost'));
+  assert.equal(t.$('.tvfoot'), null);
+  const css = readFileSync(new URL('../guest/src/screen/screen.css', import.meta.url), 'utf8');
+  assert.doesNotMatch(css, /\.ans\.dim \{[^}]*opacity/);
+  assert.match(css, /\.tv \.ans\.dim \{[^}]*color: var\(--zinc-500\)/);
+  assert.match(css, /\.tv \.ans\.dim \.pct \{ color: var\(--zinc-400\); \}/);
+  t.app.gone(401);
+});
+
+test('a reveal frame without reveal falls back to the locked question instead of throwing; an empty final board is "ended"', async () => {
+  const t = await open('reveal');
+  t.push({ ...scenes.reveal, reveal: null });
+  assert.equal(t.screen(), 'question');
+  assert.match(t.text(), /Time's up/);
+  t.push({ ...scenes.winners, team_board: [], leaderboard: [] });
+  assert.equal(t.screen(), 'ended');
+  assert.doesNotMatch(t.text(), /(^|\s)win!/);
+  t.app.gone(401);
+});
+
+test('winners: the podium is as wide as its name (380 to 560 px), the blocks stay 380', () => {
+  const css = readFileSync(new URL('../guest/src/screen/screen.css', import.meta.url), 'utf8');
+  assert.match(css, /\.tv \.pod \{[^}]*width: auto; min-width: 380px; max-width: 560px;/);
+  assert.match(css, /\.tv \.pod \.blk \{ width: 380px;/);
+});
+
+test('leaderboard: no move column when the box sends no moves; the solo board shows each player creature from the lobby', async () => {
+  const s = harness('solo');
+  s.box.set({ ...scenes.lobby, teams: false, lobby: scenes.solo.leaderboard.slice(0, 5).map((r) => ({ name: r.name, team: null })) });
+  void s.app.start();
+  await flush();
+  assert.equal(s.screen(), 'lobby');
+  s.push({ ...scenes.solo, lobby: null }); // the real kit sends lobby only in the lobby phase (view.rs)
+  assert.equal(s.screen(), 'leaderboard');
+  assert.ok(s.$('.lbt').classList.contains('nomove'));
+  assert.equal(s.$$('.lbt .d').length, 0);
+  assert.equal(s.$$('.lbt svg.sc').length, 5, s.$$('.lbt .row').map((r) => r.getAttribute('data-name') + ':' + r.querySelectorAll('svg.sc').length).join(' '));
+  s.app.gone(401);
+});
+
+test('expired and gone: the Quizmaster rests (no thinking dots); paused and away keep thinking', async () => {
+  const t = await open('expired');
+  assert.equal(t.screen(), 'signed-out');
+  assert.match(t.text(), /This screen link has expired/);
+  const rest = t.$('.tvqm').outerHTML;
+  const p = await open('paused');
+  assert.notEqual(p.$('.tvqm').outerHTML, rest);
+  p.app.gone(401);
+});
+
+test('sign-in 429 slow_down retries on the backoff with the same token instead of showing signed-out', async () => {
+  const t = harness('lobby');
+  const real = t.box.handle.bind(t.box);
+  let n = 0;
+  t.box.handle = (path, body, o) => (path === 'host/signin' && n++ < 2 ? { status: 429, body: { error: 'slow_down', message: 'Slow down.' } } : real(path, body, o));
+  void t.app.start();
+  await flush();
+  assert.equal(t.screen(), 'away');
+  await t.advance(2_000);
+  await t.advance(5_000);
+  assert.equal(t.screen(), 'lobby');
+  const ins = t.calls.filter((c) => c.path === 'host/signin');
+  assert.equal(ins.length, 3);
+  assert.ok(ins.every((c) => c.body.key === 'tok-1'));
+  t.app.gone(401);
+});
+
+test('the fake uses the real v1.1 messages for a used link and a screen-only refusal', () => {
+  const b = new ScreenBox('screen-expired');
+  assert.equal(b.handle('host/signin', { key: 'x' }, { method: 'POST' }).body.message, 'This link was already used or is too old. Open a new one from the card.');
+  const c = new ScreenBox('screen-lobby');
+  assert.equal(c.handle('host/next', {}, { method: 'POST', signed: true }).body.message, 'This screen can only show the game.');
+});

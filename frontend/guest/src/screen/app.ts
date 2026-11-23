@@ -33,6 +33,15 @@ const clock = (ms: number): string => {
   const s = Math.max(0, Math.ceil(ms / 1000));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 };
+/** Layout only: how dense the question is decides the answer size (compact c1, tight c2), never what is shown. */
+const density = (q: { text: string; options?: string[] } | undefined, line?: string): string => {
+  const n = q?.options?.length ?? 0;
+  const len = q?.text.length ?? 0;
+  const longest = Math.max(0, ...(q?.options ?? []).map((o) => o.length));
+  if (len > 200 || longest > 50 || (line?.length ?? 0) > 160 || (n > 4 && (len > 120 || longest > 30))) return ' c2';
+  if (n > 4 || len > 120 || longest > 30) return ' c1';
+  return '';
+};
 const plural = (n: number, one: string, many: string) => `${fmt(n)} ${n === 1 ? one : many}`;
 const hostOf = (url: string): string => {
   try {
@@ -90,7 +99,7 @@ export class ScreenApp {
         this.live.start();
         return;
       }
-      if (r.status !== 0 && r.status < 500) return this.gone(r.status, r.error);
+      if (r.status !== 0 && r.status !== 429 && r.status < 500) return this.gone(r.status, r.error);
       this.away = { secs: backoff(tries), tries: ++tries };
       this.draw('away');
       await new Promise<void>((res) => this.env.setTimeout(res, this.away.secs * 1000));
@@ -128,12 +137,13 @@ export class ScreenApp {
     for (const r of v.board ?? []) if (v.teams) this.color(r.name, r.color);
     const paused = v.time?.paused && (v.phase === 'question' || v.phase === 'locked');
     const s: Shown =
-      v.phase === 'final' || (v.ended && v.board?.length) ? 'winners'
+      (v.phase === 'final' || v.ended) && v.board?.length ? 'winners'
+      : v.phase === 'final' ? 'ended'
       : v.ended ? 'ended'
       : paused ? 'paused'
       : v.phase === 'lobby' ? 'lobby'
-      : v.phase === 'reveal' ? 'reveal'
-      : v.phase === 'leaderboard' ? 'leaderboard'
+      : v.phase === 'reveal' && v.reveal ? 'reveal'
+      : v.phase === 'leaderboard' || (v.phase === 'reveal' && !v.question) ? 'leaderboard'
       : 'question';
     this.draw(s);
   }
@@ -189,10 +199,10 @@ export class ScreenApp {
         body = this.calm(v, 'This quiz has ended', 'Thanks for playing!', 'finished');
         break;
       case 'signed-out':
-        body = this.calm(undefined, 'This screen link has expired', 'Open the big screen again from the Pocket card in kwant.', 'thinking');
+        body = this.calm(undefined, 'This screen link has expired', 'Open the big screen again from the Pocket card in kwant.', undefined);
         break;
       case 'missing':
-        body = this.calm(undefined, "This quiz isn't here any more", 'The host may have deleted it.', 'thinking');
+        body = this.calm(undefined, "This quiz isn't here any more", 'The host may have deleted it.', undefined);
         break;
       default:
         body = this.calm(undefined, 'Opening the big screen', 'One moment.', undefined);
@@ -217,8 +227,8 @@ export class ScreenApp {
 
   // ---------- pieces ----------
 
-  private top(left: Kid, right?: Kid): HTMLElement {
-    return h('header', { class: 'tvtop' }, h('p', null, left), right ? h('p', { class: 'tvright' }, right) : null);
+  private top(left: Kid, right?: Kid, cls = ''): HTMLElement {
+    return h('header', { class: `tvtop${cls}` }, h('p', null, left), right ? h('p', { class: 'tvright' }, right) : null);
   }
 
   private host(line: string | undefined, mood?: 'thinking' | 'finished'): HTMLElement | null {
@@ -335,10 +345,9 @@ export class ScreenApp {
       );
     }
     return [
-      this.top(this.meta(v), locked ? "Time's up" : null),
+      this.top(this.meta(v), locked ? "Time's up" : null, locked ? '' : ' withclock'),
       locked ? null : count,
-      h('div', { class: 'tvq' }, timer, h('h1', { class: `qbig${(q?.text.length ?? 0) > 90 ? ' long' : ''}` }, q?.text ?? ''), this.answers(v, false)),
-      row,
+      h('div', { class: `tvq${density(q)}` }, timer, h('h1', { class: `qbig${(q?.text.length ?? 0) > 90 ? ' long' : ''}` }, q?.text ?? ''), this.answers(v, false), row),
     ];
   }
 
@@ -352,23 +361,24 @@ export class ScreenApp {
       this.top(this.meta(v), 'Answer'),
       h(
         'div',
-        { class: 'tvq rv' },
+        { class: `tvq rv${density(v.question, line)}` },
         h('h1', { class: 'qbig small' }, v.question?.text ?? ''),
         this.answers(v, true),
         src ? h('p', { class: 'tvsrc' }, icon('check', 'pi ok'), h('span', null, `Source: ${src}`)) : null,
+        this.host(line),
       ),
-      h('footer', { class: 'tvfoot' }, this.host(line)),
     ];
   }
 
   private board(v: ScreenView): Kid {
     const rows = (v.board ?? []).slice(0, BOARD_ROWS);
     const lead = Math.max(1, rows[0]?.score ?? 1);
+    const moves = rows.some((r) => r.move);
     return [
       this.top(v.round ? h('b', null, `After round ${v.round.number} of ${v.round.of}`) : h('b', null, 'Scores')),
       h(
         'ol',
-        { class: 'lbt', 'aria-label': 'Leaderboard' },
+        { class: moves ? 'lbt' : 'lbt nomove', 'aria-label': 'Leaderboard' },
         rows.map((r, i) => {
           const team = v.teams ? r.name : r.team;
           const c = team ? this.color(team, v.teams ? r.color : undefined) : -1;
@@ -378,10 +388,15 @@ export class ScreenApp {
             'li',
             { class: `row${i === 0 ? ' first' : ''}`, 'data-name': r.name },
             h('span', { class: 'n tab' }, String(r.rank)),
-            h('span', { class: 'nm' }, v.teams ? h('span', { class: `sw${c >= 0 ? ` t${c}` : ''}`, 'aria-hidden': 'true' }) : null, h('span', { class: 'tx' }, r.name)),
+            h(
+              'span',
+              { class: 'nm' },
+              v.teams ? h('span', { class: `sw${c >= 0 ? ` t${c}` : ''}`, 'aria-hidden': 'true' }) : this.roster.has(r.name) ? this.crew(r.name, 'sc') : null,
+              h('span', { class: 'tx' }, r.name),
+            ),
             h('span', { class: 'bar', 'aria-hidden': 'true' }, bar),
             h('span', { class: 's tab' }, fmt(r.score)),
-            h('span', { class: `d tab${r.move ? (r.move > 0 ? ' up' : ' down') : ''}` }, r.move ? `${r.move > 0 ? '▲' : '▼'} ${Math.abs(r.move)}` : '', r.move ? h('span', { class: 'vh' }, r.move > 0 ? ' places up' : ' places down') : null),
+            !moves ? null : h('span', { class: `d tab${r.move ? (r.move > 0 ? ' up' : ' down') : ''}` }, r.move ? `${r.move > 0 ? '▲' : '▼'} ${Math.abs(r.move)}` : '', r.move ? h('span', { class: 'vh' }, r.move > 0 ? ' places up' : ' places down') : null),
           );
         }),
       ),
@@ -411,7 +426,7 @@ export class ScreenApp {
     const rows = (v.board ?? []).slice(0, 3);
     const tops = rows.filter((r) => r.rank === 1);
     const names = tops.map((r) => r.name);
-    const head = names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} win!` : `${names[0] ?? ''} ${v.teams ? 'win!' : 'wins!'}`;
+    const head = !names.length ? 'Final scores' : names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} win!` : `${names[0] ?? ''} ${v.teams ? 'win!' : 'wins!'}`;
     const order = [rows[1], rows[0], rows[2]];
     const stars = [0, 1, 2, 3, 4].map((i) => icon('star', `pi tvstar s${i}`));
     const sticker = h('span', { class: 'kw-sticker kw-sticker-holo tvsticker' }, svg('0 0 9 9', TROPHY, 'pi'), h('span', null, 'Winners'));
