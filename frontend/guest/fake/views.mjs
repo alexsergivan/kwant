@@ -148,27 +148,28 @@ export class FakeBox {
   env(v) {
     return envelope(fill(v, this.code), { code: this.code, version: this.version });
   }
-  current() {
-    return this.seat ?? this.s.state ?? 401;
+  /** `seated`: this phone has the seat's cookie. A phone without it never sees another phone's seat. */
+  current(seated = true) {
+    return (seated && this.seat) || this.s.state || 401;
   }
   /** pa1 sends a new state on every change: bump the version. */
   set(v) {
     this.seat = v;
     this.version++;
   }
-  handle(path, body = {}) {
+  handle(path, body = {}, { seated = true } = {}) {
     const [what, query] = path.split('?');
     const err = (status, code) => ({ status, body: errorBody(status, code) });
     if (!this.s.state && !this.s.info) return err(404);
     if (what === 'state') {
-      const v = this.current();
+      const v = this.current(seated);
       if (typeof v === 'number') return err(v);
       const since = Number(new URLSearchParams(query).get('since'));
       if (since && since === this.version) return { status: 204, body: null };
       return { status: 200, body: this.env(v) };
     }
     if (what === 'info') {
-      const v = this.s.info ?? this.current();
+      const v = this.s.info ?? this.current(seated);
       if (typeof v === 'number') return err(v === 401 ? 404 : v);
       const { me: _me, ...pub } = v;
       return { status: 200, body: this.env(pub) };
@@ -187,8 +188,9 @@ export class FakeBox {
       return { status: 200, body: this.env(this.seat) };
     }
     if (what === 'action') {
-      if (typeof this.current() === 'number') return err(this.current());
-      if (!this.s.action) return { status: 200, body: this.env(this.current()) };
+      const now = this.current(seated);
+      if (typeof now === 'number') return err(now);
+      if (!this.s.action) return { status: 200, body: this.env(now) };
       this.set(fill(this.s.action, this.code));
       return { status: 200, body: this.env(this.seat) };
     }

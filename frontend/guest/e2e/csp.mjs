@@ -166,7 +166,15 @@ for (const [label, throttle] of Object.entries(presets)) {
     for (let i = 0; i < 3; i++) {
       const { ctx, page } = await newPage({ throttle });
       await page.goto(`${base}/p/join`);
-      await page.waitForSelector('[data-screen="join"]', { timeout: 30000 });
+      try {
+        await page.waitForSelector('[data-screen="join"]', { timeout: 30000 });
+      } catch {
+        const shown = await page.getAttribute('[data-screen]', 'data-screen').catch(() => null);
+        problems.push(`timing ${label} ${how}: no join screen in 30 s (showing ${shown})`);
+        await page.screenshot({ path: path.join(out, `timing-fail-${label}-${how}.png`) }).catch(() => {});
+        await ctx.close();
+        continue;
+      }
       runs.push(
         await page.evaluate(() => ({
           fcp: Math.round(performance.getEntriesByName('first-contentful-paint')[0]?.startTime ?? -1),
@@ -175,7 +183,8 @@ for (const [label, throttle] of Object.entries(presets)) {
       );
       await ctx.close();
     }
-    const med = (k) => runs.map((r) => r[k]).sort((a, b) => a - b)[1];
+    const med = (k) => runs.map((r) => r[k]).sort((a, b) => a - b)[Math.floor(runs.length / 2)];
+    if (!runs.length) continue;
     results.timing[`${label} ${how}`] = { fcp_ms: med('fcp'), join_screen_ms: med('join'), runs };
   }
 }

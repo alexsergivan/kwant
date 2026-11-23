@@ -88,20 +88,22 @@ export class GuestApp {
   async start(boot?: unknown): Promise<void> {
     const b = boot ? this.api.take(boot) : undefined;
     if (b) {
-      // The box put this phone's state (or the public info) in the page: no first round trip.
+      // The box put a state in the page: draw it at once. A seated one needs no first round trip.
       this.show(b);
       if (b.me) {
         if (b.phase !== 'lobby' && b.phase !== 'join') this.sayBack(b);
         this.live.start();
-      } else this.watchInfo();
-      return;
+        return;
+      }
     }
+    // The seat cookie is scoped to /api/pocket/<code>, so only `state` can tell whether this phone has one.
     const r = await this.api.state();
     if (r.ok && r.view) {
       this.show(r.view);
       if (r.view.me && r.view.phase !== 'lobby' && r.view.phase !== 'join') this.sayBack(r.view);
       this.live.start();
     } else if (!r.ok && (r.status === 0 || r.status >= 500)) this.live.start();
+    else if (!r.ok && r.status === 401 && b) this.watchInfo();
     else if (!r.ok) await this.onGone(r.status, r.error);
   }
 

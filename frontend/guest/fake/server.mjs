@@ -40,8 +40,8 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
       let html = readFileSync(join(dist, 'index.html'), 'utf8');
       if (boot) {
         // What pa5 asks pa1 for: this phone's state (or the public info) in the page, `<` escaped.
-        let r = box(m[1]).handle('state');
-        if (r.status === 401) r = box(m[1]).handle('info');
+        let r = box(m[1]).handle('state', {}, { seated: false });
+        if (r.status === 401) r = box(m[1]).handle('info', {}, { seated: false });
         if (r.status === 200) html = html.replace('>null</script>', `>${JSON.stringify(r.body).replaceAll('<', '\\u003c')}</script>`);
       }
       return send(res, 200, html, TYPES['.html'], { 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
@@ -54,7 +54,10 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
     req.on('data', (c) => (body += c));
     req.on('end', () => {
       const answer = () => {
-        const r = box(code).handle(`${what}${url.search}`, JSON.parse(body || '{}'));
+        const seated = (req.headers.cookie ?? '').includes(`kp_${code}=`);
+        const r = box(code).handle(`${what}${url.search}`, JSON.parse(body || '{}'), { seated });
+        // Like pa1: join and rejoin hand this phone its seat as an HttpOnly cookie scoped to the pocket's API.
+        if ((what === 'join' || what === 'rejoin') && r.status < 300) res.setHeader('Set-Cookie', `kp_${code}=fake; Path=/api/pocket/${code}; HttpOnly; SameSite=Strict`);
         if (r.status === 204) {
           res.writeHead(204, { 'Cache-Control': 'no-store' });
           return res.end();
@@ -71,7 +74,7 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
     const key = req.headers['sec-websocket-key'];
     if (!m || !key) return socket.destroy();
     const code = m[1];
-    if (box(code).handle('state').status !== 200) return socket.destroy();
+    if (box(code).handle('state', {}, { seated: (req.headers.cookie ?? '').includes(`kp_${code}=`) }).status !== 200) return socket.destroy();
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
     log.push(`WS ${code}`);

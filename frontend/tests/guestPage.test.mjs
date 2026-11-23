@@ -274,7 +274,7 @@ test('v1: info with no room left (players = max_players) shows the full screen',
   t.app.stop();
 });
 
-test('v1: boot JSON in the page skips the first round trip', async () => {
+test('v1: boot JSON draws at once; a seated one skips the first round trip, a public one still asks state', async () => {
   const t = harness('lobby', { ws: true });
   await t.app.start(envelope(clone(scenarios.lobby.state), { code: 't', version: 3 }));
   await flush();
@@ -286,8 +286,15 @@ test('v1: boot JSON in the page skips the first round trip', async () => {
   await j.app.start(envelope(clone(scenarios.join.info), { code: 't', version: 3 }));
   await flush();
   assert.equal(j.screen(), 'join');
-  assert.equal(j.calls.length, 0);
+  assert.deepEqual(j.calls.map((c) => c.what), ['state'], 'the seat cookie is not sent with the page, so ask once');
   assert.equal(j.sockets.length, 0);
+  // A phone that does have a seat gets it back even though the page came with the public info.
+  const k = harness('rejoin', { ws: true });
+  await k.app.start(envelope(clone(scenarios.join.info), { code: 't', version: 3 }));
+  await flush();
+  assert.equal(k.screen(), 'question');
+  assert.match(document.querySelector('.toast').textContent, /^You're back, Mia\./);
+  k.app.stop();
   j.app.stop();
 });
 
