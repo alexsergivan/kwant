@@ -160,10 +160,8 @@ impl Env {
                 Ok(Ok(event)) => {
                     match event.unscoped().clone() {
                         RuntimeEvent::Notify { kind, title, body, .. } => told.notices.push((kind, title, body)),
-                        RuntimeEvent::MessageAdded { message } => {
-                            if message["sender_role"] == "kwant" {
-                                told.lines.push(message["text"].as_str().unwrap_or_default().to_string());
-                            }
+                        RuntimeEvent::MessageAdded { message } if message["sender_role"] == "kwant" => {
+                            told.lines.push(message["text"].as_str().unwrap_or_default().to_string());
                         }
                         _ => {}
                     }
