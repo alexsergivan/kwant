@@ -392,3 +392,72 @@ test('switch off: an off server sends no pocket items, so Done has no pocket row
   const v = await mountInbox([]);
   assert.equal(v.host.querySelectorAll('[data-pocket-row]').length, 0);
 });
+
+// Rigel's QA notes on c9513f4f (pa4c-ui/qa.md): N1 the card keeps the edit after the chat re-renders, N2 long
+// words wrap, N3 marks shift after an add, N4 a bad draft id drops only Edit.
+
+test('N1: the panel\'s first load refreshes the card, and a re-render of the same block keeps it', async () => {
+  fakeServer({ yours: [2] });
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  const props = () => ({ content: F.ready.reply, results: { version: 1, blocks: [{ ...raw('ready'), draft: 'qd_fq7k2m' }] }, messageId: 'm-ready' });
+  root.render(h(m.MarkdownRenderer, props()));
+  await settle();
+  mounted.add({ done: () => (root.unmount(), host.remove()) });
+  assert.equal(holos(host), 1, 'the chat block says all checked');
+  await click(byText(host, 'Edit questions'));
+  assert.match(host.textContent, /· 1 yours, not checked/, 'the GET card shows the draft as it is');
+  assert.equal(holos(host), 0);
+  root.render(h(m.MarkdownRenderer, props())); // a fresh results object with the same content
+  await settle();
+  assert.match(host.textContent, /· 1 yours, not checked/, 'still the edited card');
+  assert.equal(holos(host), 0);
+});
+
+test('N2: long answers and tags wrap anywhere instead of pushing the phone editor sideways', async () => {
+  phone = true;
+  fakeServer();
+  await openEditor();
+  const ans = row(1).querySelector('strong').parentElement;
+  assert.match(ans.className, /\[overflow-wrap:anywhere\]/);
+  await click(row(1).querySelector('button'));
+  const tagBox = document.querySelector('[data-tags]');
+  const input = tagBox.querySelector('input');
+  await type(input, 'x'.repeat(48));
+  input.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  const chip = tagBox.querySelector('[aria-label^="Remove x"]')?.parentElement;
+  assert.ok(chip, 'the long tag is a chip');
+  assert.match(chip.className, /\[overflow-wrap:anywhere\]/);
+  assert.match(chip.className, /max-w-full/);
+});
+
+test('N3: after an add, the changed marks after it move down one', async () => {
+  fakeServer();
+  const v = await openEditor();
+  await click([...panel(v).querySelectorAll('button')].find((b) => b.textContent.trim().startsWith('Round 2')));
+  await click(row(4).querySelector('[data-edit="4"]'));
+  const f = document.querySelector('[data-edit-form="4"]');
+  await type([...f.querySelectorAll('input')].find((i) => i.value === '15'), '15 players');
+  await click(byText(f, 'Save'));
+  assert.equal(row(4).dataset.changed, 'true');
+  await click([...panel(v).querySelectorAll('button')].find((b) => b.textContent.trim().startsWith('Round 1')));
+  await click(byText(panel(v), 'Add question to round 1'));
+  const form = document.querySelector('[data-edit-form="add-1"]');
+  await type(form.querySelector('textarea'), 'Who sang "Respect"?');
+  const [answer] = [...form.querySelectorAll('input:not([type="radio"])')].filter((i) => !i.placeholder);
+  await type(answer, 'Aretha Franklin');
+  await click(byText(form, 'Save'));
+  assert.equal(row(4).dataset.changed, 'true', 'the new Q4');
+  await click([...panel(v).querySelectorAll('button')].find((b) => b.textContent.trim().startsWith('Round 2')));
+  assert.equal(row(5).dataset.changed, 'true', 'the edited question is Q5 now');
+  assert.notEqual(row(6).dataset.changed, 'true');
+});
+
+test('N4: a bad draft id or yours count drops only that field, the card still shows', () => {
+  const b = m.validPocket({ ...raw('ready'), draft: 'not a valid id!', yours: -2 });
+  assert.ok(b, 'the card is kept');
+  assert.equal(b.draft, null);
+  assert.equal(b.yours, null);
+});

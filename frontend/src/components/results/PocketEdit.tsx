@@ -9,6 +9,7 @@ import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, BookOpen, Check, ChevronLeft, Loader2, Pencil, Plus, RotateCw, Trash2, X } from 'lucide-react';
 import { pocketApi, PocketApiError } from '../../pocketApi';
+import { useFocusAfterRender } from '../../focusAfterRender';
 import type { DraftCard, DraftQuestion, DraftQuestionKind, QuestionFields, QuizDraft } from '../../pocketApi';
 
 /** The server's words where it has them; these are for the cases decided here. */
@@ -111,14 +112,14 @@ const TagInput: React.FC<{ id: string; label: string; values: string[]; onChange
       </label>
       <div className={`${FIELD} ${FIELD_H} flex flex-wrap items-center gap-1.5 focus-within:border-sky-400`} data-tags={id}>
         {values.map((v) => (
-          <span key={v} className="inline-flex items-center gap-1 rounded-lg border border-sky-700 bg-sky-950 py-0.5 pl-2 pr-0.5 text-[14px] text-zinc-100 sm:text-[13px]">
-            {v}
+          <span key={v} className="inline-flex min-w-0 max-w-full items-center gap-1 rounded-lg [overflow-wrap:anywhere] border border-sky-700 bg-sky-950 py-0.5 pl-2 pr-0.5 text-[14px] text-zinc-100 sm:text-[13px]">
+            <span className="min-w-0">{v}</span>
             <button
               type="button"
               disabled={disabled}
               onClick={() => onChange(values.filter((x) => x !== v))}
               aria-label={`Remove ${v}`}
-              className="kw-focus inline-flex h-7 w-7 items-center justify-center rounded-md text-zinc-400 hover:text-zinc-100 sm:h-5 sm:w-5"
+              className="kw-focus inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-zinc-400 hover:text-zinc-100 sm:h-5 sm:w-5"
             >
               <X size={12} aria-hidden="true" />
             </button>
@@ -299,14 +300,14 @@ const QuestionRow: React.FC<{ q: DraftQuestion; changed: boolean; readOnly: bool
       <span className="min-w-0">
         <span className="block break-words text-[16px] font-medium leading-[23px] text-zinc-50 sm:text-[14px] sm:leading-[21px]">{q.question}</span>
         <span className="mt-0.5 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-[15px] text-zinc-400 sm:text-[13px]">
-          <span>
+          <span className="min-w-0 max-w-full [overflow-wrap:anywhere]">
             Answer <strong className="font-semibold text-ok">{String(q.answer)}</strong>
           </span>
           {q.accepted.length > 0 && (
             <>
               <span>· also</span>
               {q.accepted.map((a) => (
-                <span key={a} className="rounded-md border border-hairline-strong px-1.5 text-[13px] text-zinc-200 sm:text-[12px]">
+                <span key={a} className="min-w-0 max-w-full rounded-md border border-hairline-strong px-1.5 [overflow-wrap:anywhere] text-[13px] text-zinc-200 sm:text-[12px]">
                   {a}
                 </span>
               ))}
@@ -393,6 +394,8 @@ export const EditPanel: React.FC<EditPanelProps> = ({ draftId, name, phone, read
     try {
       const r = await pocketApi.getDraft(draftId);
       setDraft(r.draft);
+      // The card under the panel shows the draft as it is now (yours, checks), also after a reload of the chat.
+      if (r.card) onCard(r.card);
       setLoadErr(null);
       setRo(roFromDraft(r.draft));
       setRound((n) => (r.draft.rounds.some((x) => x.n === n) ? n : r.draft.rounds[0]?.n ?? 1));
@@ -426,7 +429,9 @@ export const EditPanel: React.FC<EditPanelProps> = ({ draftId, name, phone, read
   const readOnly = !!(roCard || ro);
   const roText = ro ?? (roCard ? EDIT_TEXT.open : null);
 
-  const focusLater = (sel: string) => window.setTimeout(() => root.current?.querySelector<HTMLElement>(sel)?.focus(), 0);
+  // Focus after the render that shows the target (focusAfterRender guard), never on a timer.
+  const focusAfter = useFocusAfterRender();
+  const focusLater = (sel: string) => focusAfter(() => root.current?.querySelector<HTMLElement>(sel));
   const open = (t: Target) => {
     if (!draft || readOnly || busy) return;
     opener.current = t.mode === 'edit' ? `[data-q="${t.n}"] button` : `[data-action="add"]`;
@@ -460,14 +465,17 @@ export const EditPanel: React.FC<EditPanelProps> = ({ draftId, name, phone, read
     }
   };
 
-  const done = (r: { draft: QuizDraft; card: DraftCard }, n: number | null, removed: number | null) => {
+  const done = (r: { draft: QuizDraft; card: DraftCard }, n: number | null, removed: number | null, inserted = false) => {
     setDraft(r.draft);
     setRo(roFromDraft(r.draft));
     onCard(r.card);
     setChanged((s) => {
       const next = new Set<number>();
-      for (const x of s) if (removed === null || x < removed) next.add(x);
-      else if (x > removed) next.add(x - 1);
+      for (const x of s) {
+        if (inserted && n !== null && x >= n) next.add(x + 1);
+        else if (removed === null || x < removed) next.add(x);
+        else if (x > removed) next.add(x - 1);
+      }
       if (n !== null) next.add(n);
       return next;
     });
@@ -506,7 +514,7 @@ export const EditPanel: React.FC<EditPanelProps> = ({ draftId, name, phone, read
         base: draft.updated_at,
       });
       const added = r.draft.questions.filter((x) => x.round === target.round).reduce((m, x) => Math.max(m, x.n), 0);
-      done(r, added || null, null);
+      done(r, added || null, null, true);
     } catch (e) {
       fail(e);
     } finally {

@@ -40,6 +40,7 @@ import { QrImage } from '../DeviceSignIn';
 import { TEAM_PALETTES, isPalette, paletteCreature, renderCreature } from '../ModernAvatar';
 import { linkUrl, pocketApi, PocketApiError } from '../../pocketApi';
 import { useMedia } from '../../useMedia';
+import { useFocusAfterRender } from '../../focusAfterRender';
 import type { DraftCard, PocketLinkRole } from '../../pocketApi';
 import { EditPanel } from './PocketEdit';
 import type { RendererProps } from './registry';
@@ -168,9 +169,10 @@ export function validPocket(raw: unknown): PocketBlock | null {
   const ended = opt(b.ended, validEnded);
   const budget = opt(b.budget, validBudget);
   const results = opt(b.results, validResults);
-  const draft = opt(b.draft, (v) => (typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v) ? v : undefined));
-  const yours = opt(b.yours, (v) => (isCount(v) ? v : undefined));
-  if ([when, progress, checks, dry_run, eta, opens_line, live, join, ended, budget, results, draft, yours].includes(undefined) || roundList.some((r) => !r)) return null;
+  // A bad draft id or yours count only drops that field (no Edit), never the whole card.
+  const draft = typeof b.draft === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(b.draft) ? b.draft : null;
+  const yours = isCount(b.yours) ? b.yours : null;
+  if ([when, progress, checks, dry_run, eta, opens_line, live, join, ended, budget, results].includes(undefined) || roundList.some((r) => !r)) return null;
   // A ready or live pocket passed its dry run; a stopped one didn't. Results only exist at the end.
   if (state === 'ready' && dry_run?.passed !== true) return null;
   if (state === 'dry_run_stopped' && dry_run?.passed === true) return null;
@@ -1117,13 +1119,17 @@ const ResultsCard: React.FC<{ block: PocketBlock; results: PocketResults; ask: (
 // ---------------------------------------------------------------------------------------------------
 // The card
 
+const sameBlock = (a: PocketBlock, b: PocketBlock) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
 export const Pocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, ask }) => {
   // pa4c: after an edit the reply's card stands in until the chat's own next block arrives.
   const [over, setOver] = useState<{ from: PocketBlock; card: DraftCard } | null>(null);
-  const block = over && over.from === chatBlock ? withCard(chatBlock, over.card) : chatBlock;
+  // Same block re-rendered (a fresh object with the same content) keeps the card; a changed block replaces it.
+  const block = over && sameBlock(over.from, chatBlock) ? withCard(chatBlock, over.card) : chatBlock;
   const [editing, setEditing] = useState(false);
   const [editOff, setEditOff] = useState<string | null>(null);
   const editId = useId();
+  const focusAfter = useFocusAfterRender();
   const phone = useMedia(PHONE);
   const [mode, setMode] = useState<PocketJoinMode>(block.join?.mode ?? 'wifi');
   const [confirm, setConfirm] = useState<Confirm>(null);
@@ -1141,7 +1147,7 @@ export const Pocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock,
   const canEdit = !!block.draft && !editOff;
   const closeEdit = () => {
     setEditing(false);
-    window.setTimeout(() => opener.current?.querySelector<HTMLButtonElement>('[data-action="edit"],[data-action="see"]')?.focus(), 0);
+    focusAfter(() => opener.current?.querySelector<HTMLButtonElement>('[data-action="edit"],[data-action="see"]'));
   };
   const editPanel =
     editing && block.draft && !editOff ? (
