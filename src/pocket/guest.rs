@@ -3,7 +3,9 @@
 //! everything while the switch is off.
 //! There is no `auth::guard` here: guests have no account. A guest key (cookie `kp_<code>`) or a
 //! host key (cookie `kph_<code>`, or `Authorization: Bearer`) opens one pocket only, and neither
-//! is ever accepted on the main port.
+//! is ever accepted on the main port. A host or screen link (pa1b, Pocket API v1.1) signs in
+//! through `host/signin {token}` and gets a session key in the same `kph_<code>` cookie; a
+//! screen session may only read `view=screen`.
 
 use super::kits::{KitCtx, Viewer};
 use super::{keys, PResult, PocketError, Snapshot};
@@ -158,15 +160,32 @@ async fn guest(state: &AppState, code: &str, headers: &HeaderMap) -> PResult<Opt
     }
 }
 
-fn host_key<'a>(code: &str, headers: &'a HeaderMap) -> Option<&'a str> {
+/// The host key or a link session key, from the bearer or the `kph_<code>` cookie.
+fn host_credential<'a>(code: &str, headers: &'a HeaderMap) -> Option<&'a str> {
     bearer(headers).or_else(|| cookie(headers, &host_cookie(code))).filter(|k| !k.is_empty())
 }
 
-async fn host(state: &AppState, code: &str, headers: &HeaderMap) -> PResult<Arc<Snapshot>> {
+fn not_host() -> PocketError {
+    PocketError::new(StatusCode::UNAUTHORIZED, "not_host", "Only the host's remote can do this.")
+}
+
+fn screen_only() -> PocketError {
+    PocketError::new(StatusCode::FORBIDDEN, "screen_only", "This screen can only show the game.")
+}
+
+/// The pocket and what this caller's host key or link session may do there.
+async fn host_as(state: &AppState, code: &str, headers: &HeaderMap) -> PResult<(Arc<Snapshot>, super::HostRole)> {
     let s = pocket(state, code).await?;
-    match host_key(code, headers) {
-        Some(k) if super::is_host_key(&s, k) => Ok(s),
-        _ => Err(PocketError::new(StatusCode::UNAUTHORIZED, "not_host", "Only the host's remote can do this.")),
+    let Some(key) = host_credential(code, headers) else { return Err(not_host()) };
+    let role = super::host_role(state, &s, key).await?.ok_or_else(not_host)?;
+    Ok((s, role))
+}
+
+/// For every host write: the host key or a host link; a screen gets 403 `screen_only`.
+async fn host(state: &AppState, code: &str, headers: &HeaderMap) -> PResult<Arc<Snapshot>> {
+    match host_as(state, code, headers).await? {
+        (s, super::HostRole::Host) => Ok(s),
+        (_, super::HostRole::Screen) => Err(screen_only()),
     }
 }
 
@@ -444,12 +463,17 @@ async fn notices_seen(State(state): State<AppState>, Path(code): Path<String>, h
     Ok(StatusCode::NO_CONTENT)
 }
 
-#[derive(Debug, Deserialize)]
+/// `{key}` (the host key, v1) or `{token}` (a one-time host or screen link, v1.1).
+#[derive(Debug, Default, Deserialize)]
 pub struct HostSignin {
-    pub key: String,
+    #[serde(default)]
+    pub key: Option<String>,
+    #[serde(default)]
+    pub token: Option<String>,
 }
 
-/// The host's remote trades the key from its link for the host cookie.
+/// The host's remote trades the key from its link for the host cookie; a host or screen link
+/// trades its one-time token for a session key with that role, in the same cookie.
 async fn host_signin(
     State(state): State<AppState>,
     Path(code): Path<String>,
@@ -459,11 +483,20 @@ async fn host_signin(
 ) -> PResult<Response> {
     let s = pocket(&state, &code).await?;
     signin_limit(&state, peer(ci), &headers)?;
-    if !super::is_host_key(&s, req.key.trim()) {
-        return Err(PocketError::new(StatusCode::UNAUTHORIZED, "not_host", "That host link doesn't work any more."));
-    }
-    let body = super::view_json(&s, &Viewer::Host, Utc::now());
-    Ok(signed_in(body, set_cookie(&host_cookie(&code), req.key.trim(), &code, &headers), StatusCode::OK))
+    let token = req.token.as_deref().map(str::trim).filter(|t| !t.is_empty());
+    let key = req.key.as_deref().map(str::trim).filter(|k| !k.is_empty());
+    let (viewer, cookie_value) = match (token, key) {
+        (Some(token), _) => {
+            let (role, session) = super::spend_link(&state, &code, token, Utc::now()).await?;
+            (if role == super::HostRole::Screen { Viewer::BigScreen } else { Viewer::Host }, session)
+        }
+        (None, Some(key)) if super::is_host_key(&s, key) => (Viewer::Host, key.to_string()),
+        (None, Some(_)) => return Err(PocketError::new(StatusCode::UNAUTHORIZED, "not_host", "That host link doesn't work any more.")),
+        (None, None) => return Err(PocketError::new(StatusCode::BAD_REQUEST, "no_key", "Open the link from the card again.")),
+    };
+    let s = pocket(&state, &code).await?;
+    let body = super::view_json(&s, &viewer, Utc::now());
+    Ok(signed_in(body, set_cookie(&host_cookie(&code), &cookie_value, &code, &headers), StatusCode::OK))
 }
 
 fn host_viewer(q: &StateQuery) -> Viewer {
@@ -474,10 +507,16 @@ fn host_viewer(q: &StateQuery) -> Viewer {
     }
 }
 
+/// The remote's state (`view=host`, the default) or the big screen's (`view=screen`). A screen
+/// session reads only `view=screen`.
 async fn host_state(State(state): State<AppState>, Path(code): Path<String>, headers: HeaderMap, Query(q): Query<StateQuery>) -> PResult<Response> {
-    let s = host(&state, &code, &headers).await?;
+    let (s, role) = host_as(&state, &code, &headers).await?;
+    let viewer = host_viewer(&q);
+    if role == super::HostRole::Screen && viewer != Viewer::BigScreen {
+        return Err(screen_only());
+    }
     state.pocket.touch(&code);
-    Ok(state_response(&s, &host_viewer(&q), q.since))
+    Ok(state_response(&s, &viewer, q.since))
 }
 
 async fn host_action(State(state): State<AppState>, Path(code): Path<String>, headers: HeaderMap, Json(req): Json<ActionRequest>) -> PResult<Response> {
@@ -531,7 +570,10 @@ impl WsWho {
     async fn still_valid(&self, state: &AppState, code: &str) -> bool {
         match self {
             WsWho::Guest { key, id } => matches!(super::guest_for_key(state, code, key).await, Ok(Some(p)) if &p.id == id),
-            WsWho::Host { key, .. } => matches!(super::snapshot(state, code).await, Ok(Some(s)) if super::is_host_key(&s, key)),
+            WsWho::Host { key, .. } => match super::snapshot(state, code).await {
+                Ok(Some(s)) => matches!(super::host_role(state, &s, key).await, Ok(Some(_))),
+                _ => false,
+            },
         }
     }
 
@@ -547,7 +589,8 @@ impl WsWho {
 /// Live state: `{"type":"state", …the state JSON}` on every change this viewer can see,
 /// `{"type":"removed"}` when the host removed this guest, `{"type":"signed_out"}` when the key
 /// otherwise stops working (PIN reset, host key rotated), `{"type":"gone"}` when the pocket is
-/// deleted. The host's remote and big screen pass `?view=host` / `?view=screen` with the host key.
+/// deleted. The host's remote and big screen pass `?view=host` / `?view=screen` with the host key
+/// or a link session; a screen session gets 403 `screen_only` for `view=host`.
 async fn ws(
     State(state): State<AppState>,
     Path(code): Path<String>,
@@ -557,10 +600,13 @@ async fn ws(
 ) -> PResult<Response> {
     let s = pocket(&state, &code).await?;
     let who = match q.view.as_deref() {
-        Some("host") | Some("screen") => {
-            let key = host_key(&code, &headers).filter(|k| super::is_host_key(&s, k));
-            let key = key.ok_or_else(|| PocketError::new(StatusCode::UNAUTHORIZED, "not_host", "Only the host's remote can do this."))?;
-            WsWho::Host { key: key.to_string(), screen: q.view.as_deref() == Some("screen") }
+        Some(view @ ("host" | "screen")) => {
+            let key = host_credential(&code, &headers).ok_or_else(not_host)?;
+            let role = super::host_role(&state, &s, key).await?.ok_or_else(not_host)?;
+            if role == super::HostRole::Screen && view != "screen" {
+                return Err(screen_only());
+            }
+            WsWho::Host { key: key.to_string(), screen: view == "screen" }
         }
         _ => {
             let key = cookie(&headers, &guest_cookie(&code)).unwrap_or("").to_string();
