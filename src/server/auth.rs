@@ -1026,6 +1026,7 @@ mod tests {
         assert!(person_only(&del, "/api/pockets/abcdef"));
         assert!(person_only(&post, "/api/pockets/abcdef/host-key"));
         assert!(person_only(&post, "/api/pockets/abcdef/link"));
+        assert!(person_only(&post, "/api/pockets/abcdef/tunnel"));
         assert!(person_only(&post, "/api/pockets/abcdef/action"));
         assert!(person_only(&post, "/api/pockets/abcdef/remove"));
         assert!(person_only(&post, "/api/pockets/abcdef/reset-pin"));
