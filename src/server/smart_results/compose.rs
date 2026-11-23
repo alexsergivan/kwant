@@ -32,9 +32,11 @@ pub async fn compute_for_message(
         _ => {}
     }
     // A turn that called one of kwant's own Quizmaster tools: the card of the bot's own stored
-    // draft (pa3c), before anything the reply's text or a present_result call could give.
+    // draft (pa3c), before anything the reply's text or a present_result call could give. Boxed:
+    // its sqlx future would otherwise sit inline in every message insert's future, and that
+    // overflowed the 2 MiB test-thread stack in a debug build (#1108 CI).
     if kind.is_none() {
-        if let Some(set) = from_block(pocket::candidate(&mut *conn, input, extra).await) {
+        if let Some(set) = from_block(Box::pin(pocket::candidate(&mut *conn, input, extra)).await) {
             return Some(set);
         }
     }

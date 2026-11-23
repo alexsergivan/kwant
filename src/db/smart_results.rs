@@ -94,7 +94,9 @@ pub(super) async fn store_on(
     if input.sender_role != "kwant" || card {
         return None;
     }
-    let set = sr::compute_for_message(conn, input, extra, root).await?;
+    // Boxed so the block sources' futures live on the heap, not inline in every caller of a
+    // message insert (a debug build's test thread has only 2 MiB of stack).
+    let set = Box::pin(sr::compute_for_message(conn, input, extra, root)).await?;
     let value = serde_json::to_value(&set).ok()?;
     let saved = sqlx::query("INSERT OR REPLACE INTO message_results (message_id, version, payload) VALUES (?, ?, ?)")
         .bind(id)
