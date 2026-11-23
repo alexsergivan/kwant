@@ -92,6 +92,9 @@ export class Api<V = GuestView> {
   readonly base: string;
   /** The last state version seen, for `state?since=`. */
   version: number | undefined;
+  /** Where the view comes from: the guest's own `state` and `ws`, or the big screen's `host/state?view=screen` and `ws?view=screen`. */
+  statePath = 'state';
+  wsPath = 'ws';
   constructor(private env: Env, readonly code: string, private parse: Parse<V> = fromState as unknown as Parse<V>) {
     this.base = `/api/pocket/${encodeURIComponent(code)}`;
   }
@@ -131,7 +134,8 @@ export class Api<V = GuestView> {
   }
 
   /** Full state, or with `changed` only what is newer than the last version (204 gives no view). */
-  state = (changed = false) => this.call(changed && this.version !== undefined ? `state?since=${this.version}` : 'state');
+  state = (changed = false) =>
+    this.call(changed && this.version !== undefined ? `${this.statePath}${this.statePath.includes('?') ? '&' : '?'}since=${this.version}` : this.statePath);
   info = () => this.call('info');
   rejoin = (name: string) => this.call('rejoin', { name });
   join = (body: { name: string; avatar: string; team?: string; pin?: string }) => this.call('join', body);
@@ -200,7 +204,7 @@ export class Live<V = GuestView> {
     let opened = false;
     let ws: WebSocket;
     try {
-      ws = new WS(`${protocol === 'https:' ? 'wss' : 'ws'}://${host}${this.api.base}/ws`);
+      ws = new WS(`${protocol === 'https:' ? 'wss' : 'ws'}://${host}${this.api.base}/${this.api.wsPath}`);
     } catch {
       this.wsFailed = 2;
       return this.poll();
@@ -272,3 +276,10 @@ export class Live<V = GuestView> {
     this.timer = this.env.setTimeout(() => void this.retry(), secs * 1000);
   }
 }
+
+/**
+ * The big screen's one sign-in: trades the `#screen=<token>` from its link for the HttpOnly `kph_<code>` cookie
+ * (pa1 `host/signin`). Today's body is `{key}`; pa1b's one-time screen links take `{token}` ("Pocket API v1.1: links"),
+ * and switching is this one line.
+ */
+export const screenSignIn = <V>(api: Api<V>, token: string): Promise<Reply<V>> => api.call('host/signin', { key: token });

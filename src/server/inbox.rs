@@ -821,9 +821,12 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
         let prepush_needs_you = prepush.iter().filter(|c| (c.status == BLOCKED || c.status == PREPUSH_FAILED) && c.tries >= NEEDS_YOU_TRIES).count() as i64;
         let reviews = gather(&state, &space).await?;
         let team_jobs = inbox_done::team_jobs(&state, &space, since, seen).await?;
+        // pa4c: pockets whose results were posted, counted like other finished work
+        let pockets = super::inbox_pockets::items(&state, &space, since, seen).await?;
+        let unseen_pockets = super::inbox_pockets::unread(&state, &space, default_since).await?;
         // The same sum as `/api/away`'s `unseen.total` (`away::unread_total`): team jobs carry
         // `unread` in the list but are not counted, so the two badges agree.
-        let unseen = waiting_count + unseen_finished + unseen_failed;
+        let unseen = waiting_count + unseen_finished + unseen_failed + unseen_pockets;
         // The answer, trail and why of each done item
         let mut done = Vec::with_capacity(finished.len() + failed.len());
         for (row, group) in failed.into_iter().map(|r| (r, Group::FailedOrStuck)).chain(finished.into_iter().map(|r| (r, Group::Finished))) {
@@ -834,10 +837,10 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
         for r in &reviews {
             review_facts.push(inbox_done::task_facts(&state, &r.task, &r.kwant_name, r.in_review_since).await?);
         }
-        Ok::<_, DbError>((waiting, done, unseen, prepush_needs_you, reviews, review_facts, team_jobs))
+        Ok::<_, DbError>((waiting, done, unseen, prepush_needs_you, reviews, review_facts, team_jobs, pockets))
     }
     .await;
-    let Ok((waiting, done, unseen_total, prepush_needs_you, reviews, review_facts, team_jobs)) = result else {
+    let Ok((waiting, done, unseen_total, prepush_needs_you, reviews, review_facts, team_jobs, pockets)) = result else {
         return StatusCode::INTERNAL_SERVER_ERROR.into_response();
     };
     // What a mission watcher left for the person (P1), listed and counted as on /api/away
@@ -885,6 +888,7 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
         }
     }
     items.extend(team_jobs);
+    items.extend(pockets);
     Json(response(items, unseen_total, prepush_needs_you, since, seen, now)).into_response()
 }
 

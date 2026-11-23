@@ -258,6 +258,16 @@ impl Database {
         .await?)
     }
 
+    /// 34g: the installed suggestions that created server `server_id` (in practice one).
+    pub async fn installed_mcp_suggestions_for_server(&self, server_id: &str) -> Result<Vec<McpSuggestion>, DbError> {
+        Ok(sqlx::query_as::<_, McpSuggestion>(
+            "SELECT * FROM mcp_suggestions WHERE server_id = ? AND status = 'installed' ORDER BY created_at DESC LIMIT 10",
+        )
+        .bind(server_id)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// Takes a pending suggestion for one install attempt; `false` when it isn't pending.
     pub async fn claim_mcp_suggestion(&self, id: &str) -> Result<bool, DbError> {
         let done = sqlx::query("UPDATE mcp_suggestions SET status = 'installing' WHERE id = ? AND status = 'pending'")

@@ -19,12 +19,13 @@ const TABLES: &[&str] = &[
         budget TEXT NOT NULL DEFAULT '{}',
         pocket_code TEXT,
         created_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
+        updated_at INTEGER NOT NULL,
+        own_keys TEXT NOT NULL DEFAULT '[]'
     )",
     "CREATE INDEX IF NOT EXISTS quiz_drafts_space ON quiz_drafts (space_id, updated_at)",
 ];
 
-const COLS: &str = "id, space_id, kwant_id, title, spec, state, problems, sources, dry_run, budget, pocket_code, created_at, updated_at";
+const COLS: &str = "id, space_id, kwant_id, title, spec, state, problems, sources, dry_run, budget, pocket_code, created_at, updated_at, own_keys";
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct QuizDraftRow {
@@ -48,6 +49,9 @@ pub struct QuizDraftRow {
     pub pocket_code: Option<String>,
     pub created_at: i64,
     pub updated_at: i64,
+    /// pa4c: JSON array of `quizmaster::source_check::own_key`s, the questions the person wrote or
+    /// changed through the draft edit API. They aren't source-checked, and a bot's update keeps them.
+    pub own_keys: String,
 }
 
 impl Database {
@@ -55,16 +59,30 @@ impl Database {
         for sql in TABLES {
             sqlx::query(sql).execute(&self.pool).await?;
         }
+        // pa4c: the person's own questions came after the first drafts
+        let has: Option<(String,)> = sqlx::query_as("SELECT name FROM pragma_table_info('quiz_drafts') WHERE name = 'own_keys'").fetch_optional(&self.pool).await?;
+        if has.is_none() {
+            sqlx::query("ALTER TABLE quiz_drafts ADD COLUMN own_keys TEXT NOT NULL DEFAULT '[]'").execute(&self.pool).await?;
+        }
         Ok(())
     }
 
     pub async fn quiz_draft_save(&self, r: &QuizDraftRow) -> Result<(), DbError> {
-        sqlx::query(&format!(
-            "INSERT INTO quiz_drafts ({COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        self.quiz_draft_save_if(r, None).await.map(|_| ())
+    }
+
+    /// Saves `r` only while the stored draft's `updated_at` is still `base` (pa4c: the person's
+    /// edit doesn't overwrite a bot's update that landed in between); `None` always saves.
+    /// Returns whether it saved.
+    pub async fn quiz_draft_save_if(&self, r: &QuizDraftRow, base: Option<i64>) -> Result<bool, DbError> {
+        let guard = if base.is_some() { " WHERE quiz_drafts.updated_at = ?" } else { "" };
+        let q = format!(
+            "INSERT INTO quiz_drafts ({COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
              ON CONFLICT(id) DO UPDATE SET title = excluded.title, spec = excluded.spec, state = excluded.state,
                problems = excluded.problems, sources = excluded.sources, dry_run = excluded.dry_run, budget = excluded.budget,
-               pocket_code = excluded.pocket_code, updated_at = excluded.updated_at"
-        ))
+               pocket_code = excluded.pocket_code, updated_at = excluded.updated_at, own_keys = excluded.own_keys{guard}"
+        );
+        let mut query = sqlx::query(&q)
         .bind(&r.id)
         .bind(&r.space_id)
         .bind(&r.kwant_id)
@@ -78,9 +96,11 @@ impl Database {
         .bind(&r.pocket_code)
         .bind(r.created_at)
         .bind(r.updated_at)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
+        .bind(&r.own_keys);
+        if let Some(b) = base {
+            query = query.bind(b);
+        }
+        Ok(query.execute(&self.pool).await?.rows_affected() > 0)
     }
 
     /// A draft in this space.
@@ -111,6 +131,7 @@ mod tests {
             pocket_code: None,
             created_at: 1,
             updated_at: 1,
+            own_keys: "[]".into(),
         };
         db.quiz_draft_save(&r).await.unwrap();
         assert_eq!(db.quiz_draft_get("s1", "qd1").await.unwrap(), Some(r.clone()));
@@ -121,6 +142,15 @@ mod tests {
         db.quiz_draft_save(&r).await.unwrap();
         let got = db.quiz_draft_get("s1", "qd1").await.unwrap().unwrap();
         assert_eq!((got.state.as_str(), got.updated_at, got.kwant_id.as_str()), ("ready", 2, "k1"), "the writer never changes");
+        // pa4c: a save based on an older draft does nothing
+        r.state = "checking".into();
+        r.own_keys = r#"["abc"]"#.into();
+        assert!(!db.quiz_draft_save_if(&r, Some(1)).await.unwrap());
+        assert_eq!(db.quiz_draft_get("s1", "qd1").await.unwrap().unwrap().state, "ready");
+        r.updated_at = 3;
+        assert!(db.quiz_draft_save_if(&r, Some(2)).await.unwrap());
+        let got = db.quiz_draft_get("s1", "qd1").await.unwrap().unwrap();
+        assert_eq!((got.state.as_str(), got.own_keys.as_str()), ("checking", r#"["abc"]"#));
         r.state = "bogus".into();
         assert!(db.quiz_draft_save(&r).await.is_err());
     }
