@@ -8,8 +8,24 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.43] - 2026-11-22
+
+kwant 0.9.43: goals that need you in the Inbox, Fix tasks checked against the goal's own test, goal alerts that keep coming after the first incident, a build switch that leaves updates to the package manager, a goal heartbeat that fills in with every check, a goal timeline in plain words, one-tap Show details on a phone, board links that open the board on a phone, goals that say why no fix is tried and goal notices that open the goal.
+
 ### Changed
+- Package-manager builds can turn off the update check: kwnt built with the no-update-check feature never looks for a new release, just as with KWNT_UPDATE_CHECK=off, because the package manager updates it; the Homebrew formula builds with it and needs openssl@4 on Linux instead of openssl@3 (#1054)
+- A goal's timeline now says what happened in plain words and names the bot, such as "Patch couldn't finish looking into it", "First check: OK", "Broke: HTTP status = 200 (it saw 502)" and "Told you it broke"; quoted reports drop their markdown, and "fix ready, waiting for your OK" shows only once the fix really waits for you (#1056)
 - Package-manager builds can turn off the update check: `cargo install --features no-update-check` makes the server report updates off, exactly as `KWNT_UPDATE_CHECK=off` does, so it never looks for a new release (the package manager updates kwant). The Homebrew formula builds with it and needs `openssl@4` on Linux instead of `openssl@3` (#1054)
+
+### Fixed
+- A goal that needs you, such as one whose fix is waiting for your OK, now shows under Needs you in the Inbox with the reason on a second line, and tapping it opens the goal on the Mission board; the board's "Waiting on you" now counts goals as well as tasks, so it agrees with "Goals · N needs you" (#1045)
+- A goal's Fix task now has to pass what the goal itself checks (the same status code, the same text on the page, a command that exits 0, the same file), so a Fix can no longer pass on a weaker test such as any 2xx answer; checks a Fix can't run, like response time, are left to the goal's own re-check (#1047)
+- A goal that breaks again the same day still tells you: the limit of three alerts a day now counts only "it broke" alerts, so a question that needs your decision, and "OK again" after a break you were told about, always go out, with an overall cap of 12 goal alerts a day (#1048)
+- A goal's heartbeat now fills in with one square per check, so a healthy goal reads "3/3 ok · Steady" on its row and in its drawer; the drawer's heartbeat no longer overlaps the schedule, and the timeline no longer fills up with hourly "Checked" lines (#1051)
+- On a phone, Show details on an approval opens on the first tap while you are typing; before, leaving keyboard mode moved the button mid-tap and it took a second tap (#1060)
+- On a phone, a link to the Mission board, Parallel Universe or Dev desk opens that page; before, a phone with no chat open yet showed the chat list instead (#1064)
+- A goal whose checks no fix can be tested against now moves to Needs you once, with the reason "no fix can be tested against its checks", instead of sitting broken with no fix and no word (#1059)
+- A tap on a goal notice now opens that goal on the Mission board, with its details open, instead of the bot's empty chat (#1065)
 
 ## [Mac 0.9.42] - 2026-11-22
 
