@@ -318,6 +318,7 @@ const pocketBase = {
   ended: null,
   budget: null,
   results: null,
+  santa: null,
 } as const;
 const passedRun = { players: 30, passed: true, stopped_at: null, what_happened: null, what_im_doing: null };
 const pocketFixture = (reply: string, block: Record<string, unknown>): Fixture => ({
@@ -426,6 +427,114 @@ export const POCKET_FIXTURES = {
     },
   }),
 } satisfies Record<string, Fixture>;
+
+// Secret Santa (pa10a/design.md §1): a family of 9, host Oleks. Names and creatures are made up.
+const SANTA_FUNNEL = 'https://oleks-mac.tail4b2e.ts.net/p/sn4tq9';
+const SANTA_WIFI = 'http://192.168.1.20:7480/p/sn4tq9';
+const SANTA_PEOPLE = [
+  ['p1', 'Oleks', 'beret'], ['p2', 'Mia', 'antenna'], ['p3', 'Sam', 'visor'], ['p4', 'Priya', 'bulb'], ['p5', 'Jonas', 'spikes'],
+  ['p6', 'Ana', 'goggles'], ['p7', 'Kai', 'horns'], ['p8', 'Leo', 'ears'], ['p9', 'Zoe', 'antenna'],
+] as const;
+const santaPeople = (f: (id: string, i: number) => Record<string, unknown>, upTo = 9) =>
+  SANTA_PEOPLE.slice(0, upTo).map(([id, name, avatar], i) => ({ id, name, avatar, you: id === 'p1', locked: false, looked: null, gift_ready: null, ...f(id, i) }));
+const santaBase = {
+  joined: 9,
+  expected: 9,
+  waiting_for: [],
+  keep_apart: [['Mia', 'Sam'], ['Priya', 'Jonas']],
+  draw_rule: 'when all 9 are in, or Sun, Dec 6 at 6 PM, whichever comes first',
+  drawn_at: null,
+  reveal: 'scheduled',
+  reveal_at: '7:00 PM',
+  revealed_at: null,
+  deletes_on: 'Fri, Dec 25',
+  ended_on: null,
+  looked: null,
+  gifts_ready: null,
+  asks_asked: null,
+  asks_answered: null,
+  can_draw: false,
+  blocked: null,
+  join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: SANTA_FUNNEL, wifi_url: SANTA_WIFI },
+};
+const santaFixture = (reply: string, state: 'live' | 'ended', santa: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: 'pocket:sn4tq9' },
+    code: 'sn4tq9',
+    kit: 'santa',
+    name: 'Family Secret Santa',
+    when: '€25 each · gifts on Fri, Dec 18 · reveal at 7 PM',
+    state,
+    budget: { calls: 3, usd: 0.01 },
+    santa: { ...santaBase, ...santa },
+  });
+const collecting = {
+  phase: 'collecting',
+  joined: 7,
+  waiting_for: ['Leo', 'Zoe'],
+  people: santaPeople(() => ({}), 7),
+  can_draw: true,
+};
+const drawnPeople = santaPeople((id, i) => ({ looked: id !== 'p8', gift_ready: i < 5 }));
+export const SANTA_FIXTURES = {
+  collecting: santaFixture("Your Secret Santa is open. Send the invite to the family chat; I'll draw names when everyone's in.", 'live', collecting),
+  noAddress: santaFixture('Your Secret Santa is open on your Wi-Fi. To let the family join from anywhere, set up Tailscale Funnel (the How to has the steps).', 'live', {
+    ...collecting,
+    join: { mode: 'wifi', anywhere_kind: null, anywhere_url: null, wifi_url: SANTA_WIFI },
+  }),
+  drawn: santaFixture("Names are drawn. Everyone sees only their own match; here's how it's going.", 'live', {
+    phase: 'drawn',
+    people: drawnPeople,
+    drawn_at: 'Sun, Dec 6 at 6:00 PM',
+    looked: 8,
+    gifts_ready: 5,
+    asks_asked: 6,
+    asks_answered: 5,
+  }),
+  revealDay: santaFixture("It's gift day. Every Santa ticked their gift.", 'live', {
+    phase: 'reveal_day',
+    people: santaPeople(() => ({ looked: true, gift_ready: true })),
+    drawn_at: 'Sun, Dec 6 at 6:00 PM',
+    looked: 9,
+    gifts_ready: 9,
+    asks_asked: 11,
+    asks_answered: 11,
+  }),
+  revealDayNotAll: santaFixture("It's gift day. Two Santas haven't ticked their gift yet.", 'live', {
+    phase: 'reveal_day',
+    people: santaPeople((_id, i) => ({ looked: true, gift_ready: i < 7 })),
+    drawn_at: 'Sun, Dec 6 at 6:00 PM',
+    looked: 9,
+    gifts_ready: 7,
+    asks_asked: 11,
+    asks_answered: 10,
+  }),
+  ended: santaFixture('Your Secret Santa is over. Everything is deleted on Fri, Dec 25.', 'ended', {
+    phase: 'ended',
+    people: santaPeople(() => ({ looked: true, gift_ready: true })),
+    drawn_at: 'Sun, Dec 6 at 6:00 PM',
+    reveal: 'shown',
+    revealed_at: 'Fri, Dec 18 at 7:00 PM',
+    ended_on: 'Dec 18',
+    looked: 9,
+    gifts_ready: 9,
+    asks_asked: 11,
+    asks_answered: 11,
+    join: null,
+  }),
+  // People and PINs after the draw: Leo hasn't looked; Ana is locked out after 5 wrong PINs.
+  people: santaFixture("Here's who's in. Matches never show here.", 'live', {
+    phase: 'drawn',
+    people: santaPeople((id, i) => ({ looked: id !== 'p8', gift_ready: i < 5, locked: id === 'p6' })),
+    drawn_at: 'Sun, Dec 6 at 6:00 PM',
+    looked: 8,
+    gifts_ready: 5,
+    asks_asked: 6,
+    asks_answered: 5,
+  }),
+} satisfies Record<string, Fixture>;
+/** What host/reset-pin answers for the shots and tests: a one-time code and its expiry (24 h). */
+export const SANTA_RESET_CODE = { code: 'K7QX', expires_at: '2026-12-08T21:41:00+01:00' };
 
 export const FIXTURES = {
   comparison,

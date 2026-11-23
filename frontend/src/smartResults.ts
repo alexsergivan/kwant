@@ -294,6 +294,63 @@ export interface PocketResults {
   near_misses: number | null;
   near_misses_accepted: number | null;
 }
+/** Secret Santa (pa10a): where the pocket is. `reveal_day` is the gift day before the reveal. */
+export type SantaPhase = 'collecting' | 'drawn' | 'reveal_day' | 'ended';
+/** One row of People and PINs: a first name, a creature and ticks. Never a match. */
+export interface SantaPerson {
+  /** The player id on the box, for Reset PIN and Remove. */
+  id: string;
+  name: string;
+  /** A guest creature id from the page ("antenna"); null: the first one. */
+  avatar: string | null;
+  /** Opened their match; null before the draw. */
+  looked: boolean | null;
+  gift_ready: boolean | null;
+  /** The host's own row. */
+  you: boolean;
+  /** 10 wrong PINs in all: locked until a reset code (pa1, ada-review.md decision 1). */
+  locked: boolean;
+}
+/**
+ * The santa kit's host facts on a Pocket card (pa10a/card-impl.md "Shape I read"). Counts, first names and
+ * display dates only: the validator rejects any block carrying a match-like field or a question's words.
+ */
+export interface SantaInfo {
+  phase: SantaPhase;
+  joined: number;
+  /** Everyone the request named; null when the host didn't say. */
+  expected: number | null;
+  /** First names not in yet (collecting). */
+  waiting_for: string[];
+  people: SantaPerson[];
+  /** Counts after the draw; null before it or when the box doesn't send them. */
+  looked: number | null;
+  gifts_ready: number | null;
+  asks_asked: number | null;
+  asks_answered: number | null;
+  /** First-name pairs kept apart in the draw. */
+  keep_apart: Array<[string, string]>;
+  /** "when all 9 are in, or Sun, Dec 6 at 6 PM, whichever comes first" */
+  draw_rule: string | null;
+  /** "Sun, Dec 6 at 6:00 PM" */
+  drawn_at: string | null;
+  reveal: 'scheduled' | 'shown' | 'skipped' | 'never';
+  /** "7:00 PM" (reveal day) */
+  reveal_at: string | null;
+  /** "Fri, Dec 18 at 7:00 PM" (ended, after a reveal) */
+  revealed_at: string | null;
+  /** "Fri, Dec 25" */
+  deletes_on: string | null;
+  /** "Dec 18" */
+  ended_on: string | null;
+  /** The draw can run now (Lin's draw.can_draw). */
+  can_draw: boolean;
+  /** Why the rules leave someone with no one (Santa needs_you); plain text from the box. */
+  blocked: string | null;
+  /** How people join: own https, else Tailscale Funnel, else Same Wi-Fi. Never a quick tunnel. */
+  join: { mode: 'anywhere' | 'wifi' | 'none'; anywhere_kind: 'https' | 'funnel' | null; anywhere_url: string | null; wifi_url: string | null } | null;
+}
+
 /**
  * A pocket app's card in chat (pa4, pa0a/design.md §1 and §6); source is always slot. Every time and
  * date is display text the server wrote for the person's time zone ("Fri, Nov 27 · 8:00 PM").
@@ -333,6 +390,8 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   budget: { calls: number; usd: number } | null;
   /** Ended with results: the card is the results card (design.md §6). */
   results: PocketResults | null;
+  /** kit "santa" only: the Secret Santa card (pa10a). `state` is "live" until the phase is "ended". */
+  santa: SantaInfo | null;
   /** pa4c: the quiz_drafts id (the bot card's `id`) that Edit questions opens. Null or absent: no editor. */
   draft?: string | null;
   /** pa4c: questions the person wrote or changed themselves (not source-checked). */

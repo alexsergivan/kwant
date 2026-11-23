@@ -753,6 +753,17 @@ async fn run_task_of(state: &AppState, link: &GoalLink) -> Option<String> {
     (fix.held_at.is_some() && matches!(fix.state.as_str(), "ready" | "backlog")).then_some(fix.id)
 }
 
+/// Whether this incident's own fix made the goal pass: its open remediation's Fix task is
+/// verified. Read by the recovered notice (34k), which the goal's passing run sends before the next
+/// tick closes the link and logs `fix_verified`; a link closes when its goal passes, so an earlier
+/// incident's verified fix is never this one's.
+pub async fn fixed_this_incident(state: &AppState, goal: &Goal) -> bool {
+    let Some(link) = state.db.open_goal_link_of(&goal.id).await.ok().flatten() else {
+        return false;
+    };
+    state.db.get_task(&link.fix_task_id).await.ok().flatten().is_some_and(|t| t.state == "verified")
+}
+
 /// The Investigate report summary of the incident that is open, if there is one.
 async fn diagnosis_of(state: &AppState, goal_id: &str, mission_id: &str) -> Option<String> {
     let evs = state.db.goal_events(goal_id, 40).await.ok()?;
@@ -778,10 +789,14 @@ pub async fn extras(state: &AppState, goal: &Goal) -> serde_json::Value {
             "diagnosis": d,
         });
     }
+    // When the open incident began (its first failing run): the row, the decision and the broken
+    // notice all say this one time (34k)
+    let since = if crate::server::goals::INCIDENT.contains(&goal.status.as_str()) { state.db.goal_incident_since(&goal.id).await.ok().flatten() } else { None };
     json!({
         "waiting_for": if goal.status == "waiting" { json!(goal.status_reason) } else { serde_json::Value::Null },
         "diagnosis": diagnosis,
         "open_mission": open,
+        "incident_since": since,
     })
 }
 

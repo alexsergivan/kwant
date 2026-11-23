@@ -8,6 +8,20 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.45] - 2026-11-23
+
+kwant 0.9.45: goal notices that say who fixed them.
+
+### Fixed
+- When a bot's fix brings a broken goal back, the recovered notice now says so ("{bot}'s fix worked; its checks pass again.") instead of "Its checks pass again. Nothing else to do.", and a broken goal's notice gives the time it first failed, the same time its row shows (#1082)
+
+## [Mac 0.9.44] - 2026-11-23
+
+kwant 0.9.44: goal drafts that say why they failed.
+
+### Fixed
+- When a bot can't draft a goal's checks, the Mission board now says why (for example "check 1: spec.url must start with http:// or https://") and offers Write the checks yourself, which opens the form with your words still in it, instead of saying "is drafting checks" for up to ten minutes (#1067)
+
 ## [Mac 0.9.43] - 2026-11-22
 
 kwant 0.9.43: goals that need you in the Inbox, Fix tasks checked against the goal's own test, goal alerts that keep coming after the first incident, a build switch that leaves updates to the package manager, a goal heartbeat that fills in with every check, a goal timeline in plain words, one-tap Show details on a phone, board links that open the board on a phone, goals that say why no fix is tried and goal notices that open the goal.

@@ -152,7 +152,7 @@ async function call<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string
       method,
       headers: body === undefined ? { Accept: 'application/json' } : { Accept: 'application/json', 'Content-Type': 'application/json' },
       credentials: 'same-origin',
-      body: body === undefined ? undefined : JSON.stringify(body),
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
   } catch {
     throw new PocketApiError('Your box didn’t answer. Check the connection and try again.', 0, null);
@@ -199,6 +199,20 @@ export const pocketApi = {
   end: async (code: string) => call<{ pocket: PocketCard }>('POST', `${one(code)}/end`),
   /** Final: players, answers and the pocket go now. */
   remove: async (code: string) => call<void>('DELETE', one(code)),
+  // pa10a: the host's own calls, person-only on the main port (Lin's src/pocket/host_api.rs, #1074). No /host
+  // segment: /host/* lives only on the guest port (/api/pocket/, singular), which refuses another origin.
+  /** A named kit action (santa: draw_now, reveal_now, skip_reveal, add_pair, ...). Returns the host view. */
+  hostAction: async (code: string, name: string, body?: Record<string, unknown>) => call<unknown>('POST', `${one(code)}/action`, body === undefined ? { name } : { name, body }),
+  /** The player's keys stop working; before the draw only for santa. Returns the host view. */
+  removePlayer: async (code: string, playerId: string) => call<unknown>('POST', `${one(code)}/remove`, { player_id: playerId }),
+  /** A one-time code, exactly once. Nothing else comes back: never a match. */
+  resetPin: async (code: string, playerId: string): Promise<ResetCode> => {
+    const r = await call<unknown>('POST', `${one(code)}/reset-pin`, { player_id: playerId });
+    const ok = r && typeof r === 'object' && typeof (r as ResetCode).code === 'string' && /^[A-Z0-9]{4,8}$/.test((r as ResetCode).code) && typeof (r as ResetCode).expires_at === 'string';
+    if (!ok) throw new PocketApiError('The box sent something unexpected. Try again.', 200, 'bad_answer');
+    // Only the two fields, whatever else the answer carried.
+    return { code: (r as ResetCode).code, expires_at: (r as ResetCode).expires_at };
+  },
   /** A fresh single-use link for the host remote or the big screen (pa1b). Every call mints a new one. */
   mintLink: async (code: string, role: PocketLinkRole) => call<PocketLink>('POST', `${one(code)}/link`, { role }),
   /** pa4c: the draft as the editor shows it. Works in every state (open and closed read only). */
@@ -218,4 +232,10 @@ export const pocketApi = {
 export function linkUrl(joinUrl: string, role: PocketLinkRole, token: string): string {
   const base = joinUrl.split('#')[0].split('?')[0];
   return `${base}#${role === 'host' ? 'remote' : 'screen'}=${encodeURIComponent(token)}`;
+}
+
+/** host/reset-pin's answer: the code and when it stops working (RFC 3339). */
+export interface ResetCode {
+  code: string;
+  expires_at: string;
 }
