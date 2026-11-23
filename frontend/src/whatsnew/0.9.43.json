@@ -1,0 +1,42 @@
+{
+  "version": "0.9.43",
+  "date": "2026-11-22",
+  "highlights": [
+    {
+      "id": "goal-needs-you-in-inbox",
+      "title": "Goals that need you show in the Inbox",
+      "text": "When a goal needs you, say a fix is ready for your OK, it now shows under Needs you in the Inbox with the reason. Tap it to open the goal on the Mission board.",
+      "image": "goal-needs-you.webp",
+      "open": null
+    },
+    {
+      "id": "goal-heartbeat-fills-in",
+      "title": "A goal's heartbeat shows every check",
+      "text": "Each check of a goal now adds a square to its heartbeat, so a healthy goal reads \"3/3 ok · Steady\". The timeline keeps to what happened, with no hourly \"Checked\" lines.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "goal-timeline-plain-words",
+      "title": "A goal's timeline says what happened",
+      "text": "A goal's history now reads in plain words and names the bot, like \"First check: OK\" or \"Told you it broke\". \"Waiting for your OK\" shows only once a fix really waits for you.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "goal-notice-opens-the-goal",
+      "title": "A goal notice opens the goal",
+      "text": "Tap a notice about a goal and kwant opens that goal on the Mission board with its details, instead of the bot's empty chat. With the board off, the chat opens as before.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A goal's Fix task now has to pass the goal's own test, so it can't pass on a weaker one.",
+    "A goal that breaks again the same day still tells you, and its questions for you are no longer held back by the alert limit.",
+    "Homebrew builds of kwnt no longer look for new releases themselves; Homebrew updates them.",
+    "On a phone, Show details on an approval opens on the first tap, even right after typing.",
+    "On a phone, a link to the Mission board, Parallel Universe or Dev desk opens that page, not the chat list.",
+    "A goal no fix can be tested for now moves to Needs you and says why, instead of sitting broken with no word."
+  ]
+}
