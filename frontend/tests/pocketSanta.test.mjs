@@ -284,11 +284,11 @@ test('buttons with no santa action yet are disabled and say why; Draw now says w
   const dates = button(d, 'Change dates');
   assert.equal(dates.getAttribute('aria-disabled'), 'true');
   assert.equal(dates.getAttribute('title'), m.SANTA_LATER.dates);
-  const c = await card('collecting');
+  const c = await card('collecting', withSanta('collecting', { can_draw: false }));
   const draw = button(c, 'Draw now');
   assert.equal(draw.getAttribute('aria-disabled'), 'true');
   assert.ok(draw.getAttribute('title'));
-  const few = await card('collecting', withSanta('collecting', { joined: 2, people: [] , waiting_for: []}));
+  const few = await card('collecting', withSanta('collecting', { joined: 2, people: [], waiting_for: [], can_draw: false }));
   assert.equal(button(few, 'Draw now').getAttribute('title'), 'A draw needs at least 3 people');
   const can = await card('collecting', withSanta('collecting', { can_draw: true }));
   assert.equal(button(can, 'Draw now').getAttribute('aria-disabled'), null);

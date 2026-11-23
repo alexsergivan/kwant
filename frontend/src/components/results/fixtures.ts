@@ -473,6 +473,7 @@ const collecting = {
   joined: 7,
   waiting_for: ['Leo', 'Zoe'],
   people: santaPeople(() => ({}), 7),
+  can_draw: true,
 };
 const drawnPeople = santaPeople((id, i) => ({ looked: id !== 'p8', gift_ready: i < 5 }));
 export const SANTA_FIXTURES = {

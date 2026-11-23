@@ -627,9 +627,12 @@ export const PeoplePanel: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ bl
               <li key={p.id} className={`border-b border-hairline last:rounded-b-2xl last:border-b-0 ${open ? 'bg-white/[0.03]' : ''}`} data-person={p.name}>
                 <div className="relative flex min-h-[56px] items-center gap-3 px-3.5 sm:min-h-[48px]">
                   <GuestCreature avatar={p.avatar} size={24} />
-                  <span className="min-w-0 flex-1 truncate text-[15px] font-semibold text-zinc-100 sm:text-body">{p.name}</span>
-                  <span className={`shrink-0 text-[13px] sm:text-2xs ${p.locked ? 'text-zinc-200' : 'text-zinc-400'}`} data-status>
-                    {statusText(p, s.phase)}
+                  {/* Phone: the status sits under the name, so a long status never squeezes the name out. */}
+                  <span className="flex min-w-0 flex-1 flex-col py-1.5 sm:flex-row sm:items-center sm:gap-3 sm:py-0">
+                    <span className="min-w-0 truncate text-[15px] font-semibold text-zinc-100 sm:flex-1 sm:text-body">{p.name}</span>
+                    <span className={`text-[13px] sm:shrink-0 sm:text-2xs ${p.locked ? 'text-zinc-200' : 'text-zinc-400'}`} data-status>
+                      {statusText(p, s.phase)}
+                    </span>
                   </span>
                   <button
                     type="button"
