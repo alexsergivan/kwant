@@ -250,6 +250,8 @@ impl Database {
         // 26b: routine runs can end `needs_you` or `incomplete` (rebuilds `routine_runs` once;
         // after the step that adds its `note` column)
         db.migrate_run_statuses().await?;
+        // routine-retry-once: a run can have trigger `retry` (AutoFix's run; rebuilds once more)
+        db.migrate_run_triggers().await?;
         // 0.9.0 P5: tool notes (add-only)
         db.migrate_tool_notes().await?;
         // 0.9.0 P1: mission watches and their checks (add-only)

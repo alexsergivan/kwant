@@ -37,7 +37,7 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
         let prov = block.provenance().kind.as_str();
         let prov_ok = match block {
             Block::Comparison(_) | Block::Steps(_) | Block::Recipe(_) => matches!(prov, "reply_text" | "bot_declared"),
-            Block::Verification(_) | Block::Files(_) => prov == "kwant_data",
+            Block::Verification(_) | Block::Files(_) | Block::Pocket(_) => prov == "kwant_data",
             _ => prov == "reply_text",
         };
         if !prov_ok {
@@ -446,6 +446,7 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
                     }
                 }
             }
+            Block::Pocket(p) => check_pocket(p)?,
         }
     }
     if let Some(reply) = reply {
@@ -458,6 +459,81 @@ pub fn validate(set: &ResultSet, reply: Option<&str>) -> Result<(), String> {
         return Err(format!("payload of {size} bytes"));
     }
     Ok(())
+}
+
+/// The Quizmaster's card (pa3c): kwant's own draft, drawn by the frontend's `validPocket`, whose
+/// rules these mirror so a block the server stores is one the chat draws. The parts kwant doesn't
+/// fill yet (rounds, live, join, ended, budget, results) must be empty.
+fn check_pocket(p: &super::Pocket) -> Result<(), String> {
+    const STATES: [&str; 6] = ["writing", "checking", "dry_run_stopped", "ready", "live", "ended"];
+    let reference = p.provenance.reference.as_deref().and_then(|r| r.strip_prefix("pocket:"));
+    if reference.is_none_or(|r| !id_like(r, 120)) || p.provenance.tool_call_id.is_some() {
+        return Err("pocket provenance".into());
+    }
+    if p.title.is_some() {
+        return Err("a pocket title".into());
+    }
+    if !(3..=32).contains(&p.code.len()) || !id_like(&p.code, 32) {
+        return Err("pocket code".into());
+    }
+    let kit_ok = p.kit.len() <= 24
+        && p.kit.bytes().next().is_some_and(|b| b.is_ascii_lowercase())
+        && p.kit.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_');
+    if !kit_ok {
+        return Err("pocket kit".into());
+    }
+    check_text(&p.name, 80, "pocket name")?;
+    if !STATES.contains(&p.state.as_str()) {
+        return Err(format!("pocket state {:?}", p.state));
+    }
+    if let Some(w) = &p.when {
+        check_text(w, 160, "pocket time")?;
+    }
+    if p.paused && p.state != "live" {
+        return Err("a paused pocket that isn't live".into());
+    }
+    if p.progress.as_ref().is_some_and(|g| g.total == 0 || g.done > g.total) {
+        return Err("pocket progress".into());
+    }
+    if let Some(c) = &p.checks {
+        if c.matched > c.total || c.swapped.len() > 20 {
+            return Err("pocket checks".into());
+        }
+        for q in &c.swapped {
+            check_text(q, 12, "swapped question")?;
+        }
+    }
+    if let Some(d) = &p.dry_run {
+        for (t, max, what) in [(&d.stopped_at, 80, "dry run stop"), (&d.what_happened, 400, "dry run line"), (&d.what_im_doing, 400, "dry run line")] {
+            if let Some(t) = t {
+                check_text(t, max, what)?;
+            }
+        }
+    }
+    let passed = p.dry_run.as_ref().map(|d| d.passed);
+    if (p.state == "ready" && passed != Some(true)) || (p.state == "dry_run_stopped" && passed == Some(true)) {
+        return Err(format!("a {} pocket's dry run", p.state));
+    }
+    for (t, max, what) in [(&p.eta, 120, "pocket eta"), (&p.opens_line, 200, "pocket opening")] {
+        if let Some(t) = t {
+            check_text(t, max, what)?;
+        }
+    }
+    if !p.rounds.is_empty() || p.live.is_some() || p.join.is_some() || p.ended.is_some() || p.budget.is_some() || p.results.is_some() {
+        return Err("a pocket part kwant doesn't fill".into());
+    }
+    if p.draft.as_deref().is_some_and(|d| !id_like(d, 64)) {
+        return Err("pocket draft".into());
+    }
+    if p.yours.is_some_and(|n| n > 10_000) {
+        return Err("pocket yours".into());
+    }
+    Ok(())
+}
+
+/// Letters, digits, `_` and `-`, 1 to `max` long.
+fn id_like(s: &str, max: usize) -> bool {
+    !s.is_empty() && s.len() <= max && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
 /// Tables (lists) are indexed in their own count; `slot` has no index. A list's `ordered` absent
@@ -482,7 +558,7 @@ fn check_source(block: &Block) -> Result<(), String> {
                     _ => false,
                 }
         }
-        "slot" => matches!(kind, "verification" | "files") && section_only && s.index.is_none() && s.ordered.is_none(),
+        "slot" => matches!(kind, "verification" | "files" | "pocket") && section_only && s.index.is_none() && s.ordered.is_none(),
         _ => false,
     };
     if ok {
