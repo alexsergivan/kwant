@@ -69,9 +69,15 @@ pub async fn call(state: &AppState, scope: &SelfScope, args: &Value) -> (String,
         Ok(Some(s)) => s,
         _ => return ("Could not find your space.".into(), true),
     };
+    // 34f: a goal draft turn that saves nothing says why on the board
+    let note = |outcome: Result<(), &str>| crate::server::goals_remediation::note_draft_call(state, space.as_str(), &scope.kwant_id, outcome);
     let checks: Vec<CheckInput> = match serde_json::from_value(args["checks"].clone()) {
         Ok(c) => c,
-        Err(e) => return (format!("checks: {e}"), true),
+        Err(e) => {
+            // The parse error quotes the bot's arguments; the board gets a plain reason instead
+            note(Err("the checks weren’t in a shape kwant takes"));
+            return (format!("checks: {e}"), true);
+        }
     };
     let mode = match args["mode"].as_str().map(str::trim) {
         Some("fix") | None => "suggest",
@@ -92,10 +98,14 @@ pub async fn call(state: &AppState, scope: &SelfScope, args: &Value) -> (String,
     };
     let new = match build_goal(state, &space, &input, &scope.kwant_id, true).await {
         Ok(n) => n,
-        Err(e) => return (e, true),
+        Err(e) => {
+            note(Err(e.as_str()));
+            return (e, true);
+        }
     };
     match state.db.create_goal(&new, now_ms()).await {
         Ok(Created::Goal(g)) => {
+            note(Ok(()));
             emit_goal(state, &g);
             let out = json!({
                 "goal_id": g.id,
@@ -104,12 +114,16 @@ pub async fn call(state: &AppState, scope: &SelfScope, args: &Value) -> (String,
             });
             (serde_json::to_string_pretty(&out).unwrap_or_default(), false)
         }
-        Ok(Created::TooManyDrafts) => (
-            format!("There are already {MAX_DRAFTS} goals waiting for the person's approval in this space. Ask them to approve or delete one first."),
-            true,
-        ),
+        Ok(Created::TooManyDrafts) => {
+            note(Err(format!("{MAX_DRAFTS} drafts already wait for your approval").as_str()));
+            (
+                format!("There are already {MAX_DRAFTS} goals waiting for the person's approval in this space. Ask them to approve or delete one first."),
+                true,
+            )
+        }
         Err(e) => {
             tracing::warn!(error = %e, "goal_propose");
+            note(Err("kwant couldn’t save the goal"));
             ("Could not save the goal.".into(), true)
         }
     }
