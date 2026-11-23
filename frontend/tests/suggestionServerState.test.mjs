@@ -63,6 +63,7 @@ test('fetchServerStates reads /api/connections quietly and throws on errors', as
   const got = await m.fetchServerStates(7, ok);
   assert.equal(asked.url, '/api/connections');
   assert.equal(asked.init.cache, 'no-store');
+  assert.equal(asked.init.kwntQuiet, true, 'a background read never opens the sign-in prompt');
   assert.equal(got.seq, 7);
   assert.equal(got.states.tasks, 'needs_sign_in');
   await assert.rejects(m.fetchServerStates(8, async () => new Response('{"error":"person only"}', { status: 401 })));
@@ -114,4 +115,31 @@ test('a chat needs the list only for an installed suggestion with a server, meta
   // The live record wins over the message's own meta (installed after the card was posted).
   const live = { s1: { id: 's1', status: 'installed', server_id: 'tasks', last_error: null, card: null } };
   assert.equal(m.chatHasInstalledServer(msgs([{ meta: JSON.stringify(pending) }]), live), true);
+});
+
+test('fetchServerStates through the app 401 wrapper never opens "Confirm it\'s you" (person-only 401)', async () => {
+  const auth = await loadBundled(`export * from './src/auth';`);
+  const seen = [];
+  let calls = 0;
+  const win = {
+    location: { origin: 'http://kwnt.test' },
+    fetch: async () => { calls += 1; return new Response(JSON.stringify({ error: 'needs token', person_only: true }), { status: 401, headers: { 'content-type': 'application/json' } }); },
+    dispatchEvent: (e) => { seen.push(e.type); return true; },
+    addEventListener() {}, removeEventListener() {},
+  };
+  const prevWindow = globalThis.window;
+  const prevFetch = globalThis.fetch;
+  globalThis.window = win;
+  try {
+    auth.installUnauthorizedListener();
+    globalThis.fetch = win.fetch;
+    await assert.rejects(m.fetchServerStates(1), /401/);
+    assert.equal(calls, 1);
+    assert.deepEqual(seen, [], 'the card\'s background read stays quiet');
+    await win.fetch('/api/connections');
+    assert.deepEqual(seen, [auth.PERSON_TOKEN_EVENT], 'control: a plain call through the same wrapper does prompt');
+  } finally {
+    globalThis.window = prevWindow;
+    globalThis.fetch = prevFetch;
+  }
 });

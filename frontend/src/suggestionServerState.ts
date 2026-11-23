@@ -46,11 +46,12 @@ export function suggestionServerState(
 }
 
 /**
- * Reads the connections list without the person-token prompt `connectionsApi.list()` can open: the
- * card asks on its own when a chat opens, so a viewer without the token just keeps today's card.
+ * Reads the connections list without the person-token prompt: the card asks on its own when a chat
+ * opens, so a viewer without the token just keeps today's card. `kwntQuiet` keeps the app's 401 wrapper
+ * (auth.ts installUnauthorizedListener) from opening "Confirm it's you" on the person-only 401.
  */
 export async function fetchServerStates(seq: number, send: typeof fetch = (...a) => fetch(...a)): Promise<ServerStates> {
-  const res = await send('/api/connections', { cache: 'no-store' });
+  const res = await send('/api/connections', { cache: 'no-store', kwntQuiet: true } as RequestInit);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
   const body = (await res.json()) as { connections?: unknown } | null;
   if (!body || !Array.isArray(body.connections)) throw new Error('No connections in the answer.');
