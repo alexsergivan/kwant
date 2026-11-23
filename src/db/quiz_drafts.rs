@@ -155,6 +155,7 @@ mod tests {
             pocket_code: Some("ABCD".into()),
             created_at: 1,
             updated_at: 1,
+            own_keys: "[]".into(),
         };
         db.quiz_draft_save(&r).await.unwrap();
         assert_eq!(db.quiz_draft_by_pocket("ABCD").await.unwrap().map(|r| r.id), Some("qd9".into()));
