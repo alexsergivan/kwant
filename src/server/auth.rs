@@ -1019,6 +1019,13 @@ mod tests {
         let (get, post, put, del) = (Method::GET, Method::POST, Method::PUT, Method::DELETE);
         assert!(person_only(&get, "/api/sandbox/t1/passwords"));
         assert!(person_only(&get, "/api/tool-notes"));
+        // Pocket apps (pa1): bots never list, make, end or delete pockets
+        assert!(person_only(&get, "/api/pockets"));
+        assert!(person_only(&post, "/api/pockets"));
+        assert!(person_only(&get, "/api/pockets/abcdef"));
+        assert!(person_only(&del, "/api/pockets/abcdef"));
+        assert!(person_only(&post, "/api/pockets/abcdef/host-key"));
+        assert!(!person_only(&get, "/api/pocket/abcdef/state"), "the guest API isn't on the main port at all");
         assert!(person_only(&get, "/api/glance"));
         assert!(person_only(&post, "/api/glance/ask"));
         assert!(person_only(&post, "/api/questions/q1/answer"));
