@@ -618,7 +618,7 @@ export const RoutineRow: React.FC<{
       <div className="flex items-start gap-2.5">
         {/* Mira's 0945 pass Minor d: on a phone the switch is a 44x44 hit area around the same 28x16 track, without moving it. */}
         <label
-          className="relative inline-flex shrink-0 items-center justify-center w-11 h-11 -mx-2 -my-3.5 sm:justify-start sm:w-auto sm:h-auto sm:p-1 sm:-m-1 cursor-pointer"
+          className="relative inline-flex shrink-0 items-center justify-center w-11 h-11 -mx-2 -mt-2.5 -mb-3.5 sm:justify-start sm:w-auto sm:h-auto sm:p-1 sm:-m-1 sm:mt-0 cursor-pointer"
           title={routine.enabled ? 'Turn off' : 'Turn on'}
         >
           <input

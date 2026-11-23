@@ -52,7 +52,7 @@ test('k: a run going on a paused routine keeps its live badge', () => {
 test('d: on a phone the switch is a 44x44 hit area; desktop keeps 36x24', () => {
   const label = card({}).match(/<label[^>]*title="Turn off"[^>]*>/);
   assert.ok(label, 'switch label rendered');
-  for (const c of ['w-11', 'h-11', 'sm:w-auto', 'sm:h-auto', 'sm:p-1', 'sm:-m-1']) assert.match(label[0], new RegExp(`class="[^"]*(?<![\\w:-])${c.replace(/[-:]/g, '\\$&')}(?![\\w-])`), c);
+  for (const c of ['w-11', 'h-11', 'sm:w-auto', 'sm:h-auto', 'sm:p-1', 'sm:-m-1', 'sm:mt-0']) assert.match(label[0], new RegExp(`class="[^"]*(?<![\\w:-])${c.replace(/[-:]/g, '\\$&')}(?![\\w-])`), c);
 });
 
 test('e: on a phone "Open result" is 44 px tall; desktop unchanged', () => {
