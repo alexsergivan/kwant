@@ -125,8 +125,10 @@ export class SantaBox {
       if (!this.s.join) return err(410, 'ended');
       this.seat = copy(this.s.join);
       this.seat.me = { ...this.seat.me, name: body.name ?? this.seat.me.name, avatar: body.avatar ?? this.seat.me.avatar };
-      this.seat.view.people = [...people.filter((p) => p.id !== this.seat.me.id), { id: this.seat.me.id, name: this.seat.me.name, avatar: this.seat.me.avatar }];
-      this.seat.view.joined = (this.seat.view.joined ?? 5) + 1;
+      // The joiner is a new person (p6): everyone already listed stays, and joined counts exactly the people drawn.
+      this.seat.me.id = 'p6';
+      this.seat.view.people = [...this.seat.view.people.filter((p) => p.id !== 'p6'), { id: 'p6', name: this.seat.me.name, avatar: this.seat.me.avatar }];
+      this.seat.view.joined = this.seat.view.people.length;
       this.bump();
       return { status: 201, body: this.env() };
     }

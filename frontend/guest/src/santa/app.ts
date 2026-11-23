@@ -743,7 +743,7 @@ export class SantaApp {
 
   /** "Edit my wish list" (G2, and under the match): opens a box with Save. Allowed until the gift day. */
   private wishEditor(v: SantaView): HTMLElement {
-    const label = v.my_wish ? 'Edit my wish list' : 'Add a wish list';
+    const label = v.my_wish ? 'Edit my wish list' : 'Add my wish list';
     if (!this.wishOpen) {
       const b = h('button', { type: 'button', class: 'gbtn ghost', 'data-edit-wish': '' }, label);
       b.addEventListener('click', () => {
@@ -819,7 +819,7 @@ export class SantaApp {
       'div',
       { class: 'body' },
       changed
-        ? h('div', { class: 'notice plain', role: 'status', 'data-changed': '' }, icon('info', 'pi'), h('span', null, h('b', null, 'Your match changed.'), ' ', h('span', { class: 'soft' }, "Someone joined late, so you're buying for someone new.")))
+        ? h('div', { class: 'notice plain', role: 'status', 'data-changed': '' }, saIcon('gift'), h('span', null, h('b', null, 'Your match changed.'), ' ', h('span', { class: 'soft' }, "Someone joined late, so you're buying for someone new.")))
         : null,
       h('div', { class: 'say' }, santa(36), h('div', { class: 'b' }, changed ? 'Your new match is inside. Only you can see it.' : `Names are drawn, ${me.name}! Your match is inside. Only you can see it.`)),
       h('div', { class: 'center' }, giftbox()),
@@ -875,7 +875,7 @@ export class SantaApp {
       left !== undefined && left >= 0 ? this.fact('Days left', left === 0 ? 'Today' : fmt(left)) : null,
     ].filter(Boolean) as HTMLElement[];
     const wishes = (m.wish ?? '').split(/\n+/).map((s) => s.trim()).filter(Boolean);
-    const ready = h('button', { type: 'button', class: `gbtn ghost${v.gift_ready ? ' done' : ''}`, 'aria-pressed': v.gift_ready ? 'true' : 'false', 'data-gift': '' }, icon(v.gift_ready ? 'check' : 'tick', 'pi'), v.gift_ready ? 'Gift ready' : "I've got the gift") as HTMLButtonElement;
+    const ready = h('button', { type: 'button', class: `gbtn ghost${v.gift_ready ? ' done' : ''}`, 'aria-pressed': v.gift_ready ? 'true' : 'false', 'data-gift': '' }, v.gift_ready ? icon('check', 'pi') : saIcon('gift'), v.gift_ready ? 'Gift ready' : "I've got the gift") as HTMLButtonElement;
     ready.disabled = this.busy === 'gift';
     ready.addEventListener('click', () => void this.giftReady(!v.gift_ready));
     const newIn = v.asks.received.some((a) => !a.a && (a.new || this.fresh.has(a.id)));
@@ -894,8 +894,8 @@ export class SantaApp {
       h(
         'div',
         { class: `matchcard${this.popping() ? ' pop' : ''}`, tabindex: -1, role: 'group', 'aria-label': `You're buying for ${m.name}` },
-        h('span', { class: 'twinkle t1' }, icon('star', 'pi')),
-        h('span', { class: 'twinkle t2' }, icon('star', 'pi')),
+        h('span', { class: 'twinkle tw1' }, icon('star', 'pi')),
+        h('span', { class: 'twinkle tw2' }, icon('star', 'pi')),
         h('div', { class: 'eyebrow' }, saIcon('gift'), "You're buying for"),
         h('div', null, creature(m.avatar, 'big')),
         h('div', { class: 'nm' }, m.name),
@@ -1109,8 +1109,8 @@ export class SantaApp {
         ? h(
             'div',
             { class: 'matchcard', role: 'group', 'aria-label': `Your Santa was ${s.name}` },
-            h('span', { class: 'twinkle t1' }, icon('star', 'pi')),
-            h('span', { class: 'twinkle t2' }, icon('star', 'pi')),
+            h('span', { class: 'twinkle tw1' }, icon('star', 'pi')),
+            h('span', { class: 'twinkle tw2' }, icon('star', 'pi')),
             h('div', { class: 'eyebrow' }, 'Your Santa was'),
             h('div', null, creature(s.avatar, 'big')),
             h('div', { class: 'nm' }, s.name),

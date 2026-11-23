@@ -321,9 +321,8 @@ button.ans:active:not(:disabled) { animation: tap 120ms var(--kw-ease); }
 .pin.warn { border-color: color-mix(in srgb, var(--kw-warn) 70%, transparent); }
 .pin .caret { width: 2px; height: 28px; background: var(--sky-300); }
 .pin-in { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; border: 0; padding: 0; font-size: 16px; color: transparent; caret-color: transparent; background: transparent; }
-.pinwrap:has(.pin-in:focus-visible) .pins { outline: 3px solid var(--sky-300); outline-offset: 4px; border-radius: 16px; }
 
-.wish { display: block; width: 100%; min-height: 104px; resize: vertical; border-radius: 14px; background: var(--kw-surface-main); border: 2px solid var(--zinc-700); padding: 12px 16px; font: inherit; font-size: 16px; line-height: 24px; color: var(--zinc-100); }
+.wish { display: block; width: 100%; min-height: 104px; resize: none; border-radius: 14px; background: var(--kw-surface-main); border: 2px solid var(--zinc-700); padding: 12px 16px; font: inherit; font-size: 16px; line-height: 24px; color: var(--zinc-100); }
 .wish:focus { border-color: var(--sky-400); outline: none; }
 /* 8 creatures in two rows of 4: one row of 8 would make each tap target under 44 px at 390. */
 .crow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
@@ -341,8 +340,8 @@ button.ans:active:not(:disabled) { animation: tap 120ms var(--kw-ease); }
 .matchcard .nm { font-size: 34px; line-height: 40px; font-weight: 800; letter-spacing: -0.02em; overflow-wrap: anywhere; }
 .matchcard .twinkle { position: absolute; color: var(--kw-warn); }
 .matchcard .twinkle svg.pi { width: 12px; height: 12px; }
-.matchcard .t1 { top: 16px; left: 20%; }
-.matchcard .t2 { top: 44px; right: 18%; }
+.matchcard .tw1 { top: 16px; left: 20%; }
+.matchcard .tw2 { top: 44px; right: 18%; }
 .wl { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .wl li { display: flex; gap: 10px; align-items: flex-start; font-size: 16px; line-height: 23px; overflow-wrap: anywhere; min-width: 0; }
 .wl li svg.pi { width: 12px; height: 11px; margin-top: 6px; color: var(--sky-300); flex-shrink: 0; }
@@ -376,7 +375,9 @@ button.ans:active:not(:disabled) { animation: tap 120ms var(--kw-ease); }
 .who-grid .sm { width: 36px; height: 45px; }
 .who-grid .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .who-grid .empty { width: 36px; height: 45px; margin: 0 auto; border-radius: 10px; border: 2px dashed var(--zinc-700); display: grid; place-items: center; color: var(--zinc-500); font-weight: 700; }
-.sa .timer { margin-top: 10px; width: 100%; }
+.sa .timer { flex: none; height: 6px; border-radius: 3px; border-color: var(--kw-hairline); margin-top: 10px; width: 100%; }
+.sa .timer i { background: var(--sky-400); }
+.sa.s-unwrap .body { justify-content: center; gap: 18px; }
 .sa .timer i { transition: none; }
 .sa .timer i.w0 { transform: scaleX(0); }
 .sa .timer i.w1 { transform: scaleX(0.05); }

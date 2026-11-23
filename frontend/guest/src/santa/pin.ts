@@ -48,7 +48,7 @@ export class PinInput {
     const n = this.input.value.length;
     const focused = document.activeElement === this.input;
     this.boxes.forEach((b, i) => {
-      b.classList.toggle('on', focused && i === Math.min(n, 3) && n < 4);
+      b.classList.toggle('on', focused && i === Math.min(n, 3));
       b.replaceChildren(i < n ? '•' : focused && i === n ? h('span', { class: 'caret' }) : '');
     });
   }

@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { startFake } from '../fake/server.mjs';
 import { CSP, order } from '../fake/views.mjs';
+import { santaScenarios } from '../fake/santa.mjs';
 
 const pw = await import(process.env.PW_CORE || 'playwright-core');
 const out = path.resolve(process.argv[2] || 'guest-shots');
@@ -200,6 +201,11 @@ for (const name of order) {
   const go = async (code, screen, { base = origin, reduced = false } = {}) => {
     const p = await newPage();
     if (reduced) await p.page.emulateMedia({ reducedMotion: 'reduce' });
+    // A pre-seated scenario (state is a seat, not a status) is a guest who joined earlier: give the page its seat
+    // cookie, as pa1 would have set it on join. Without it the box answers 401 and the page rightly shows G10 late.
+    if (typeof santaScenarios[code]?.state === 'object') {
+      await p.ctx.addCookies([{ name: `kp_${code}`, value: 'fake', domain: '127.0.0.1', path: `/api/pocket/${code}`, httpOnly: true, sameSite: 'Strict' }]);
+    }
     const res = await p.page.goto(`${base}/p/${code}`);
     if (res.headers()['content-security-policy'] !== CSP) problems.push(`${code}: wrong CSP header`);
     await p.page.waitForSelector(`main.sa[data-screen="${screen}"]`, { timeout: 20000 });
