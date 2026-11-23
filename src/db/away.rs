@@ -44,11 +44,15 @@ pub struct AwayRow {
     pub direct_kwant_id: Option<String>,
     /// Questions only: the JSON array of choices.
     pub choices: Option<String>,
+    /// Routine runs only: the run's routine, so a failed one can offer Run again
+    /// (`POST /api/routines/:id/run`). `NULL` on every other kind.
+    pub routine_id: Option<String>,
 }
 
 const OPEN_QUESTIONS: &str = "
     SELECT 'question' AS kind, q.id, q.kwant_id, k.name AS kwant_name, q.question AS title, q.status,
-           NULL AS body, q.created_at AS at, q.thread_id, q.channel_id, q.direct_kwant_id, q.choices
+           NULL AS body, q.created_at AS at, q.thread_id, q.channel_id, q.direct_kwant_id, q.choices,
+           NULL AS routine_id
     FROM questions q LEFT JOIN kwants k ON k.id = q.kwant_id
     WHERE q.status = 'open'
       AND COALESCE(k.space_id, 'spc_default') = ?3";
@@ -57,7 +61,8 @@ const OPEN_QUESTIONS: &str = "
 const DELEGATIONS_ENDED: &str = "
     SELECT 'delegation' AS kind, d.id, d.specialist_kwant_id AS kwant_id, k.name AS kwant_name, d.title, d.status,
            CASE WHEN d.status = 'completed' THEN COALESCE(m.text, d.error) ELSE COALESCE(d.error, m.text) END AS body,
-           d.ended_at AS at, d.thread_id, NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices
+           d.ended_at AS at, d.thread_id, NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices,
+           NULL AS routine_id
     FROM delegations d
     LEFT JOIN kwants k ON k.id = d.specialist_kwant_id
     LEFT JOIN messages m ON m.id = d.result_message_id
@@ -68,7 +73,7 @@ const DELEGATIONS_ENDED: &str = "
 const DELEGATIONS_STUCK: &str = "
     SELECT 'delegation' AS kind, d.id, d.specialist_kwant_id AS kwant_id, k.name AS kwant_name, d.title,
            'stuck' AS status, NULL AS body, d.started_at AS at, d.thread_id,
-           NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices
+           NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices, NULL AS routine_id
     FROM delegations d LEFT JOIN kwants k ON k.id = d.specialist_kwant_id
     WHERE d.status = 'running' AND d.started_at < ?1
       AND COALESCE(k.space_id, 'spc_default') = ?3
@@ -81,7 +86,8 @@ const ROUTINE_RUNS_ENDED: &str = "
     SELECT 'routine_run' AS kind, r.id, rt.kwant_id, k.name AS kwant_name, rt.name AS title, r.status,
            CASE WHEN r.status = 'ok' THEN m.text ELSE r.error END AS body, r.ended_at AS at,
            NULL AS thread_id, rt.channel_id,
-           CASE WHEN rt.channel_id IS NULL THEN rt.kwant_id END AS direct_kwant_id, NULL AS choices
+           CASE WHEN rt.channel_id IS NULL THEN rt.kwant_id END AS direct_kwant_id, NULL AS choices,
+           r.routine_id
     FROM routine_runs r
     JOIN routines rt ON rt.id = r.routine_id
     LEFT JOIN kwants k ON k.id = rt.kwant_id
@@ -193,7 +199,7 @@ impl Database {
         let sql = format!(
             "SELECT 'approval' AS kind, a.id, a.kwant_id, k.name AS kwant_name, a.tool_name AS title, a.status,
                     a.parameters AS body, a.created_at AS at, NULL AS thread_id, NULL AS channel_id,
-                    NULL AS direct_kwant_id, NULL AS choices
+                    NULL AS direct_kwant_id, NULL AS choices, NULL AS routine_id
              FROM approvals a LEFT JOIN kwants k ON k.id = a.kwant_id
              WHERE a.status = 'pending' AND a.id IN ({marks})
              ORDER BY a.created_at DESC, a.rowid DESC"
