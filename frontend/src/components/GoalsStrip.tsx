@@ -89,6 +89,10 @@ const goodBtn = `${btn} bg-teal-300 text-zinc-950 font-semibold hover:bg-teal-20
 const mainBtn = `${btn} bg-sky-600 text-white hover:bg-sky-700`;
 const dangerBtn = `${btn} border border-rose-500/40 text-rose-200 hover:bg-rose-500/10`;
 const linkBtn = `inline-flex items-center min-h-[40px] sm:min-h-0 rounded text-sky-300 underline underline-offset-2 hover:text-sky-200 ${focusRing}`;
+// A link inside a sentence: it keeps the sentence's line height (a button lays out as an inline block, so padding
+// would push the lines apart, and so would the phone 44 px rule, hence data-compact); on a phone an invisible layer
+// makes the tap target 44 px tall instead.
+const inlineLinkBtn = `relative inline rounded text-left text-sky-300 underline underline-offset-2 hover:text-sky-200 after:absolute after:inset-x-0 after:-inset-y-[14px] sm:after:hidden ${focusRing}`;
 const field =
   'w-full min-w-0 min-h-[40px] sm:min-h-[36px] px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-sky-500 aria-[invalid=true]:border-rose-500/70';
 const heading = 'text-[11px] font-medium uppercase tracking-wide text-zinc-500';
@@ -1481,7 +1485,13 @@ export const GoalsStrip: React.FC<{
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [drafting, setDrafting] = useState<{ bot: string; text: string; at: number; known: string[] } | null>(null);
+  const [drafting, setDrafting] = useState<{ bot: string; kwantId: string; text: string; at: number; known: string[] } | null>(null);
+  // 34f: the bot's draft turn ended without a draft; says why, in place of the drafting line.
+  const [draftFailed, setDraftFailed] = useState<{ bot: string; text: string; reason: string } | null>(null);
+  const draftingRef = useRef(drafting);
+  draftingRef.current = drafting;
+  // The draft request on its way: a failure for its bot that arrives before the reply is kept here.
+  const askingRef = useRef<{ kwantId: string; reason: string | null } | null>(null);
   // Detail reads for list rows that don't carry their incident (D8): the strip can show the decision without the drawer.
   const [reads, setReads] = useState<Record<string, GoalDetail>>({});
   const reading = useRef<Set<string>>(new Set());
@@ -1629,6 +1639,22 @@ export const GoalsStrip: React.FC<{
     window.addEventListener(OPEN_GOAL_EVENT, onOpen);
     return () => window.removeEventListener(OPEN_GOAL_EVENT, onOpen);
   }, []);
+
+  // 34f: the server says the bot we wait on saved no draft: stop the spinner and say why.
+  useEffect(
+    () =>
+      onMission('goal_draft_failed', (e) => {
+        if (e.space_id && spaceId && e.space_id !== spaceId) return;
+        // The turn can fail before the request's reply arrives: keep the reason for requestDraft
+        const asked = askingRef.current;
+        if (asked && asked.kwantId === e.kwant_id) asked.reason = e.reason;
+        const cur = draftingRef.current;
+        if (!cur || cur.kwantId !== e.kwant_id) return;
+        setDrafting(null);
+        setDraftFailed({ bot: cur.bot, text: cur.text, reason: e.reason });
+      }),
+    [spaceId],
+  );
 
   // A requested draft: done when a draft this strip hadn't seen shows up, or after ten minutes.
   useEffect(() => {
@@ -1811,6 +1837,8 @@ export const GoalsStrip: React.FC<{
     setFormError(null);
     const k = `draft:${kwantId}:${text}`;
     const key = (keys.current[k] ??= newIdempotencyKey());
+    const asked: { kwantId: string; reason: string | null } = { kwantId, reason: null };
+    askingRef.current = asked;
     try {
       const g = await api.draft({ space_id: spaceId, kwant_id: kwantId, text }, key);
       if (!alive.current) return;
@@ -1819,13 +1847,20 @@ export const GoalsStrip: React.FC<{
       if (g) {
         upsert(g);
         setPanel(g.status === 'draft' ? { kind: 'goal', id: g.id } : null);
+      } else if (asked.reason !== null) {
+        // It already failed while the request was on its way
+        setDrafting(null);
+        setDraftFailed({ bot: names[kwantId] ?? 'The bot', text, reason: asked.reason });
+        setPanel(null);
       } else {
-        setDrafting({ bot: names[kwantId] ?? 'The bot', text, at: Date.now(), known: (goals ?? []).map((x) => x.id) });
+        setDraftFailed(null);
+        setDrafting({ bot: names[kwantId] ?? 'The bot', kwantId, text, at: Date.now(), known: (goals ?? []).map((x) => x.id) });
         setPanel(null);
       }
     } catch (e) {
       setFormError(errText(e, 'Couldn’t ask for a draft. Try again.'));
     } finally {
+      if (askingRef.current === asked) askingRef.current = null;
       savingRef.current = false;
       if (alive.current) setSaving(false);
     }
@@ -1931,12 +1966,44 @@ export const GoalsStrip: React.FC<{
     setFormError(null);
     setPanel({ kind: 'new' });
   };
-  const draftingLine = drafting && (
+  const draftingLine = drafting ? (
     <p role="status" className={`flex min-w-0 items-center gap-1.5 text-[11px] text-sky-200 ${wrap}`} data-goals-drafting>
       <Loader2 size={11} className={`shrink-0 ${spin}`} aria-hidden="true" />
       {drafting.bot} is drafting checks for “{quotedGoalText(drafting.text)}”. The draft shows here.
     </p>
-  );
+  ) : draftFailed ? (
+    <p role="status" className="flex min-w-0 items-start gap-1.5 text-[11px] text-amber-200" data-goals-draft-failed>
+      <AlertTriangle size={11} className="mt-[3px] shrink-0" aria-hidden="true" />
+      <span className={`min-w-0 flex-1 ${wrap}`}>
+        {draftFailed.bot} couldn’t draft it: {draftFailed.reason.replace(/[.\s]+$/, '')}.{' '}
+        <button
+          type="button"
+          onClick={() => {
+            const seed = draftFailed.text;
+            setDraftFailed(null);
+            setFormError(null);
+            setPanel({ kind: 'form', seed });
+          }}
+          className={inlineLinkBtn}
+          data-compact
+          data-goals-draft-write
+        >
+          Write the checks yourself
+        </button>
+        .
+      </span>
+      <button
+        type="button"
+        onClick={(e) => {
+          // Keyboard focus goes to "New goal", the natural next step, instead of falling to the page
+          e.currentTarget.closest('[data-goals-strip]')?.querySelector<HTMLElement>('[data-new-goal]')?.focus();
+          setDraftFailed(null);
+        }}
+        aria-label="Dismiss" className={`-my-2.5 -mr-2 inline-flex h-10 w-10 shrink-0 items-center justify-center rounded text-zinc-500 hover:text-zinc-200 sm:my-0 sm:mr-0 sm:h-auto sm:w-auto sm:p-0.5 ${focusRing}`} data-goals-draft-dismiss>
+        <X size={11} aria-hidden="true" />
+      </button>
+    </p>
+  ) : null;
 
   // Empty: one line with a link, not a panel (B.0 rule 5), so the board's columns stay in view.
   if (goals !== null && sorted.length === 0)

@@ -1779,7 +1779,9 @@ export type MissionEvent =
   | { type: 'fact_changed'; data: { fact: FactChangedEvent } }
   | { type: 'fact_dispute'; data: { dispute: FactDisputeEvent } }
   /** Goals (0.6.5): a goal changed status or was checked, edited, approved or deleted. */
-  | { type: 'goal_updated'; data: { id: string; status: string | null } };
+  | { type: 'goal_updated'; data: { id: string; status: string | null } }
+  /** 34f: a bot's goal draft turn saved no draft; `reason` says why. */
+  | { type: 'goal_draft_failed'; data: { space_id: string | null; kwant_id: string; reason: string } };
 
 const bus = typeof EventTarget !== 'undefined' ? new EventTarget() : null;
 

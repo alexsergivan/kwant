@@ -122,7 +122,9 @@ pub fn owners(event: &RuntimeEvent) -> Vec<Owner> {
         E::Error { kwant_id, .. } => contexts([kwant_id]),
         E::RoutineRun { routine_id, .. } => vec![Owner::Routine(routine_id.clone())],
         E::TaskUpdated { task: v } | E::MissionUpdated { mission: v } => fields(v, &["space_id"], Owner::Space),
-        E::GoalUpdated { space_id, .. } | E::IdeaUpdated { space_id, .. } => vec![Owner::Space(space_id.clone())],
+        E::GoalUpdated { space_id, .. } | E::GoalDraftFailed { space_id, .. } | E::IdeaUpdated { space_id, .. } => {
+            vec![Owner::Space(space_id.clone())]
+        }
         E::DevCard { space_id, .. }
         | E::DevPrepush { space_id, .. }
         | E::DevMode { space_id, .. }
@@ -331,6 +333,7 @@ mod tests {
             E::TaskUpdated { task: json!({"id": "t", "space_id": "spc_x"}) },
             E::MissionUpdated { mission: json!({"id": "m", "space_id": "spc_x"}) },
             E::GoalUpdated { id: s("g"), status: s("met"), space_id: s("spc_x") },
+            E::GoalDraftFailed { space_id: s("spc_x"), kwant_id: s("k"), reason: s("x") },
             E::DevCard { space_id: s("spc_x"), id: s("dvc_1"), kind: s("landed"), status: s("ready") },
             E::DevPrepush { space_id: s("spc_x"), id: s("pp_1"), kwant_id: s("kw"), status: s("blocked") },
             E::DevMode { space_id: s("spc_x"), on: true },
@@ -409,6 +412,7 @@ mod tests {
                 | E::TaskUpdated { .. }
                 | E::MissionUpdated { .. }
                 | E::GoalUpdated { .. }
+                | E::GoalDraftFailed { .. }
                 | E::DevCard { .. }
                 | E::DevPrepush { .. }
                 | E::DevMode { .. }
