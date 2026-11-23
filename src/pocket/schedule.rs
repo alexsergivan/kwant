@@ -182,23 +182,38 @@ pub fn reminder_copy(title: &str, zone: &Zone, starts_at: DateTime<Utc>, opens_a
     Some((format!("{t} {day}"), body, line))
 }
 
-/// The results' words: `(notification title, notification body, chat line)`. Counts only.
-pub fn results_copy(kit: &str, title: &str, players: usize, has_chat: bool) -> (String, String, String) {
+/// The results' words: `(notification title, notification body, chat line)`. Counts only, the
+/// same for every kit (Mira's copy check: the title says which pocket, the body the outcome).
+pub fn results_copy(title: &str, players: usize, has_chat: bool) -> (String, String, String) {
     let t = short_title(title);
-    let head = if kit == "quiz" { "Quiz results are in".to_string() } else { "Results are in".to_string() };
-    let body = if has_chat { format!("{t} has ended. The results are in your chat.") } else { format!("{t} has ended.") };
     let who = match players {
         0 => "Nobody joined.".to_string(),
         1 => "1 player took part.".to_string(),
         n => format!("{n} players took part."),
     };
-    (head, body, format!("{t} has ended. {who}"))
+    let body = if has_chat && players > 0 { format!("{who} The results are in your chat.") } else { who.clone() };
+    (format!("{t} has ended"), body, format!("{t} has ended. {who}"))
 }
 
-/// The line under the card's name: "Fri 27 Nov, 8 PM".
+/// The line under the card's name: "Fri, Nov 27 · 8 PM".
 fn when_line(zone: &Zone, starts_at: DateTime<Utc>) -> String {
     let l = zone.local(starts_at);
-    format!("{}, {}", l.format("%a %-d %b"), clock(l))
+    format!("{} · {}", l.format("%a, %b %-d"), clock(l))
+}
+
+/// The guests' names leave a posted results block: each team's `members` empties and
+/// `results.names_deleted_at` records when. Team names, points and the winner stay (Mira's
+/// copy check: the Ended card promises "Names and answers are deleted on …").
+pub fn blank_names(block: &mut Value, at: DateTime<Utc>) {
+    let Some(results) = block.get_mut("results").and_then(Value::as_object_mut) else { return };
+    if let Some(teams) = results.get_mut("teams").and_then(Value::as_array_mut) {
+        for team in teams.iter_mut().filter_map(Value::as_object_mut) {
+            if team.contains_key("members") {
+                team.insert("members".into(), json!([]));
+            }
+        }
+    }
+    results.insert("names_deleted_at".into(), json!(at));
 }
 
 /// The kit's results when they fit the card's shape (1-12 teams), else `Null`.
@@ -360,14 +375,17 @@ pub struct Ran {
     pub ended: usize,
     pub reminded: Vec<String>,
     pub results: Vec<String>,
+    /// Results messages whose guest names were blanked (the pocket's data expired or was deleted).
+    pub names_deleted: usize,
 }
 
 /// One run at `now`: end pockets whose kit finished or whose closing time passed, send due
 /// reminders, then post the results of ended pockets. Does nothing while the switch is off.
 /// Runs before the sweep, so a pocket that keeps nothing after it ends still gets its results
-/// posted before the sweep deletes it.
+/// posted before the sweep deletes it. Blanking guest names in posted results comes first and
+/// runs even with the switch off: it only ever removes data.
 pub async fn run_once(state: &AppState, now: DateTime<Utc>) -> Ran {
-    let mut ran = Ran::default();
+    let mut ran = Ran { names_deleted: forget_names(state, now).await, ..Ran::default() };
     if !super::enabled(&state.db).await {
         return ran;
     }
@@ -411,6 +429,36 @@ pub async fn run_once(state: &AppState, now: DateTime<Utc>) -> Ran {
     ran
 }
 
+/// Blanks guest names in posted results whose pocket's data is gone or expires by `now` (the
+/// sweep deletes it right after this run), and tells open chats.
+async fn forget_names(state: &AppState, now: DateTime<Utc>) -> usize {
+    let ids = match state.db.pocket_result_posts_expired(now).await {
+        Ok(ids) => ids,
+        Err(e) => {
+            tracing::warn!("pocket apps: couldn't list results to clear names from: {e}");
+            return 0;
+        }
+    };
+    let mut done = 0;
+    for id in ids {
+        if let Ok(Some(mut m)) = state.db.get_message(&id).await {
+            let mut meta: Value = m.meta.as_deref().and_then(|t| serde_json::from_str(t).ok()).unwrap_or(Value::Null);
+            if meta.get("block").is_some() {
+                blank_names(&mut meta["block"], now);
+                if let Err(e) = state.db.set_message_meta(&id, &meta).await {
+                    tracing::warn!("pocket apps: couldn't clear names from a results message: {e}");
+                    continue;
+                }
+                m.meta = Some(meta.to_string());
+                let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&m).unwrap_or(Value::Null) });
+                done += 1;
+            }
+        }
+        let _ = state.db.pocket_result_post_delete(&id).await;
+    }
+    done
+}
+
 fn origin_of(row: &ScheduleRow) -> Option<Origin> {
     row.origin.as_deref().and_then(|o| serde_json::from_str(o).ok())
 }
@@ -430,7 +478,7 @@ async fn remind(state: &AppState, code: &str, at: DateTime<Utc>, now: DateTime<U
     let Some((_, _, line)) = reminder_copy(&s.row.title, &zone, starts_at, s.row.opens_at, now, true) else { return Ok(false) };
     let origin = origin_of(&row);
     let posted = match &origin {
-        Some(o) => post(state, o, json!({ "kind": "pocket", "reason": "reminder", "code": code, "starts_at": starts_at, "opens_at": s.row.opens_at, "block": null }), line).await,
+        Some(o) => post(state, o, json!({ "kind": "pocket", "reason": "reminder", "code": code, "starts_at": starts_at, "opens_at": s.row.opens_at, "block": null }), line).await.is_some(),
         None => false,
     };
     let Some((title, body, _)) = reminder_copy(&s.row.title, &zone, starts_at, s.row.opens_at, now, posted) else { return Ok(false) };
@@ -447,12 +495,26 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
     let row = state.db.pocket_schedule(code).await?;
     let zone = Zone::parse(row.as_ref().map_or("UTC", |r| r.zone.as_str()));
     let origin = row.as_ref().and_then(origin_of);
-    let (_, _, line) = results_copy(&s.row.kit, &s.row.title, s.players.len(), true);
+    let (_, _, line) = results_copy(&s.row.title, s.players.len(), true);
     let posted = match &origin {
-        Some(o) => post(state, o, json!({ "kind": "pocket", "reason": "results", "code": code, "block": ended_block(&s, row.as_ref(), &zone) }), line).await,
+        Some(o) => {
+            let mut block = ended_block(&s, row.as_ref(), &zone);
+            // Data that is deleted as the pocket ends (or already due) never reaches the chat with names
+            let expiring = s.row.expires_at.is_some_and(|e| e <= now);
+            if expiring {
+                blank_names(&mut block, now);
+            }
+            let id = post(state, o, json!({ "kind": "pocket", "reason": "results", "code": code, "block": block }), line).await;
+            if let (Some(id), false) = (&id, expiring) {
+                if let Err(e) = state.db.pocket_result_post_insert(id, code).await {
+                    tracing::warn!(code = %code, "pocket apps: couldn't note a results message for its names' expiry: {e}");
+                }
+            }
+            id.is_some()
+        }
         None => false,
     };
-    let (title, body, _) = results_copy(&s.row.kit, &s.row.title, s.players.len(), posted);
+    let (title, body, _) = results_copy(&s.row.title, s.players.len(), posted);
     notify(state, origin.as_ref(), &s, title, body).await;
     Ok(true)
 }
@@ -465,10 +527,11 @@ async fn sender(state: &AppState, kwant_id: &str) -> String {
     }
 }
 
-/// Posts a card into the origin chat. `false` when the chat is gone (the notification still goes).
-async fn post(state: &AppState, o: &Origin, mut meta: Value, text: String) -> bool {
+/// Posts a card into the origin chat: the message's id, `None` when the chat is gone (the
+/// notification still goes).
+async fn post(state: &AppState, o: &Origin, mut meta: Value, text: String) -> Option<String> {
     if check_origin(state, o).await.is_err() {
-        return false;
+        return None;
     }
     let message = NewMessage {
         channel_id: o.channel_id.clone(),
@@ -488,11 +551,11 @@ async fn post(state: &AppState, o: &Origin, mut meta: Value, text: String) -> bo
                 let _ = state.db.touch_thread(t).await;
             }
             let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&m).unwrap_or(Value::Null) });
-            true
+            Some(m.id)
         }
         Err(e) => {
             tracing::warn!("pocket apps: couldn't post into the pocket's chat: {e}");
-            false
+            None
         }
     }
 }
@@ -611,10 +674,38 @@ mod tests {
         // Late by a day (the server was off): no reminder rather than a wrong "tomorrow"
         assert!(reminder_copy("Pub quiz", &z, w, None, utc(2026, 11, 25, 19, 0), true).is_none());
         assert_eq!(reminder_copy("Pub quiz", &z, w, None, utc(2026, 11, 27, 9, 0), true).unwrap().1, "Pub quiz today at 8 PM. The card is in your chat.");
-        let (title, body, line) = results_copy("quiz", "Pub quiz", 9, true);
-        assert_eq!((title.as_str(), body.as_str(), line.as_str()), ("Quiz results are in", "Pub quiz has ended. The results are in your chat.", "Pub quiz has ended. 9 players took part."));
-        assert_eq!(results_copy("test", "", 1, false), ("Results are in".to_string(), "Your pocket app has ended.".to_string(), "Your pocket app has ended. 1 player took part.".to_string()));
+        let (title, body, line) = results_copy("Pub quiz", 9, true);
+        assert_eq!((title.as_str(), body.as_str(), line.as_str()), ("Pub quiz has ended", "9 players took part. The results are in your chat.", "Pub quiz has ended. 9 players took part."));
+        let s = |a: &str, b: &str, c: &str| (a.to_string(), b.to_string(), c.to_string());
+        assert_eq!(results_copy("Pub quiz", 1, true), s("Pub quiz has ended", "1 player took part. The results are in your chat.", "Pub quiz has ended. 1 player took part."));
+        assert_eq!(results_copy("Pub quiz", 0, true), s("Pub quiz has ended", "Nobody joined.", "Pub quiz has ended. Nobody joined."));
+        assert_eq!(results_copy("Pub quiz", 9, false).1, "9 players took part.");
+        assert_eq!(results_copy("", 1, false), s("Your pocket app has ended", "1 player took part.", "Your pocket app has ended. 1 player took part."));
+        assert_eq!(when_line(&z, w), "Fri, Nov 27 · 8 PM");
+        assert_eq!(when_line(&z, w - Duration::minutes(30)), "Fri, Nov 27 · 7:30 PM");
         let long = "x".repeat(200);
         assert_eq!(short_title(&long).chars().count(), TITLE_CHARS);
+    }
+
+    #[test]
+    fn expiry_blanks_player_names_and_keeps_teams_and_scores() {
+        let at = utc(2026, 12, 4, 20, 0);
+        let mut block = json!({ "type": "pocket", "ended": { "winner": { "name": "Quizzly Bears", "points": 41 } }, "results": {
+            "teams": [
+                { "name": "Quizzly Bears", "players": 2, "points": 41, "members": ["Mia", "Zyxqv Canary"] },
+                { "name": "Team 2", "players": 1, "points": 30, "members": ["Ola"] },
+            ],
+            "margin": 11,
+        } });
+        blank_names(&mut block, at);
+        assert!(!block.to_string().contains("Zyxqv") && !block.to_string().contains("Mia"), "{block}");
+        assert_eq!(block["results"]["teams"][0], json!({ "name": "Quizzly Bears", "players": 2, "points": 41, "members": [] }));
+        assert_eq!(block["results"]["teams"][1]["points"], json!(30));
+        assert_eq!(block["results"]["names_deleted_at"], json!(at));
+        assert_eq!(block["ended"]["winner"]["name"], json!("Quizzly Bears"));
+        // No results (a kit without them): nothing to blank
+        let mut empty = json!({ "type": "pocket", "results": null });
+        blank_names(&mut empty, at);
+        assert_eq!(empty["results"], Value::Null);
     }
 }

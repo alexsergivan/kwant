@@ -189,6 +189,12 @@ impl Database {
                 reminded_at TEXT,
                 results_posted_at TEXT
             )",
+            // pa7: the chat messages that carry a pocket's results with guest names. Kept after
+            // the pocket is deleted, so its expiry can blank those names in the chat too.
+            "CREATE TABLE IF NOT EXISTS pocket_result_posts (
+                message_id TEXT PRIMARY KEY,
+                pocket_code TEXT NOT NULL
+            )",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
@@ -642,6 +648,33 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Remembers a results message that still names guests.
+    pub async fn pocket_result_post_insert(&self, message_id: &str, code: &str) -> Result<(), DbError> {
+        sqlx::query("INSERT OR IGNORE INTO pocket_result_posts (message_id, pocket_code) VALUES (?, ?)")
+            .bind(message_id)
+            .bind(code)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Results messages whose pocket's data is gone or expires by `now`: their names go.
+    pub async fn pocket_result_posts_expired(&self, now: DateTime<Utc>) -> Result<Vec<String>, DbError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT r.message_id FROM pocket_result_posts r LEFT JOIN pocket_apps p ON p.code = r.pocket_code \
+             WHERE p.code IS NULL OR (p.expires_at IS NOT NULL AND p.expires_at <= ?)",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    pub async fn pocket_result_post_delete(&self, message_id: &str) -> Result<(), DbError> {
+        sqlx::query("DELETE FROM pocket_result_posts WHERE message_id = ?").bind(message_id).execute(&self.pool).await?;
+        Ok(())
     }
 
     /// Marks the results posted; `true` only for the one caller that did it.

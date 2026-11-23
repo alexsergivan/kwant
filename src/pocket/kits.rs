@@ -307,7 +307,9 @@ impl Kit for TestKit {
         state["final_round"].as_i64().is_some_and(|last| state["round"].as_i64().unwrap_or(0) >= last)
     }
 
-    /// Each player is a team of one, most taps first (at most 12); secrets never appear.
+    /// Each player is a team of one ("Team 1" first: the most taps), at most 12. The team's name
+    /// is a label, the player's name only in `members` (blanked when the data expires); secrets
+    /// never appear.
     fn results(&self, ctx: &KitCtx, state: &Value) -> Value {
         if ctx.players.is_empty() {
             return Value::Null;
@@ -318,7 +320,8 @@ impl Kit for TestKit {
         let teams: Vec<Value> = players
             .iter()
             .take(12)
-            .map(|p| json!({ "name": p.name, "players": 1, "points": taps(&p.id), "palette": null, "members": [p.name] }))
+            .enumerate()
+            .map(|(i, p)| json!({ "name": format!("Team {}", i + 1), "players": 1, "points": taps(&p.id), "palette": null, "members": [p.name] }))
             .collect();
         json!({ "teams": teams, "margin": null, "missed": [], "near_misses": null, "near_misses_accepted": null })
     }

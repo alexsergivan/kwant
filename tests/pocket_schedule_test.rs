@@ -294,9 +294,10 @@ async fn results_are_posted_once_across_end_sweep_and_restart() {
     assert_eq!(block["results"]["teams"].as_array().map(Vec::len), Some(2));
     assert!(block["ended"]["winner"].is_object());
     assert_eq!(block["provenance"]["ref"], json!(format!("pocket:{code}")));
+    assert!(block["results"]["names_deleted_at"].is_null(), "names stay until the data expires");
 
     let n = notes(&mut rx);
-    assert_eq!(n, vec![("pocket_app".to_string(), "Results are in".to_string(), "Pub quiz has ended. The results are in your chat.".to_string())]);
+    assert_eq!(n, vec![("pocket_app".to_string(), "Pub quiz has ended".to_string(), "2 players took part. The results are in your chat.".to_string())]);
     for (_, title, body) in &n {
         assert!(!title.contains("Zyxqv") && !body.contains("Zyxqv"), "a guest's name in a notification");
     }
@@ -308,12 +309,69 @@ async fn a_pocket_kept_only_until_it_ends_still_gets_its_results() {
     let t = setup().await;
     let k = bot(&t, "Quizmaster").await;
     let code = make(&t, json!({ "title": "Quick quiz", "retention": "at_end" }), origin(&k), None).await;
+    join(&t, &code, CANARY).await;
     pocket::end(&t.state, &code).await.unwrap();
     // The listener's order: pa7 first, then the sweep
     let now = Utc::now() + Duration::seconds(1);
     assert_eq!(schedule::run_once(&t.state, now).await.results, vec![code.clone()]);
     assert_eq!(pocket::sweep(&t.state, now).await.deleted, 1);
-    assert_eq!(cards(&t.state, &k).await.len(), 1);
+    let c = cards(&t.state, &k).await;
+    assert_eq!(c.len(), 1);
+    // Its data goes as it ends, so the names never reach the chat; the team and score do
+    let results = &c[0].2["block"]["results"];
+    assert_eq!(results["teams"][0]["name"], json!("Team 1"));
+    assert_eq!(results["teams"][0]["members"], json!([]));
+    assert!(results["names_deleted_at"].is_string());
+    assert!(!c[0].2.to_string().contains("Zyxqv"), "a guest's name in the chat after its data was deleted");
+    assert_eq!(schedule::run_once(&t.state, now + Duration::minutes(1)).await.names_deleted, 0, "nothing left to blank");
+}
+
+#[tokio::test]
+async fn guest_names_leave_the_chat_when_the_pocket_expires_or_is_deleted() {
+    let t = setup().await;
+    let k = bot(&t, "Quizmaster").await;
+    let kept = make(&t, json!({ "title": "Pub quiz" }), origin(&k), None).await;
+    let deleted = make(&t, json!({ "title": "Other quiz" }), origin(&k), None).await;
+    for code in [&kept, &deleted] {
+        join(&t, code, CANARY).await;
+        join(&t, code, "Mia").await;
+        pocket::end(&t.state, code).await.unwrap();
+    }
+    let now = Utc::now() + Duration::seconds(1);
+    assert_eq!(schedule::run_once(&t.state, now).await.results.len(), 2);
+    let posted = cards(&t.state, &k).await;
+    assert_eq!(posted.len(), 2);
+    assert!(posted.iter().all(|(_, _, m)| m.to_string().contains("Zyxqv")), "names are shown while the data is kept");
+
+    // The host deletes one: its names go on the next run
+    assert!(pocket::delete(&t.state, &deleted).await.unwrap());
+    let mut rx = t.state.event_sender.subscribe();
+    assert_eq!(schedule::run_once(&t.state, now + Duration::minutes(1)).await.names_deleted, 1);
+    let mut updated = 0;
+    while let Ok(ev) = rx.try_recv() {
+        if let RuntimeEvent::MessageAdded { message } = ev {
+            assert!(!message.to_string().contains("Zyxqv"), "{message}");
+            updated += 1;
+        }
+    }
+    assert_eq!(updated, 1, "the open chat hears about the change");
+
+    // The other one keeps its names until it expires (the sweep deletes it in the same tick)
+    let expires = pocket::snapshot(&t.state, &kept).await.unwrap().unwrap().row.expires_at.expect("kept for a while after it ends");
+    assert_eq!(schedule::run_once(&t.state, expires - Duration::minutes(1)).await.names_deleted, 0);
+    assert_eq!(schedule::run_once(&t.state, expires + Duration::seconds(1)).await.names_deleted, 1);
+    pocket::sweep(&t.state, expires + Duration::seconds(1)).await;
+    assert_eq!(schedule::run_once(&t.state, expires + Duration::minutes(1)).await.names_deleted, 0, "once");
+
+    for (_, text, meta) in cards(&t.state, &k).await {
+        let results = &meta["block"]["results"];
+        assert!(!meta.to_string().contains("Zyxqv") && !meta.to_string().contains("Mia"), "{meta}");
+        assert!(results["names_deleted_at"].is_string());
+        assert_eq!(results["teams"].as_array().map(Vec::len), Some(2), "the teams and scores stay");
+        assert_eq!(results["teams"][0]["name"], json!("Team 1"));
+        assert!(results["teams"][0]["points"].is_number());
+        assert!(text.ends_with("2 players took part."));
+    }
 }
 
 #[tokio::test]
@@ -370,7 +428,7 @@ async fn without_an_origin_only_the_notification_goes() {
         n,
         vec![
             ("pocket_app".to_string(), "Pub quiz tomorrow".to_string(), "Pub quiz tomorrow at 8 PM. The lobby opens at 7:30 PM by itself.".to_string()),
-            ("pocket_app".to_string(), "Results are in".to_string(), "Pub quiz has ended.".to_string()),
+            ("pocket_app".to_string(), "Pub quiz has ended".to_string(), "Nobody joined.".to_string()),
         ]
     );
     assert!(cards(&t.state, &k).await.is_empty());
