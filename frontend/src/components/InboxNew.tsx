@@ -230,16 +230,20 @@ interface RowProps {
   onOpenConnections?: () => void;
 }
 
-/** pa4c: a finished quiz's Done meta, "24 players · ended 22:41". */
-export function pocketMeta(i: Pick<InboxItem, 'meta' | 'timestamp'>): string {
+/** pa4c: a finished quiz's Done meta, "24 players". The end time sits on the row's top line, like every Done row. */
+export function pocketMeta(i: Pick<InboxItem, 'meta'>): string {
   const n = i.meta?.players;
-  const at = i.meta?.ended_at || i.timestamp;
-  return [typeof n === 'number' ? `${n} ${n === 1 ? 'player' : 'players'}` : null, at ? `ended ${clock(at)}` : null].filter(Boolean).join(' · ');
+  return typeof n === 'number' ? `${n} ${n === 1 ? 'player' : 'players'}` : '';
 }
+
+/** pa4c: when the quiz ended (falls back to the item's time). */
+export const pocketEndedAt = (i: Pick<InboxItem, 'meta' | 'timestamp'>): string => i.meta?.ended_at || i.timestamp;
 
 /** pa4c: the Done row for a finished pocket quiz. Opens its chat at the results card. */
 const PocketRow: React.FC<{ item: InboxItem; selected: boolean; focusable: boolean; onPick: (i: InboxItem) => void }> = ({ item, selected, focusable, onPick }) => {
   const unread = isUnread(item);
+  const endedAt = pocketEndedAt(item);
+  const meta = pocketMeta(item);
   const tint = selected ? 'border-sky-400/70 bg-sky-500/10' : GROUP_STYLE[item.group].row;
   return (
     <li role="presentation" className={`relative rounded-xl border transition-colors ${tint}`} data-row={item.id} data-group={item.group} data-pocket-row>
@@ -256,28 +260,45 @@ const PocketRow: React.FC<{ item: InboxItem; selected: boolean; focusable: boole
             onPick(item);
           }
         }}
-        className="kw-focus flex items-center gap-3 p-3 rounded-xl cursor-pointer"
+        className="kw-focus flex items-start gap-3 p-3 rounded-xl cursor-pointer"
       >
-        <ModernAvatar role={item.kwant_name} name={item.kwant_name} size={28} kwantId={item.kwant_id} />
+        <ModernAvatar role={item.kwant_name} name={item.kwant_name} size={30} kwantId={item.kwant_id} />
         <span className="flex-1 min-w-0">
-          <span className="block text-sm font-semibold text-zinc-100 break-words max-md:line-clamp-2 md:truncate">{item.title}</span>
-          <span className="block mt-0.5 text-xs text-zinc-400 tabular-nums" data-pocket-meta>
-            {pocketMeta(item)}
+          <span className="flex items-center gap-2 text-[11px]">
+            <span className="min-w-0 font-semibold text-zinc-300 truncate">
+              <span className="font-normal text-zinc-400" data-kicker>
+                Pocket app ·{' '}
+              </span>
+              {item.kwant_name}
+            </span>
+            {unread && (
+              <span className="ml-auto shrink-0 inline-flex items-center" data-unread>
+                <span className="block w-2 h-2 rounded-full bg-sky-400" aria-hidden="true" />
+                <span className="sr-only">New</span>
+              </span>
+            )}
+            <time dateTime={endedAt} className={`${unread ? '' : 'ml-auto '}shrink-0 whitespace-nowrap tabular-nums text-zinc-400`}>
+              {clock(endedAt)}
+            </time>
+          </span>
+          <span className="block mt-0.5 text-sm font-semibold text-zinc-100 break-words line-clamp-2" data-pocket-title>
+            {item.title}
+          </span>
+          <span className="block mt-1 text-xs text-zinc-400">
+            {meta && (
+              <span className="whitespace-nowrap tabular-nums align-middle" data-pocket-meta>
+                {meta}
+              </span>
+            )}
+            {item.winner && (
+              <span className={`${meta ? 'ml-2 ' : ''}inline-block align-middle`} title={`${item.winner.name} win`}>
+                <Sticker tone="holo" size="sm" ariaLabel={`Winners: ${item.winner.name}`}>
+                  Winners
+                </Sticker>
+              </span>
+            )}
           </span>
         </span>
-        {item.winner && (
-          <span className="shrink-0" title={`${item.winner.name} win`}>
-            <Sticker tone="holo" size="sm" ariaLabel={`Winners: ${item.winner.name}`}>
-              Winners
-            </Sticker>
-          </span>
-        )}
-        {unread && (
-          <span className="shrink-0 inline-flex items-center self-start" data-unread>
-            <span className="block w-2 h-2 rounded-full bg-sky-400" aria-hidden="true" />
-            <span className="sr-only">New</span>
-          </span>
-        )}
       </div>
     </li>
   );

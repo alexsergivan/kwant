@@ -30,7 +30,7 @@ const m = await loadBundled(`
   export { pocketApi, PocketApiError } from './src/pocketApi';
   export * as fx from './src/doneAwayFixture';
   export * as store from './src/inboxStore';
-  export { InboxNew, pocketMeta } from './src/components/InboxNew';
+  export { InboxNew, pocketMeta, pocketEndedAt } from './src/components/InboxNew';
 `);
 const { React, createRoot } = m;
 const h = React.createElement;
@@ -198,10 +198,13 @@ test('add and delete a question, each with base; delete asks first', async () =>
   assert.deepEqual(post.body, { round: 1, kind: 'text', question: 'Who sang "Respect"?', answer: 'Aretha Franklin', accepted: [], base: 1_763_900_000_000 });
   assert.equal(panel(v).querySelector('[data-header]').textContent, '9 questions · 8 checked · 1 yours');
   assert.equal(row(4).dataset.changed, 'true', 'the new question is marked');
+  assert.ok(row(4).querySelector('[data-own-icon]'), 'own questions show the pen, not the book');
+  assert.equal(row(1).querySelector('[data-own-icon]'), null, 'checked questions keep the book');
   // Delete Q2: asks first, then sends ?base=.
   await click(row(2).querySelector('[data-edit="2"]'));
   await click(byText(document.querySelector('[data-edit-form="2"]'), 'Delete question'));
   assert.equal(s.calls.filter((c) => c.method === 'DELETE').length, 0, 'nothing deleted before yes');
+  assert.equal(document.querySelector('[role="group"][aria-label="Delete Q2"] p').textContent, 'Delete Q2? The questions after it move up one. Deleting re-runs the dry run (about 30 s).');
   await click(document.querySelector('[data-action="delete-yes"]'));
   const del = s.calls.find((c) => c.method === 'DELETE');
   assert.equal(del.path, '/api/quiz-drafts/qd_fq7k2m/questions/2');
@@ -367,22 +370,44 @@ async function mountInbox(items, onOpen = () => {}) {
   return mount(h(m.InboxNew, { onOpen, noLoad: true, wide: true, now: Date.parse(data.now), placeName: m.fx.awayPlaceName }));
 }
 
-test('Done row: Quizmaster avatar 28, the title, "N players · ended <time>", Winners only with a winner, opens at the results', async () => {
+test('Done row: AnyRow anatomy (kicker + ended time on top), the server title in full, "N players", Winners inline only with a winner, opens at the results', async () => {
   const opened = [];
-  const v = await mountInbox([pocketItem(), pocketItem({ id: 'pocket:nowin', title: 'Office Quiz', winner: null, meta: { players: 1, ended_at: '2026-11-21T20:05:00Z' } })], (i) => opened.push(i));
+  const v = await mountInbox(
+    [
+      pocketItem({ title: 'Friday Pub Quiz: Quizzly Bears win' }),
+      pocketItem({ id: 'pocket:nowin', title: 'Office Quiz: Nobody joined.', winner: null, unread: false, meta: { players: 1, ended_at: '2026-11-21T20:05:00Z' } }),
+    ],
+    (i) => opened.push(i),
+  );
   const rows = [...v.host.querySelectorAll('[data-pocket-row]')];
   assert.equal(rows.length, 2);
   const [win, none] = rows;
-  assert.match(win.textContent, /Friday Pub Quiz/);
-  assert.equal(win.querySelector('[data-pocket-meta]').textContent, `24 players · ended ${m.pocketMeta(pocketItem()).split('ended ')[1]}`);
-  assert.match(win.querySelector('[data-pocket-meta]').textContent, /^24 players · ended /);
+  const opt = win.querySelector('[role="option"]');
+  assert.match(opt.className, /\bitems-start\b/, 'top-aligned like AnyRow');
+  assert.equal(win.querySelector('[data-kicker]').textContent.trim(), 'Pocket app ·');
+  assert.match(win.querySelector('[data-kicker]').parentElement.textContent, /Pocket app · Quizmaster/);
+  const t = win.querySelector('time');
+  assert.equal(t.getAttribute('dateTime'), '2026-11-21T22:41:00Z');
+  assert.match(t.className, /tabular-nums/);
+  assert.match(t.className, /whitespace-nowrap/);
+  assert.ok(win.querySelector('[data-unread]').nextElementSibling === t, 'unread dot sits before the time');
+  const title = win.querySelector('[data-pocket-title]');
+  assert.equal(title.textContent.trim(), 'Friday Pub Quiz: Quizzly Bears win');
+  assert.doesNotMatch(title.className, /\btruncate\b/, 'the winner name is never cut to one line');
+  assert.match(title.className, /line-clamp-2/);
+  const meta = win.querySelector('[data-pocket-meta]');
+  assert.equal(meta.textContent, '24 players');
+  assert.match(meta.className, /whitespace-nowrap/);
+  assert.equal(m.pocketMeta(pocketItem()), '24 players');
+  assert.equal(m.pocketEndedAt({ meta: {}, timestamp: 'x' }), 'x');
   assert.equal(holos(win), 1, 'Winners holo');
-  assert.match(win.textContent, /Winners/);
-  const av = win.querySelector('svg, img, [data-avatar]');
-  assert.ok(av, 'an avatar');
+  assert.ok(meta.parentElement.contains(win.querySelector('[aria-label="Winners: The Quizzly Bears"]')), 'Winners is inline on the meta line');
+  assert.ok(win.querySelector('svg, img, [data-avatar]'), 'an avatar');
   assert.equal(holos(none), 0, 'no winner, no sticker');
-  assert.match(none.querySelector('[data-pocket-meta]').textContent, /^1 player · ended /);
-  await click(win.querySelector('[role="option"]'));
+  assert.equal(none.querySelector('[data-pocket-meta]').textContent, '1 player');
+  assert.equal(none.querySelector('[data-unread]'), null);
+  assert.match(none.querySelector('time').className, /ml-auto/);
+  await click(opt);
   assert.equal(opened.length, 1);
   assert.equal(opened[0].message_id, 'msg-results', 'scrolls to the results message');
   assert.deepEqual(opened[0].link, { thread_id: null, channel_id: 'ch-pub', direct_kwant_id: null });

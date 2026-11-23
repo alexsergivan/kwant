@@ -7,7 +7,7 @@
 
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { AlertTriangle, BookOpen, Check, ChevronLeft, Loader2, Pencil, Plus, RotateCw, Trash2, X } from 'lucide-react';
+import { AlertTriangle, BookOpen, Check, ChevronLeft, Loader2, Pencil, PenLine, Plus, RotateCw, Trash2, X } from 'lucide-react';
 import { pocketApi, PocketApiError } from '../../pocketApi';
 import { useFocusAfterRender } from '../../focusAfterRender';
 import type { DraftCard, DraftQuestion, DraftQuestionKind, QuestionFields, QuizDraft } from '../../pocketApi';
@@ -18,6 +18,7 @@ export const EDIT_TEXT = {
   open: "An open quiz's questions can't change.",
   closed: "A closed quiz's questions can't change.",
   saving: 'Saving re-runs the dry run (about 30 s).',
+  deleting: 'Deleting re-runs the dry run (about 30 s).',
   yours: "Your own questions aren't source-checked. Quizmaster still runs them in the dry run.",
   hint: 'Pick a round, then a question to change it by hand.',
 } as const;
@@ -257,7 +258,7 @@ const EditForm: React.FC<{
       )}
       {confirm && q ? (
         <div className="flex flex-col gap-2 rounded-xl border border-rose-300/35 bg-rose-300/[0.07] p-3 sm:flex-row sm:items-center" role="group" aria-label={`Delete Q${q.n}`}>
-          <p className="flex-1 text-[15px] text-zinc-200 sm:text-[13px]">Delete Q{q.n}? The questions after it move up one. {EDIT_TEXT.saving}</p>
+          <p className="flex-1 text-[15px] text-zinc-200 sm:text-[13px]">Delete Q{q.n}? The questions after it move up one. {EDIT_TEXT.deleting}</p>
           <button type="button" disabled={busy} onClick={onDelete} className={`${STOP} border border-rose-300/40`} data-action="delete-yes">
             {busy ? <Loader2 size={14} className="motion-safe:animate-spin" aria-hidden="true" /> : <Trash2 size={14} aria-hidden="true" />}
             Delete
@@ -315,7 +316,11 @@ const QuestionRow: React.FC<{ q: DraftQuestion; changed: boolean; readOnly: bool
           )}
         </span>
         <span className={`mt-0.5 flex items-start gap-1.5 text-[14px] sm:text-[12px] ${q.status === 'not_checked' ? 'text-warn' : 'text-zinc-400'}`} data-source>
-          <BookOpen size={12} className="mt-[3px] shrink-0 sm:mt-0.5" aria-hidden="true" />
+          {q.status === 'yours' ? (
+            <PenLine size={12} className="mt-[3px] shrink-0 sm:mt-0.5" aria-hidden="true" data-own-icon />
+          ) : (
+            <BookOpen size={12} className="mt-[3px] shrink-0 sm:mt-0.5" aria-hidden="true" />
+          )}
           <span className="min-w-0 break-words">{sourceLine(q)}</span>
         </span>
       </span>
