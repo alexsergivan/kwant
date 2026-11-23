@@ -11,6 +11,7 @@ pub mod embedded;
 pub mod fsx;
 pub(crate) mod helper_process;
 pub mod import;
+pub mod kits;
 pub mod mcp;
 pub mod parallel;
 pub mod pocket;

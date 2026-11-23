@@ -7,7 +7,8 @@
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "dev": "vite",
-    "build": "tsc && vite build",
+    "build": "tsc && vite build && npm run build:guest",
+    "build:guest": "tsc -p guest && vite build -c guest/vite.config.ts",
     "preview": "vite preview"
   },
   "dependencies": {

@@ -39,6 +39,21 @@ jobs:
         run: npm run build
       - name: Tests
         run: npm test
+      # pa5: the pocket guest page (dist/pocket) in Chrome under exactly pa1's CSP; any violation fails. Also the
+      # 390 px shots of every state and the throttled first-paint numbers (results.json).
+      - name: Guest page under the pocket CSP
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/pw" playwright-core@1.65.0
+          export PW_CORE="$RUNNER_TEMP/pw/node_modules/playwright-core/index.mjs"
+          export CHROMIUM="$(command -v google-chrome || command -v chromium)"
+          node guest/e2e/csp.mjs "$RUNNER_TEMP/guest-shots"
+      - name: Guest page shots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: guest-shots
+          path: ${{ runner.temp }}/guest-shots
+          retention-days: 7
       - uses: actions/upload-artifact@v4
         with:
           name: frontend-dist
