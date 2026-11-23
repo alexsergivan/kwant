@@ -172,6 +172,9 @@ impl KitGame for QuizGame {
     fn view(&self, viewer: &Viewer, now: DateTime<Utc>) -> Value {
         serde_json::to_value(QuizGame::view(self, viewer, now)).unwrap_or(Value::Null)
     }
+    fn lobby(&self) -> Value {
+        serde_json::to_value(QuizGame::lobby(self)).unwrap_or(Value::Null)
+    }
     fn save(&self) -> Value {
         QuizGame::save(self)
     }

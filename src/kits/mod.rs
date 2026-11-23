@@ -188,6 +188,9 @@ pub trait KitGame: Send {
     fn next_deadline(&self) -> Option<DateTime<Utc>>;
     /// What this viewer may see, as JSON.
     fn view(&self, viewer: &Viewer, now: DateTime<Utc>) -> serde_json::Value;
+    /// The public pre-join view (pa1's `Kit::lobby`: `view` in `info` and the no-seat boot).
+    /// Anyone with the link sees it, so it never holds a guest's name, an answer or a score.
+    fn lobby(&self) -> serde_json::Value;
     /// The whole game state, for pa1 to store (the spec is stored separately).
     fn save(&self) -> serde_json::Value;
     /// True once the game reached its end.

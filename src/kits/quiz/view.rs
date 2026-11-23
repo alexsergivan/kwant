@@ -155,6 +155,49 @@ pub struct LobbyRow {
     pub team: Option<String>,
 }
 
+/// The public pre-join view: what the join screen needs before anyone has a seat. Keys are always
+/// present (null when they don't apply) so pa5 can tell a solo quiz (`teams: null`) from one whose
+/// teams are all still to be made (`teams: []`).
+#[derive(Debug, Clone, Serialize)]
+pub struct LobbyInfo {
+    /// What the page calls the game ("Join the quiz").
+    pub noun: &'static str,
+    pub rounds: usize,
+    /// The host's name. pocket.json v1 has none, so this is always null for now.
+    pub host: Option<String>,
+    /// The spec's `when`, unchanged (RFC 3339 with an offset).
+    pub starts_at: Option<String>,
+    /// Null in a solo quiz.
+    pub teams: Option<Vec<LobbyTeam>>,
+    /// Most players a team (`teams.size`); null when solo or unlimited.
+    pub team_max: Option<u32>,
+    /// True when a guest may start a new team (teams on, no names written ahead).
+    pub new_teams: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct LobbyTeam {
+    /// Stable for the team's whole life (from its name), so a picked radio button stays put.
+    pub id: String,
+    pub name: String,
+    /// Palette slot: the team's place in the list (names written ahead first, then new teams in
+    /// the order they were made).
+    pub color: usize,
+    pub count: usize,
+    pub max: usize,
+    pub full: bool,
+}
+
+/// "t" + FNV-1a of the name, in hex: short, stable and free of the name's characters.
+fn team_id(name: &str) -> String {
+    let mut h: u32 = 0x811c_9dc5;
+    for b in name.as_bytes() {
+        h ^= u32::from(*b);
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    format!("t{h:08x}")
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct MeView {
     pub name: String,
@@ -236,6 +279,47 @@ fn fmt_number(n: f64) -> String {
 }
 
 impl QuizGame {
+    /// The public pre-join view. Team names and head counts only: no player names, answers,
+    /// scores or anything from the host's view.
+    pub fn lobby(&self) -> LobbyInfo {
+        let spec = self.spec();
+        let on = spec.teams.mode == TeamMode::Teams;
+        let teams = on.then(|| {
+            let mut names: Vec<String> = spec.teams.names.iter().flatten().map(|n| n.trim().to_string()).collect();
+            for p in self.players().iter().filter(|p| !p.removed) {
+                if let Some(t) = &p.team {
+                    if !names.contains(t) {
+                        names.push(t.clone());
+                    }
+                }
+            }
+            let max = spec.teams.size.map(|s| s as usize).unwrap_or_else(|| self.max_players());
+            let mut ids: Vec<String> = Vec::new();
+            names
+                .into_iter()
+                .enumerate()
+                .map(|(color, name)| {
+                    let count = self.players().iter().filter(|p| !p.removed && p.team.as_deref() == Some(name.as_str())).count();
+                    let mut id = team_id(&name);
+                    if ids.contains(&id) {
+                        id = format!("{id}-{color}");
+                    }
+                    ids.push(id.clone());
+                    LobbyTeam { id, name, color, count, max, full: count >= max }
+                })
+                .collect::<Vec<_>>()
+        });
+        LobbyInfo {
+            noun: "quiz",
+            rounds: spec.rounds.len(),
+            host: None,
+            starts_at: spec.when.clone(),
+            teams,
+            team_max: if on { spec.teams.size } else { None },
+            new_teams: on && spec.teams.names.is_none(),
+        }
+    }
+
     /// The text of an answer as people read it.
     pub(crate) fn answer_display(&self, q: usize, v: &AnswerValue) -> String {
         match v {

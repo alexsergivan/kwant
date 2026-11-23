@@ -270,7 +270,7 @@ impl QuizGame {
     pub(crate) fn option_order(&self, q: usize) -> &[usize] {
         &self.option_order[q]
     }
-    fn max_players(&self) -> usize {
+    pub(crate) fn max_players(&self) -> usize {
         self.spec.settings.max_players.unwrap_or(MAX_PLAYERS).min(MAX_PLAYERS) as usize
     }
     pub(crate) fn player(&self, id: &str) -> Option<&Player> {
@@ -744,7 +744,7 @@ impl QuizGame {
                 tied: false,
             })
             .collect();
-        rows.sort_by(|a, b| b.score.cmp(&a.score));
+        rows.sort_by_key(|r| std::cmp::Reverse(r.score));
         let scores: Vec<i64> = rows.iter().map(|r| r.score).collect();
         for (i, r) in rows.iter_mut().enumerate() {
             r.rank = scores.iter().position(|s| *s == r.score).unwrap_or(i) + 1;
@@ -777,7 +777,7 @@ impl QuizGame {
                 }
             }
         }
-        teams.sort_by(|a, b| b.score.cmp(&a.score));
+        teams.sort_by_key(|t| std::cmp::Reverse(t.score));
         let scores: Vec<i64> = teams.iter().map(|t| t.score).collect();
         for (i, t) in teams.iter_mut().enumerate() {
             t.rank = scores.iter().position(|s| *s == t.score).unwrap_or(i) + 1;

@@ -453,9 +453,9 @@ pub fn run(spec: &QuizSpec, opts: &DryRunOptions) -> DryRunReport {
             }
         }
     }
-    for p in 0..n {
-        if !sim.plan[p].joined {
-            sim.plan[p].intents.iter_mut().for_each(|i| *i = Intent::Silent);
+    for plan in sim.plan.iter_mut().take(n) {
+        if !plan.joined {
+            plan.intents.iter_mut().for_each(|i| *i = Intent::Silent);
         }
     }
     now += Duration::seconds(5);

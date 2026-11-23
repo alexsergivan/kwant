@@ -742,3 +742,86 @@ fn dry_runs_repeat_from_a_seed_and_find_problems() {
     let r = dry_run::run(&spec, &DryRunOptions { players: 6, ..Default::default() });
     assert!(r.problems.iter().any(|p| p.contains("Player 6 couldn't join")), "{:?}", r.problems);
 }
+
+/// pa1's `Kit::lobby` (`view` in `info` and the no-seat boot) is public: team names and head counts,
+/// never a player's name, an answer or a score. Shape agreed with Lin (pa1) and Iris (pa5).
+#[test]
+fn the_public_lobby_lists_teams_and_counts_but_no_guest() {
+    // Teams made by guests: listed in the order made, ids stable, full at `size`.
+    let spec = json!({"version": 1, "title": "Teams", "when": "2026-11-27T20:00:00+00:00",
+        "teams": {"mode": "teams", "size": 2},
+        "settings": {"shuffle_options": false, "lock_when_all_answered": false},
+        "rounds": [{"title": "R", "questions": [
+            {"kind": "text", "text": "Capital of France?", "answer": "Paris", "points": 3, "source": src()}]}]});
+    let mut g = QuizGame::new(validate::parse(&spec.to_string()).unwrap(), 1, t0());
+    for (id, name, team) in [("a", "Annabel Secretname", "Owls"), ("b", "Bertram Hidden", "owls "), ("c", "Cyril Private", "Cats")] {
+        g.join(id, name, t0()).unwrap();
+        g.act(&guest(id), "team", &json!({"name": team}), t0()).unwrap();
+    }
+    g.join("d", "Dora Nobody", t0()).unwrap();
+    let kit: &dyn kits::KitGame = &g;
+    let lobby = kit.lobby();
+    let keys: Vec<&str> = lobby.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+    assert_eq!(keys.len(), 7, "{keys:?}");
+    for k in ["noun", "rounds", "host", "starts_at", "teams", "team_max", "new_teams"] {
+        assert!(lobby.get(k).is_some(), "{k} is always present");
+    }
+    assert_eq!(lobby["noun"], "quiz");
+    assert_eq!(lobby["rounds"], 1);
+    assert_eq!(lobby["host"], Value::Null);
+    assert_eq!(lobby["starts_at"], "2026-11-27T20:00:00+00:00");
+    assert_eq!(lobby["team_max"], 2);
+    assert_eq!(lobby["new_teams"], true);
+    let teams = lobby["teams"].as_array().unwrap();
+    let rows: Vec<(&str, u64, u64, u64, bool)> = teams
+        .iter()
+        .map(|t| (t["name"].as_str().unwrap(), t["color"].as_u64().unwrap(), t["count"].as_u64().unwrap(), t["max"].as_u64().unwrap(), t["full"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(rows, [("Owls", 0, 2, 2, true), ("Cats", 1, 1, 2, false)]);
+    let owls_id = teams[0]["id"].as_str().unwrap().to_string();
+    assert!(owls_id.starts_with('t') && owls_id != teams[1]["id"], "ids are distinct: {owls_id}");
+    assert_eq!(teams[0].as_object().unwrap().len(), 6, "id, name, color, count, max, full");
+
+    // Play a question: still no names, answers or scores.
+    next(&mut g, at(1));
+    answer(&mut g, "a", 0, json!("Paris"), at(2)).unwrap();
+    answer(&mut g, "c", 0, json!("Lyon"), at(2)).unwrap();
+    next(&mut g, at(3));
+    let text = g.lobby();
+    let text = serde_json::to_string(&text).unwrap();
+    for leak in ["Annabel", "Bertram", "Cyril", "Dora", "Paris", "Lyon", "score", "\"a\"", "answer", "Capital"] {
+        assert!(!text.contains(leak), "the public lobby holds {leak}: {text}");
+    }
+
+    // A team whose last member is removed leaves the list; the others keep their ids.
+    g.act(&Actor::Host, "remove", &json!({"player": "c"}), at(4)).unwrap();
+    g.act(&Actor::Host, "remove", &json!({"player": "b"}), at(4)).unwrap();
+    let after = serde_json::to_value(g.lobby()).unwrap();
+    let teams = after["teams"].as_array().unwrap();
+    assert_eq!(teams.len(), 1);
+    assert_eq!((teams[0]["id"].as_str().unwrap(), teams[0]["count"].as_u64(), teams[0]["full"].as_bool()), (owls_id.as_str(), Some(1), Some(false)));
+
+    // Names written ahead: all listed from the start, no new teams.
+    let ahead = json!({"version": 1, "title": "Ahead", "teams": {"mode": "teams", "size": 3, "names": ["Red", "Blue"]},
+        "rounds": [{"title": "R", "questions": [
+            {"kind": "number", "text": "2+2?", "answer": 4, "points": 1, "source": src()}]}]});
+    let mut g = QuizGame::new(validate::parse(&ahead.to_string()).unwrap(), 1, t0());
+    g.join("x", "Xena", t0()).unwrap();
+    g.act(&guest("x"), "team", &json!({"name": "blue"}), t0()).unwrap();
+    let l = serde_json::to_value(g.lobby()).unwrap();
+    let rows: Vec<(&str, u64, u64)> = l["teams"].as_array().unwrap().iter().map(|t| (t["name"].as_str().unwrap(), t["color"].as_u64().unwrap(), t["count"].as_u64().unwrap())).collect();
+    assert_eq!(rows, [("Red", 0, 0), ("Blue", 1, 1)]);
+    assert_eq!(l["new_teams"], false);
+    assert_eq!(l["starts_at"], Value::Null);
+
+    // Solo: teams and team_max are null, not missing.
+    let g = small(json!({}));
+    let l = serde_json::to_value(g.lobby()).unwrap();
+    assert_eq!((l["teams"].clone(), l["team_max"].clone(), l["new_teams"].clone(), l["rounds"].clone()), (Value::Null, Value::Null, json!(false), json!(2)));
+    assert!(l.as_object().unwrap().contains_key("teams"));
+
+    // The example plays through the trait the same way.
+    let game = QuizKit.start(EXAMPLE, 3, t0()).unwrap();
+    let l = game.lobby();
+    assert_eq!((l["team_max"].clone(), l["teams"].clone(), l["new_teams"].clone()), (json!(4), json!([]), json!(true)));
+}

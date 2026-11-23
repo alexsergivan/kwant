@@ -229,8 +229,8 @@ fn check_lines(spec: &QuizSpec, f: &mut Found) {
     }
 }
 
-fn check_question(q: &super::spec::Question, at: &str, f: &mut Found) {
-    let at = Some(at);
+fn check_question(q: &super::spec::Question, path: &str, f: &mut Found) {
+    let at = Some(path);
     let text = q.text.trim();
     if text.is_empty() {
         f.add(at, "the question is empty");
@@ -294,7 +294,7 @@ fn check_question(q: &super::spec::Question, at: &str, f: &mut Found) {
         check_picture(p, at, f);
     }
     if let Some(r) = &q.reveal_line {
-        line(f, at.unwrap_or_default(), "the reveal line", r);
+        line(f, path, "the reveal line", r);
     }
 }
 
