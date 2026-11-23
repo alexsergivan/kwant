@@ -47,7 +47,7 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
         .await
         .ok()
         .flatten();
-    Some(Block::Pocket(block(&row, &qt::card_of(&row), tz.as_deref())))
+    Some(Block::Pocket(Box::new(block(&row, &qt::card_of(&row), tz.as_deref()))))
 }
 
 /// The draft id the turn's last Quizmaster call that answered with a card named: `arguments.id`,
@@ -247,15 +247,22 @@ mod tests {
     type Change = Box<dyn Fn(&mut Pocket)>;
 
     fn check(p: Pocket) -> Result<(), String> {
-        validate(&ResultSet { version: VERSION, blocks: vec![Block::Pocket(p)] }, None)
+        validate(&ResultSet { version: VERSION, blocks: vec![Block::Pocket(Box::new(p))] }, None)
     }
 
     #[test]
     fn a_ready_card_passes_and_serializes_draft_and_yours() {
         let p = sample();
         assert_eq!(check(p.clone()), Ok(()));
-        let v = serde_json::to_value(Block::Pocket(p)).unwrap();
+        let block = Block::Pocket(Box::new(p.clone()));
+        let v = serde_json::to_value(&block).unwrap();
         assert_eq!(v["type"], "pocket");
+        // The Box adds nothing to the wire: the block is exactly the card's own fields plus `type`,
+        // and it reads back to the same block.
+        let mut want = serde_json::to_value(&p).unwrap();
+        want.as_object_mut().unwrap().insert("type".into(), "pocket".into());
+        assert_eq!(v, want);
+        assert_eq!(serde_json::from_str::<Block>(&serde_json::to_string(&block).unwrap()).unwrap(), block);
         assert_eq!(v["draft"], "qd_0123456789ab");
         assert_eq!(v["yours"], 1);
         assert!(v["results"].is_null() && v["join"].is_null());

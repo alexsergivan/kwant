@@ -97,7 +97,8 @@ pub enum Block {
     Verification(Verification),
     Files(Files),
     Recipe(Recipe),
-    Pocket(Pocket),
+    /// Boxed: a pocket card is several times the size of every other block (clippy::large_enum_variant).
+    Pocket(Box<Pocket>),
 }
 
 impl Block {
