@@ -692,7 +692,9 @@ export type ContinuityEvent =
   /** Show it once: SSE `show_once_trial_ended` (api.md §10), a "Try it once" run finished. */
   | { type: 'trial_ended'; data: { skill_id: string; recording_id: string | null; bot: string; outcome: string } }
   /** kwant suggested a routine (re-broadcast from its notification), so an open Routines list reloads. */
-  | { type: 'automation_suggested'; data: NotifyEvent };
+  | { type: 'automation_suggested'; data: NotifyEvent }
+  /** A routine was made, changed, paused or deleted (here or by a bot), so routine cards read it again. */
+  | { type: 'routines_changed'; data: { routine_id: string | null } };
 
 const bus = typeof EventTarget !== 'undefined' ? new EventTarget() : null;
 
@@ -734,6 +736,13 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 
 const enc = encodeURIComponent;
 
+/** Tells routine cards a routine changed once the request succeeded. */
+async function changed<T>(routine_id: string | null, p: Promise<T>): Promise<T> {
+  const out = await p;
+  emitContinuity({ type: 'routines_changed', data: { routine_id } });
+  return out;
+}
+
 export const continuityApi = {
   setTeamInstructions: (id: string, instructions: string) =>
     request<{ instructions: string | null }>('PATCH', `/api/teams/${enc(id)}`, { instructions }),
@@ -756,9 +765,9 @@ export const continuityApi = {
   removeMemory: (kwantId: string, id: string) => request<void>('DELETE', `/api/kwants/${enc(kwantId)}/memories/${enc(id)}`),
 
   routines: () => request<Routine[]>('GET', '/api/routines'),
-  createRoutine: (body: RoutineInput) => request<Routine>('POST', '/api/routines', body),
-  updateRoutine: (id: string, body: Partial<RoutineInput>) => request<Routine>('PATCH', `/api/routines/${enc(id)}`, body),
-  removeRoutine: (id: string) => request<void>('DELETE', `/api/routines/${enc(id)}`),
+  createRoutine: (body: RoutineInput) => changed(null, request<Routine>('POST', '/api/routines', body)),
+  updateRoutine: (id: string, body: Partial<RoutineInput>) => changed(id, request<Routine>('PATCH', `/api/routines/${enc(id)}`, body)),
+  removeRoutine: (id: string) => changed(id, request<void>('DELETE', `/api/routines/${enc(id)}`)),
   runRoutine: (id: string) => request<RoutineRun>('POST', `/api/routines/${enc(id)}/run`),
   routineRuns: (id: string, limit = 20) => request<RoutineRun[]>('GET', `/api/routines/${enc(id)}/runs?limit=${limit}`),
 };

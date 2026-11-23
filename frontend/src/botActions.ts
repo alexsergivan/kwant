@@ -2,7 +2,7 @@
 // the chat; only the person can undo, confirm, decline, accept or deny.
 // Contract: docs/bot-actions.md.
 import { parseMetaObject } from './questions';
-import { Schedule, WEEKDAYS, describeSchedule, formatWhen } from './continuity';
+import { Routine, Schedule, WEEKDAYS, describeSchedule, formatWhen } from './continuity';
 import { PersonCancelledError, personFetch } from './auth';
 import { dateText, timeText } from './clock';
 
@@ -197,37 +197,68 @@ export function onceWords(iso: string, locale?: string): string | null {
 
 /** The card's one line. The server writes a one-off schedule as "once at <RFC 3339 UTC>"; that part is
  *  put in the viewer's local time. Anything else stays as the server wrote it. */
-export function summaryText(m: BotActionMeta): string {
+export function summaryText(m: BotActionMeta, opts: { dropSchedule?: boolean } = {}): string {
   const s = asSchedule(m.details.schedule);
   const raw = m.details.schedule_text;
-  if (s?.type !== 'once' || typeof raw !== 'string' || !raw || !m.summary.includes(raw)) return m.summary;
+  if (typeof raw !== 'string' || !raw || !m.summary.includes(raw)) return m.summary;
+  if (s?.type !== 'once') {
+    // The facts table already says When (as it is now), so the headline doesn't repeat the stored schedule.
+    // A one-off keeps its local "once on …" words: those read as the check-in's own sentence.
+    return opts.dropSchedule && m.summary.includes(`, ${raw}`) ? m.summary.replace(`, ${raw}`, '') : m.summary;
+  }
   const words = onceWords(s.at);
   return words ? m.summary.replace(raw, words) : m.summary;
 }
 
+/** The routine a card is about, as it is now: undefined until the list loads (or for cards it doesn't apply
+ *  to), null when it's gone. Only an applied card that made or changed a routine follows it. */
+export function followsRoutine(m: Pick<BotActionMeta, 'status' | 'action' | 'target_kind' | 'target_id'>): boolean {
+  return m.target_kind === 'routine' && !!m.target_id && m.status === 'applied' && m.action !== 'routine_delete';
+}
+
+/** A routine card whose routine has since been deleted (the loaded list doesn't have it). */
+export function routineGone(m: BotActionMeta, now: Routine | null | undefined): boolean {
+  return followsRoutine(m) && now === null;
+}
+
 /** The facts a routine card lists: when, as whom, where, and the next run. */
-export function routineFacts(m: BotActionMeta): Array<{ label: string; value: string }> {
+export function routineFacts(m: BotActionMeta, now?: Routine | null): Array<{ label: string; value: string }> {
   if (m.target_kind !== 'routine') return [];
   const d = m.details;
+  const cur = followsRoutine(m) && now ? now : null;
+  const gone = routineGone(m, now);
   const rows: Array<{ label: string; value: string }> = [];
-  if (d.schedule || d.schedule_text) rows.push({ label: 'When', value: scheduleWords(d.schedule, d.schedule_text) });
+  if (cur) rows.push({ label: 'When', value: scheduleWords(cur.schedule, cur.schedule_text) });
+  else if (d.schedule || d.schedule_text) rows.push({ label: 'When', value: scheduleWords(d.schedule, d.schedule_text) });
   if (str(d.bot_name)) rows.push({ label: 'Runs as', value: d.bot_name as string });
   if (str(d.delivers_to)) rows.push({ label: 'Posts in', value: d.delivers_to as string });
   if (m.action === 'routine_run_now') {
     if (str(d.run_status)) rows.push({ label: 'This run', value: RUN_WORDS[d.run_status as string] ?? (d.run_status as string) });
-  } else if (m.status === 'applied' && m.action !== 'routine_delete') {
+  } else if (cur) {
+    const next = !cur.enabled ? 'Paused' : cur.next_run_at ? formatWhen(cur.next_run_at) : null;
+    if (next) rows.push({ label: 'Next run', value: next });
+  } else if (m.status === 'applied' && m.action !== 'routine_delete' && !gone) {
     const next = d.enabled === false ? 'Paused' : str(d.next_run_at) ? formatWhen(d.next_run_at as string) : null;
     if (next) rows.push({ label: 'Next run', value: next });
   }
   return rows;
 }
 
-const RUN_WORDS: Record<string, string> = { running: 'Running', ok: 'Finished', error: 'Failed', skipped: 'Skipped, it was already running' };
+const RUN_WORDS: Record<string, string> = {
+  running: 'Running',
+  ok: 'Finished',
+  error: 'Failed',
+  skipped: 'Skipped, it was already running',
+  incomplete: 'A step failed',
+  needs_you: 'Waiting on you',
+};
 
 /** Edit and Pause make sense while the routine the card made or changed still exists. */
-export function routineButtons(m: BotActionMeta): { edit: boolean; pause: boolean } {
-  const live = m.target_kind === 'routine' && !!m.target_id && m.status === 'applied' && m.action !== 'routine_delete';
-  return { edit: live, pause: live && m.details.enabled !== false && m.action !== 'routine_pause' };
+/** With the routine as it is now, Pause or Resume follows its switch; before the list loads, the stored state. */
+export function routineButtons(m: BotActionMeta, now?: Routine | null): { edit: boolean; pause: boolean; resume: boolean } {
+  const live = followsRoutine(m) && now !== null;
+  if (live && now) return { edit: true, pause: now.enabled, resume: !now.enabled };
+  return { edit: live, pause: live && m.details.enabled !== false && m.action !== 'routine_pause', resume: false };
 }
 
 // ---------------------------------------------------------------------------
