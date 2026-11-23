@@ -167,7 +167,7 @@ async fn away_lists_every_kind_filters_caps_and_marks_seen() {
     assert_eq!(v["last_seen"], Value::Null);
     let since = DateTime::parse_from_rfc3339(v["since"].as_str().unwrap()).unwrap();
     assert!((now - Duration::days(7) - since.with_timezone(&Utc)).num_seconds().abs() < 5);
-    assert_eq!(v["unseen"], json!({"waiting": 0, "finished": 0, "failed": 0, "total": 0}));
+    assert_eq!(v["unseen"], json!({"waiting": 0, "finished": 0, "failed": 0, "pockets": 0, "total": 0}));
 
     // Waiting: an open question, an answered one (hidden), a live approval and a stale one
     let place = QuestionPlace {
@@ -298,7 +298,7 @@ async fn away_lists_every_kind_filters_caps_and_marks_seen() {
     for list in ["waiting", "finished", "failed"] {
         assert_newest_first(&v[list]);
     }
-    assert_eq!(v["unseen"], json!({"waiting": 2, "finished": 3, "failed": 4, "total": 9}));
+    assert_eq!(v["unseen"], json!({"waiting": 2, "finished": 3, "failed": 4, "pockets": 0, "total": 9}));
     assert_eq!(v["stuck_after_minutes"], 30);
 
     // An explicit since narrows finished and failed, but not waiting or stuck
@@ -325,7 +325,7 @@ async fn away_lists_every_kind_filters_caps_and_marks_seen() {
     assert_eq!(v["last_seen"], seen["last_seen"]);
     assert_eq!(v["since"], seen["last_seen"]);
     assert_eq!(v["finished"], json!([]));
-    assert_eq!(v["unseen"], json!({"waiting": 2, "finished": 0, "failed": 1, "total": 3}));
+    assert_eq!(v["unseen"], json!({"waiting": 2, "finished": 0, "failed": 1, "pockets": 0, "total": 3}));
     // Not a settings key, and not writable through /api/settings
     let (s, _) = call(&app, "GET", "/api/settings", &[]).await;
     assert_eq!(s, StatusCode::OK);

@@ -226,9 +226,18 @@ pub(crate) fn card_of(row: &QuizDraftRow) -> card::Card {
 }
 
 async fn save_and_show(state: &AppState, row: &QuizDraftRow) -> ToolResult {
-    if let Err(e) = state.db.quiz_draft_save(row).await {
-        tracing::warn!(error = %e, "quiz draft save failed");
-        return fail("Couldn't save the quiz.");
+    save_if_and_show(state, row, None).await
+}
+
+/// [`save_and_show`], saving only while the stored draft's `updated_at` is still `base` (pa4c).
+async fn save_if_and_show(state: &AppState, row: &QuizDraftRow, base: Option<i64>) -> ToolResult {
+    match state.db.quiz_draft_save_if(row, base).await {
+        Ok(true) => {}
+        Ok(false) => return fail("The person changed this quiz while you were working, so nothing was saved. Call pocket_update again: it tells you which of their questions to keep."),
+        Err(e) => {
+            tracing::warn!(error = %e, "quiz draft save failed");
+            return fail("Couldn't save the quiz.");
+        }
     }
     let c = card_of(row);
     let is_error = matches!(c.state, State::Writing);
@@ -373,8 +382,10 @@ async fn update(state: &AppState, mut row: QuizDraftRow, args: &Value) -> ToolRe
     }
     // Passed checks are reused while the question's source and answer stay the same
     let cache: HashMap<String, SourceResult> = parse::<Vec<SourceResult>>(&row.sources).into_iter().filter(|r| r.ok).map(|r| (r.key.clone(), r)).collect();
+    let base = row.updated_at;
     check_into(&mut row, spec_text, &cache).await;
-    save_and_show(state, &row).await
+    // pa4c: a person's edit that landed while this update ran wins; the bot calls again
+    save_if_and_show(state, &row, Some(base)).await
 }
 
 /// pa4c: a bot's whole-spec update that drops or changes a question the person wrote, said with

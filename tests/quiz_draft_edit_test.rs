@@ -9,20 +9,33 @@ mod quizmaster_support;
 
 use axum::{
     body::{to_bytes, Body},
-    extract::ConnectInfo,
+    extract::{ConnectInfo, Path, State},
     http::{Request, StatusCode},
+    response::Html,
+    routing::get,
+    Router,
 };
-use quizmaster_support::{card, ready_friday_quiz, setup, space, start_pages, tool, turn, Env};
+use quizmaster_support::{card, ready_friday_quiz, setup, space, start_pages, tool, turn, Env, PAGES};
 use serde_json::{json, Value};
-use std::net::SocketAddr;
+use std::{
+    net::SocketAddr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc, Mutex,
+    },
+};
 use tower::ServiceExt;
 
 /// A call as the person, from this machine.
 async fn person(e: &Env, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+    person_on(&e.app, method, uri, body).await
+}
+
+async fn person_on(app: &Router, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
     let req = Request::builder().method(method).uri(uri).header("host", "127.0.0.1:8799").header("content-type", "application/json");
     let mut req = req.body(body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty)).unwrap();
     req.extensions_mut().insert(ConnectInfo("127.0.0.1:50000".parse::<SocketAddr>().unwrap()));
-    let resp = e.app.clone().oneshot(req).await.unwrap();
+    let resp = app.clone().oneshot(req).await.unwrap();
     let status = resp.status();
     let bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
     (status, serde_json::from_slice(&bytes).unwrap_or(Value::Null))
@@ -234,4 +247,61 @@ async fn a_bot_update_keeps_the_persons_question() {
     assert!(!err, "{text}");
     let c = card(&text);
     assert_eq!((c["state"].as_str(), c["yours"].as_u64()), (Some("ready"), Some(1)), "{text}");
+}
+
+/// A source server whose first page fetch is where the person saves an edit: the bot's update is
+/// still checking its sources when the person's PATCH lands.
+#[derive(Clone)]
+struct Race {
+    app: Router,
+    uri: String,
+    fired: Arc<AtomicBool>,
+    person_status: Arc<Mutex<Option<StatusCode>>>,
+}
+
+async fn race_page(State(r): State<Race>, Path(slug): Path<String>) -> Result<Html<String>, StatusCode> {
+    if !r.fired.swap(true, Ordering::SeqCst) {
+        let (status, _) = person_on(&r.app, "PATCH", &r.uri, Some(json!({"accepted": ["Zidane", "Zizou", "ZZ"]}))).await;
+        *r.person_status.lock().unwrap() = Some(status);
+    }
+    let body = PAGES.iter().find(|(s, _)| *s == slug).map(|(_, t)| *t).ok_or(StatusCode::NOT_FOUND)?;
+    Ok(Html(format!("<html><head><title>{slug}</title></head><body><p>{body}</p></body></html>")))
+}
+
+#[tokio::test]
+async fn a_persons_edit_during_a_bot_update_wins() {
+    let e = setup(true).await;
+    let (id, token, _) = ready(&e).await;
+    let before = e.state.db.quiz_draft_get(&space(), &id).await.unwrap().unwrap();
+    let race = Race {
+        app: e.app.clone(),
+        uri: format!("/api/quiz-drafts/{id}/questions/2"),
+        fired: Arc::new(AtomicBool::new(false)),
+        person_status: Arc::new(Mutex::new(None)),
+    };
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let race_url = format!("http://{}/wiki", listener.local_addr().unwrap());
+    let server = Router::new().route("/wiki/:slug", get(race_page)).with_state(race.clone());
+    tokio::spawn(async move { axum::serve(listener, server).await.unwrap() });
+
+    // The bot moves question 1 to a new page, so its update fetches; the person edits question 2 meanwhile
+    let mut spec: Value = serde_json::from_str(&before.spec).unwrap();
+    spec["rounds"][0]["questions"][0]["source"]["url"] = json!(format!("{race_url}/definitely-maybe"));
+    spec["title"] = json!("Friday Pub Quiz, the bot's take");
+    let (text, err) = tool(&e, &token, "pocket_update", json!({"id": id, "spec": spec})).await;
+    assert_eq!(*race.person_status.lock().unwrap(), Some(StatusCode::OK), "the person's edit landed mid-update");
+    assert!(err, "{text}");
+    assert!(text.contains("The person changed this quiz while you were working"), "{text}");
+
+    // The person's edit is what's stored; none of the bot's update is
+    let row = e.state.db.quiz_draft_get(&space(), &id).await.unwrap().unwrap();
+    assert!(row.spec.contains("\"ZZ\""), "the person's edit is still there");
+    assert!(!row.spec.contains(&race_url), "the bot's stale spec didn't overwrite it");
+    assert_eq!(row.title, before.title);
+    assert_ne!(row.own_keys, "[]", "question 2 is the person's");
+
+    // Calling again, the bot is told which question to keep
+    let (text, err) = tool(&e, &token, "pocket_update", json!({"id": id, "spec": spec})).await;
+    assert!(err, "{text}");
+    assert!(text.contains("round 1, question 2") && text.contains("\"ZZ\""), "{text}");
 }
