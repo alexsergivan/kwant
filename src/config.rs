@@ -88,6 +88,11 @@ pub struct Config {
     /// Limits for Claude replies that run inside the VM (`[agents_in_vm]`).
     #[serde(default)]
     pub agents_in_vm: AgentsInVmConfig,
+
+    /// The pocket apps guest port (pa1); unset means the main port + 1. Env: `KWNT_POCKET_PORT`.
+    /// Nothing listens there unless the `pocket_apps` setting is `on`.
+    #[serde(default)]
+    pub pocket_port: Option<u16>,
 }
 
 /// Server limits for isolated Claude replies. Env overrides: `KWNT_AGENT_REQUEST_LIMIT`,
@@ -132,6 +137,7 @@ impl Default for Config {
             default_fallback_model: default_fallback_model(),
             browser_cdp_url: None,
             agents_in_vm: AgentsInVmConfig::default(),
+            pocket_port: None,
         }
     }
 }
@@ -195,6 +201,11 @@ impl Config {
         if let Ok(port_str) = std::env::var("KWNT_PORT").or_else(|_| std::env::var("PORT")) {
             if let Ok(port) = port_str.parse::<u16>() {
                 self.port = port;
+            }
+        }
+        if let Ok(port) = std::env::var("KWNT_POCKET_PORT") {
+            if let Ok(port) = port.trim().parse::<u16>() {
+                self.pocket_port = Some(port);
             }
         }
         if let Ok(dir) = std::env::var("KWNT_DATA_DIR") {

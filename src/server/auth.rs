@@ -380,6 +380,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // P5 tool notes: bots file them with `note_tool`; only the person reads, edits, fixes or
         // deletes them, and their text is what every bot with the tool sees
         ["", "api", "tool-notes", ..] => true,
+        // Pocket apps (pa1): only the person lists, reads, makes, ends and deletes pockets; guest
+        // and host keys of a pocket work only on the guest port, never here
+        ["", "api", "pockets", ..] => true,
         // Raw clicks by position are the person's live view: a bot clicking by coordinates would
         // skip the payment floor, which reads the element under a label (bots use /act)
         ["", "api", "sandbox", _, "interact"] => true,

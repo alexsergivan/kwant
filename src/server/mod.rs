@@ -182,6 +182,8 @@ pub struct AppState {
     pub agent_vm: Arc<crate::sandbox::agent_vm::AgentVm>,
     /// Dictation's 2-at-once slots and the wait for one (a test shortens the wait).
     pub dictation: Arc<transcribe::Slots>,
+    /// Pocket apps (pa1): per-pocket locks, viewers, snapshots, guest limits and the guest listener.
+    pub pocket: Arc<crate::pocket::Hub>,
 }
 
 impl AppState {
@@ -244,6 +246,7 @@ impl AppState {
             spend: Arc::default(),
             agent_vm,
             dictation: Arc::default(),
+            pocket: Arc::default(),
         }
     }
 
@@ -651,6 +654,7 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/glance/ask", post(glance::ask))
         .route("/api/events", get(sse::sse_handler))
         .merge(show_once::routes::router())
+        .merge(crate::pocket::host_api::router())
         .fallback(crate::embedded::static_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), spaces::row_guard))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))
