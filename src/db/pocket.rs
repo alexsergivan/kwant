@@ -176,6 +176,25 @@ impl Database {
                 at TEXT NOT NULL
             )",
             "CREATE INDEX IF NOT EXISTS pocket_events_pocket ON pocket_events(pocket_code, id)",
+            // pa7 For Friday: a pocket's start time, the chat it came from, and the once-only
+            // reminder and results post. One row per pocket, deleted with it.
+            "CREATE TABLE IF NOT EXISTS pocket_schedule (
+                pocket_code TEXT PRIMARY KEY,
+                origin TEXT,
+                starts_at TEXT,
+                zone TEXT NOT NULL DEFAULT 'UTC',
+                opens_from_when INTEGER NOT NULL DEFAULT 0,
+                closes_from_when INTEGER NOT NULL DEFAULT 0,
+                remind_at TEXT,
+                reminded_at TEXT,
+                results_posted_at TEXT
+            )",
+            // pa7: the chat messages that carry a pocket's results with guest names. Kept after
+            // the pocket is deleted, so its expiry can blank those names in the chat too.
+            "CREATE TABLE IF NOT EXISTS pocket_result_posts (
+                message_id TEXT PRIMARY KEY,
+                pocket_code TEXT NOT NULL
+            )",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
@@ -283,7 +302,7 @@ impl Database {
     /// Deletes the pocket, its players, keys and events. Final: there is no undo.
     pub async fn pocket_delete(&self, code: &str) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
-        for table in ["pocket_events", "pocket_guest_keys", "pocket_players"] {
+        for table in ["pocket_events", "pocket_guest_keys", "pocket_players", "pocket_schedule"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE pocket_code = ?")).bind(code).execute(&mut *tx).await?;
         }
         let done = sqlx::query("DELETE FROM pocket_apps WHERE code = ?").bind(code).execute(&mut *tx).await?;
@@ -515,5 +534,166 @@ impl Database {
             out[i] = n;
         }
         Ok(out)
+    }
+}
+
+/// pa7: a pocket's schedule row (see `crate::pocket::schedule`).
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct ScheduleRow {
+    pub pocket_code: String,
+    /// The chat the pocket came from, as JSON (`crate::pocket::Origin`); `None`: notifications only.
+    pub origin: Option<String>,
+    /// The spec's `when` (the event's start), when it was in the future at planning.
+    pub starts_at: Option<DateTime<Utc>>,
+    /// The zone the 19:00 reminder and the times in its words use: an IANA name or `+HH:MM`.
+    pub zone: String,
+    /// `opens_at` / `closes_at` came from `when` (so a new `when` moves them); explicit ones stay.
+    pub opens_from_when: bool,
+    pub closes_from_when: bool,
+    pub remind_at: Option<DateTime<Utc>>,
+    pub reminded_at: Option<DateTime<Utc>>,
+    pub results_posted_at: Option<DateTime<Utc>>,
+}
+
+const SCHEDULE_COLS: &str =
+    "pocket_code, origin, starts_at, zone, opens_from_when, closes_from_when, remind_at, reminded_at, results_posted_at";
+
+impl Database {
+    pub async fn pocket_schedule_insert(&self, r: &ScheduleRow) -> Result<(), DbError> {
+        sqlx::query(&format!("INSERT OR REPLACE INTO pocket_schedule ({SCHEDULE_COLS}) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)"))
+            .bind(&r.pocket_code)
+            .bind(&r.origin)
+            .bind(r.starts_at)
+            .bind(&r.zone)
+            .bind(r.opens_from_when)
+            .bind(r.closes_from_when)
+            .bind(r.remind_at)
+            .bind(r.reminded_at)
+            .bind(r.results_posted_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn pocket_schedule(&self, code: &str) -> Result<Option<ScheduleRow>, DbError> {
+        Ok(sqlx::query_as(&format!("SELECT {SCHEDULE_COLS} FROM pocket_schedule WHERE pocket_code = ?"))
+            .bind(code)
+            .fetch_optional(&self.pool)
+            .await?)
+    }
+
+    /// A new `when`: the pocket's spec and times, and its schedule row (including which times
+    /// come from `when`), in one transaction. A reminder whose time moved fires again at the new
+    /// time; one already claimed at the same time stays claimed. `false`: the pocket isn't open.
+    #[allow(clippy::too_many_arguments)]
+    pub async fn pocket_reschedule(
+        &self,
+        code: &str,
+        spec: &str,
+        opens_at: Option<DateTime<Utc>>,
+        closes_at: Option<DateTime<Utc>>,
+        starts_at: Option<DateTime<Utc>>,
+        zone: &str,
+        remind_at: Option<DateTime<Utc>>,
+        from_when: (bool, bool),
+    ) -> Result<bool, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let done = sqlx::query(
+            "UPDATE pocket_apps SET spec = ?, opens_at = ?, closes_at = ?, version = version + 1 WHERE code = ? AND state = 'open'",
+        )
+        .bind(spec)
+        .bind(opens_at)
+        .bind(closes_at)
+        .bind(code)
+        .execute(&mut *tx)
+        .await?;
+        if done.rows_affected() == 0 {
+            return Ok(false);
+        }
+        sqlx::query(
+            "UPDATE pocket_schedule SET starts_at = ?, zone = ?, opens_from_when = ?, closes_from_when = ?, \
+             reminded_at = CASE WHEN remind_at IS ? THEN reminded_at ELSE NULL END, remind_at = ? WHERE pocket_code = ?",
+        )
+        .bind(starts_at)
+        .bind(zone)
+        .bind(from_when.0)
+        .bind(from_when.1)
+        .bind(remind_at)
+        .bind(remind_at)
+        .bind(code)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        Ok(true)
+    }
+
+    /// Open pockets whose reminder is due by `now` and hasn't fired: `(code, remind_at)`.
+    pub async fn pocket_due_reminders(&self, now: DateTime<Utc>) -> Result<Vec<(String, DateTime<Utc>)>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT s.pocket_code, s.remind_at FROM pocket_schedule s JOIN pocket_apps p ON p.code = s.pocket_code \
+             WHERE p.state = 'open' AND s.remind_at IS NOT NULL AND s.remind_at <= ? AND s.reminded_at IS NULL ORDER BY s.remind_at",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// Marks the reminder fired; `true` only for the one caller that did it (it is then sent once).
+    pub async fn pocket_claim_reminder(&self, code: &str, remind_at: DateTime<Utc>, now: DateTime<Utc>) -> Result<bool, DbError> {
+        let done = sqlx::query("UPDATE pocket_schedule SET reminded_at = ? WHERE pocket_code = ? AND remind_at = ? AND reminded_at IS NULL")
+            .bind(now)
+            .bind(code)
+            .bind(remind_at)
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    /// Ended pockets whose results haven't been posted.
+    pub async fn pocket_results_due(&self) -> Result<Vec<String>, DbError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT s.pocket_code FROM pocket_schedule s JOIN pocket_apps p ON p.code = s.pocket_code \
+             WHERE p.state = 'ended' AND s.results_posted_at IS NULL ORDER BY p.ended_at",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Remembers a results message that still names guests.
+    pub async fn pocket_result_post_insert(&self, message_id: &str, code: &str) -> Result<(), DbError> {
+        sqlx::query("INSERT OR IGNORE INTO pocket_result_posts (message_id, pocket_code) VALUES (?, ?)")
+            .bind(message_id)
+            .bind(code)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Results messages whose pocket's data is gone or expires by `now`: their names go.
+    pub async fn pocket_result_posts_expired(&self, now: DateTime<Utc>) -> Result<Vec<String>, DbError> {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT r.message_id FROM pocket_result_posts r LEFT JOIN pocket_apps p ON p.code = r.pocket_code \
+             WHERE p.code IS NULL OR (p.expires_at IS NOT NULL AND p.expires_at <= ?)",
+        )
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    pub async fn pocket_result_post_delete(&self, message_id: &str) -> Result<(), DbError> {
+        sqlx::query("DELETE FROM pocket_result_posts WHERE message_id = ?").bind(message_id).execute(&self.pool).await?;
+        Ok(())
+    }
+
+    /// Marks the results posted; `true` only for the one caller that did it.
+    pub async fn pocket_claim_results(&self, code: &str, now: DateTime<Utc>) -> Result<bool, DbError> {
+        let done = sqlx::query("UPDATE pocket_schedule SET results_posted_at = ? WHERE pocket_code = ? AND results_posted_at IS NULL")
+            .bind(now)
+            .bind(code)
+            .execute(&self.pool)
+            .await?;
+        Ok(done.rows_affected() > 0)
     }
 }

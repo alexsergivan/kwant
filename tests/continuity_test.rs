@@ -1774,7 +1774,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     assert_eq!(s["notify_webhook_url"], "");
     assert_eq!(
         s["notify_on"],
-        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked", "loose_ends", "human_step", "app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped", "turn_quiet", "turn_stopped"])
+        json!(["turn_finished", "approval_needed", "routine_failed", "delegation_finished", "delegation_stalled", "skill_proposed", "question_asked", "loose_ends", "human_step", "app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped", "turn_quiet", "turn_stopped", "pocket_app"])
     );
 
     let (status, _) = req(
@@ -1788,7 +1788,7 @@ async fn webhook_setting_is_https_only_and_masked() {
     let (_, s) = req(&app, "GET", "/api/settings", None).await;
     assert_eq!(s["notify_webhook_url"], "••••••••");
     assert!(!s.to_string().contains("secret-topic"));
-    assert_eq!(s["notify_on"], json!(["routine_failed", "app_update"]), "off the Mac app a save keeps app_update as it was");
+    assert_eq!(s["notify_on"], json!(["routine_failed", "app_update", "pocket_app"]), "off the Mac app a save keeps app_update as it was, and pocket_app until the page offers it");
 
     // Sending the mask back keeps it
     req(

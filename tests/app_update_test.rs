@@ -352,7 +352,7 @@ async fn app_update_and_work_ahead_are_on_for_lists_saved_before_they_existed() 
     // What a person who saved their notification settings before #78 has stored
     e.state.db.set_setting("notify_on", r#"["turn_finished","approval_needed"]"#).await.unwrap();
     let on = continuity::notify_on(&e.state).await;
-    assert_eq!(on, kinds(&["turn_finished", "approval_needed", "app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped"]));
+    assert_eq!(on, kinds(&["turn_finished", "approval_needed", "app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped", "pocket_app"]));
     assert!(update_notification_delivered(&e, "0.1.2").await);
     let (_, s) = call(&e.app, "GET", "/api/settings", None).await;
     assert!(s["notify_on"].as_array().unwrap().contains(&json!("app_update")), "the switch shows on: {s}");
@@ -364,7 +364,7 @@ async fn an_explicit_untick_sticks_and_new_kinds_stay_on() {
     e.state.db.set_setting("notify_on", r#"["turn_finished"]"#).await.unwrap();
     // The Mac app's settings page offers app_update; the person unticks it
     continuity::save_notify_settings(&e.state, None, Some(kinds(&["turn_finished", "question_asked"]))).await.unwrap();
-    assert_eq!(continuity::notify_on(&e.state).await, kinds(&["turn_finished", "question_asked"]));
+    assert_eq!(continuity::notify_on(&e.state).await, kinds(&["turn_finished", "question_asked", "pocket_app"]), "pocket_app (pa7) isn't on the page yet, so a save keeps it");
     assert!(!update_notification_delivered(&e, "0.1.2").await);
     // A later save that doesn't touch notify_on keeps it off
     continuity::save_notify_settings(&e.state, Some(String::new()), None).await.unwrap();
@@ -386,7 +386,7 @@ async fn saving_off_the_mac_app_keeps_the_app_update_choice() {
     // Off the Mac app the settings page leaves app_update out of the save (#79)
     let e = setup(None).await;
     continuity::save_notify_settings(&e.state, None, Some(kinds(&["turn_finished"]))).await.unwrap();
-    assert_eq!(continuity::notify_on(&e.state).await, kinds(&["turn_finished", "app_update"]), "default on survives");
+    assert_eq!(continuity::notify_on(&e.state).await, kinds(&["turn_finished", "app_update", "pocket_app"]), "default on survives");
 
     // Turned off in the Mac app, then saved from the VPS: still off
     e.state.db.set_setting("notify_on", r#"["turn_finished"]"#).await.unwrap();

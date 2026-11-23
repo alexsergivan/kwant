@@ -34,7 +34,7 @@ const AGENT_SEARCH_LIMIT: i64 = 20;
 /// Longest notification body.
 pub const NOTIFY_BODY_CHARS: usize = 200;
 const WEBHOOK_TIMEOUT: Duration = Duration::from_secs(5);
-pub const NOTIFY_KINDS: [&str; 19] = [
+pub const NOTIFY_KINDS: [&str; 20] = [
     "turn_finished",
     "approval_needed",
     "routine_failed",
@@ -54,6 +54,8 @@ pub const NOTIFY_KINDS: [&str; 19] = [
     "spend_stopped",
     "turn_quiet",
     "turn_stopped",
+    // pa7: a pocket app's reminder the evening before, and its results
+    "pocket_app",
 ];
 const MASK: &str = "••••••••";
 
@@ -1870,8 +1872,8 @@ pub async fn notify_settings_view(state: &AppState) -> (String, Vec<String>) {
 pub const NOTIFY_KNOWN_SETTING: &str = "notify_known";
 /// Kinds added after `notify_on` lists were first saved but before `notify_known` existed: a list
 /// saved without `notify_known` was chosen from every kind but these.
-const KINDS_SINCE_FIRST_LIST: [&str; 8] =
-    ["app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped"];
+const KINDS_SINCE_FIRST_LIST: [&str; 9] =
+    ["app_update", "work_ahead", "automation_suggested", "tier_proposed", "fact_disputed", "goal_alert", "idea_ready", "spend_stopped", "pocket_app"];
 
 /// Kinds the user wants to hear about; all of them unless set. A kind added after the list was
 /// saved is on, so a new event isn't silently off for everyone who ever saved the settings.
@@ -1908,11 +1910,12 @@ pub fn effective_kinds(saved: &[String], known: &[String]) -> Vec<String> {
 
 /// Kinds this server can't raise, so its settings page doesn't offer them: the web app leaves
 /// them out of a save, which must not read as the person turning them off.
+/// `pocket_app` (pa7) too, until the web app's settings offer it.
 fn unavailable_kinds(state: &AppState) -> Vec<&'static str> {
     if state.app_update.status().can_install {
-        Vec::new()
+        vec!["pocket_app"]
     } else {
-        vec!["app_update"]
+        vec!["app_update", "pocket_app"]
     }
 }
 
