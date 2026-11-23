@@ -826,26 +826,31 @@ const dist = new URL('../dist/pocket/', import.meta.url);
 const built = existsSync(new URL('index.html', dist));
 const needBuild = { skip: !built && !process.env.CI ? 'dist/pocket not built here (npm run build:guest)' : false };
 
-test('built: phone files at most 80 KB gzipped (JS + CSS + HTML + font); the big screen chunk at most 40 KB on its own', needBuild, () => {
+test('built: phone files at most 80 KB gzipped (JS + CSS + HTML + font); the big screen and the host remote chunks at most 40 KB each', needBuild, () => {
   const files = readdirSync(dist).filter((f) => statSync(new URL(f, dist)).isFile());
   let phone = 0;
   let screen = 0;
+  let remote = 0;
   const rows = [];
   for (const f of files) {
     const buf = readFileSync(new URL(f, dist));
     const gz = gzipSync(buf, { level: 9 }).length;
     // pa5b: the big screen's lazy chunk and its CSS (g-screen-*) load only on /p/<code>#screen=, never on a phone.
     if (f.startsWith('g-screen-')) screen += gz;
+    // pa4b: the host remote's lazy chunk and its CSS (g-remote-*) load only on /p/<code>#remote=.
+    else if (f.startsWith('g-remote-')) remote += gz;
     else phone += gz;
     rows.push(`${f} ${buf.length} B raw, ${gz} B gz`);
   }
-  console.log(`guest bundle: phone ${phone} B gzipped, big screen ${screen} B gzipped, total ${phone + screen}\n  ${rows.join('\n  ')}`);
+  console.log(`guest bundle: phone ${phone} B gzipped, big screen ${screen} B gzipped, host remote ${remote} B gzipped, total ${phone + screen + remote}\n  ${rows.join('\n  ')}`);
   assert.ok(phone <= 80 * 1024, `guest page is ${phone} B gzipped, budget 81920`);
   assert.ok(screen > 0 && screen <= 40 * 1024, `big screen chunk is ${screen} B gzipped, budget 40960`);
+  assert.ok(remote > 0 && remote <= 40 * 1024, `host remote chunk is ${remote} B gzipped, budget 40960`);
   assert.ok(files.some((f) => f.endsWith('.woff2')), 'the font ships as a file');
-  assert.ok(files.every((f) => /^(index\.html|g-(screen-)?[\w-]+\.(js|css)|inter-guest-[\w-]+\.woff2)$/.test(f)), files.join(' '));
-  // The phone's page never links the screen's files; only the entry's lazy import names them.
+  assert.ok(files.every((f) => /^(index\.html|g-(screen-|remote-)?[\w-]+\.(js|css)|inter-guest-[\w-]+\.woff2)$/.test(f)), files.join(' '));
+  // The phone's page never links the screen's or the remote's files; only the entry's lazy imports name them.
   assert.doesNotMatch(readFileSync(new URL('index.html', dist), 'utf8'), /g-screen-/);
+  assert.doesNotMatch(readFileSync(new URL('index.html', dist), 'utf8'), /g-remote-/);
 });
 
 test('built: index.html fits the CSP with no inline script or style; the app is not in it', needBuild, () => {

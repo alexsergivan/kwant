@@ -17,7 +17,7 @@ export default defineConfig({
     assetsDir: '',
     // Fonts stay files: a data: font would need font-src data:, which the pocket CSP does not allow.
     assetsInlineLimit: 0,
-    // The big screen's CSS (pa5b) is its own file beside its lazy chunk, so phones never fetch it.
+    // The big screen's CSS (pa5b) and the host remote's (pa4b) are their own files beside their lazy chunks, so phones never fetch them.
     cssCodeSplit: true,
     modulePreload: { polyfill: false },
     target: 'es2020',
@@ -25,10 +25,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         entryFileNames: 'g-[hash].js',
-        chunkFileNames: (c) => (c.name === 'screen' ? 'g-screen-[hash].js' : 'g-[hash].js'),
+        chunkFileNames: (c) => (c.name === 'screen' ? 'g-screen-[hash].js' : c.name === 'remote' ? 'g-remote-[hash].js' : 'g-[hash].js'),
         assetFileNames: (a) => {
           const n = a.names?.[0] ?? a.name ?? '';
-          return n.endsWith('.woff2') ? 'inter-guest-[hash][extname]' : n.startsWith('screen') ? 'g-screen-[hash][extname]' : 'g-[hash][extname]';
+          return n.endsWith('.woff2') ? 'inter-guest-[hash][extname]' : n.startsWith('screen') ? 'g-screen-[hash][extname]' : n.startsWith('remote') ? 'g-remote-[hash][extname]' : 'g-[hash][extname]';
         },
       },
     },
