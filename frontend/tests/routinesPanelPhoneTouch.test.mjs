@@ -55,12 +55,17 @@ test('d: on a phone the switch is a 44x44 hit area; desktop keeps 36x24', () => 
   for (const c of ['w-11', 'h-11', 'sm:w-auto', 'sm:h-auto', 'sm:p-1', 'sm:-m-1', 'sm:mt-0']) assert.match(label[0], new RegExp(`class="[^"]*(?<![\\w:-])${c.replace(/[-:]/g, '\\$&')}(?![\\w-])`), c);
 });
 
-test('e: on a phone "Open result" is 44 px tall; desktop unchanged', () => {
+test('e: "Open result" keeps main\'s classes; its 44 px phone tap area is kw-hit, not a taller row (Round 2)', () => {
   const row = ui.run({ routine: base, run: { id: 'r1', routine_id: 'rt1', trigger: 'schedule', started_at: '2026-11-23T08:00:00Z', ended_at: null, status: 'ok', error: null, message_id: 'm1' }, onOpenRunResult: () => {} });
   const btn = row.match(/<button[^>]*data-run-result[^>]*>/);
   assert.ok(btn, 'Open result rendered');
-  assert.match(btn[0], /\bmin-h-11\b/);
-  assert.match(btn[0], /sm:min-h-0/);
-  assert.match(btn[0], /\binline-flex\b/);
-  assert.match(btn[0], /\bitems-center\b/);
+  assert.match(btn[0], /\bkw-hit\b/);
+  assert.doesNotMatch(btn[0], /min-h-11/);
+});
+
+test('k: a paused routine that never ran shows "Paused" once (no pill)', () => {
+  const html = card({ enabled: false, last_status: null, last_run_at: null });
+  assert.doesNotMatch(html, /data-routine-paused/);
+  assert.doesNotMatch(html, /data-run-badge/);
+  assert.equal((html.replace(/<[^>]+>/g, ' ').match(/\bPaused\b/g) ?? []).length, 1);
 });

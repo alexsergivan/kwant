@@ -475,8 +475,7 @@ export const RunRow: React.FC<{
   const t = onOpenRunResult ? runResultTarget(routine, r) : null;
   const card = onOpenRunCard && st.cardId ? st.cardId : null;
   const note = routineRunNote(r);
-  // Mira's 0945 pass Minor e: a 44 px tall tap target on a phone; desktop as before.
-  const link = 'kw-focus kw-hit inline-flex items-center min-h-11 sm:min-h-0 gap-0.5 rounded font-semibold text-info hover:text-sky-200';
+  const link = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-info hover:text-sky-200';
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400" data-run-row={r.id} data-run-state={st.tone}>
       <StatusBadge status={r.status} error={r.error} wait={wait} inHistory />
@@ -607,7 +606,7 @@ export const RoutineRow: React.FC<{
   // "last ran" line in the existing status words. A run still going on a paused routine keeps its live badge.
   const liveWait = liveWaitOf(waits, routine.id);
   const lastState = routine.last_status ? runRowState({ status: routine.last_status, error: routine.last_error ?? null }, liveWait) : null;
-  const pausedPill = !routine.enabled && lastState?.tone !== 'running' && lastState?.tone !== 'waiting';
+  const pausedPill = !routine.enabled && !!lastState && lastState.tone !== 'running' && lastState.tone !== 'waiting';
   const lastWord = pausedPill && lastState ? (lastState.label === 'OK' ? 'OK' : lastState.label.charAt(0).toLowerCase() + lastState.label.slice(1)) : null;
   const lastResult = lastWord ? `, ${lastWord}` : '';
 
