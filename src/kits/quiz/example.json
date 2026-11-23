@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "kit": "quiz",
+  "title": "Friday Pub Quiz at The Anchor",
+  "when": "2026-11-27T20:00:00+00:00",
+  "theme": "#7c5cff",
+  "teams": { "mode": "teams", "size": 4 },
+  "settings": { "leaderboard": "round", "shuffle_options": true, "lock_when_all_answered": true },
+  "lines": {
+    "intro": "Evening, quizzers! Phones out, names in, and no googling: I can see you.",
+    "reveal": ["Let's see who knew that one.", "Drum roll, please."],
+    "final": "That's the lot! Give it up for our winners."
+  },
+  "rounds": [
+    {
+      "title": "The 90s",
+      "intro": "Round one: the 1990s. Cast your mind back to dial-up.",
+      "questions": [
+        {
+          "kind": "choice",
+          "text": "Which band released the album \"Definitely Maybe\" in 1994?",
+          "options": ["Blur", "Oasis", "Pulp", "Suede"],
+          "answer": "Oasis",
+          "points": 1,
+          "time_limit_s": 20,
+          "source": {
+            "url": "https://en.wikipedia.org/wiki/Definitely_Maybe",
+            "quote": "Definitely Maybe is the debut studio album by English rock band Oasis, released on 29 August 1994"
+          }
+        },
+        {
+          "kind": "text",
+          "text": "Which footballer won the Ballon d'Or in 1998?",
+          "answer": "Zinedine Zidane",
+          "accept": ["Zidane", "Zizou"],
+          "points": 2,
+          "time_limit_s": 30,
+          "source": {
+            "url": "https://en.wikipedia.org/wiki/1998_Ballon_d%27Or",
+            "quote": "Zinedine Zidane won the award"
+          },
+          "reveal_line": "Zizou! Half points if you only remembered the headbutt."
+        }
+      ]
+    },
+    {
+      "title": "Numbers and pictures",
+      "questions": [
+        {
+          "kind": "number",
+          "text": "In what year did the Berlin Wall fall?",
+          "answer": 1989,
+          "tolerance": 0,
+          "source": {
+            "url": "https://en.wikipedia.org/wiki/Fall_of_the_Berlin_Wall",
+            "quote": "The fall of the Berlin Wall on 9 November 1989"
+          }
+        },
+        {
+          "kind": "text",
+          "text": "Where did your quizmaster take this holiday photo?",
+          "answer": "Paris",
+          "picture": {
+            "url": "files/holiday/tower.jpg",
+            "licence": "own",
+            "alt": "A tall iron lattice tower over a river"
+          },
+          "source": {
+            "url": "https://en.wikipedia.org/wiki/Eiffel_Tower",
+            "quote": "The Eiffel Tower is a wrought-iron lattice tower on the Champ de Mars in Paris, France."
+          }
+        }
+      ]
+    }
+  ]
+}
