@@ -339,14 +339,14 @@ pub async fn callback(State(state): State<AppState>, Query(q): Query<CallbackQue
     let Some(code) = q.code.as_deref().filter(|c| !c.is_empty()) else {
         return callback_page(Some(&server_id), Err("the sign-in response had no code".into()));
     };
-    match state.db.get_mcp_server(&server_id).await {
-        Ok(Some(_)) => {}
+    let server = match state.db.get_mcp_server(&server_id).await {
+        Ok(Some(server)) => server,
         Ok(None) => return callback_page(Some(&server_id), Err("this server was deleted".into())),
         Err(e) => {
             tracing::warn!(error = %e, "MCP OAuth callback database error");
             return callback_page(Some(&server_id), Err("database error".into()));
         }
-    }
+    };
     let set = match oauth::exchange_code(&state.mcp_oauth.http, &pending, code).await {
         Ok(set) => set,
         Err(e) => return callback_page(Some(&server_id), Err(e.to_string())),
@@ -362,11 +362,31 @@ pub async fn callback(State(state): State<AppState>, Query(q): Query<CallbackQue
         auth_method: pending.auth_method,
         resource: pending.resource,
     };
+    // A first sign-in: nothing was stored for this server before
+    let first = matches!(state.db.get_mcp_oauth_token(&server_id).await, Ok(None));
     if let Err(e) = state.db.save_mcp_oauth_token(&token).await {
         tracing::warn!(error = %e, "could not store MCP OAuth token");
         return callback_page(Some(&server_id), Err("could not store the sign-in".into()));
     }
+    signed_in(&state, &server, first).await;
     callback_page(Some(&server_id), Ok(()))
+}
+
+/// 34g: the person signed in to `server`. Its open lines close for every bot (and leave Needs
+/// you), and each chat that stopped on it carries on once. The first sign-in of a server a bot
+/// suggested carries the suggestion's chat on instead, when the bot is still waiting there.
+async fn signed_in(state: &AppState, server: &McpServer, first: bool) {
+    use super::tool_failures::{carry_on, resolve_connection, signed_in_prompt, Closed};
+    let stopped = resolve_connection(state, &format!("mcp:{}", server.id), Closed::Fixed).await;
+    let suggested = if first { super::mcp_suggest::carry_on_connected(state, &server.id).await } else { Vec::new() };
+    for s in stopped {
+        let context_id = s.context_id();
+        if suggested.iter().any(|(kwant_id, chat)| *kwant_id == s.kwant_id && *chat == context_id) {
+            continue;
+        }
+        let label = if s.connection.is_empty() { server.name.clone() } else { s.connection.clone() };
+        carry_on(state, &s.kwant_id, s.channel_id, s.thread_id, context_id, signed_in_prompt(&label)).await;
+    }
 }
 
 /// `DELETE /api/mcp/servers/:id/oauth`: forgets the tokens (the registration is kept).

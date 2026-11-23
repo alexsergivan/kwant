@@ -20,7 +20,9 @@ export const ToolFailureLine: React.FC<{
 }> = ({ meta, messageId, flash = false, tight = false, onFix }) => {
   const open = !meta.resolved_at;
   const urgent = open && meta.needs_you;
-  const Icon = open ? Unplug : Plug;
+  // 34g: a line whose connection was deleted closes grey, unplugged, "Removed."
+  const removed = !open && meta.removed;
+  const Icon = open || removed ? Unplug : Plug;
   return (
     <div
       data-message-id={messageId}
@@ -31,7 +33,7 @@ export const ToolFailureLine: React.FC<{
       <p className="min-w-0 break-words">
         {urgent && <span className="sr-only">Needs you: </span>}
         {meta.line}
-        {!open && <span className="text-ok"> It works again.</span>}
+        {!open && (removed ? <span className="text-zinc-500"> Removed.</span> : <span className="text-ok"> It works again.</span>)}
         {open && meta.fix && onFix && (
           <>
             {' '}
