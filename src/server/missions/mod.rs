@@ -847,6 +847,11 @@ pub fn blocked_line(title: &str, reason: Option<&str>) -> String {
 }
 
 async fn task_chat_line(state: &AppState, t: &Task, m: Option<&Mission>) {
+    // A routine's run already tells the person (its notice and Inbox item, once per failure); a
+    // board line would repeat it on every attempt and point at a board they never opened
+    if t.source_kind == "routine" {
+        return;
+    }
     let text = match t.state.as_str() {
         "verified" => format!("Verified: \"{}\" passed its checks.", t.title),
         "failed" => format!("Failed: \"{}\" didn't pass its checks after {} attempts. Retry it on the board.", t.title, t.attempts),

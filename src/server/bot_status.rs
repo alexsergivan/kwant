@@ -285,6 +285,17 @@ impl Board {
         cleared
     }
 
+    /// 34g: the person signed in to the connection again, or deleted it: its mark goes on every
+    /// bot. Returns how many bots had one.
+    pub fn clear_sign_in_everywhere(&mut self, key: &str) -> usize {
+        let marked: Vec<String> =
+            self.marks.iter().filter(|(_, m)| m.sign_in.iter().any(|s| s.key == key)).map(|(k, _)| k.clone()).collect();
+        for kwant_id in &marked {
+            self.clear_sign_in(kwant_id, key);
+        }
+        marked.len()
+    }
+
     /// Reserves `key` (chat + client message id) for one send, whose message will be saved as
     /// `message_id`. `Err` with the first send when it was seen within [`DEDUPE_MIN`].
     pub fn reserve_send(&mut self, key: &str, now: DateTime<Utc>, message_id: &str) -> Result<(), Sent> {

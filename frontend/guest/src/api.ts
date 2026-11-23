@@ -13,7 +13,14 @@ export interface Env {
   location: { pathname: string; protocol: string; host: string };
 }
 
-export type Reply = { ok: true; view?: GuestView } | { ok: false; status: number; error?: string };
+/**
+ * A failed call keeps what pa1 and the kits say about it: `error` (code), `message` (plain words to show as is),
+ * `tries_left` (wrong PIN) and `until` (PIN lock).
+ */
+export type Fail = { ok: false; status: number; error?: string; message?: string; tries_left?: number; until?: string };
+export type Reply<V = GuestView> = { ok: true; view?: V } | Fail;
+/** Reads one v1 state into the page's own view (the quiz's `fromState`, Santa's `santaFrom`). */
+export type Parse<V> = (json: unknown) => { view: V; version?: number } | undefined;
 
 type Obj = Record<string, unknown>;
 const obj = (x: unknown): Obj | undefined => (x && typeof x === 'object' && !Array.isArray(x) ? (x as Obj) : undefined);
@@ -81,15 +88,18 @@ export const BACKOFF = [2, 5, 10, 20];
 export const backoff = (tries: number): number => BACKOFF[Math.min(tries, BACKOFF.length - 1)];
 export const POLL_MS = 2000;
 
-export class Api {
+export class Api<V = GuestView> {
   readonly base: string;
   /** The last state version seen, for `state?since=`. */
   version: number | undefined;
-  constructor(private env: Env, readonly code: string) {
+  /** Where the view comes from: the guest's own `state` and `ws`, or the big screen's `host/state?view=screen` and `ws?view=screen`. */
+  statePath = 'state';
+  wsPath = 'ws';
+  constructor(private env: Env, readonly code: string, private parse: Parse<V> = fromState as unknown as Parse<V>) {
     this.base = `/api/pocket/${encodeURIComponent(code)}`;
   }
 
-  async call(path: string, body?: unknown): Promise<Reply> {
+  async call(path: string, body?: unknown): Promise<Reply<V>> {
     let res: Response;
     try {
       res = await this.env.fetch(`${this.base}/${path}`, {
@@ -109,30 +119,36 @@ export class Api {
     } catch {
       /* empty or not JSON */
     }
-    if (!res.ok) return { ok: false, status: res.status, error: str(obj(json)?.error) };
+    if (!res.ok) {
+      const e = obj(json);
+      return { ok: false, status: res.status, error: str(e?.error), message: str(e?.message), tries_left: num(e?.tries_left), until: str(e?.until) };
+    }
     return { ok: true, view: this.take(json) };
   }
 
   /** Reads a v1 state and remembers its version. */
-  take(json: unknown): GuestView | undefined {
-    const s = fromState(json);
+  take(json: unknown): V | undefined {
+    const s = this.parse(json);
     if (s?.version !== undefined) this.version = s.version;
     return s?.view;
   }
 
   /** Full state, or with `changed` only what is newer than the last version (204 gives no view). */
-  state = (changed = false) => this.call(changed && this.version !== undefined ? `state?since=${this.version}` : 'state');
+  state = (changed = false) =>
+    this.call(changed && this.version !== undefined ? `${this.statePath}${this.statePath.includes('?') ? '&' : '?'}since=${this.version}` : this.statePath);
   info = () => this.call('info');
   rejoin = (name: string) => this.call('rejoin', { name });
-  join = (body: { name: string; avatar: string; team?: string }) => this.call('join', body);
+  join = (body: { name: string; avatar: string; team?: string; pin?: string }) => this.call('join', body);
   answer = (q: string, answer: Answer) => this.call('action', { name: 'answer', body: { q, ...answer } });
+  /** A kit action: `{name, body}` (body left out when there is none). */
+  act = (name: string, body?: unknown) => this.call('action', body === undefined ? { name } : { name, body });
 }
 
 /**
  * Keeps one live link to the box: a WebSocket when the browser has one, else `state` every 2 s. When the box stops
  * answering it calls `away(nextSecs, tries)` and retries on the BACKOFF schedule until `state` answers again.
  */
-export class Live {
+export class Live<V = GuestView> {
   private ws: WebSocket | null = null;
   private timer = 0;
   private tries = 0;
@@ -142,9 +158,9 @@ export class Live {
 
   constructor(
     private env: Env,
-    private api: Api,
+    private api: Api<V>,
     private on: {
-      view: (v: GuestView) => void;
+      view: (v: V) => void;
       away: (nextSecs: number, tries: number) => void;
       back: () => void;
       gone: (status: number, error?: string) => void;
@@ -188,7 +204,7 @@ export class Live {
     let opened = false;
     let ws: WebSocket;
     try {
-      ws = new WS(`${protocol === 'https:' ? 'wss' : 'ws'}://${host}${this.api.base}/ws`);
+      ws = new WS(`${protocol === 'https:' ? 'wss' : 'ws'}://${host}${this.api.base}/${this.api.wsPath}`);
     } catch {
       this.wsFailed = 2;
       return this.poll();
@@ -260,3 +276,10 @@ export class Live {
     this.timer = this.env.setTimeout(() => void this.retry(), secs * 1000);
   }
 }
+
+/**
+ * The big screen's one sign-in: trades the `#screen=<token>` from its link for the HttpOnly `kph_<code>` cookie
+ * (pa1 `host/signin`). Today's body is `{key}`; pa1b's one-time screen links take `{token}` ("Pocket API v1.1: links"),
+ * and switching is this one line.
+ */
+export const screenSignIn = <V>(api: Api<V>, token: string): Promise<Reply<V>> => api.call('host/signin', { key: token });

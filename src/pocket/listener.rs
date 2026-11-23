@@ -1,8 +1,9 @@
 //! The guest listener's supervisor. Every 5 s it reads the `pocket_apps` switch: on starts the
 //! guest port (main port + 1, or `KWNT_POCKET_PORT`), off stops it. While on it also sweeps
-//! expired pockets every minute and runs watched pockets' kit timers every second. While off it
-//! binds nothing and touches no pocket. It also stops a quick tunnel when the switch goes off,
-//! and on macOS keeps the computer awake while a tunnel or an open pocket runs (pa6).
+//! expired pockets every minute (after pa7's reminders and results, `schedule::run_once`) and runs
+//! watched pockets' kit timers every second. While off it binds nothing and touches no pocket. It
+//! also stops a quick tunnel when the switch goes off, and on macOS keeps the computer awake while
+//! a tunnel or an open pocket runs (pa6).
 
 use crate::server::AppState;
 use std::net::SocketAddr;
@@ -106,7 +107,10 @@ pub fn spawn(state: AppState, cancel: CancellationToken) {
                 _ = reconcile_tick.tick() => { reconcile(&state).await; }
                 _ = sweep_tick.tick() => {
                     if state.pocket.on.load(Ordering::SeqCst) {
-                        super::sweep(&state, chrono::Utc::now()).await;
+                        let now = chrono::Utc::now();
+                        // pa7 first: reminders, and results posted before the sweep deletes
+                        super::schedule::run_once(&state, now).await;
+                        super::sweep(&state, now).await;
                     }
                 }
                 _ = timer_tick.tick() => {

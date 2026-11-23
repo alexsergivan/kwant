@@ -3,13 +3,16 @@
 //! is never accepted here. While the switch is off the list is empty and the rest is 404.
 //!
 //! - `GET    /api/pockets`                 `{enabled, pocket_port, kits, pockets: [card]}`
-//! - `POST   /api/pockets`                 `{kit, spec, owner_kwant_id?, opens_at?, closes_at?}` → 201 `{pocket: card, host_key}`
+//! - `POST   /api/pockets`                 `{kit, spec, owner_kwant_id?, opens_at?, closes_at?, origin?}` → 201 `{pocket: card, host_key}`
+//!   (pa7: a future `spec.when` sets the times not given; `origin` `{kwant_id, channel_id?, thread_id?}`)
 //! - `GET    /api/pockets/:code`           `{pocket: card, summary, removed, host_view, join}`: the kit's
 //!   host view (counts and ticks, never a match or a guest's words) and where guests open it
 //! - `POST   /api/pockets/:code/action`    `{name, body}` → the same as `GET` (a host action, pa10a)
 //! - `POST   /api/pockets/:code/remove`    `{player_id}` → the same as `GET`
 //! - `POST   /api/pockets/:code/reset-pin` `{player_id}` → `{code, expires_at}` (shown once)
 //! - `POST   /api/pockets/:code/end`       `{pocket: card}`
+//! - `POST   /api/pockets/:code/when`      `{when: RFC 3339 | null}` → `{pocket: card}` (pa7: moves the
+//!   times that came from `when` and re-plans the reminder; open pockets only)
 //! - `POST   /api/pockets/:code/host-key`  `{host_key}` (the old one and every host link stop
 //!   working; screen links stay)
 //! - `POST   /api/pockets/:code/link`      `{role: "host"|"screen"}` → `{token, role, expires_at}`:
@@ -35,6 +38,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/pockets", get(list).post(create))
         .route("/api/pockets/:code", get(read).delete(delete))
         .route("/api/pockets/:code/end", post(end))
+        .route("/api/pockets/:code/when", post(set_when))
         .route("/api/pockets/:code/host-key", post(host_key))
         .route("/api/pockets/:code/link", post(link))
         .route("/api/pockets/:code/tunnel", post(tunnel))
@@ -137,6 +141,21 @@ async fn reset_pin(State(state): State<AppState>, Path(code): Path<String>, Json
 async fn end(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
     found(&state, &code).await?;
     let s = super::end(&state, &code).await?;
+    Ok(Json(json!({ "pocket": card(&s) })))
+}
+
+#[derive(serde::Deserialize)]
+struct WhenRequest {
+    when: Option<String>,
+}
+
+async fn set_when(State(state): State<AppState>, Path(code): Path<String>, Json(req): Json<WhenRequest>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    let when = match req.when.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
+        Some(w) => Some(chrono::DateTime::parse_from_rfc3339(w).map_err(|_| PocketError::new(StatusCode::BAD_REQUEST, "bad_when", "when must be a date and time with its offset, like 2026-11-27T20:00:00+02:00."))?),
+        None => None,
+    };
+    let s = super::schedule::set_when(&state, &code, when).await?;
     Ok(Json(json!({ "pocket": card(&s) })))
 }
 

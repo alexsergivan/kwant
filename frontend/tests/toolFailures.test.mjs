@@ -92,3 +92,16 @@ test('no button without a place to fix it; a fixed connection says it works agai
   assert.doesNotMatch(fixed, /<button/);
   assert.doesNotMatch(fixed, /text-amber-400/);
 });
+
+test('34g: a line whose connection was deleted ends in a grey "Removed.", not "It works again.", with no button', () => {
+  const v = m.parseToolFailureMeta(meta({ resolved_at: '2026-11-23T08:00:00Z', removed: true }));
+  assert.equal(v.removed, true);
+  assert.equal(m.parseToolFailureMeta(meta({ resolved_at: '2026-11-23T08:00:00Z' })).removed, false);
+  assert.equal(m.parseToolFailureMeta(meta({ removed: 'yes' })).removed, false, 'only true counts');
+  const gone = ui.line({ meta: v, onFix: () => {} });
+  assert.match(gone, /<span class="text-zinc-400"> Removed\.<\/span>/);
+  assert.doesNotMatch(gone, /<span class="text-zinc-500"> Removed/, "zinc-500 is 3.89:1 on the chat background, under AA");
+  assert.doesNotMatch(gone, /It works again|text-ok|<button|amber|sr-only/);
+  assert.match(gone, /lucide-unplug/);
+  assert.match(gone, /^<div[^>]*text-zinc-400/);
+});
