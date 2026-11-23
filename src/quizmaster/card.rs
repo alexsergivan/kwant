@@ -138,6 +138,8 @@ pub struct Card {
     pub questions: usize,
     pub checked: usize,
     pub total: usize,
+    /// pa4c: questions the person wrote or changed themselves (not source-checked).
+    pub yours: usize,
     pub failed: Vec<FailedSource>,
     pub problems: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -167,6 +169,10 @@ pub struct CardInput<'a> {
 pub fn build(i: CardInput<'_>) -> Card {
     let total = i.spec.map(|s| s.rounds.iter().map(|r| r.questions.len()).sum()).unwrap_or(0);
     let checked = i.sources.iter().filter(|r| r.ok).count();
+    // The person's own questions have no source result once checked (pa4c)
+    let yours = i.spec.map_or(0, |s| {
+        super::source_check::questions(s).iter().enumerate().filter(|(n, (_, q))| q.source.as_ref().is_some_and(|s| s.own) && !i.sources.iter().any(|r| r.q == *n)).count()
+    });
     let failed: Vec<FailedSource> = i
         .sources
         .iter()
@@ -203,7 +209,8 @@ pub fn build(i: CardInput<'_>) -> Card {
         rounds: i.spec.map(|s| s.rounds.len()).unwrap_or(0),
         questions: total,
         checked,
-        total: if i.sources.is_empty() { total } else { i.sources.len() },
+        total: if i.sources.is_empty() { total - yours } else { i.sources.len() },
+        yours,
         failed,
         problems: i.problems.to_vec(),
         dry_run: i.dry_run.cloned(),
@@ -234,6 +241,9 @@ impl Card {
         }
         if self.total > 0 && self.state != State::Writing || !self.failed.is_empty() {
             out.push_str(&format!("{}/{} answers checked against a source.\n", self.checked, self.total));
+        }
+        if self.yours > 0 {
+            out.push_str(&format!("{} question(s) the person wrote themselves: not source-checked. Keep them exactly as they are in every pocket_update.\n", self.yours));
         }
         if !self.failed.is_empty() {
             out.push_str("Not checked:\n");

@@ -16,11 +16,11 @@ use crate::drivers::TurnInput;
 use crate::quizmaster::budget::{judge_allowance, Budget};
 use crate::quizmaster::card::{self, DryRunLine, State};
 use crate::quizmaster::judge::{Judge, JudgeBudget, JudgeModel};
-use crate::quizmaster::source_check::{Policy, SourceResult};
+use crate::quizmaster::source_check::{self, Policy, SourceResult};
 use crate::quizmaster::{self as qm, preset};
 use async_trait::async_trait;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
 
@@ -206,7 +206,7 @@ fn parse<T: serde::de::DeserializeOwned + Default>(s: &str) -> T {
 }
 
 /// Builds the card for a row.
-fn card_of(row: &QuizDraftRow) -> card::Card {
+pub(crate) fn card_of(row: &QuizDraftRow) -> card::Card {
     let spec = crate::kits::quiz::validate::parse(&row.spec).ok();
     let problems: Vec<String> = parse(&row.problems);
     let sources: Vec<SourceResult> = parse(&row.sources);
@@ -235,11 +235,47 @@ async fn save_and_show(state: &AppState, row: &QuizDraftRow) -> ToolResult {
     (c.text(), is_error)
 }
 
-/// Checks a spec and writes the result onto `row`, counting one writing call.
-async fn check_into(row: &mut QuizDraftRow, spec_text: String, cache: &HashMap<String, SourceResult>) {
-    let e = qm::evaluate(&spec_text, cache, &Policy::current()).await;
+/// pa4c: the person's own question keys stored on a draft.
+pub(crate) fn own_keys(row: &QuizDraftRow) -> HashSet<String> {
+    parse(&row.own_keys)
+}
+
+/// pa4c: each question of a spec that may not validate, read one by one, with where it sits
+/// ("round 1, question 2") and its JSON. A question that doesn't read is left out.
+pub(crate) fn loose_questions(spec_text: &str) -> Vec<(String, Value, Option<crate::kits::quiz::spec::Question>)> {
+    let v: Value = serde_json::from_str(spec_text).unwrap_or(Value::Null);
+    let mut out = Vec::new();
+    for (r, round) in v["rounds"].as_array().into_iter().flatten().enumerate() {
+        for (i, q) in round["questions"].as_array().into_iter().flatten().enumerate() {
+            out.push((format!("round {}, question {}", r + 1, i + 1), q.clone(), serde_json::from_value(q.clone()).ok()));
+        }
+    }
+    out
+}
+
+/// pa4c: the person's own keys still present in a spec.
+fn own_keys_in(spec_text: &str, own: &HashSet<String>) -> HashSet<String> {
+    loose_questions(spec_text).into_iter().filter_map(|(_, _, q)| q).filter(|q| source_check::is_own(q, own)).map(|q| source_check::own_key(&q)).collect()
+}
+
+/// Checks a spec and writes the result onto `row`, counting one writing call. The person's own
+/// questions (pa4c) skip the source check; keys no longer in the spec are dropped.
+pub(crate) async fn check_into(row: &mut QuizDraftRow, spec_text: String, cache: &HashMap<String, SourceResult>) {
+    recheck(row, spec_text, cache, true).await
+}
+
+/// [`check_into`]; `writing_call`: whether it counts as one of the bot's writing calls (the
+/// person's own edits, pa4c, don't).
+pub(crate) async fn recheck(row: &mut QuizDraftRow, spec_text: String, cache: &HashMap<String, SourceResult>, writing_call: bool) {
+    let own = own_keys_in(&spec_text, &own_keys(row));
+    let e = qm::evaluate_own(&spec_text, cache, &Policy::current(), &own).await;
+    let mut own: Vec<String> = own.into_iter().collect();
+    own.sort();
+    row.own_keys = serde_json::to_string(&own).unwrap_or_else(|_| "[]".into());
     let mut budget: Budget = parse(&row.budget);
-    budget.writing_calls += 1;
+    if writing_call {
+        budget.writing_calls += 1;
+    }
     budget.source_fetches += e.fetched;
     if let Some(s) = &e.spec {
         budget.judge_allowance = judge_allowance(qm::text_questions(s));
@@ -275,6 +311,7 @@ async fn create(state: &AppState, scope: &SelfScope, space: &str, args: &Value) 
         pocket_code: None,
         created_at: now,
         updated_at: now,
+        own_keys: "[]".into(),
     };
     check_into(&mut row, spec_text, &HashMap::new()).await;
     save_and_show(state, &row).await
@@ -330,10 +367,40 @@ async fn update(state: &AppState, mut row: QuizDraftRow, args: &Value) -> ToolRe
     let Some(spec_text) = spec_text else {
         return fail("`spec` is required: the whole quiz, not only the changes.");
     };
+    // pa4c: the questions the person wrote stay as they wrote them
+    if let Some(msg) = drops_persons_questions(&row, &spec_text) {
+        return fail(msg);
+    }
     // Passed checks are reused while the question's source and answer stay the same
     let cache: HashMap<String, SourceResult> = parse::<Vec<SourceResult>>(&row.sources).into_iter().filter(|r| r.ok).map(|r| (r.key.clone(), r)).collect();
     check_into(&mut row, spec_text, &cache).await;
     save_and_show(state, &row).await
+}
+
+/// pa4c: a bot's whole-spec update that drops or changes a question the person wrote, said with
+/// those questions' JSON so the bot can keep them as they are. `None`: every one is still there.
+fn drops_persons_questions(row: &QuizDraftRow, spec_text: &str) -> Option<String> {
+    let own = own_keys(row);
+    if own.is_empty() {
+        return None;
+    }
+    let kept = own_keys_in(spec_text, &own);
+    let lost: Vec<(String, Value)> = loose_questions(&row.spec)
+        .into_iter()
+        .filter_map(|(at, v, q)| q.filter(|q| source_check::is_own(q, &own) && !kept.contains(&source_check::own_key(q))).map(|_| (at, v)))
+        .collect();
+    if lost.is_empty() {
+        return None;
+    }
+    let mut msg = format!(
+        "Nothing changed: the person wrote {} of this quiz's questions themselves, and this spec drops or changes {}. Put each back exactly as it is below (same text, answer, spellings and `\"source\": {{\"own\": true}}`), then call pocket_update again.\n",
+        own.len(),
+        if lost.len() == 1 { "one of them".to_string() } else { format!("{} of them", lost.len()) }
+    );
+    for (at, v) in lost {
+        msg.push_str(&format!("  {at}: {v}\n"));
+    }
+    Some(msg)
 }
 
 /// Moves the event. An open quiz moves through the Pocket core (pa7 `set_when`), which keeps an

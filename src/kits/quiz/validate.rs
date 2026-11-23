@@ -278,6 +278,12 @@ fn check_question(q: &super::spec::Question, path: &str, f: &mut Found) {
     }
     match &q.source {
         None => f.add(at, "the answer has no source; add `source` with the page's `url` and the `quote` that holds the answer"),
+        // pa4c: the person's own question has no page to quote
+        Some(src) if src.own => {
+            if !src.url.is_empty() || !src.quote.is_empty() {
+                f.add(at, "a source is either the person's own (`own`) or a page with `url` and `quote`, not both");
+            }
+        }
         Some(src) => {
             if !web_url(&src.url) {
                 f.add(at, "the source needs a web address (http or https) in `url`");
