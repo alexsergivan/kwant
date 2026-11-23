@@ -354,14 +354,10 @@ pub async fn set_when(state: &AppState, code: &str, new_when: Option<DateTime<Fi
             })
             .await?;
     }
-    if !state.db.pocket_reschedule(code, &text, t.opens_at, t.closes_at, t.starts_at, &zone.text(), remind).await? {
+    // One write, so the minute tick can't claim the reminder in between (Rigel's QA risk 4)
+    let from_when = (t.opens_from_when, t.closes_from_when);
+    if !state.db.pocket_reschedule(code, &text, t.opens_at, t.closes_at, t.starts_at, &zone.text(), remind, from_when).await? {
         return Err(PocketError::new(StatusCode::GONE, "ended", "This pocket app has ended."));
-    }
-    // Which times now come from `when` (an explicit one stays explicit)
-    if let Some(mut row) = state.db.pocket_schedule(code).await? {
-        row.opens_from_when = t.opens_from_when;
-        row.closes_from_when = t.closes_from_when;
-        state.db.pocket_schedule_insert(&row).await?;
     }
     super::changed(state, code).await?;
     super::snapshot(state, code).await?.ok_or_else(PocketError::not_found)

@@ -576,8 +576,9 @@ impl Database {
             .await?)
     }
 
-    /// A new `when`: the pocket's spec and times, and its schedule row, in one transaction. A
-    /// reminder whose time moved fires again at the new time. `false`: the pocket isn't open.
+    /// A new `when`: the pocket's spec and times, and its schedule row (including which times
+    /// come from `when`), in one transaction. A reminder whose time moved fires again at the new
+    /// time; one already claimed at the same time stays claimed. `false`: the pocket isn't open.
     #[allow(clippy::too_many_arguments)]
     pub async fn pocket_reschedule(
         &self,
@@ -588,6 +589,7 @@ impl Database {
         starts_at: Option<DateTime<Utc>>,
         zone: &str,
         remind_at: Option<DateTime<Utc>>,
+        from_when: (bool, bool),
     ) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
         let done = sqlx::query(
@@ -603,11 +605,13 @@ impl Database {
             return Ok(false);
         }
         sqlx::query(
-            "UPDATE pocket_schedule SET starts_at = ?, zone = ?, \
+            "UPDATE pocket_schedule SET starts_at = ?, zone = ?, opens_from_when = ?, closes_from_when = ?, \
              reminded_at = CASE WHEN remind_at IS ? THEN reminded_at ELSE NULL END, remind_at = ? WHERE pocket_code = ?",
         )
         .bind(starts_at)
         .bind(zone)
+        .bind(from_when.0)
+        .bind(from_when.1)
         .bind(remind_at)
         .bind(remind_at)
         .bind(code)
