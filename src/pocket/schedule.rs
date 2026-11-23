@@ -196,7 +196,7 @@ pub fn results_copy(title: &str, players: usize, has_chat: bool) -> (String, Str
 }
 
 /// The line under the card's name: "Fri, Nov 27 · 8 PM".
-fn when_line(zone: &Zone, starts_at: DateTime<Utc>) -> String {
+pub(crate) fn when_line(zone: &Zone, starts_at: DateTime<Utc>) -> String {
     let l = zone.local(starts_at);
     format!("{} · {}", l.format("%a, %b %-d"), clock(l))
 }
