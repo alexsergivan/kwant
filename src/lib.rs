@@ -14,6 +14,7 @@ pub mod import;
 pub mod kits;
 pub mod mcp;
 pub mod parallel;
+pub mod pocket;
 pub mod profiles;
 pub mod router;
 pub mod routines;

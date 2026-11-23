@@ -1,0 +1,316 @@
+//! The kit registry (Pocket API v1). A kit is a deterministic engine the core drives: it checks a
+//! spec, keeps its own state as JSON (saved by the core after every change), answers named
+//! actions, and draws one view per viewer. The core never sends a kit's whole state to anyone:
+//! each viewer gets only what `view(viewer)` returns for it, over `state` and over `ws` alike.
+//!
+//! Adding a kit: implement [`Kit`] in its own module (the Quiz is `crate::kits`, pa2) and add one
+//! line to [`kit`]. Later versions of the API add to these shapes and never change them.
+
+use chrono::{DateTime, Duration, NaiveDate, Utc};
+use serde_json::{json, Value};
+
+/// Players a pocket takes unless its kit asks for fewer (quick tunnels cap requests in flight).
+pub const DEFAULT_MAX_PLAYERS: usize = 60;
+
+/// How long a kit keeps guest data (plan section 8 rule 11). The sweeper deletes the pocket, its
+/// players, keys and events once `expires_at` passes; deleting is final.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Retention {
+    /// `days` after the pocket ends (games: 7).
+    AfterEnd { days: i64 },
+    /// `days` after the first date in the spec among `fields` (Secret Santa: the reveal date,
+    /// else the gift date, + 7). With none of them set, it behaves like `AfterEnd`.
+    AfterDate { fields: &'static [&'static str], days: i64 },
+    /// At the end (a class quiz keeps nothing).
+    AtEnd,
+}
+
+impl Retention {
+    /// When the data goes, if that is known yet: at creation `ended_at` is `None`.
+    pub fn expires_at(&self, spec: &Value, ended_at: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
+        match *self {
+            Retention::AfterEnd { days } => ended_at.map(|t| t + Duration::days(days)),
+            Retention::AtEnd => ended_at,
+            Retention::AfterDate { fields, days } => match fields.iter().find_map(|f| spec_date(spec.get(*f)?)) {
+                Some(date) => Some(date + Duration::days(days)),
+                None => ended_at.map(|t| t + Duration::days(days)),
+            },
+        }
+    }
+
+    /// The JSON the guest page and the host card show before anyone types.
+    pub fn describe(&self) -> Value {
+        match *self {
+            Retention::AfterEnd { days } => json!({ "kind": "after_end", "days": days }),
+            Retention::AfterDate { fields, days } => json!({ "kind": "after_date", "fields": fields, "days": days }),
+            Retention::AtEnd => json!({ "kind": "at_end" }),
+        }
+    }
+}
+
+/// A date in a spec: RFC 3339 (`2026-12-18T19:00:00Z`) or a plain day (`2026-12-18`, end of day UTC).
+pub fn spec_date(v: &Value) -> Option<DateTime<Utc>> {
+    let s = v.as_str()?.trim();
+    if let Ok(t) = DateTime::parse_from_rfc3339(s) {
+        return Some(t.with_timezone(&Utc));
+    }
+    NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?.and_hms_opt(23, 59, 59).map(|t| t.and_utc())
+}
+
+/// What a kit declares for one spec (a kit may differ by spec: a class quiz keeps nothing).
+#[derive(Debug, Clone, PartialEq)]
+pub struct KitRules {
+    pub retention: Retention,
+    /// Joining picks a 4-digit PIN and rejoining needs it (Secret Santa).
+    pub needs_pin: bool,
+    /// At most [`DEFAULT_MAX_PLAYERS`]; the core clamps a bigger number.
+    pub max_players: usize,
+    /// Action names a guest may send; anything else is a 400.
+    pub guest_actions: &'static [&'static str],
+    /// Action names the host remote may send (for example `advance`); anything else is a 400.
+    pub host_actions: &'static [&'static str],
+}
+
+/// Who a view is for. Each gets its own view; there is never one shared blob a page filters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Viewer {
+    Guest(String),
+    Host,
+    BigScreen,
+}
+
+impl Viewer {
+    pub fn player_id(&self) -> Option<&str> {
+        match self {
+            Viewer::Guest(id) => Some(id),
+            _ => None,
+        }
+    }
+}
+
+/// A player as a kit sees it (no PIN, no keys).
+#[derive(Debug, Clone, PartialEq)]
+pub struct Player {
+    pub id: String,
+    pub name: String,
+    pub avatar: String,
+    pub team: Option<String>,
+    pub joined_at: DateTime<Utc>,
+}
+
+/// What a kit gets for one call: the spec, the players still in, the time, and somewhere to put
+/// events the core saves with the state (deleted with the pocket).
+pub struct KitCtx<'a> {
+    pub spec: &'a Value,
+    pub players: &'a [Player],
+    pub now: DateTime<Utc>,
+    pub events: Vec<KitEvent>,
+}
+
+impl<'a> KitCtx<'a> {
+    pub fn new(spec: &'a Value, players: &'a [Player], now: DateTime<Utc>) -> Self {
+        Self { spec, players, now, events: Vec::new() }
+    }
+
+    pub fn player(&self, id: &str) -> Option<&Player> {
+        self.players.iter().find(|p| p.id == id)
+    }
+
+    pub fn event(&mut self, player_id: Option<&str>, kind: &str, payload: Value) {
+        self.events.push(KitEvent { player_id: player_id.map(str::to_string), kind: kind.to_string(), payload });
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct KitEvent {
+    pub player_id: Option<String>,
+    pub kind: String,
+    pub payload: Value,
+}
+
+/// Why a kit refused an action: a 400 (bad body) or a 409 (not now).
+#[derive(Debug, Clone, PartialEq)]
+pub enum KitError {
+    BadInput(String),
+    NotNow(String),
+}
+
+pub trait Kit: Send + Sync + 'static {
+    fn id(&self) -> &'static str;
+    fn rules(&self, spec: &Value) -> KitRules;
+    /// `Err` is a plain sentence for the bot or the person (shown as is).
+    fn validate_spec(&self, spec: &Value) -> Result<(), String>;
+    /// The pocket's title from its spec (shown on the card and the guest page).
+    fn title(&self, spec: &Value) -> String {
+        spec.get("title").and_then(Value::as_str).unwrap_or("").trim().chars().take(80).collect()
+    }
+    fn init(&self, spec: &Value) -> Value;
+    fn on_join(&self, _ctx: &mut KitCtx, _state: &mut Value, _player: &Player) {}
+    fn on_remove(&self, _ctx: &mut KitCtx, _state: &mut Value, _player_id: &str) {}
+    /// A named action from `actor` (its name is already one the rules list for that actor).
+    fn act(&self, ctx: &mut KitCtx, state: &mut Value, actor: &Viewer, name: &str, body: &Value) -> Result<(), KitError>;
+    /// Called about once a second while someone is watching; `true` when the state changed
+    /// (a timer ran out). Kits without timers keep the default.
+    fn tick(&self, _ctx: &mut KitCtx, _state: &mut Value) -> bool {
+        false
+    }
+    fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value;
+    /// What anyone with the link sees before joining (`info`, and the page's boot without a
+    /// seat, as `view`): for example the Quiz's teams with counts, rounds and start time.
+    /// Never a guest's name, answer, secret or match. `Null` (the default) means nothing.
+    fn lobby(&self, _ctx: &KitCtx, _state: &Value) -> Value {
+        Value::Null
+    }
+    /// Counts for the person's pocket card on the main port. Never names a guest's secret,
+    /// answer or match: counts only.
+    fn host_summary(&self, _ctx: &KitCtx, _state: &Value) -> Value {
+        json!({})
+    }
+}
+
+/// The kit registered under `id`. `test` exists only in debug builds or with
+/// `KWNT_POCKET_TEST_KIT=1` (QA on a release image).
+pub fn kit(id: &str) -> Option<&'static dyn Kit> {
+    match id {
+        "test" if test_kit_allowed() => Some(&TestKit),
+        _ => None,
+    }
+}
+
+/// Every kit id this build can make a pocket with.
+pub fn kit_ids() -> Vec<&'static str> {
+    ["test"].into_iter().filter(|id| kit(id).is_some()).collect()
+}
+
+fn test_kit_allowed() -> bool {
+    cfg!(debug_assertions) || std::env::var("KWNT_POCKET_TEST_KIT").is_ok_and(|v| v.trim() == "1")
+}
+
+/// A tiny kit for the core's tests. Spec: `title`, optional `pin` (bool), `max_players`,
+/// `retention` (`after_end` | `after_date` | `at_end`), `days`, `reveal_at`, `gift_on`.
+/// Guests `tap` and `set_secret {secret}` (a private field only its owner sees); the host can
+/// `advance` the round.
+pub struct TestKit;
+
+const TEST_DATE_FIELDS: &[&str] = &["reveal_at", "gift_on"];
+
+impl Kit for TestKit {
+    fn id(&self) -> &'static str {
+        "test"
+    }
+
+    fn rules(&self, spec: &Value) -> KitRules {
+        let days = spec.get("days").and_then(Value::as_i64).unwrap_or(7);
+        let retention = match spec.get("retention").and_then(Value::as_str) {
+            Some("at_end") => Retention::AtEnd,
+            Some("after_date") => Retention::AfterDate { fields: TEST_DATE_FIELDS, days },
+            _ => Retention::AfterEnd { days },
+        };
+        KitRules {
+            retention,
+            needs_pin: spec.get("pin").and_then(Value::as_bool).unwrap_or(false),
+            max_players: spec.get("max_players").and_then(Value::as_u64).map(|n| n as usize).unwrap_or(DEFAULT_MAX_PLAYERS),
+            guest_actions: &["tap", "set_secret"],
+            host_actions: &["advance"],
+        }
+    }
+
+    fn validate_spec(&self, spec: &Value) -> Result<(), String> {
+        if !spec.is_object() {
+            return Err("The spec must be a JSON object.".into());
+        }
+        if spec.get("title").and_then(Value::as_str).is_none_or(|t| t.trim().is_empty()) {
+            return Err("The spec needs a title.".into());
+        }
+        Ok(())
+    }
+
+    fn init(&self, _spec: &Value) -> Value {
+        json!({ "round": 0, "taps": {}, "secrets": {} })
+    }
+
+    fn on_remove(&self, _ctx: &mut KitCtx, state: &mut Value, player_id: &str) {
+        if let Some(s) = state["secrets"].as_object_mut() {
+            s.remove(player_id);
+        }
+    }
+
+    fn act(&self, ctx: &mut KitCtx, state: &mut Value, actor: &Viewer, name: &str, body: &Value) -> Result<(), KitError> {
+        match (actor, name) {
+            (Viewer::Guest(id), "tap") => {
+                let n = state["taps"][id.as_str()].as_i64().unwrap_or(0) + 1;
+                state["taps"][id.as_str()] = json!(n);
+                ctx.event(Some(id), "tap", json!({}));
+                Ok(())
+            }
+            (Viewer::Guest(id), "set_secret") => {
+                let secret = body.get("secret").and_then(Value::as_str).ok_or_else(|| KitError::BadInput("secret is required".into()))?;
+                if secret.chars().count() > 50 {
+                    return Err(KitError::BadInput("secret is at most 50 characters".into()));
+                }
+                state["secrets"][id.as_str()] = json!(secret);
+                Ok(())
+            }
+            (Viewer::Host, "advance") => {
+                state["round"] = json!(state["round"].as_i64().unwrap_or(0) + 1);
+                Ok(())
+            }
+            _ => Err(KitError::BadInput(format!("unknown action {name}"))),
+        }
+    }
+
+    fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value {
+        let taps = |id: &str| state["taps"][id].as_i64().unwrap_or(0);
+        let total: i64 = ctx.players.iter().map(|p| taps(&p.id)).sum();
+        let players: Vec<Value> = ctx.players.iter().map(|p| json!({ "id": p.id, "name": p.name, "avatar": p.avatar, "taps": taps(&p.id) })).collect();
+        match viewer {
+            Viewer::Guest(id) => json!({
+                "round": state["round"],
+                "total_taps": total,
+                "players": players,
+                "me": { "taps": taps(id), "secret": state["secrets"][id.as_str()] },
+            }),
+            Viewer::Host => json!({
+                "round": state["round"],
+                "total_taps": total,
+                "players": players,
+                "secrets_set": state["secrets"].as_object().map_or(0, |s| s.len()),
+            }),
+            Viewer::BigScreen => json!({ "round": state["round"], "total_taps": total, "players": players }),
+        }
+    }
+
+    fn lobby(&self, ctx: &KitCtx, state: &Value) -> Value {
+        json!({ "round": state["round"], "players": ctx.players.len() })
+    }
+
+    fn host_summary(&self, _ctx: &KitCtx, state: &Value) -> Value {
+        json!({ "round": state["round"], "secrets_set": state["secrets"].as_object().map_or(0, |s| s.len()) })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn retention_dates() {
+        let end = DateTime::parse_from_rfc3339("2026-12-01T10:00:00Z").unwrap().with_timezone(&Utc);
+        let spec = json!({ "gift_on": "2026-12-18", "reveal_at": "2026-12-18T19:00:00Z" });
+        assert_eq!(Retention::AfterEnd { days: 7 }.expires_at(&spec, None), None);
+        assert_eq!(Retention::AfterEnd { days: 7 }.expires_at(&spec, Some(end)), Some(end + Duration::days(7)));
+        assert_eq!(Retention::AtEnd.expires_at(&spec, Some(end)), Some(end));
+        let santa = Retention::AfterDate { fields: TEST_DATE_FIELDS, days: 7 };
+        // The reveal date comes first, then the gift date, then the end
+        assert_eq!(santa.expires_at(&spec, None).unwrap().to_rfc3339(), "2026-12-25T19:00:00+00:00");
+        assert_eq!(santa.expires_at(&json!({ "gift_on": "2026-12-18" }), None).unwrap().to_rfc3339(), "2026-12-25T23:59:59+00:00");
+        assert_eq!(santa.expires_at(&json!({}), None), None);
+        assert_eq!(santa.expires_at(&json!({}), Some(end)), Some(end + Duration::days(7)));
+    }
+
+    #[test]
+    fn unknown_kits_are_none() {
+        assert!(kit("quiz-nope").is_none());
+        assert!(kit("test").is_some(), "debug builds have the test kit");
+    }
+}
