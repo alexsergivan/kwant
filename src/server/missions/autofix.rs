@@ -741,6 +741,27 @@ async fn execute(state: &AppState, a: &Attempt) {
     }
 }
 
+/// What AutoFix does with a routine run that just ended `error` or `incomplete`, so the person hears
+/// about one failure once (routine-retry-once). The board takes the run's end first (the listener
+/// may not have seen it yet; taking it twice changes nothing), which records the failure and plans
+/// AutoFix's answer. `None`: AutoFix runs it again (a scheduled or running attempt for this
+/// failure), so the notice waits for the last attempt. `Some(n)`: nothing will run it again; `n` is
+/// how many times AutoFix already retried it (0 with the board or AutoFix off, a class only the
+/// person can fix, a suggestion, or the attempts used up).
+pub async fn routine_run_failed(state: &AppState, routine_id: &str, run_id: &str, status: &str) -> Option<i64> {
+    super::listener::on_routine_run(state, routine_id, run_id, status).await;
+    let Ok(Some(task)) = state.db.task_by_source("routine", run_id).await else { return Some(0) };
+    let retries = task.attempts.max(0);
+    if task.state != "failed" {
+        return Some(retries);
+    }
+    let failures = state.db.failures_of(&task.id).await.unwrap_or_default();
+    let Some(f) = failures.last() else { return Some(retries) };
+    let attempts = state.db.attempts_of(&task.id).await.unwrap_or_default();
+    let again = attempts.iter().any(|a| a.failure_id == f.id && matches!(a.status.as_str(), "scheduled" | "running"));
+    if again { None } else { Some(retries) }
+}
+
 /// A routine retry is a new run of the routine; its task is linked to the failed one (§4.4).
 async fn retry_routine(state: &AppState, a: &Attempt, failed: &Task) {
     let routine = match failed.source_id.as_deref() {
@@ -755,7 +776,7 @@ async fn retry_routine(state: &AppState, a: &Attempt, failed: &Task) {
         return;
     };
     let routine_id = routine.id.clone();
-    let Some(run) = crate::server::scheduler::start_run(state, routine, "manual").await else {
+    let Some(run) = crate::server::scheduler::start_run(state, routine, crate::server::scheduler::RETRY).await else {
         let _ = state.db.move_attempt(a, "running", "failed", Some("the routine run couldn't start")).await;
         return;
     };

@@ -53,6 +53,7 @@ import { isSignInDeadEndCode } from './mcpSignInDeadEnd';
 import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
 import { connectSheetFor, type ConnectionSuggestionMeta } from './connectionSuggestions';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
+import { type ServerStates, chatHasInstalledServer, fetchServerStates, suggestionServerState } from './suggestionServerState';
 import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi } from './botActions';
 import { BotActionCard, type BotActionDecision } from './components/BotActionCard';
 import { HireCard, type HireDecision } from './components/HireCard';
@@ -411,7 +412,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     initialView?.kind === 'settings' && initialView.scope === 'space' && initialView.section ? { section: initialView.section, seq: 1 } : null,
   );
   // A connection card's button: the Connect <App> sheet to open in Apps & accounts (cleared by any other way in).
-  const [connectApp, setConnectApp] = useState<{ slug: string; initial: { picked: string[] }; seq: number } | null>(null);
+  const [connectApp, setConnectApp] = useState<{ slug: string; name?: string; initial: { picked: string[] }; seq: number } | null>(null);
   const openSpaceSettings = (tab: SpaceSettingsTab = 'general', section?: AppsSection) => {
     setAppsSection(section ? { section, seq: Date.now() } : null);
     setConnectApp(null);
@@ -1155,6 +1156,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // servers that still need the person to sign in.
   const [suggestions, setSuggestions] = useState<Record<string, Suggestion>>({});
   const [needsSignIn, setNeedsSignIn] = useState<Record<string, boolean>>({});
+  // 34i: installed servers' real state from the connections list. `needsSignIn` (from Install or a card
+  // sign-in) is only the optimistic value until a list fetched after it answers.
+  const [serverStates, setServerStates] = useState<ServerStates | null>(null);
+  const serverSeqRef = useRef(0);
+  // Taken during render so the card never compares a new local value with an older sequence number.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const needsSignInSeq = useMemo(() => ++serverSeqRef.current, [needsSignIn]);
   // Cards for changes bots made (bot_action_updated) and hire proposals (hire_updated), by id.
   const [botActions, setBotActions] = useState<Record<string, BotActionMeta>>({});
   const [hires, setHires] = useState<Record<string, HireMeta>>({});
@@ -2830,7 +2838,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const res = await suggestionsApi.install(id, body);
       setSuggestions((prev) => applySuggestion(prev, res.suggestion));
-      if (res.oauth_required && res.server?.id) setNeedsSignIn((prev) => ({ ...prev, [res.server.id]: true }));
+      // 34i: false too, so the card says Ready right away instead of an older list's "Removed".
+      if (res.server?.id) setNeedsSignIn((prev) => ({ ...prev, [res.server.id]: !!res.oauth_required }));
       return {};
     } catch (err) {
       return { error: errText(err) };
@@ -2902,6 +2911,17 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       return errText(err);
     }
   };
+  // 34i: the open chat shows an installed tool suggestion, so its card needs the server's real state.
+  const hasInstalledMcpCard = useMemo(() => chatHasInstalledServer(messages, suggestions), [messages, suggestions]);
+  // Once per opened chat, again when Settings closes, and after Install or a card sign-in. No polling.
+  // A failed list keeps what the card had: an error never shows "Removed".
+  useEffect(() => {
+    if (!hasInstalledMcpCard) return;
+    const seq = ++serverSeqRef.current;
+    fetchServerStates(seq)
+      .then((r) => setServerStates((prev) => (prev && prev.seq > r.seq ? prev : r)))
+      .catch(() => {});
+  }, [hasInstalledMcpCard, openCtx, settingsClosedCount, needsSignIn]);
   const renderMcpSuggestion = (msg: ChatMessage, meta: SuggestionMeta, flash: boolean) => {
     const live = suggestions[meta.suggestion_id];
     const owner = live?.kwant_id ?? meta.kwant_id ?? undefined;
@@ -2914,7 +2934,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         kwantName={name ?? (msg.sender_id && msg.sender_id.length <= 20 ? msg.sender_id : chatTitle)}
         kwantId={owner}
         live={live}
-        needsSignIn={!!serverId && !!needsSignIn[serverId]}
+        serverState={serverId ? suggestionServerState(serverId, serverStates, needsSignIn[serverId], needsSignInSeq) : undefined}
         onInstall={handleInstallSuggestion}
         onDismiss={handleDismissSuggestion}
         onSignIn={handleSuggestionSignIn}

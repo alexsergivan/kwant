@@ -44,6 +44,10 @@ pub struct AwayRow {
     pub direct_kwant_id: Option<String>,
     /// Questions only: the JSON array of choices.
     pub choices: Option<String>,
+    /// Failed routine runs whose summary is the bot's reply: the run's raw error, the summary
+    /// when the reply is no summary (a usage-limit line). Other queries don't select it.
+    #[sqlx(default)]
+    pub fallback: Option<String>,
 }
 
 const OPEN_QUESTIONS: &str = "
@@ -77,11 +81,17 @@ const DELEGATIONS_STUCK: &str = "
       AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'delegation' AND x.ref_id = d.id)";
 
 /// `?1` = since. A routine posts in its channel, or the kwant's direct chat when it has none.
+/// routine-failed-row-bot-words: a run that failed (`error`, `incomplete`) reads the bot's own
+/// reply when it left one, with the raw step error as `fallback`; no reply, the error. A
+/// `needs_you` run keeps its own wording (26b, unanswered-question-not-ok).
 const ROUTINE_RUNS_ENDED: &str = "
     SELECT 'routine_run' AS kind, r.id, rt.kwant_id, k.name AS kwant_name, rt.name AS title, r.status,
-           CASE WHEN r.status = 'ok' THEN m.text ELSE r.error END AS body, r.ended_at AS at,
+           CASE WHEN r.status = 'ok' THEN m.text
+                WHEN r.status IN ('error', 'incomplete') THEN COALESCE(m.text, r.error)
+                ELSE r.error END AS body, r.ended_at AS at,
            NULL AS thread_id, rt.channel_id,
-           CASE WHEN rt.channel_id IS NULL THEN rt.kwant_id END AS direct_kwant_id, NULL AS choices
+           CASE WHEN rt.channel_id IS NULL THEN rt.kwant_id END AS direct_kwant_id, NULL AS choices,
+           CASE WHEN r.status IN ('error', 'incomplete') AND m.text IS NOT NULL THEN r.error END AS fallback
     FROM routine_runs r
     JOIN routines rt ON rt.id = r.routine_id
     LEFT JOIN kwants k ON k.id = rt.kwant_id
@@ -104,7 +114,11 @@ const FINISHED_RUNS: &str = "r.status = 'ok'";
 /// 22i close rules for a failed routine run: its bot or channel is gone, a later run of the same
 /// routine started (Run now or the next schedule), or it is in `attention_closed`. 26b: a run whose
 /// step waits on the person (`needs_you`) or failed (`incomplete`) didn't finish either.
+/// unanswered-question-not-ok: a `needs_you` run that waits on a question
+/// ([`crate::server::scheduler::QUESTION_ERROR`]) isn't listed: its open question is the one
+/// Needs-you item, and answering or dismissing it leaves nothing behind.
 const FAILED_RUNS: &str = "r.status IN ('error', 'incomplete', 'needs_you')
+      AND NOT (r.status = 'needs_you' AND COALESCE(r.error, '') = 'A step is waiting for your answer, so it didn''t finish')
       AND k.id IS NOT NULL
       AND (rt.channel_id IS NULL OR EXISTS (SELECT 1 FROM channels c WHERE c.id = rt.channel_id))
       AND NOT EXISTS (SELECT 1 FROM routine_runs r2 WHERE r2.routine_id = r.routine_id
@@ -582,6 +596,15 @@ fn newest(mut rows: Vec<AwayRow>, limit: i64) -> Vec<AwayRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// unanswered-question-not-ok: the SQL leaves out exactly the scheduler's question error,
+    /// quoted for SQL, and only for `needs_you`.
+    #[test]
+    fn failed_runs_leave_out_the_question_error() {
+        let quoted = crate::server::scheduler::QUESTION_ERROR.replace('\'', "''");
+        assert!(FAILED_RUNS.contains(&format!("r.status = 'needs_you' AND COALESCE(r.error, '') = '{quoted}'")), "{FAILED_RUNS}");
+        assert!(!FAILED_RUNS.contains(&crate::server::scheduler::NEEDS_YOU_ERROR.replace('\'', "''")));
+    }
 
     async fn plan(db: &Database, sql: &str) -> Vec<String> {
         let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))

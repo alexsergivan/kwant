@@ -105,10 +105,10 @@ test('1. the card’s button reads "Connect Gmail" and hands over its app and bo
     }
     host.querySelector('[data-open-connections]').dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
     assert.equal(opened.length, 1, composio);
-    assert.deepEqual(m.connectSheetFor(opened[0]), { slug: 'gmail', initial: { picked: ['k1'] } }, composio);
+    assert.deepEqual(m.connectSheetFor(opened[0]), { slug: 'gmail', name: 'Gmail', initial: { picked: ['k1'] } }, composio);
     for (const u of [...mounted]) u();
   }
-  assert.deepEqual(m.connectSheetFor(gmail({ kwant_id: null })), { slug: 'gmail', initial: { picked: [] } }, 'no bot: none ticked');
+  assert.deepEqual(m.connectSheetFor(gmail({ kwant_id: null })), { slug: 'gmail', name: 'Gmail', initial: { picked: [] } }, 'no bot: none ticked');
 });
 
 test('2. Apps & accounts given the card’s sheet opens Connect Gmail with that bot ticked', async () => {
@@ -126,7 +126,7 @@ test('2. Apps & accounts given the card’s sheet opens Connect Gmail with that 
 
   // Settings hands the card's sheet to Apps & accounts (and opens a fresh one on a second press).
   const ss = src('components/SpaceSettings.tsx');
-  assert.match(ss, /initialSheet=\{p\.connectApp \? \{ slug: p\.connectApp\.slug, initial: p\.connectApp\.initial \} : undefined\}/);
+  assert.match(ss, /initialSheet=\{p\.connectApp \? \{ slug: p\.connectApp\.slug, name: p\.connectApp\.name, initial: p\.connectApp\.initial \} : undefined\}/);
   assert.match(ss, /key=\{`\$\{space\.id\}:\$\{p\.connectApp\?\.seq \?\? 0\}`\}/);
 });
 
@@ -190,4 +190,53 @@ test('5. after the sheet is closed, leaving Apps & accounts and coming back does
   assert.match(app, /const changeSpaceSettingsTab = \(tab: SpaceSettingsTab\) => \{\s*setConnectApp\(null\);\s*setSpaceSettingsTab\(tab\);/);
   assert.match(app, /<SpaceSettings[\s\S]{0,200}onTab=\{changeSpaceSettingsTab\}/);
   assert.doesNotMatch(app, /onTab=\{setSpaceSettingsTab\}/);
+});
+
+// Iris (2026-11-23), 34j connect-sheet-uses-app-name (autonomy/connect-sheet-uses-app-name/brief.md, Mira's
+// ux-pass-0942-connections report section 4): an app that isn't one of the built-in tiles opened a sheet that said
+// "Connect google_search_console" six times. The card's plain name now rides along to the sheet.
+const gsc = (over = {}) =>
+  m.parseConnectionMeta({ kind: 'connection_suggestion', app: 'google_search_console', name: 'Google Search Console', reason: 'To see which pages rank.', composio: 'needs_key', kwant_id: 'k1', ...over });
+
+test('6. a suggested app that is not a built-in tile opens a sheet in the card’s words, not its slug', async () => {
+  assert.deepEqual(m.connectSheetFor(gsc()), { slug: 'google_search_console', name: 'Google Search Console', initial: { picked: ['k1'] } });
+  // A card with no name falls back to the slug in parseConnectionMeta, and connectSheetFor without a name stays slug-only.
+  assert.equal(m.connectSheetFor(gsc({ name: '' })).name, 'google_search_console');
+  assert.deepEqual(m.connectSheetFor({ app: 'x_app', kwant_id: null }), { slug: 'x_app', initial: { picked: [] } });
+
+  const composio = { id: 'composio', kind: 'mcp', name: 'Composio', description: 'Apps.', optional: true, added: false, connection_id: null, enabled: false, logins_stored: 'composio', warning: 'w', add: '/api/connections/composio' };
+  const props = (initialSheet) => ({
+    spaceName: 'Home', spaceMode: 'ask', kwants: [{ id: 'k1', name: 'Ben', approvals_effective: 'ask' }, { id: 'k2', name: 'Scout', approvals_effective: 'ask' }],
+    data: { connections: [], counts: {}, vault: { status: 'ok' }, catalog: [composio] }, profiles: [], engines: [], manageAccounts: () => null, advanced: () => h('p', null, 'ADVANCED'), phone: false, initialSheet,
+  });
+  mount(m.AppsAccounts, props(m.connectSheetFor(gsc())));
+  const sheet = await until(() => document.querySelector('[data-connect-sheet="google_search_console"]'), 'the Search Console sheet');
+  const t = text(sheet);
+  assert.match(t, /Connect Google Search Console/);
+  assert.match(t, /Use Google Search Console's tools/);
+  assert.doesNotMatch(t, /google_search_console/, 'no slug in the sheet text');
+  const attrs = [...sheet.querySelectorAll('*')].flatMap((el) => ['aria-label', 'title', 'alt'].map((a) => el.getAttribute(a) ?? ''));
+  assert.equal(attrs.filter((a) => a.includes('google_search_console')).length, 0, 'no slug in labels either');
+  const primary = buttons(sheet).filter((b) => /^Connect /.test(b));
+  assert.ok(primary.includes('Connect Google Search Console'), `primary button: ${JSON.stringify(buttons(sheet))}`);
+  assert.match(t, /^GSConnect Google Search Console/, 'the tile letters (GS) come from the name');
+  assert.equal(sheet.querySelector('[data-sheet-bot="k1"] input').checked, true, 'the bot that asked is ticked');
+  for (const u of [...mounted]) u();
+
+  // An older caller with only a slug still opens the sheet (named by the slug, as before).
+  mount(m.AppsAccounts, props({ slug: 'google_search_console', initial: { picked: [] } }));
+  const old = await until(() => document.querySelector('[data-connect-sheet="google_search_console"]'), 'the slug-only sheet');
+  assert.match(text(old), /Connect google_search_console/);
+  for (const u of [...mounted]) u();
+
+  // A built-in tile keeps its own name even if the card spelled it differently.
+  mount(m.AppsAccounts, props(m.connectSheetFor(gmail({ name: 'gmail inbox' }))));
+  const g = await until(() => document.querySelector('[data-connect-sheet="gmail"]'), 'the Gmail sheet');
+  assert.match(text(g), /Connect Gmail/);
+  assert.doesNotMatch(text(g), /gmail inbox/);
+
+  // App threads the name: connectApp's type carries it and is set from connectSheetFor.
+  const app = src('App.tsx');
+  assert.match(app, /useState<\{ slug: string; name\?: string; initial: \{ picked: string\[\] \}; seq: number \} \| null>/);
+  assert.match(app, /setConnectApp\(\{ \.\.\.connectSheetFor\(meta\), seq: Date\.now\(\) \}\)/);
 });
