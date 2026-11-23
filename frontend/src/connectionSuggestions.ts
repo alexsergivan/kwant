@@ -78,9 +78,15 @@ export const initialState = (meta: Pick<ConnectionSuggestionMeta, 'composio'> & 
   return missing ? { phase: 'missing', message: missing } : { phase: 'ready' };
 };
 
-/** The card's button: Settings → Apps & accounts with the Connect <App> sheet open and the bot that asked ticked. */
-export const connectSheetFor = (meta: Pick<ConnectionSuggestionMeta, 'app' | 'kwant_id'>): { slug: string; initial: { picked: string[] } } => ({
+/**
+ * The card's button: Settings → Apps & accounts with the Connect <App> sheet open and the bot that asked ticked.
+ * `name` is the card's plain name ("Google Search Console"), so an app that isn't a built-in tile isn't called by its slug.
+ */
+export const connectSheetFor = (
+  meta: Pick<ConnectionSuggestionMeta, 'app' | 'kwant_id'> & Partial<Pick<ConnectionSuggestionMeta, 'name'>>,
+): { slug: string; name?: string; initial: { picked: string[] } } => ({
   slug: meta.app,
+  ...(meta.name ? { name: meta.name } : {}),
   initial: { picked: meta.kwant_id ? [meta.kwant_id] : [] },
 });
 
