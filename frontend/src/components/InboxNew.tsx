@@ -23,6 +23,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
+import { Sticker } from './Sticker';
 import { ModernApprovalCard } from './ModernApprovalCard';
 import { ReviewDone, VERDICT_STYLE } from './ReviewItemStub';
 import { ReviewItemView } from './ReviewItemView';
@@ -229,7 +230,62 @@ interface RowProps {
   onOpenConnections?: () => void;
 }
 
-const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, doneSummary, place, onOpenConnections }) => {
+/** pa4c: a finished quiz's Done meta, "24 players · ended 22:41". */
+export function pocketMeta(i: Pick<InboxItem, 'meta' | 'timestamp'>): string {
+  const n = i.meta?.players;
+  const at = i.meta?.ended_at || i.timestamp;
+  return [typeof n === 'number' ? `${n} ${n === 1 ? 'player' : 'players'}` : null, at ? `ended ${clock(at)}` : null].filter(Boolean).join(' · ');
+}
+
+/** pa4c: the Done row for a finished pocket quiz. Opens its chat at the results card. */
+const PocketRow: React.FC<{ item: InboxItem; selected: boolean; focusable: boolean; onPick: (i: InboxItem) => void }> = ({ item, selected, focusable, onPick }) => {
+  const unread = isUnread(item);
+  const tint = selected ? 'border-sky-400/70 bg-sky-500/10' : GROUP_STYLE[item.group].row;
+  return (
+    <li role="presentation" className={`relative rounded-xl border transition-colors ${tint}`} data-row={item.id} data-group={item.group} data-pocket-row>
+      <div
+        role="option"
+        id={`inbox-opt-${item.id}`}
+        aria-selected={selected}
+        tabIndex={focusable ? 0 : -1}
+        data-option={item.id}
+        onClick={() => onPick(item)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onPick(item);
+          }
+        }}
+        className="kw-focus flex items-center gap-3 p-3 rounded-xl cursor-pointer"
+      >
+        <ModernAvatar role={item.kwant_name} name={item.kwant_name} size={28} kwantId={item.kwant_id} />
+        <span className="flex-1 min-w-0">
+          <span className="block text-sm font-semibold text-zinc-100 break-words max-md:line-clamp-2 md:truncate">{item.title}</span>
+          <span className="block mt-0.5 text-xs text-zinc-400 tabular-nums" data-pocket-meta>
+            {pocketMeta(item)}
+          </span>
+        </span>
+        {item.winner && (
+          <span className="shrink-0" title={`${item.winner.name} win`}>
+            <Sticker tone="holo" size="sm" ariaLabel={`Winners: ${item.winner.name}`}>
+              Winners
+            </Sticker>
+          </span>
+        )}
+        {unread && (
+          <span className="shrink-0 inline-flex items-center self-start" data-unread>
+            <span className="block w-2 h-2 rounded-full bg-sky-400" aria-hidden="true" />
+            <span className="sr-only">New</span>
+          </span>
+        )}
+      </div>
+    </li>
+  );
+};
+
+const QueueRow: React.FC<RowProps> = (props) => (props.item.kind === 'pocket' ? <PocketRow item={props.item} selected={props.selected} focusable={props.focusable} onPick={props.onPick} /> : <AnyRow {...props} />);
+
+const AnyRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, doneSummary, place, onOpenConnections }) => {
   const stopped = isReview(item) ? null : stoppedAction(item as AwayItem);
   const review = isReview(item) ? item : null;
   const title = rowTitle(item);
@@ -802,6 +858,13 @@ export const InboxNew: React.FC<InboxNewProps> = ({
       if (opensInPane(i)) {
         select(i.id);
         setCrumb(null);
+        return;
+      }
+      // pa4c: a finished quiz opens its chat scrolled to the results card.
+      if (i.kind === 'pocket') {
+        const src = i.source?.kind === 'pocket' ? i.source : null;
+        const link = i.link ?? i.result_link ?? { thread_id: src?.thread_id ?? null, channel_id: src?.channel_id ?? null, direct_kwant_id: src?.channel_id || src?.thread_id ? null : i.kwant_id };
+        onOpen({ ...(i as unknown as AwayItem), link, message_id: src?.message_id ?? i.result_message_id ?? null });
         return;
       }
       onOpen(i as AwayItem);

@@ -3,6 +3,8 @@
 // the routes on lin-pa1-pocket-core): list, read one, end, delete; pa4b adds mintLink (pa1b "Pocket API v1.1:
 // links"). All are person-only on the main port; a guest or host key is never sent from here. A minted link's
 // token only ever goes into a URL fragment (linkUrl), never a query string. Nothing in the card polls.
+// pa4c adds the quiz draft edit routes (Juno's pa4c-server/impl.md "Draft edit API"): read, add, edit and delete a
+// question. Every edit sends `base` (the draft's `updated_at` the person saw); the app's fetch wrapper adds `?space=`.
 
 /** A pocket as the person's list shows it: public facts and counts, never names or guest text. */
 export interface PocketCard {
@@ -56,10 +58,83 @@ export interface PocketLink {
 }
 
 export class PocketApiError extends Error {
-  constructor(message: string, readonly status: number, readonly code: string | null) {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code: string | null,
+    /** 422 `invalid`: the server's numbered problems ("1. round 1, question 1: …"). */
+    readonly problems: string[] = [],
+  ) {
     super(message);
     this.name = 'PocketApiError';
   }
+}
+
+// ---- pa4c: quiz drafts ----
+
+export type DraftQuestionKind = 'choice' | 'text' | 'number';
+export type DraftStatus = 'checked' | 'yours' | 'not_checked';
+
+export interface DraftQuestion {
+  /** 1-based across all rounds; the `:n` of the routes. */
+  n: number;
+  round: number;
+  /** "round 1, question 1" */
+  at?: string;
+  kind: DraftQuestionKind;
+  question: string;
+  answer: string | number;
+  accepted: string[];
+  options?: string[];
+  status: DraftStatus;
+  source_url?: string;
+  /** not_checked only: pa3's failure words. */
+  why?: string;
+  picture?: unknown;
+}
+
+export interface QuizDraft {
+  id: string;
+  title: string;
+  /** writing | checking | dry_run_stopped | ready | open | closed */
+  state: string;
+  chip: string;
+  kwant_id?: string;
+  pocket_code: string | null;
+  /** The `base` every edit sends back. */
+  updated_at: number;
+  counts: { questions: number; checked: number; yours: number; not_checked: number };
+  /** "40 questions · 39 checked · 1 yours" */
+  header: string;
+  dry_run: { ok: boolean; summary?: string; problems?: string[] } | null;
+  problems: string[];
+  rounds: { n: number; title: string | null }[];
+  questions: DraftQuestion[];
+}
+
+/** The card the bot's pocket_create/pocket_update returns (pa3 `Card`); the pocket card swaps it in after an edit. */
+export interface DraftCard {
+  id: string;
+  state: string;
+  chip: string;
+  checked: number;
+  total: number;
+  yours: number;
+  failed: { q: number; at: string; url: string; why: string }[];
+  problems: string[];
+  dry_run?: { ok: boolean; summary: string; problems?: string[] } | null;
+}
+
+export interface DraftReply {
+  draft: QuizDraft;
+  card: DraftCard;
+}
+
+export interface QuestionFields {
+  question?: string;
+  answer?: string;
+  accepted?: string[];
+  options?: string[];
 }
 
 /** The same rule as the server's `keys::valid_code`, loosely: letters and digits, 3-32. */
@@ -70,7 +145,7 @@ const FALLBACK: Record<string, string> = {
   not_found: 'This pocket app no longer exists.',
 };
 
-async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: unknown): Promise<T> {
+async function call<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string, body?: unknown): Promise<T> {
   let res: Response;
   try {
     res = await fetch(path, {
@@ -94,7 +169,8 @@ async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: u
       (typeof data?.message === 'string' && data.message) ||
       (code && FALLBACK[code]) ||
       (res.status === 404 ? FALLBACK.not_found : `That didn’t work (HTTP ${res.status}).`);
-    throw new PocketApiError(message, res.status, code);
+    const problems = Array.isArray(data?.problems) ? data.problems.filter((p): p is string => typeof p === 'string') : [];
+    throw new PocketApiError(message, res.status, code, problems);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -103,6 +179,17 @@ async function call<T>(method: 'GET' | 'POST' | 'DELETE', path: string, body?: u
 const one = (code: string) => {
   if (!validPocketCode(code)) throw new PocketApiError(FALLBACK.not_found, 404, 'not_found');
   return `/api/pockets/${encodeURIComponent(code)}`;
+};
+
+/** A quiz_drafts id as the card carries it. */
+export const validDraftId = (id: string) => /^[A-Za-z0-9_-]{1,64}$/.test(id);
+const draftPath = (id: string) => {
+  if (!validDraftId(id)) throw new PocketApiError("There's no quiz draft here.", 404, 'not_found');
+  return `/api/quiz-drafts/${encodeURIComponent(id)}`;
+};
+const qPath = (id: string, n: number) => {
+  if (!Number.isInteger(n) || n < 1) throw new PocketApiError(`This quiz has no question ${n}.`, 404, 'no_question');
+  return `${draftPath(id)}/questions/${n}`;
 };
 
 export const pocketApi = {
@@ -114,6 +201,14 @@ export const pocketApi = {
   remove: async (code: string) => call<void>('DELETE', one(code)),
   /** A fresh single-use link for the host remote or the big screen (pa1b). Every call mints a new one. */
   mintLink: async (code: string, role: PocketLinkRole) => call<PocketLink>('POST', `${one(code)}/link`, { role }),
+  /** pa4c: the draft as the editor shows it. Works in every state (open and closed read only). */
+  getDraft: async (id: string) => call<DraftReply>('GET', draftPath(id)),
+  /** pa4c: a new question at the end of `round` (1-based). The server infers `kind` when it's left out. */
+  addQuestion: async (id: string, body: QuestionFields & { round: number; kind?: DraftQuestionKind; base: number }) =>
+    call<DraftReply>('POST', `${draftPath(id)}/questions`, body),
+  /** pa4c: only the fields sent change; `accepted: []` clears the also-accept list. */
+  editQuestion: async (id: string, n: number, body: QuestionFields & { base: number }) => call<DraftReply>('PATCH', qPath(id, n), body),
+  deleteQuestion: async (id: string, n: number, base: number) => call<DraftReply>('DELETE', `${qPath(id, n)}?base=${encodeURIComponent(String(base))}`),
 };
 
 /**

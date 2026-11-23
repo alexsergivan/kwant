@@ -249,9 +249,10 @@ test('buttons whose route comes later are disabled and say why', async () => {
   };
   const r1 = { label: 'Round 1', topic: 'Music', written: 6, total: 10 };
   await later('writing', [['Edit questions', m.LATER.editRound1]], { rounds: [r1] });
-  await later('writing', [['Edit questions', m.LATER.edit]]);
-  await later('checking', [['Edit questions', m.LATER.edit]]);
-  await later('ready', [['Edit questions', m.LATER.edit]]);
+  await later('writing', [['Edit questions', m.LATER.editRound1]]);
+  // pa4c: with no draft id on the block, Edit asks for the chat instead.
+  await later('checking', [['Edit questions', m.LATER.noDraft]]);
+  await later('ready', [['Edit questions', m.LATER.noDraft]]);
   // No dead Pause or Resume on the live card: the remote pauses (Mira round 1, fix 1).
   for (const name of ['live', 'paused']) {
     const v = await card(name);

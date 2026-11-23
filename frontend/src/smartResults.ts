@@ -333,6 +333,10 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   budget: { calls: number; usd: number } | null;
   /** Ended with results: the card is the results card (design.md §6). */
   results: PocketResults | null;
+  /** pa4c: the quiz_drafts id (the bot card's `id`) that Edit questions opens. Null or absent: no editor. */
+  draft?: string | null;
+  /** pa4c: questions the person wrote or changed themselves (not source-checked). */
+  yours?: number | null;
 }
 
 export type SmartBlock =
