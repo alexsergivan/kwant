@@ -30,7 +30,7 @@ const m = await loadBundled(`
   export { POCKET_FIXTURES, FIXTURES } from './src/components/results/fixtures';
   export { REGISTRY, resolveBlock } from './src/components/results/registry';
   export { blockMarkdown, blockRows } from './src/components/results/exporters';
-  export { pocketApi, PocketApiError } from './src/pocketApi';
+  export { pocketApi, PocketApiError, linkUrl } from './src/pocketApi';
   export { pickCreature, AVATAR_STYLES, paletteCreature, isPalette } from './src/components/ModernAvatar';
 `);
 const { React, createRoot } = m;
@@ -236,7 +236,7 @@ test('End quiz asks first, names the leader, and shows the box’s own error', a
 // ---------------------------------------------------------------------------------------------------
 // pa4b buttons, prefilled asks, holo
 
-test('buttons that come with pa4b are disabled and say why', async () => {
+test('buttons whose route comes later are disabled and say why', async () => {
   const later = async (name, labels, over = {}) => {
     const v = await card(name, over);
     for (const [text, why] of labels) {
@@ -251,9 +251,14 @@ test('buttons that come with pa4b are disabled and say why', async () => {
   await later('writing', [['Edit questions', m.LATER.editRound1]], { rounds: [r1] });
   await later('writing', [['Edit questions', m.LATER.edit]]);
   await later('checking', [['Edit questions', m.LATER.edit]]);
-  await later('ready', [['Big screen', m.LATER.bigScreen], ['Edit questions', m.LATER.edit]]);
-  await later('live', [['Open the remote', m.LATER.remote], ['Big screen', m.LATER.bigScreen], ['Pause', m.LATER.pause]]);
-  await later('paused', [['Resume', m.LATER.pause]]);
+  await later('ready', [['Edit questions', m.LATER.edit]]);
+  // No dead Pause or Resume on the live card: the remote pauses (Mira round 1, fix 1).
+  for (const name of ['live', 'paused']) {
+    const v = await card(name);
+    assert.equal(button(v, 'Pause'), undefined, `${name}: no Pause`);
+    assert.equal(button(v, 'Resume'), undefined, `${name}: no Resume`);
+    v.done();
+  }
   await later('ended', [['Keep the results', m.LATER.keep]]);
   await later('results', [['Keep the results', m.LATER.keep]]);
 });
@@ -397,4 +402,140 @@ test('pocketApi: the four routes, same-origin, and plain errors', async () => {
     throw new TypeError('offline');
   };
   await assert.rejects(m.pocketApi.end('fq7k2m'), (e) => e.status === 0 && /didn’t answer/.test(e.message));
+});
+
+// ---------------------------------------------------------------------------------------------------
+// pa4b: Open the remote and Big screen mint a fresh single-use link per press
+
+/** The main port as the card sees it: GET the pocket (join addresses), POST …/link mints token n. */
+function linkBox({ join = { mode: 'wifi', wifi_url: 'http://192.168.1.20:8790/p/fq7k2m', anywhere_url: 'https://quiz-x.trycloudflare.com/p/fq7k2m' }, fail = null } = {}) {
+  const calls = [];
+  let n = 0;
+  g.fetch = async (url, init = {}) => {
+    calls.push({ method: init.method, url, body: init.body ? JSON.parse(init.body) : undefined });
+    if (init.method === 'POST' && url.endsWith('/link')) {
+      if (fail) return new Response(JSON.stringify(fail), { status: 403 });
+      n++;
+      return new Response(JSON.stringify({ token: `tok+${n}/x`, role: JSON.parse(init.body).role, expires_at: new Date(Date.now() + 600_000).toISOString() }), { status: 200 });
+    }
+    return new Response(JSON.stringify({ pocket: { code: 'fq7k2m' }, summary: null, removed: 0, join }), { status: 200 });
+  };
+  return calls;
+}
+const mints = (calls) => calls.filter((c) => c.method === 'POST' && c.url.endsWith('/link'));
+
+test('pocketApi.mintLink: POST /api/pockets/:code/link {role}; linkUrl puts the token in the fragment only', async () => {
+  const calls = linkBox();
+  const l = await m.pocketApi.mintLink('fq7k2m', 'host');
+  assert.equal(l.token, 'tok+1/x');
+  assert.deepEqual(mints(calls).map((c) => [c.url, c.body]), [['/api/pockets/fq7k2m/link', { role: 'host' }]]);
+  assert.equal(m.linkUrl('http://192.168.1.20:8790/p/fq7k2m', 'host', 'tok+1/x'), 'http://192.168.1.20:8790/p/fq7k2m#remote=tok%2B1%2Fx');
+  assert.equal(m.linkUrl('https://a.example/p/fq7k2m?x=1#old', 'screen', 't'), 'https://a.example/p/fq7k2m#screen=t');
+  await assert.rejects(m.pocketApi.mintLink('../x', 'host'), (e) => e.status === 404);
+});
+
+test('card: Open the remote mints a host link and shows a private QR; every press mints a fresh one; no token in a query', async () => {
+  const calls = linkBox();
+  const v = await card('live');
+  const open = button(v, 'Open the remote');
+  assert.equal(open.getAttribute('aria-disabled'), null);
+  assert.equal(open.getAttribute('aria-expanded'), 'false');
+  await click(open);
+  const panel = v.host.querySelector('[data-link-panel="host"]');
+  assert.ok(panel, 'the panel shows');
+  assert.equal(panel.getAttribute('data-link'), 'ready');
+  assert.match(panel.textContent, /Only you see this · scan with your phone/);
+  assert.match(panel.textContent, /Works once, for 10 minutes/);
+  assert.equal(panel.querySelectorAll('[data-qr] svg, [data-qr] img, [data-qr] canvas').length > 0, true, 'a QR code');
+  assert.equal(open.getAttribute('aria-expanded'), 'true');
+  assert.deepEqual(mints(calls).map((c) => c.body), [{ role: 'host' }]);
+  await click(button(v, 'Open the remote'));
+  await click(button(v, 'New code'));
+  assert.equal(mints(calls).length, 3, 'one fresh link per press');
+  for (const c of calls) assert.ok(!/tok/.test(c.url), `no token in ${c.url}`);
+  assert.ok(!v.host.querySelector('.kw-sticker'), 'no holo for a link');
+  await click(v.host.querySelector('[data-link-close]'));
+  assert.equal(v.host.querySelector('[data-link-panel]'), null);
+  assert.equal(document.activeElement, button(v, 'Open the remote'), 'focus goes back to the button');
+});
+
+test('card on a phone (under 640 px): Open here leads, primary, and the host line says a phone cannot scan itself', async () => {
+  linkBox();
+  const real = window.matchMedia;
+  window.matchMedia = g.matchMedia = (q) => ({ matches: q === '(max-width: 639px)', addEventListener() {}, removeEventListener() {} });
+  try {
+    const v = await card('live');
+    await click(button(v, 'Open the remote'));
+    const panel = v.host.querySelector('[data-link-panel="host"]');
+    assert.equal(panel.querySelector('[data-where]').textContent, 'Only you see this · press Open here, or scan from another phone');
+    const acts = [...panel.querySelectorAll('[data-action]')].map((b) => b.getAttribute('data-action'));
+    assert.deepEqual(acts, ['open-here', 'new-link'], 'Open here comes first');
+    assert.match(panel.querySelector('[data-action="open-here"]').className, /kw-btn-primary/);
+    assert.match(panel.querySelector('[data-qr]').className, /w-\[200px\]/, 'QR stays 200 px');
+    await click(button(v, 'Big screen'));
+    assert.match(v.host.querySelector('[data-link-panel="screen"] [data-where]').textContent, /press Open here on the computer plugged into the TV, or scan it with the tablet or laptop/);
+    v.done();
+  } finally {
+    window.matchMedia = g.matchMedia = real;
+  }
+});
+
+test('card: Big screen mints a screen link on ready and live; Open here mints its own and opens it in a new tab', async () => {
+  const calls = linkBox();
+  const opened = [];
+  const realOpen = window.open;
+  window.open = (u, target) => {
+    const tab = { location: { href: u }, opener: window, closed: false, close() { this.closed = true; } };
+    opened.push({ tab, target });
+    return tab;
+  };
+  try {
+    const v = await card('ready');
+    await click(button(v, 'Big screen'));
+    assert.ok(v.host.querySelector('[data-link-panel="screen"]'));
+    assert.deepEqual(mints(calls).map((c) => c.body), [{ role: 'screen' }]);
+    await click(button(v, 'Open here'));
+    assert.equal(opened.length, 1);
+    assert.equal(opened[0].target, '_blank');
+    assert.equal(opened[0].tab.opener, null, 'the new tab cannot reach back into the app');
+    assert.match(opened[0].tab.location.href, /\/p\/fq7k2m#screen=tok%2B2%2Fx$/);
+    assert.ok(!opened[0].tab.location.href.includes('?'), 'never a query string');
+    assert.equal(mints(calls).length, 2, 'Open here made its own link; the QR one stays good');
+    const live = await card('live');
+    await click(button(live, 'Big screen'));
+    assert.ok(live.host.querySelector('[data-link-panel="screen"]'));
+  } finally {
+    window.open = realOpen;
+  }
+});
+
+test('card: a refused mint says why in plain words, closes the blank tab, and can be tried again', async () => {
+  linkBox({ fail: { error: 'pocket_apps_off', message: 'Pocket apps are off.' } });
+  const tabs = [];
+  const realOpen = window.open;
+  window.open = () => {
+    const tab = { location: { href: '' }, opener: window, closed: false, close() { this.closed = true; } };
+    tabs.push(tab);
+    return tab;
+  };
+  try {
+    const v = await card('live');
+    await click(button(v, 'Open the remote'));
+    const panel = v.host.querySelector('[data-link-panel="host"]');
+    assert.equal(panel.getAttribute('data-link'), 'error');
+    assert.match(panel.textContent, /Couldn't make a remote link: Pocket apps are off\./);
+    assert.equal(panel.querySelector('[data-qr]'), null, 'no QR without a link');
+    await click(button(v, 'Open here'));
+    assert.equal(tabs[0].closed, true);
+  } finally {
+    window.open = realOpen;
+  }
+});
+
+test('card: with no join address anywhere the panel says so and mints nothing', async () => {
+  const calls = linkBox({ join: null });
+  const v = await card('live', { join: null });
+  await click(button(v, 'Open the remote'));
+  assert.match(v.host.querySelector('[data-link-panel]').textContent, /hasn't said its address yet/);
+  assert.equal(mints(calls).length, 0);
 });

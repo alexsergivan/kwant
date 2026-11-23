@@ -728,6 +728,170 @@ pub async fn resolve(state: &AppState, kwant_id: &str, key: &str) {
     tracing::info!(kwant = %kwant_id, %key, "a connection works again; its line is resolved");
 }
 
+/// 34g: how [`resolve_connection`] closes a connection's open lines.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Closed {
+    /// The person signed in again: the lines say it works again and their chats carry on.
+    Fixed,
+    /// The connection was deleted: the lines say "Removed." and nothing carries on.
+    Removed,
+}
+
+/// 34g: a chat where a bot stopped on a connection that works again, to carry on in.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stopped {
+    pub kwant_id: String,
+    /// The connection's name as the line says it ("Tasklane").
+    pub connection: String,
+    pub channel_id: Option<String>,
+    pub direct_kwant_id: Option<String>,
+    pub thread_id: Option<String>,
+}
+
+impl Stopped {
+    pub fn context_id(&self) -> String {
+        self.channel_id
+            .clone()
+            .or_else(|| self.thread_id.clone())
+            .or_else(|| self.direct_kwant_id.clone())
+            .unwrap_or_else(|| self.kwant_id.clone())
+    }
+}
+
+/// The lines [`resolve_connection`] closes, with their new meta: every bot's open lines on `key`
+/// from the last [`NEEDS_YOU_DAYS`]. A sign-in closes the ones that needed the person (a server
+/// that is down isn't fixed by signing in); a delete closes them all, marked `"removed": true`.
+pub fn lines_to_close(lines: &[Message], key: &str, how: Closed, now: DateTime<Utc>) -> Vec<(Message, Value)> {
+    let since = now - Span::days(NEEDS_YOU_DAYS);
+    lines
+        .iter()
+        .filter(|m| m.created_at.is_some_and(|at| at >= since))
+        .filter_map(|m| meta_of(m).map(|v| (m.clone(), v)))
+        .filter(|(_, v)| v["key"] == key && v["resolved_at"].is_null() && (how == Closed::Removed || v["needs_you"] == true))
+        .map(|(m, mut v)| {
+            v["resolved_at"] = json!(now);
+            if how == Closed::Removed {
+                v["removed"] = json!(true);
+            }
+            (m, v)
+        })
+        .collect()
+}
+
+/// The chats to carry on after a sign-in closed `closed`: one per bot and chat however many
+/// lines it had, oldest first.
+pub fn stopped_chats(closed: &[(Message, Value)]) -> Vec<Stopped> {
+    let mut seen: HashSet<(String, String)> = HashSet::new();
+    let mut out: Vec<Stopped> = Vec::new();
+    let mut sorted: Vec<&(Message, Value)> = closed.iter().filter(|(_, v)| v["needs_you"] == true).collect();
+    sorted.sort_by_key(|(m, _)| m.created_at);
+    for (m, v) in sorted {
+        let Some(kwant_id) = v["kwant_id"].as_str().filter(|k| !k.is_empty()) else {
+            continue;
+        };
+        let stop = Stopped {
+            kwant_id: kwant_id.to_string(),
+            connection: v["connection"].as_str().unwrap_or("").to_string(),
+            channel_id: m.channel_id.clone(),
+            direct_kwant_id: m.direct_kwant_id.clone(),
+            thread_id: m.thread_id.clone(),
+        };
+        if seen.insert((stop.kwant_id.clone(), stop.context_id())) {
+            out.push(stop);
+        }
+    }
+    out
+}
+
+/// 34g: the person signed in to the connection `key` again, or deleted it. Every bot's open
+/// lines on it close now (for every bot, not only the next one to call it), their sign-in marks
+/// go, and clients update the lines and drop the Needs you items at once. Returns the chats to
+/// carry on after a sign-in (none after a delete: nothing there can work any more).
+pub async fn resolve_connection(state: &AppState, key: &str, how: Closed) -> Vec<Stopped> {
+    let marked = state.turns.board(|b| b.clear_sign_in_everywhere(key));
+    let Ok(lines) = state.db.list_tool_failure_lines().await else {
+        return Vec::new();
+    };
+    let mut closed = Vec::new();
+    for (mut m, v) in lines_to_close(&lines, key, how, Utc::now()) {
+        if state.db.set_message_meta(&m.id, &v).await.is_err() {
+            continue;
+        }
+        m.meta = Some(v.to_string());
+        // The same message again: clients put the new meta in place ("It works again." / "Removed.")
+        let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&m).unwrap_or(Value::Null) });
+        if v["needs_you"] == true {
+            let item = json!({
+                "id": m.id,
+                "kind": "connection",
+                "status": "closed",
+                "reason": if how == Closed::Removed { "removed" } else { "signed_in" },
+                "kwant_id": v["kwant_id"],
+                "channel_id": m.channel_id,
+                "direct_kwant_id": m.direct_kwant_id,
+                "thread_id": m.thread_id,
+            });
+            let _ = state.event_sender.send(RuntimeEvent::WaitingUpdated { item });
+        }
+        closed.push((m, v));
+    }
+    if !closed.is_empty() || marked > 0 {
+        tracing::info!(%key, lines = closed.len(), marks = marked, ?how, "a connection's open lines closed");
+    }
+    match how {
+        Closed::Fixed => stopped_chats(&closed),
+        Closed::Removed => Vec::new(),
+    }
+}
+
+/// A name for the first line of a prompt: one line, no brackets of its own (a server's name or a
+/// registry title is someone else's text).
+pub fn prompt_name(name: &str) -> String {
+    let clean: String = name.chars().map(|c| if c.is_control() || c == '[' || c == ']' { ' ' } else { c }).take(100).collect();
+    clean.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// The first words of the turn that carries a chat on after the person signed in again.
+pub fn signed_in_prompt(connection: &str) -> String {
+    format!(
+        "[You can use {} again: the person signed in.]\nCarry on with what you were doing when it stopped. If it's already done or no longer needed, say so in one line.",
+        prompt_name(connection)
+    )
+}
+
+/// 34g: a new turn of `kwant_id` in a chat, queued like any other turn there. Nothing for a bot
+/// that was deleted, or a channel or thread that is gone.
+pub async fn carry_on(
+    state: &AppState,
+    kwant_id: &str,
+    channel_id: Option<String>,
+    thread_id: Option<String>,
+    context_id: String,
+    prompt: String,
+) {
+    use super::routes::{scope_for, try_kwant_turn, TurnOpts};
+    let Ok(Some(kwant)) = state.db.get_kwant(kwant_id).await else {
+        return;
+    };
+    let depth = match &thread_id {
+        Some(t) => state.db.delegation_for_thread(t).await.ok().flatten().map(|d| d.depth).unwrap_or(0),
+        None => 0,
+    };
+    let job = state.turns.start_job([context_id.clone()]);
+    let scope = match scope_for(state, &kwant, channel_id, thread_id, &job, depth).await {
+        Ok(scope) => scope,
+        Err(e) => {
+            tracing::info!(kwant_id = %kwant.id, context_id = %context_id, why = %e, "not carrying on: the chat is gone");
+            return;
+        }
+    };
+    tracing::info!(kwant_id = %kwant.id, context_id = %context_id, "a connection works again; the chat carries on");
+    tokio::spawn(async move {
+        let _job = job;
+        let _ = try_kwant_turn(&scope, &kwant, prompt, TurnOpts::default()).await;
+    });
+}
+
 /// "Needs you" items: open sign-in lines of the space's bots from the last [`NEEDS_YOU_DAYS`],
 /// one per bot and connection (the newest), as `(asked_at, item)` for `GET /api/waiting`.
 pub async fn needs_you(state: &AppState, kwants: &[crate::db::models::Kwant]) -> Vec<(DateTime<Utc>, Value)> {

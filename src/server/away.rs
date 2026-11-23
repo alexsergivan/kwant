@@ -211,12 +211,13 @@ pub(super) fn item(row: AwayRow) -> Value {
         }
         _ => {
             // A usage-limit line is not a summary of anything (also when an older run saved one)
-            let summary = row
-                .body
-                .as_deref()
-                .filter(|b| !crate::profiles::classify::is_limit_line(b))
-                .map(summarize)
-                .filter(|s| !s.is_empty());
+            let usable = |text: Option<&str>| {
+                text.filter(|b| !crate::profiles::classify::is_limit_line(b))
+                    .map(summarize)
+                    .filter(|s| !s.is_empty())
+            };
+            // A failed run's reply that is no summary falls back to its raw error
+            let summary = usable(row.body.as_deref()).or_else(|| usable(row.fallback.as_deref()));
             (clip_title(&row.title), summary.unwrap_or_else(|| fallback_summary(&row).into()))
         }
     };
@@ -277,7 +278,9 @@ pub async fn unread_total(state: &AppState, space: &SpaceId) -> Result<i64, crat
     let watch = crate::server::missions::watch::waiting_items(state, space).await.len() as i64;
     let waiting = state.db.away_count_open_questions(space).await? + waiting_approvals(state, space).await?.len() as i64 + watch;
     let (finished, failed) = state.db.away_counts(space, since, now - Duration::minutes(STUCK_AFTER_MINUTES)).await?;
-    Ok(waiting + finished + failed)
+    // pa4c: posted pocket results count as finished work
+    let pockets = super::inbox_pockets::unread(state, space, since).await?;
+    Ok(waiting + finished + failed + pockets)
 }
 
 /// The space's approvals the broker still waits on, each linked to the chat its turn runs in.
@@ -564,10 +567,11 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
         let failed = state.db.away_failed(&space, since, stuck_before, MAX_ITEMS).await?;
         // The badge counts from the marker, whatever this page asked for
         let (unseen_finished, unseen_failed) = state.db.away_counts(&space, default_since, stuck_before).await?;
-        Ok::<_, crate::db::DbError>((waiting, finished, failed, waiting_count, unseen_finished, unseen_failed))
+        let unseen_pockets = super::inbox_pockets::unread(&state, &space, default_since).await?;
+        Ok::<_, crate::db::DbError>((waiting, finished, failed, waiting_count, unseen_finished, unseen_failed, unseen_pockets))
     }
     .await;
-    let Ok((waiting, finished, failed, waiting_count, unseen_finished, unseen_failed)) = result else {
+    let Ok((waiting, finished, failed, waiting_count, unseen_finished, unseen_failed, unseen_pockets)) = result else {
         return internal();
     };
     let mut finished: Vec<Value> = finished.into_iter().map(item).collect();
@@ -586,7 +590,9 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
             "waiting": waiting_count,
             "finished": unseen_finished,
             "failed": unseen_failed,
-            "total": waiting_count + unseen_finished + unseen_failed,
+            // pa4c: posted pocket results (listed in the Inbox's Done, not in `finished` here)
+            "pockets": unseen_pockets,
+            "total": waiting_count + unseen_finished + unseen_failed + unseen_pockets,
         },
     }))
     .into_response()
@@ -723,6 +729,7 @@ mod tests {
             channel_id: None,
             direct_kwant_id: None,
             choices: None,
+            fallback: None,
         };
         let limit = item(row("You've hit your session limit · resets 3am (Europe/Berlin)"));
         assert_eq!(limit["summary"], "Finished");
