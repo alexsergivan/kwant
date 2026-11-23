@@ -94,16 +94,15 @@ export const pocketApi = {
   end: async (code: string) => call<{ pocket: PocketCard }>('POST', `${one(code)}/end`),
   /** Final: players, answers and the pocket go now. */
   remove: async (code: string) => call<void>('DELETE', one(code)),
-  // pa10a: the host's own calls, person-only on the main port. They mirror pa1's guest-port host routes
-  // (host/action, host/remove, host/reset-pin), which a page on the main port can't call (another origin,
-  // and a host key would have to sit in the page). Lin adds the main-port routes (card-impl.md "For Lin").
+  // pa10a: the host's own calls, person-only on the main port (Lin's src/pocket/host_api.rs, #1074). No /host
+  // segment: /host/* lives only on the guest port (/api/pocket/, singular), which refuses another origin.
   /** A named kit action (santa: draw_now, reveal_now, skip_reveal, add_pair, ...). Returns the host view. */
-  hostAction: async (code: string, name: string, body?: Record<string, unknown>) => call<unknown>('POST', `${one(code)}/host/action`, body === undefined ? { name } : { name, body }),
+  hostAction: async (code: string, name: string, body?: Record<string, unknown>) => call<unknown>('POST', `${one(code)}/action`, body === undefined ? { name } : { name, body }),
   /** The player's keys stop working; before the draw only for santa. Returns the host view. */
-  removePlayer: async (code: string, playerId: string) => call<unknown>('POST', `${one(code)}/host/remove`, { player_id: playerId }),
+  removePlayer: async (code: string, playerId: string) => call<unknown>('POST', `${one(code)}/remove`, { player_id: playerId }),
   /** A one-time code, exactly once. Nothing else comes back: never a match. */
   resetPin: async (code: string, playerId: string): Promise<ResetCode> => {
-    const r = await call<unknown>('POST', `${one(code)}/host/reset-pin`, { player_id: playerId });
+    const r = await call<unknown>('POST', `${one(code)}/reset-pin`, { player_id: playerId });
     const ok = r && typeof r === 'object' && typeof (r as ResetCode).code === 'string' && /^[A-Z0-9]{4,8}$/.test((r as ResetCode).code) && typeof (r as ResetCode).expires_at === 'string';
     if (!ok) throw new PocketApiError('The box sent something unexpected. Try again.', 200, 'bad_answer');
     // Only the two fields, whatever else the answer carried.

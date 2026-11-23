@@ -302,7 +302,7 @@ test('Draw now, Show the reveal now and Skip ask first and call the box’s name
   assert.match(c.host.querySelector('[data-confirm="draw"]').textContent, /Only 7 of 9 are in/);
   assert.equal(document.activeElement, button(c, 'Draw names'), 'focus goes to the answer');
   await click(button(c, 'Draw names'));
-  assert.deepEqual(calls.pop(), ['POST', '/api/pockets/sn4tq9/host/action', JSON.stringify({ name: 'draw_now' })]);
+  assert.deepEqual(calls.pop(), ['POST', '/api/pockets/sn4tq9/action', JSON.stringify({ name: 'draw_now' })]);
   assert.match(c.host.textContent, /Drawn\. Everyone can open their own match now\./);
 
   const r = await card('revealDay');
@@ -311,7 +311,7 @@ test('Draw now, Show the reveal now and Skip ask first and call the box’s name
   assert.equal(r.host.querySelector('[data-confirm]'), null, 'Escape keeps it');
   await click(button(r, 'Show the reveal now'));
   await click(button(r, 'Show it now'));
-  assert.deepEqual(calls.pop(), ['POST', '/api/pockets/sn4tq9/host/action', JSON.stringify({ name: 'reveal_now' })]);
+  assert.deepEqual(calls.pop(), ['POST', '/api/pockets/sn4tq9/action', JSON.stringify({ name: 'reveal_now' })]);
 
   g.fetch = async () => new Response(JSON.stringify({ error: 'already_revealed', message: 'The reveal already happened.' }), { status: 409 });
   const s = await card('revealDay');
@@ -369,7 +369,7 @@ test('People and PINs: inside the card, names and status only, Remove before the
   await click(button(c, 'Remove'));
   assert.match(cp.querySelector('[data-confirm="remove"]').textContent, /Nothing is drawn yet, so nobody's match changes\./);
   await click(button(c, 'Remove Sam'));
-  assert.deepEqual(calls.pop(), ['POST', '/api/pockets/sn4tq9/host/remove', JSON.stringify({ player_id: 'p3' })]);
+  assert.deepEqual(calls.pop(), ['POST', '/api/pockets/sn4tq9/remove', JSON.stringify({ player_id: 'p3' })]);
   assert.match(cp.textContent, /People and PINs · 6/);
   assert.equal(cp.querySelector('[data-person="Sam"]'), null);
 });
@@ -387,7 +387,7 @@ test('Reset PIN: asks first, then shows only the one-time code (mono 28px) and i
   assert.match(ask.textContent, /Mia's match, wish list and questions stay as they are\. You won't see any of them\./);
   assert.doesNotMatch(ask.textContent, /\b(Her|her|His|his|She|she|He|he)\b/, 'no guessed pronouns');
   await click(button(v, 'Reset and show the code'));
-  assert.deepEqual(calls.pop(), ['/api/pockets/sn4tq9/host/reset-pin', JSON.stringify({ player_id: 'p2' })]);
+  assert.deepEqual(calls.pop(), ['/api/pockets/sn4tq9/reset-pin', JSON.stringify({ player_id: 'p2' })]);
   const box = panel.querySelector('[data-reset-code]');
   assert.match(box.textContent, /Mia's one-time code/);
   const code = box.querySelector('[data-code]');
