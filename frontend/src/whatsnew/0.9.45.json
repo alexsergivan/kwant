@@ -1,0 +1,21 @@
+{
+  "version": "0.9.45",
+  "date": "2026-11-23",
+  "highlights": [
+    {
+      "id": "goal-recovered-says-who",
+      "title": "A fixed goal says who fixed it",
+      "text": "When a bot's fix brings a broken goal back, the notice says \"{bot}'s fix worked; its checks pass again.\" A goal that recovers on its own still says its checks pass again.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "goal-notice-real-since",
+      "title": "Goal notices give the real start time",
+      "text": "A broken goal's notice now says when it first failed, the same time its row shows, not when the notice went out.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}
