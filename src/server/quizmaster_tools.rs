@@ -41,13 +41,41 @@ pub async fn enabled(state: &AppState) -> bool {
     matches!(state.db.get_setting(SETTING).await, Ok(Some(v)) if v == "on")
 }
 
-/// What pa1 registers so a Ready quiz can open as a pocket, and close.
+/// The chat a pocket was asked for in (pa7 `CreateRequest.origin`): its reminder card and results
+/// post go there. Built on the server from the turn's own context, never from tool arguments, so a
+/// bot can't aim a pocket's posts at another chat.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct PocketOrigin {
+    pub kwant_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub channel_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub thread_id: Option<String>,
+}
+
+impl PocketOrigin {
+    pub fn of(scope: &SelfScope) -> Self {
+        let o = scope.origin.as_ref();
+        Self {
+            kwant_id: scope.kwant_id.clone(),
+            channel_id: o.and_then(|o| o.channel_id.clone()),
+            thread_id: o.and_then(|o| o.thread_id.clone()),
+        }
+    }
+}
+
+/// What pa1 registers so a Ready quiz can open as a pocket, move and close. Errors are plain
+/// sentences for the bot (pa7's `bad_origin`, `ended`, `bad_times` mapped to words).
 #[async_trait]
 pub trait PocketCore: Send + Sync {
-    /// Creates the pocket (pa1 `pocket::create`) and returns its code.
-    async fn open(&self, state: &AppState, kit: &str, spec: &Value, owner_kwant_id: &str) -> Result<String, String>;
+    /// Creates the pocket (pa1 `pocket::create`, with pa7's `origin`) and returns its code.
+    async fn open(&self, state: &AppState, kit: &str, spec: &Value, origin: &PocketOrigin) -> Result<String, String>;
     /// Ends the pocket.
     async fn close(&self, state: &AppState, code: &str) -> Result<(), String>;
+    /// Moves the event (pa7 `pocket::schedule::set_when`): an RFC 3339 time, or `None` for no time.
+    async fn set_when(&self, _state: &AppState, _code: &str, _when: Option<&str>) -> Result<(), String> {
+        Err("this kwant build can't move an open pocket yet".into())
+    }
 }
 
 static CORE: OnceLock<Arc<dyn PocketCore>> = OnceLock::new();
@@ -75,8 +103,10 @@ pub fn tools() -> Vec<Value> {
         json!({
             "name": "pocket_update",
             "description": "Hand in a fixed or changed quiz: the whole spec again. It is checked like pocket_create (unchanged sources aren't fetched again) \
-                and returns the card.",
-            "inputSchema": {"type": "object", "properties": {"id": id, "spec": spec}, "required": ["id", "spec"]},
+                and returns the card. To move the event only (also once it's open), send `when` instead of `spec`.",
+            "inputSchema": {"type": "object", "properties": {"id": id, "spec": spec,
+                "when": {"type": ["string", "null"], "description": "The new start time, RFC 3339 with its offset (2026-11-27T21:00:00+00:00), or null for no time"}},
+                "required": ["id"]},
         }),
         json!({
             "name": "pocket_dry_run",
@@ -155,7 +185,7 @@ pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value)
             match name {
                 "pocket_update" => update(state, row, args).await,
                 "pocket_dry_run" => dry_run(state, row, args).await,
-                "pocket_open" => open(state, row).await,
+                "pocket_open" => open(state, row, &PocketOrigin::of(scope)).await,
                 _ => close(state, row).await,
             }
         }
@@ -250,18 +280,83 @@ async fn create(state: &AppState, scope: &SelfScope, space: &str, args: &Value) 
     save_and_show(state, &row).await
 }
 
-async fn update(state: &AppState, mut row: QuizDraftRow, args: &Value) -> ToolResult {
-    if matches!(State::parse(&row.state), Some(State::Open | State::Closed)) {
-        return fail("This quiz is open or closed, so it can't change: guests may be playing it. Make a new one with pocket_create.");
+/// The `when` argument: `Some(None)` clears the time, `Some(Some(t))` sets it (RFC 3339, kept as
+/// written), `None` when it's absent.
+fn when_arg(args: &Value) -> Result<Option<Option<String>>, String> {
+    match args.get("when") {
+        None => Ok(None),
+        Some(Value::Null) => Ok(Some(None)),
+        Some(Value::String(s)) => {
+            let t = s.trim();
+            if t.len() > 64 || chrono::DateTime::parse_from_rfc3339(t).is_err() {
+                return Err("`when` must be an RFC 3339 time with its offset, like 2026-11-27T21:00:00+00:00, or null".into());
+            }
+            Ok(Some(Some(t.to_string())))
+        }
+        Some(_) => Err("`when` must be a string or null".into()),
     }
-    let spec_text = match spec_arg(args) {
-        Ok(Some(s)) => s,
-        Ok(None) => return fail("`spec` is required: the whole quiz, not only the changes."),
+}
+
+/// The stored spec with `when` set or removed.
+fn spec_with_when(spec: &str, when: Option<&str>) -> Option<String> {
+    let mut v: Value = serde_json::from_str(spec).ok()?;
+    let o = v.as_object_mut()?;
+    match when {
+        Some(t) => o.insert("when".into(), json!(t)),
+        None => o.remove("when"),
+    };
+    Some(v.to_string())
+}
+
+async fn update(state: &AppState, mut row: QuizDraftRow, args: &Value) -> ToolResult {
+    let st = State::parse(&row.state);
+    let when = match when_arg(args) {
+        Ok(w) => w,
         Err(e) => return fail(e),
+    };
+    let spec_text = match spec_arg(args) {
+        Ok(s) => s,
+        Err(e) => return fail(e),
+    };
+    if spec_text.is_some() && when.is_some() {
+        return fail("Send either the whole `spec` (with its `when` inside) or `when` alone, not both.");
+    }
+    if let (None, Some(when)) = (&spec_text, &when) {
+        return move_when(state, row, when.as_deref()).await;
+    }
+    if matches!(st, Some(State::Open | State::Closed)) {
+        return fail("This quiz is open or closed, so its questions can't change: guests may be playing it. Make a new one with pocket_create.");
+    }
+    let Some(spec_text) = spec_text else {
+        return fail("`spec` is required: the whole quiz, not only the changes.");
     };
     // Passed checks are reused while the question's source and answer stay the same
     let cache: HashMap<String, SourceResult> = parse::<Vec<SourceResult>>(&row.sources).into_iter().filter(|r| r.ok).map(|r| (r.key.clone(), r)).collect();
     check_into(&mut row, spec_text, &cache).await;
+    save_and_show(state, &row).await
+}
+
+/// Moves the event. An open quiz moves through the Pocket core (pa7 `set_when`), which keeps an
+/// explicit close and re-plans the reminder; a draft just changes its spec. Nothing is re-checked:
+/// the time isn't part of any question.
+async fn move_when(state: &AppState, mut row: QuizDraftRow, when: Option<&str>) -> ToolResult {
+    match State::parse(&row.state) {
+        Some(State::Closed) => return fail("This quiz is closed, so its time can't move."),
+        Some(State::Open) => {
+            let (Some(core), Some(code)) = (pocket_core(), row.pocket_code.clone()) else {
+                return fail("This kwant build has no Pocket core, so an open quiz can't move.");
+            };
+            if let Err(e) = core.set_when(state, &code, when).await {
+                return fail(format!("The time didn't move: {e}"));
+            }
+        }
+        _ => {}
+    }
+    let Some(spec) = spec_with_when(&row.spec, when) else {
+        return fail("The stored quiz can't be read.");
+    };
+    row.spec = spec;
+    row.updated_at = now_ms();
     save_and_show(state, &row).await
 }
 
@@ -281,7 +376,7 @@ async fn dry_run(state: &AppState, mut row: QuizDraftRow, args: &Value) -> ToolR
     save_and_show(state, &row).await
 }
 
-async fn open(state: &AppState, mut row: QuizDraftRow) -> ToolResult {
+async fn open(state: &AppState, mut row: QuizDraftRow, origin: &PocketOrigin) -> ToolResult {
     match State::parse(&row.state) {
         Some(State::Ready) => {}
         Some(State::Open) => return fail(format!("It's already open: {}.", row.pocket_code.as_deref().unwrap_or("?"))),
@@ -294,7 +389,7 @@ async fn open(state: &AppState, mut row: QuizDraftRow) -> ToolResult {
         Ok(v) => v,
         Err(_) => return fail("The stored quiz can't be read."),
     };
-    match core.open(state, crate::kits::quiz::KIT_ID, &spec, &row.kwant_id).await {
+    match core.open(state, crate::kits::quiz::KIT_ID, &spec, origin).await {
         Ok(code) => {
             row.pocket_code = Some(code);
             row.state = State::Open.as_str().into();
