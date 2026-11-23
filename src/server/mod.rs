@@ -58,6 +58,7 @@ pub mod transcribe;
 pub mod connection_suggest;
 pub mod bot_actions;
 pub mod quizmaster_tools;
+pub mod quizmaster_live;
 pub mod hires;
 pub mod concierge;
 pub mod rerouting;

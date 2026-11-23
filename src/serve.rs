@@ -78,6 +78,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     crate::server::show_once::spawn_sweeper(state.clone(), cancel.clone());
     // Pocket apps (pa1): the guest listener, expiry sweeper and kit timers, only while switched on
     crate::pocket::listener::spawn(state.clone(), cancel.clone());
+    // pa3b: the Quizmaster opens, moves and closes pockets through the core (every use checks the switch)
+    crate::server::quizmaster_tools::register_pocket_core(std::sync::Arc::new(crate::server::quizmaster_live::CoreAdapter));
     crate::server::engine_routes::spawn_startup_check(state.clone());
     crate::server::parallel_routes::spawn_startup_sweep(state.clone());
     crate::server::app_update_routes::spawn_notifier(state.clone());

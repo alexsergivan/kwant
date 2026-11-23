@@ -87,11 +87,64 @@ impl Database {
     pub async fn quiz_draft_get(&self, space_id: &str, id: &str) -> Result<Option<QuizDraftRow>, DbError> {
         Ok(sqlx::query_as(&format!("SELECT {COLS} FROM quiz_drafts WHERE space_id = ? AND id = ?")).bind(space_id).bind(id).fetch_optional(&self.pool).await?)
     }
+
+    /// The draft a pocket was opened from (pa3b: the live judge reads its allowance here).
+    pub async fn quiz_draft_by_pocket(&self, pocket_code: &str) -> Result<Option<QuizDraftRow>, DbError> {
+        Ok(sqlx::query_as(&format!("SELECT {COLS} FROM quiz_drafts WHERE pocket_code = ? ORDER BY updated_at DESC LIMIT 1"))
+            .bind(pocket_code)
+            .fetch_optional(&self.pool)
+            .await?)
+    }
+
+    /// pa3b (pa3 qa F3): the judge calls live play has used, written into the budget JSON so the
+    /// card counts them and a restart resumes the allowance. Never lowers the stored count (two
+    /// judging rounds may finish out of order). Changes nothing else in the row.
+    pub async fn quiz_draft_set_judge_calls(&self, id: &str, calls: u32) -> Result<bool, DbError> {
+        let r = sqlx::query(
+            "UPDATE quiz_drafts SET budget = json_set(CASE WHEN json_valid(budget) THEN budget ELSE '{}' END, '$.judge_calls',
+               MAX(?, COALESCE(CASE WHEN json_valid(budget) THEN json_extract(budget, '$.judge_calls') END, 0)))
+             WHERE id = ?",
+        )
+        .bind(i64::from(calls))
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
+        Ok(r.rows_affected() > 0)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn judge_calls_go_into_the_budget_and_the_pocket_finds_its_draft() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let r = QuizDraftRow {
+            id: "qd9".into(),
+            space_id: "s1".into(),
+            kwant_id: "k1".into(),
+            title: "Friday".into(),
+            spec: "{}".into(),
+            state: "open".into(),
+            problems: "[]".into(),
+            sources: "[]".into(),
+            dry_run: None,
+            budget: r#"{"writing_calls":2,"source_fetches":4,"judge_allowance":16}"#.into(),
+            pocket_code: Some("ABCD".into()),
+            created_at: 1,
+            updated_at: 1,
+        };
+        db.quiz_draft_save(&r).await.unwrap();
+        assert_eq!(db.quiz_draft_by_pocket("ABCD").await.unwrap().map(|r| r.id), Some("qd9".into()));
+        assert_eq!(db.quiz_draft_by_pocket("NOPE").await.unwrap(), None);
+        assert!(db.quiz_draft_set_judge_calls("qd9", 3).await.unwrap());
+        assert!(!db.quiz_draft_set_judge_calls("nope", 3).await.unwrap());
+        assert!(db.quiz_draft_set_judge_calls("qd9", 2).await.unwrap(), "a late, lower count doesn't lower it");
+        let b: serde_json::Value = serde_json::from_str(&db.quiz_draft_get("s1", "qd9").await.unwrap().unwrap().budget).unwrap();
+        assert_eq!(b, serde_json::json!({"writing_calls": 2, "source_fetches": 4, "judge_allowance": 16, "judge_calls": 3}));
+    }
 
     #[tokio::test]
     async fn save_get_update_and_space_scoping() {

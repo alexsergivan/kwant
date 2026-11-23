@@ -36,9 +36,53 @@ pub fn handles(name: &str) -> bool {
     TOOLS.contains(&name)
 }
 
-/// Whether pocket apps are on.
+/// Whether pocket apps are on: the Pocket core's own check (pa3 qa F6), so both read the switch
+/// the same way.
 pub async fn enabled(state: &AppState) -> bool {
-    matches!(state.db.get_setting(SETTING).await, Ok(Some(v)) if v == "on")
+    crate::pocket::enabled(&state.db).await
+}
+
+/// One lock per quiz draft (pa3 qa F2): every read → check → save of a draft runs under it, so
+/// two calls on one quiz (two opens at once, an update racing an open, the live judge writing
+/// its count) take turns. Locks nobody holds or waits for are dropped on the next call.
+pub async fn draft_lock(id: &str) -> tokio::sync::OwnedMutexGuard<()> {
+    static LOCKS: OnceLock<std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> = OnceLock::new();
+    let lock = {
+        let mut map = LOCKS.get_or_init(Default::default).lock().unwrap_or_else(|e| e.into_inner());
+        map.retain(|_, l| Arc::strong_count(l) > 1);
+        map.entry(id.to_string()).or_default().clone()
+    };
+    lock.lock_owned().await
+}
+
+/// The row as stored now (read again under [`draft_lock`]).
+async fn fresh(state: &AppState, row: &QuizDraftRow) -> Result<QuizDraftRow, ToolResult> {
+    match state.db.quiz_draft_get(&row.space_id, &row.id).await {
+        Ok(Some(r)) => Ok(r),
+        Ok(None) => Err(fail("That quiz is gone.")),
+        Err(e) => {
+            tracing::warn!(error = %e, "quiz draft read failed");
+            Err(fail("Couldn't read the quiz."))
+        }
+    }
+}
+
+static FAIL_OPEN_SAVE: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
+/// Tests: the next `pocket_open` of this draft fails to save it after the pocket opened.
+#[cfg(feature = "test-seams")]
+#[doc(hidden)]
+pub fn fail_next_open_save_for_tests(draft_id: &str) {
+    *FAIL_OPEN_SAVE.lock().unwrap_or_else(|e| e.into_inner()) = Some(draft_id.to_string());
+}
+
+fn fail_this_open_save(draft_id: &str) -> bool {
+    let mut f = FAIL_OPEN_SAVE.lock().unwrap_or_else(|e| e.into_inner());
+    if f.as_deref() == Some(draft_id) {
+        *f = None;
+        return true;
+    }
+    false
 }
 
 /// The chat a pocket was asked for in (pa7 `CreateRequest.origin`): its reminder card and results
@@ -308,7 +352,12 @@ fn spec_with_when(spec: &str, when: Option<&str>) -> Option<String> {
     Some(v.to_string())
 }
 
-async fn update(state: &AppState, mut row: QuizDraftRow, args: &Value) -> ToolResult {
+async fn update(state: &AppState, row: QuizDraftRow, args: &Value) -> ToolResult {
+    let _g = draft_lock(&row.id).await;
+    let mut row = match fresh(state, &row).await {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
     let st = State::parse(&row.state);
     let when = match when_arg(args) {
         Ok(w) => w,
@@ -338,7 +387,7 @@ async fn update(state: &AppState, mut row: QuizDraftRow, args: &Value) -> ToolRe
 
 /// Moves the event. An open quiz moves through the Pocket core (pa7 `set_when`), which keeps an
 /// explicit close and re-plans the reminder; a draft just changes its spec. Nothing is re-checked:
-/// the time isn't part of any question.
+/// the time isn't part of any question. The caller holds the draft's lock.
 async fn move_when(state: &AppState, mut row: QuizDraftRow, when: Option<&str>) -> ToolResult {
     match State::parse(&row.state) {
         Some(State::Closed) => return fail("This quiz is closed, so its time can't move."),
@@ -360,7 +409,12 @@ async fn move_when(state: &AppState, mut row: QuizDraftRow, when: Option<&str>) 
     save_and_show(state, &row).await
 }
 
-async fn dry_run(state: &AppState, mut row: QuizDraftRow, args: &Value) -> ToolResult {
+async fn dry_run(state: &AppState, row: QuizDraftRow, args: &Value) -> ToolResult {
+    let _g = draft_lock(&row.id).await;
+    let mut row = match fresh(state, &row).await {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
     let players = args.get("players").and_then(Value::as_u64).map(|p| p as usize).unwrap_or(qm::DRY_RUN_PLAYERS);
     match qm::dry_run(&row.spec, players) {
         Err(problems) => return fail(format!("The quiz doesn't validate yet:\n{}", problems.join("\n"))),
@@ -376,7 +430,13 @@ async fn dry_run(state: &AppState, mut row: QuizDraftRow, args: &Value) -> ToolR
     save_and_show(state, &row).await
 }
 
-async fn open(state: &AppState, mut row: QuizDraftRow, origin: &PocketOrigin) -> ToolResult {
+async fn open(state: &AppState, row: QuizDraftRow, origin: &PocketOrigin) -> ToolResult {
+    // Two opens at once: the second waits here, reads the row the first saved and says it's open
+    let _g = draft_lock(&row.id).await;
+    let mut row = match fresh(state, &row).await {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
     match State::parse(&row.state) {
         Some(State::Ready) => {}
         Some(State::Open) => return fail(format!("It's already open: {}.", row.pocket_code.as_deref().unwrap_or("?"))),
@@ -391,16 +451,35 @@ async fn open(state: &AppState, mut row: QuizDraftRow, origin: &PocketOrigin) ->
     };
     match core.open(state, crate::kits::quiz::KIT_ID, &spec, origin).await {
         Ok(code) => {
-            row.pocket_code = Some(code);
+            row.pocket_code = Some(code.clone());
             row.state = State::Open.as_str().into();
             row.updated_at = now_ms();
-            save_and_show(state, &row).await
+            let saved = if fail_this_open_save(&row.id) {
+                Err("test: save refused".to_string())
+            } else {
+                state.db.quiz_draft_save(&row).await.map_err(|e| e.to_string())
+            };
+            if let Err(e) = saved {
+                // A pocket the card doesn't know about would be open with nobody to close it
+                tracing::warn!(error = %e, "quiz draft save failed after the pocket opened; closing it");
+                return match core.close(state, &code).await {
+                    Ok(()) => fail("Couldn't save the quiz, so the pocket that had just opened was closed again. The quiz is still Ready; try pocket_open again."),
+                    Err(c) => fail(format!("Couldn't save the quiz after its pocket {code} opened, and closing that pocket failed too ({c}). Tell the person: pocket {code} may be open.")),
+                };
+            }
+            let c = card_of(&row);
+            (c.text(), false)
         }
         Err(e) => fail(format!("The pocket didn't open: {e}")),
     }
 }
 
-async fn close(state: &AppState, mut row: QuizDraftRow) -> ToolResult {
+async fn close(state: &AppState, row: QuizDraftRow) -> ToolResult {
+    let _g = draft_lock(&row.id).await;
+    let mut row = match fresh(state, &row).await {
+        Ok(r) => r,
+        Err(e) => return e,
+    };
     if State::parse(&row.state) != Some(State::Open) {
         return fail("This quiz isn't open.");
     }
@@ -450,42 +529,7 @@ impl JudgeModel for DriverJudgeModel {
         std::fs::create_dir_all(&dir).map_err(|_| "no scratch folder".to_string())?;
         // Removed when the call ends, also when the judge's time limit drops this future
         let _scratch = Scratch(dir.clone());
-        let input = TurnInput {
-            thread_id: format!("quiz-judge-{}", uuid::Uuid::new_v4().simple()),
-            kwant: Kwant {
-                id: "quiz-judge".into(),
-                name: "QuizJudge".into(),
-                title: "Quiz judge".into(),
-                persona_prompt: "You judge quiz answers. Reply with exactly one word: yes, no or partial.".into(),
-                soul: String::new(),
-                avatar_sprite: String::new(),
-                temperature: 0.0,
-                max_tokens: 8,
-                turns_completed: 0,
-                created_at: None,
-                ..self.kwant.clone()
-            },
-            prompt,
-            history: Vec::new(),
-            model_override: None,
-            model,
-            effort_level: None,
-            team_context: None,
-            workspace_dir: Some(dir.clone()),
-            browser_api_url: None,
-            sandbox_id: None,
-            teammates: Vec::new(),
-            continuity: String::new(),
-            skills: String::new(),
-            person: Default::default(),
-            store: None,
-            mcp: None,
-            no_tools: true,
-            read_only: true,
-            delivery: None,
-            fresh_eyes: true,
-            expects: String::new(),
-        };
+        let input = judge_turn_input(&self.kwant, prompt, model, dir.clone());
         let (tx, mut rx) = tokio::sync::mpsc::channel(64);
         let drain = tokio::spawn(async move { while rx.recv().await.is_some() {} });
         let out = driver.stream_turn(input, tx).await;
@@ -494,14 +538,86 @@ impl JudgeModel for DriverJudgeModel {
     }
 }
 
-/// The judge for one opened quiz: pa1's adapter builds it when the pocket starts and calls
-/// [`Judge::on_answer`] after each guest `answer` action, with the pocket under its lock
-/// (see pa3/impl.md, "For Lin"). `None` when the bot is gone.
-pub async fn judge_for(state: &AppState, kwant_id: &str, spec: &crate::kits::quiz::spec::QuizSpec) -> Option<Judge> {
+/// The judge's one model call (pa3 qa F4): the host bot's model with a fixed one-word persona,
+/// no history, no tools, read-only, no MCP servers, no skills or memory, and a scratch folder.
+pub fn judge_turn_input(host: &Kwant, prompt: String, model: Option<String>, dir: std::path::PathBuf) -> TurnInput {
+    TurnInput {
+        thread_id: format!("quiz-judge-{}", uuid::Uuid::new_v4().simple()),
+        kwant: Kwant {
+            id: "quiz-judge".into(),
+            name: "QuizJudge".into(),
+            title: "Quiz judge".into(),
+            persona_prompt: "You judge quiz answers. Reply with exactly one word: yes, no or partial.".into(),
+            soul: String::new(),
+            avatar_sprite: String::new(),
+            temperature: 0.0,
+            max_tokens: 8,
+            turns_completed: 0,
+            created_at: None,
+            ..host.clone()
+        },
+        prompt,
+        history: Vec::new(),
+        model_override: None,
+        model,
+        effort_level: None,
+        team_context: None,
+        workspace_dir: Some(dir),
+        browser_api_url: None,
+        sandbox_id: None,
+        teammates: Vec::new(),
+        continuity: String::new(),
+        skills: String::new(),
+        person: Default::default(),
+        store: None,
+        mcp: None,
+        no_tools: true,
+        read_only: true,
+        delivery: None,
+        fresh_eyes: true,
+        expects: String::new(),
+    }
+}
+
+/// The judge for one open quiz pocket (pa3b, `server::quizmaster_live`): `allowance` calls, of
+/// which `used` were spent before a restart. `None` when the bot is gone.
+pub async fn judge_for(state: &AppState, kwant_id: &str, allowance: u32, used: u32) -> Option<Judge> {
     let kwant = state.db.get_kwant(kwant_id).await.ok().flatten()?;
     let model: Arc<dyn JudgeModel> = Arc::new(DriverJudgeModel::new(state.clone(), kwant));
-    Some(Judge::new(model, Arc::new(JudgeBudget::new(judge_allowance(qm::text_questions(spec))))))
+    Some(Judge::new(model, Arc::new(JudgeBudget::resume(allowance, used))))
 }
 
 /// The judge's hard time limit, for the card copy ("near misses are judged in seconds").
 pub const JUDGE_TIMEOUT: Duration = crate::quizmaster::judge::TIMEOUT;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn host() -> Kwant {
+        serde_json::from_value(json!({
+            "id": "host-bot", "name": "Quizzy", "title": "", "persona_prompt": "Be fun and use your tools.", "avatar_sprite": "",
+            "driver_type": "claude", "preferred_model": "claude-opus", "temperature": 0.9, "max_tokens": 4000, "level": 1,
+            "turns_completed": 12, "created_at": null
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn the_judge_call_has_no_tools() {
+        let dir = std::env::temp_dir().join("quiz-judge-test");
+        let t = judge_turn_input(&host(), "the prompt".into(), Some("fast".into()), dir.clone());
+        assert!(t.no_tools, "no tools at all");
+        assert!(t.read_only);
+        assert!(t.mcp.is_none(), "no MCP servers");
+        assert!(t.store.is_none() && t.delivery.is_none() && t.browser_api_url.is_none() && t.sandbox_id.is_none());
+        assert!(t.history.is_empty() && t.teammates.is_empty() && t.skills.is_empty() && t.continuity.is_empty());
+        assert!(t.team_context.is_none());
+        assert_eq!(t.workspace_dir, Some(dir));
+        assert_eq!((t.kwant.id.as_str(), t.kwant.max_tokens, t.kwant.temperature), ("quiz-judge", 8, 0.0));
+        assert!(!t.kwant.persona_prompt.contains("tools"), "the host's persona doesn't come along");
+        assert_eq!(t.kwant.preferred_model, "claude-opus", "the host's own model");
+        assert_eq!(t.prompt, "the prompt");
+        assert_eq!(t.model.as_deref(), Some("fast"));
+    }
+}
