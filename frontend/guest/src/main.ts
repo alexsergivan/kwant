@@ -3,6 +3,8 @@
 import './guest.css';
 import { codeFrom, Env } from './api';
 import { GuestApp } from './app';
+import { remoteToken } from './remote/link';
+import { screenToken } from './screen/link';
 
 function boot(): unknown {
   const el = document.getElementById('pocket-boot');
@@ -33,6 +35,11 @@ const env: Env & { now: () => number; setInterval: (f: () => void, ms: number) =
 };
 const code = codeFrom(w.location.pathname);
 
+// Before anything else (pa5b): a #screen=<token> link is read and wiped from the address bar here.
+const screen = screenToken(w, code);
+// The same for the host remote (pa4b): #remote=<token>, read and wiped before any request.
+const remote = screen === undefined ? remoteToken(w, code) : undefined;
+
 /** The boot JSON names the kit. Without one (an old box), the public `info` does; if that fails too, the quiz. */
 async function kit(b: unknown): Promise<string> {
   if (b) return kitOf(b);
@@ -55,7 +62,18 @@ function store() {
 async function main(): Promise<void> {
   const b = boot();
   let app: { start(boot: unknown): Promise<void>; wake(): void };
-  if ((await kit(b)) === 'santa') {
+  if (screen !== undefined) {
+    const { ScreenApp } = await import('./screen/screen');
+    const still = w.matchMedia?.('(prefers-reduced-motion: reduce)');
+    const tv = new ScreenApp(root, { ...env, origin: w.location.origin, still: () => !!still?.matches }, code, screen || undefined);
+    const fit = () => tv.fit(w.innerWidth, w.innerHeight);
+    fit();
+    w.addEventListener('resize', fit);
+    app = tv;
+  } else if (remote !== undefined) {
+    const { RemoteApp } = await import('./remote/remote');
+    app = new RemoteApp(root, env, code, remote || undefined);
+  } else if ((await kit(b)) === 'santa') {
     const { SantaApp } = await import('./santa/app');
     app = new SantaApp(root, { ...env, store: store() }, code);
   } else app = new GuestApp(root, env, code);

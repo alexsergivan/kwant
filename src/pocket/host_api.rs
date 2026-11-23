@@ -5,13 +5,18 @@
 //! - `GET    /api/pockets`                 `{enabled, pocket_port, kits, pockets: [card]}`
 //! - `POST   /api/pockets`                 `{kit, spec, owner_kwant_id?, opens_at?, closes_at?, origin?}` → 201 `{pocket: card, host_key}`
 //!   (pa7: a future `spec.when` sets the times not given; `origin` `{kwant_id, channel_id?, thread_id?}`)
-//! - `GET    /api/pockets/:code`           `{pocket: card, summary, removed}` (counts only)
+//! - `GET    /api/pockets/:code`           `{pocket: card, summary, removed, host_view, join}`: the kit's
+//!   host view (counts and ticks, never a match or a guest's words) and where guests open it
+//! - `POST   /api/pockets/:code/action`    `{name, body}` → the same as `GET` (a host action, pa10a)
+//! - `POST   /api/pockets/:code/remove`    `{player_id}` → the same as `GET`
+//! - `POST   /api/pockets/:code/reset-pin` `{player_id}` → `{code, expires_at}` (shown once)
 //! - `POST   /api/pockets/:code/end`       `{pocket: card}`
 //! - `POST   /api/pockets/:code/when`      `{when: RFC 3339 | null}` → `{pocket: card}` (pa7: moves the
 //!   times that came from `when` and re-plans the reminder; open pockets only)
 //! - `POST   /api/pockets/:code/host-key`  `{host_key}` (the old one stops working)
 //! - `DELETE /api/pockets/:code`           204, final
 
+use super::kits::Viewer;
 use super::{keys, PResult, PocketError, Snapshot};
 use crate::server::AppState;
 use axum::extract::{Path, State};
@@ -28,6 +33,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/pockets/:code/end", post(end))
         .route("/api/pockets/:code/when", post(set_when))
         .route("/api/pockets/:code/host-key", post(host_key))
+        .route("/api/pockets/:code/action", post(action))
+        .route("/api/pockets/:code/remove", post(remove))
+        .route("/api/pockets/:code/reset-pin", post(reset_pin))
 }
 
 fn off() -> PocketError {
@@ -85,9 +93,40 @@ async fn found(state: &AppState, code: &str) -> PResult<std::sync::Arc<Snapshot>
 
 async fn read(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
     let s = found(&state, &code).await?;
-    let counts = state.db.pocket_counts(&code).await?;
-    let summary = s.kit().map(|k| k.host_summary(&super::kits::KitCtx::new(&s.spec, &s.players, chrono::Utc::now()), &s.kit_state));
-    Ok(Json(json!({ "pocket": card(&s), "summary": summary, "removed": counts.removed })))
+    read_json(&state, &s).await.map(Json)
+}
+
+async fn read_json(state: &AppState, s: &Snapshot) -> PResult<Value> {
+    let code = &s.row.code;
+    let counts = state.db.pocket_counts(code).await?;
+    let now = chrono::Utc::now();
+    let ctx = super::kits::KitCtx::new(&s.spec, &s.players, now);
+    let summary = s.kit().map(|k| k.host_summary(&ctx, &s.kit_state));
+    let host_view = s.kit().map(|k| k.view(&ctx, &s.kit_state, &Viewer::Host));
+    let join = super::address::join(state, code).await;
+    Ok(json!({ "pocket": card(s), "summary": summary, "removed": counts.removed, "host_view": host_view, "join": join }))
+}
+
+/// A host action from the person's card (the same names the host remote sends).
+async fn action(State(state): State<AppState>, Path(code): Path<String>, Json(req): Json<super::guest::ActionRequest>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    super::act(&state, &code, &Viewer::Host, &req.name, &req.body).await?;
+    let s = found(&state, &code).await?;
+    read_json(&state, &s).await.map(Json)
+}
+
+async fn remove(State(state): State<AppState>, Path(code): Path<String>, Json(req): Json<super::guest::PlayerRef>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    super::remove_player(&state, &code, &req.player_id).await?;
+    let s = found(&state, &code).await?;
+    read_json(&state, &s).await.map(Json)
+}
+
+/// The one-time reset code, shown once. The answer names nothing else about the player.
+async fn reset_pin(State(state): State<AppState>, Path(code): Path<String>, Json(req): Json<super::guest::PlayerRef>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    let (reset, expires_at) = super::reset_pin(&state, &code, &req.player_id).await?;
+    Ok(Json(json!({ "code": reset, "expires_at": expires_at })))
 }
 
 async fn end(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {

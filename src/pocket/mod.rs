@@ -11,6 +11,7 @@
 //! state with a new version, refresh the in-memory snapshot, and signal the pocket's viewers,
 //! each of whom then draws its own view from the snapshot.
 
+pub mod address;
 pub mod guest;
 pub mod host_api;
 pub mod keys;
@@ -18,6 +19,7 @@ pub mod kits;
 pub mod limits;
 pub mod listener;
 pub mod quiz_kit;
+pub mod santa;
 pub mod schedule;
 pub mod words;
 
@@ -485,6 +487,7 @@ pub async fn join(state: &AppState, code: &str, req: JoinRequest) -> PResult<(Pl
     if s.players.len() >= rules.max_players {
         return Err(PocketError::new(StatusCode::CONFLICT, "full", "It's full.").with(json!({ "max_players": rules.max_players })));
     }
+    kit.admit(&KitCtx::new(&s.spec, &s.players, now), &s.kit_state, &name_key).map_err(kit_refusal)?;
     let id = keys::new_player_id();
     let salt = keys::new_salt();
     let pin_hash = pin.map(|p| keys::hash_secret(p, &salt));
@@ -712,6 +715,9 @@ pub async fn remove_player(state: &AppState, code: &str, player_id: &str) -> PRe
     let s = snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
     let kit = s.kit().ok_or_else(PocketError::not_found)?;
     let now = Utc::now();
+    if s.players.iter().any(|p| p.id == player_id) {
+        kit.may_remove(&KitCtx::new(&s.spec, &s.players, now), &s.kit_state, player_id).map_err(kit_refusal)?;
+    }
     if !state.db.pocket_player_remove(code, player_id, now).await? {
         return Err(PocketError::new(StatusCode::NOT_FOUND, "no_such_player", "That player isn't in this pocket."));
     }
@@ -755,20 +761,31 @@ pub async fn reset_pin(state: &AppState, code: &str, player_id: &str) -> PResult
 /// Lets each watched pocket's kit run its timers.
 pub async fn tick(state: &AppState) {
     for code in state.pocket.watched() {
-        let lock = state.pocket.lock_for(&code);
-        let _g = lock.lock().await;
-        let Ok(Some(s)) = snapshot(state, &code).await else { continue };
-        let Some(kit) = s.kit() else { continue };
-        if s.row.state != OPEN {
-            continue;
-        }
-        let now = Utc::now();
-        let mut kit_state = s.kit_state.clone();
-        let mut ctx = KitCtx::new(&s.spec, &s.players, now);
-        if kit.tick(&mut ctx, &mut kit_state) {
-            if let Err(e) = save(state, &code, &kit_state, ctx, now).await {
-                tracing::warn!(code = %code, "pocket apps: couldn't save a timer change: {}", e.code);
-            }
+        tick_one(state, &code, Utc::now(), false).await;
+    }
+}
+
+/// Runs the timers of open pockets whose kit asks for it even while nobody watches (a Secret
+/// Santa draw or reveal weeks away). The sweeper calls it once a minute, with its clock.
+pub async fn tick_unwatched(state: &AppState, now: DateTime<Utc>) {
+    for code in state.db.pocket_codes_open().await.unwrap_or_default() {
+        tick_one(state, &code, now, true).await;
+    }
+}
+
+async fn tick_one(state: &AppState, code: &str, now: DateTime<Utc>, only_unwatched_kits: bool) {
+    let lock = state.pocket.lock_for(code);
+    let _g = lock.lock().await;
+    let Ok(Some(s)) = snapshot(state, code).await else { return };
+    let Some(kit) = s.kit() else { return };
+    if s.row.state != OPEN || (only_unwatched_kits && !kit.ticks_unwatched()) {
+        return;
+    }
+    let mut kit_state = s.kit_state.clone();
+    let mut ctx = KitCtx::new(&s.spec, &s.players, now);
+    if kit.tick(&mut ctx, &mut kit_state) {
+        if let Err(e) = save(state, code, &kit_state, ctx, now).await {
+            tracing::warn!(code = %code, "pocket apps: couldn't save a timer change: {}", e.code);
         }
     }
 }
@@ -780,13 +797,14 @@ pub struct Swept {
     pub deleted: usize,
 }
 
-/// Ends pockets past their closing time and deletes pockets whose data has expired. Does
-/// nothing while the switch is off.
+/// Runs unwatched kit timers, ends pockets past their closing time and deletes pockets whose
+/// data has expired. Does nothing while the switch is off.
 pub async fn sweep(state: &AppState, now: DateTime<Utc>) -> Swept {
     let mut out = Swept::default();
     if !enabled(&state.db).await {
         return out;
     }
+    tick_unwatched(state, now).await;
     for code in state.db.pocket_past_closing(now).await.unwrap_or_default() {
         if end(state, &code).await.is_ok() {
             out.ended += 1;
