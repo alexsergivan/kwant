@@ -37,6 +37,8 @@ const LOCAL: &str = "127.0.0.1:50000";
 
 struct T {
     main: Router,
+    /// Only the `cfg(unix)` tests read it (they drive a fake `cloudflared` shell script).
+    #[cfg_attr(not(unix), allow(dead_code))]
     state: AppState,
     data: PathBuf,
     _tmp: TempDir,
