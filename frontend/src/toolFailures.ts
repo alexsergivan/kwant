@@ -17,8 +17,10 @@ export interface ToolFailureMeta {
   needs_you: boolean;
   /** Where to fix it; null for kwant's own tools. */
   fix: { label: string; connection_id: string | null } | null;
-  /** Set once a later call through the connection worked. */
+  /** Set once a later call through the connection worked, or the person signed in or deleted it. */
   resolved_at: string | null;
+  /** 34g: closed because the connection was deleted ("Removed."), not because it works again. */
+  removed: boolean;
 }
 
 const CAUSES: readonly ToolFailureCause[] = ['sign_in', 'reconnect', 'not_started', 'down'];
@@ -41,5 +43,6 @@ export function parseToolFailureMeta(raw: unknown): ToolFailureMeta | null {
     needs_you: m.needs_you === true,
     fix: label ? { label, connection_id: str(fix?.connection_id) } : null,
     resolved_at: str(m.resolved_at),
+    removed: m.removed === true,
   };
 }
