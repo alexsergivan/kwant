@@ -58,7 +58,7 @@ export class GuestApp {
   private toast: HTMLElement | null = null;
   /** Per question: the answer this phone sent first. First tap counts, later taps are ignored. */
   private sent = new Map<string, Answer>();
-  /** Questions whose answer the box has taken (an ok or 409 reply, or a state with `answer`). Until then it is pending. */
+  /** Questions whose answer the box has taken (an ok reply, a 409 `already_answered`, or a state with `answer`). Until then it is pending. */
   private confirmed = new Set<string>();
   private inflight = new Set<string>();
   /** Questions whose answer failed 6 times in a row: the page says "Couldn't send. Trying again." and keeps trying. */
@@ -914,7 +914,8 @@ export class GuestApp {
   }
 
   /**
-   * Sends an answer and keeps it pending until the box takes it (ok, or 409: the first one counts). A dropped connection
+   * Sends an answer and keeps it pending until the box takes it (ok, or 409 `already_answered`: the first one counts). Any
+   * other 409 (pa2's `not_now`: too late, locked, wrong phase) is a refusal, like a 400. A dropped connection
    * retries every 2 s; after 6 failures the page says so and keeps trying every 5 s while the question is open. A state
    * for this question without `answer` (back from away, a wake, a push) sends it again (resend). A refusal frees the pick.
    */
@@ -924,7 +925,7 @@ export class GuestApp {
     this.inflight.add(q.id);
     const r = await this.api.answer(q.id, a);
     this.inflight.delete(q.id);
-    if (r.ok || r.status === 409) {
+    if (r.ok || (r.status === 409 && r.error === 'already_answered')) {
       this.confirmed.add(q.id);
       this.failing.delete(q.id);
       const cur = this.view?.question;
@@ -941,7 +942,7 @@ export class GuestApp {
       return;
     }
     if (r.status === 401 || r.status === 403 || r.status === 404 || r.status === 410) return void this.onGone(r.status, r.error);
-    // Refused (time's up, not a valid answer): it was not taken, so the pick is freed and the screen says what is true.
+    // Refused (409 not_now: time's up or locked; 400: not a valid answer): it was not taken, so the pick is freed and the screen says what is true.
     this.sent.delete(q.id);
     this.failing.delete(q.id);
     if (this.isOpen(q) && this.view) {

@@ -581,9 +581,47 @@ test('D1: an answer lost while the box was away is sent again when it is back', 
   t.app.stop();
 });
 
+test('D2: a 409 not_now (too late) is not shown as locked in; the pick is freed and not retried', async () => {
+  const t = await open('choice');
+  t.box.actionReply = async () => ({ ok: false, status: 409, json: async () => ({ error: 'not_now', message: 'Too late.' }) });
+  click(t.root.querySelector('button[data-answer="B"]'));
+  await flush();
+  await t.advance(500);
+  assert.ok(!t.text().includes('Locked in'), t.text());
+  assert.ok(t.text().includes('Tap one. Your first tap counts.'), t.text());
+  assert.ok([...t.root.querySelectorAll('button[data-answer]')].every((b) => !b.disabled), 'pick freed');
+  await t.advance(15_000);
+  assert.equal(t.calls.filter((c) => c.what === 'action').length, 1);
+  assert.ok(!t.text().includes('Locked in'), t.text());
+  assert.ok(!t.text().includes('Sent.'));
+  assert.ok(!t.text().includes('Sending…'));
+  t.app.stop();
+});
+
+test('D1: an answer pending when the host pauses is sent again when the question comes back without it', async () => {
+  const t = await open('choice', { ws: true });
+  t.sockets[0].onopen();
+  t.box.actionReply = async () => ({ ok: false, status: 503, json: async () => ({}) });
+  click(t.root.querySelector('button[data-answer="C"]'));
+  await flush();
+  t.sockets[0].onmessage(frame(scenarios.paused.state, 51));
+  await flush();
+  assert.equal(t.screen(), 'paused');
+  await t.advance(30_000);
+  const before = t.calls.filter((c) => c.what === 'action').length;
+  assert.equal(before, 1, 'no retries while paused');
+  t.box.actionReply = null;
+  t.sockets[0].onmessage(frame(scenarios.choice.state, 52));
+  await flush();
+  const sent = t.calls.filter((c) => c.what === 'action');
+  assert.equal(sent.length, 2, 'resent when the question is back with no answer');
+  assert.deepEqual(sent.at(-1).body.body, { q: 'q8', choice: 'C' });
+  t.app.stop();
+});
+
 test('D1: a refused answer (time is up) frees the pick and is not retried', async () => {
   const t = await open('choice');
-  t.box.actionReply = async () => ({ ok: false, status: 422, json: async () => ({ error: 'closed' }) });
+  t.box.actionReply = async () => ({ ok: false, status: 409, json: async () => ({ error: 'not_now' }) });
   click(t.root.querySelector('button[data-answer="A"]'));
   await flush();
   await t.advance(15_000);
