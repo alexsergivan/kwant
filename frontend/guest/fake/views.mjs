@@ -65,7 +65,7 @@ export const scenarios = {
   'join-solo': { state: 401, info: { ...base, phase: 'lobby', teams: null, team_max: undefined, retention: { kind: 'at_end' } }, join: { ...lobby, teams: null, me: { ...me, team: undefined, team_name: undefined } } },
   lobby: { state: lobby },
   rejoin: { state: { ...base, phase: 'question', me, question: qChoice } },
-  away: { state: 503 },
+  away: { state: 503, info: pub },
   full: { state: 401, info: { ...base, phase: 'lobby', player_count: 60 } },
   ended: { state: 401, info: { ...base, phase: 'ended', ended: { winner: 'Quizzly Bears', points: 3420 }, deletes_on: '2026-12-04' } },
   choice: { state: { ...base, phase: 'question', me, question: qChoice }, action: { ...base, phase: 'question', me, question: { ...qChoice, answer: { choice: 'B' }, waiting: 5, secs_left: 9 } } },
@@ -88,7 +88,7 @@ export const scenarios = {
   overturned: {
     state: {
       ...base, phase: 'reveal', me,
-      reveal: { question: qText, outcome: 'overturned', points: 0, yours: 'Canbra', answer: 'Canberra', source: 'Wikipedia, "Canberra": the capital of Australia since 1913.' },
+      reveal: { question: qText, outcome: 'overturned', points: -100, yours: 'Canbra', answer: 'Canberra', source: 'Wikipedia, "Canberra": the capital of Australia since 1913.' },
     },
   },
   wrong: {
@@ -104,7 +104,7 @@ export const scenarios = {
     },
   },
   paused: { state: { ...base, phase: 'paused', me } },
-  removed: { state: 403 },
+  removed: { state: 403, info: pub },
   missing: { state: 404 },
 };
 

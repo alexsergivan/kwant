@@ -64,11 +64,15 @@ async function check(name, page, log) {
       if (r.height < 44 || r.width < 44) small.push(`${el.tagName.toLowerCase()}.${el.className} "${(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 24)}" ${Math.round(r.width)}x${Math.round(r.height)}`);
     }
     // Pixel icons draw in the text colour; a rect with no fill would render black on the dark page.
-    const unfilled = document.querySelectorAll('svg rect:not([fill])').length;
+    // A fill that isn't currentColor or #rrggbb ("undefined", a name, empty) draws black too.
+    const unfilled = [...document.querySelectorAll('svg rect')].filter((r) => {
+      const f = r.getAttribute('fill');
+      return f !== 'currentColor' && !/^#[0-9a-f]{6}$/i.test(f ?? '');
+    }).length;
     return { scrollWidth: document.documentElement.scrollWidth, small, unfilled };
   });
   if (layout.scrollWidth > 390) problems.push(`${name}: scrolls sideways at 390 (${layout.scrollWidth} px)`);
-  if (layout.unfilled) problems.push(`${name}: ${layout.unfilled} svg rect(s) without a fill (would draw black)`);
+  if (layout.unfilled) problems.push(`${name}: ${layout.unfilled} svg rect(s) whose fill isn't currentColor or #rrggbb (would draw black)`);
   for (const s of layout.small) problems.push(`${name}: tap target under 44 px: ${s}`);
 }
 
@@ -97,9 +101,11 @@ const ready = (page, screen) => page.waitForSelector(screen ? `[data-screen="${s
   await ctx.close();
 }
 
+// Removed and away load as pa1 serves them, with the public facts in the page, so the bar keeps the title (fix 5).
+const bootOrigin = `http://127.0.0.1:${boot.port}`;
 for (const name of order) {
   const { ctx, page, log } = await newPage();
-  const res = await page.goto(`${origin}/p/${name}`);
+  const res = await page.goto(`${name === 'removed' || name === 'away' ? bootOrigin : origin}/p/${name}`);
   if (res.headers()['content-security-policy'] !== CSP) problems.push(`${name}: wrong CSP header`);
   const t0 = Date.now();
   if (name === 'away') await page.waitForSelector('[data-screen="away"]', { timeout: 20000 });
@@ -108,6 +114,9 @@ for (const name of order) {
   results.states[name] = { screen, ms: Date.now() - t0 };
   if (name === 'rejoin') await page.waitForSelector('.toast');
   if (name === 'picture') await page.waitForFunction(() => document.querySelector('.pic img')?.complete);
+  // A seated load mid-game says "You're back" for 4 s. Only the rejoin shot keeps it (at its bottom place), so the
+  // other shots show the meta row and the timer it used to cover. Removing a node is not a style change.
+  if (name !== 'rejoin') await page.evaluate(() => document.querySelector('.toast')?.remove());
   await shot(page, name);
 
   if (name === 'join') {
@@ -142,6 +151,27 @@ for (const name of order) {
     await shot(page, 'away');
   }
   await check(name, page, log);
+  await ctx.close();
+}
+
+// Away mid-game (fix 5): the box drops while a question is up. The last view stays, so the bar keeps the title and
+// the score, and the lead says the score is safe. The phone "comes back online" to make the page notice at once.
+{
+  const { ctx, page, log } = await newPage();
+  await page.goto(`${origin}/p/rejoin`);
+  await ready(page, 'question');
+  await page.evaluate(() => document.querySelector('.toast')?.remove());
+  await page.route('**/api/pocket/**', (r) => r.abort('connectionfailed'));
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.waitForSelector('[data-screen="away"]', { timeout: 10000 });
+  const bar = await page.textContent('header.bar');
+  const lead = await page.textContent('main');
+  if (!bar.includes('Friday Pub Quiz') || !bar.includes('1,240')) problems.push(`away mid-game: bar is "${bar.trim()}"`);
+  if (!lead.includes('Your score is safe: 1,240.')) problems.push('away mid-game: no "Your score is safe: 1,240."');
+  await shot(page, 'away-midgame');
+  results.states['away-midgame'] = { screen: 'away' };
+  await page.unroute('**/api/pocket/**');
+  await check('away-midgame', page, log.filter((l) => !/ERR_CONNECTION|Failed to load resource|net::/.test(l)));
   await ctx.close();
 }
 

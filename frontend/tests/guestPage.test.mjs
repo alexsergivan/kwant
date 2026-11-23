@@ -19,6 +19,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInputEle
 const m = await loadBundled(`
   export { GuestApp, privacyLine, day } from './guest/src/app';
   export { BACKOFF, backoff, codeFrom, fromState, retentionFrom } from './guest/src/api';
+  export * as art from './guest/src/art';
 `);
 const settle = () => new Promise((r) => setTimeout(r, 0));
 const flush = async () => {
@@ -127,7 +128,7 @@ const expect = {
   locked: ['question', ['Locked in', '1996', 'Waiting for 5 more players. Eyes on the TV!']],
   right: ['reveal', ['Right!', '+120', '100 + 20 for speed', '62% got it', 'Source: Wikipedia', 'Quizzly Bears', '1,960', '1,360 pts']],
   near: ['reveal', ['Close one!', 'You wrote "Canbera". One letter off, so it counts.', '+100', 'Canberra']],
-  overturned: ['reveal', ['Not counted', `The host didn't count "Canbra".`, '+0']],
+  overturned: ['reveal', ['Not counted', `The host didn't count "Canbra".`, '−100']],
   wrong: ['reveal', ['Not this time', 'You said 212. The answer is 206.', '+40', 'for being close']],
   between: ['between', ['After round 2 of 4', 'Round 3 in 0:40', 'Quizzly Bears jump to first', 'Fact Hunters', '▲ 2', '▼ 1', 'Your team: up 2 places this round']],
   paused: ['paused', ['Back in a moment', 'The host paused the quiz. Your answers and score are safe: 1,240.']],
@@ -156,6 +157,8 @@ for (const name of order) {
     for (const el of t.root.querySelectorAll('[style]')) assert.ok(el.parentElement?.matches('[data-timer]'), `style on ${el.outerHTML.slice(0, 80)}`);
     // The Quizmaster is the subject of the bar on every screen.
     assert.ok(t.root.querySelector('.bar .qm[role="img"][aria-label^="Quizmaster"]'));
+    // Every drawn rect is a colour: a fill of "undefined" would draw black (pa5 design-check fix 1).
+    for (const r of document.querySelectorAll('svg rect')) assert.match(r.getAttribute('fill') ?? '', /^(currentColor|#[0-9a-f]{6})$/i, `${name}: rect fill`);
     t.app.stop();
   });
 }
@@ -200,6 +203,40 @@ test('join: name, creature and team go to join; errors are plain words', async (
   assert.equal(join.path, 'join');
   assert.equal(t.screen(), 'lobby');
   assert.ok(t.text().includes("You're in, Mia!"));
+  t.app.stop();
+});
+
+test('join: a name error marks the name field and focuses it; a team error marks the team list; typing clears it', async () => {
+  const t = await open('join');
+  const name = () => t.root.querySelector('#name');
+  submit(t.root.querySelector('form'));
+  await flush();
+  assert.equal(name().getAttribute('aria-invalid'), 'true');
+  assert.equal(name().getAttribute('aria-describedby'), 'name-hint join-err');
+  assert.equal(t.root.querySelector('[data-err]').id, 'join-err');
+  assert.equal(document.activeElement, name());
+  type(name(), 'Mia');
+  assert.equal(name().getAttribute('aria-invalid'), null);
+  assert.equal(name().getAttribute('aria-describedby'), 'name-hint');
+  assert.equal(t.root.querySelector('[data-err]').textContent, '');
+  submit(t.root.querySelector('form'));
+  await flush();
+  const teams = t.root.querySelector('[data-teams]');
+  assert.equal(teams.getAttribute('aria-invalid'), 'true');
+  assert.equal(teams.getAttribute('aria-describedby'), 'join-err');
+  assert.ok(t.root.querySelector('#lbl-team').classList.contains('bad'));
+  assert.equal(name().getAttribute('aria-invalid'), null, 'only the field the error is about');
+  assert.ok(teams.contains(document.activeElement));
+  const bears = t.root.querySelector('input[value="t1"]');
+  bears.checked = true;
+  bears.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  assert.equal(t.root.querySelector('[data-teams]').getAttribute('aria-invalid'), null);
+  assert.ok(!t.root.querySelector('#lbl-team').classList.contains('bad'));
+  // A server name error (name_taken) marks the name too.
+  t.box.joinError = 'name_taken';
+  submit(t.root.querySelector('form'));
+  await flush();
+  assert.equal(name().getAttribute('aria-invalid'), 'true');
   t.app.stop();
 });
 
@@ -675,6 +712,17 @@ test('lobby preloads pictures one at a time, same origin only', async () => {
     t.app.stop();
   } finally {
     g.Image = Real;
+  }
+});
+
+test('art: every colour index is -1 (currentColor) or inside PALETTE; every PALETTE entry is #rrggbb', () => {
+  const { art } = m;
+  assert.ok(art.PALETTE.every((c) => /^#[0-9a-f]{6}$/i.test(c)));
+  const tables = { QM_FRAME: art.QM_FRAME, QM_BODY: art.QM_BODY, QM_BODY_SMALL: art.QM_BODY_SMALL, MOOD_THINKING: art.MOOD_THINKING, MOOD_FINISHED: art.MOOD_FINISHED };
+  art.CREATURES.forEach((t, i) => (tables[`CREATURES[${i}]`] = t));
+  for (const [k, [, t]] of Object.entries(art.ICONS)) tables[`ICONS.${k}`] = t;
+  for (const [name, rects] of Object.entries(tables)) {
+    for (const r of rects) assert.ok(r[4] === -1 || (r[4] >= 0 && r[4] < art.PALETTE.length), `${name}: index ${r[4]} of ${art.PALETTE.length}`);
   }
 });
 

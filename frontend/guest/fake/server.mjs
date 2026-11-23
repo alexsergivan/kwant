@@ -39,9 +39,9 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
     if (m) {
       let html = readFileSync(join(dist, 'index.html'), 'utf8');
       if (boot) {
-        // What pa5 asks pa1 for: this phone's state (or the public info) in the page, `<` escaped.
-        let r = box(m[1]).handle('state', {}, { seated: false });
-        if (r.status === 401) r = box(m[1]).handle('info', {}, { seated: false });
+        // As pa1 does (pa1/impl.md "Boot JSON"): the seat cookie never reaches /p/<code>, so the page always carries the
+        // public facts (the `info` JSON), `<` escaped. A removed guest's or an away box's page still names the pocket.
+        const r = box(m[1]).handle('info', {}, { seated: false });
         if (r.status === 200) html = html.replace('>null</script>', `>${JSON.stringify(r.body).replaceAll('<', '\\u003c')}</script>`);
       }
       return send(res, 200, html, TYPES['.html'], { 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });

@@ -43,7 +43,7 @@ export function answerText(q: Question, a: Answer | undefined): string {
 
 const LETTERS = 'ABCDEFGH';
 
-type Draft = { name: string; avatar: string; team: string; newTeam: string; making: boolean; error: string; busy: boolean; mine: string };
+type Draft = { name: string; avatar: string; team: string; newTeam: string; making: boolean; error: string; busy: boolean; mine: string; field: '' | 'name' | 'team' };
 
 export class GuestApp {
   view: GuestView | null = null;
@@ -68,7 +68,7 @@ export class GuestApp {
   private numDraft: number | null = null;
   private preloaded = new Set<string>();
   private preloading: HTMLImageElement[] = [];
-  private draft: Draft = { name: '', avatar: AVATARS[0], team: '', newTeam: '', making: false, error: '', busy: false, mine: '' };
+  private draft: Draft = { name: '', avatar: AVATARS[0], team: '', newTeam: '', making: false, error: '', busy: false, mine: '', field: '' };
   private gone: 'removed' | 'missing' | null = null;
   /** Local clock reading when the current timer value arrived. */
   private stamp = 0;
@@ -386,7 +386,7 @@ export class GuestApp {
         'div',
         { class: 'stick' },
         h('button', { class: 'gbtn', type: 'submit', 'data-join': '', 'aria-busy': d.busy ? 'true' : null }, d.busy ? 'Joining…' : `Join the ${noun(v)}`),
-        h('p', { class: 'err', role: 'alert', 'data-err': '' }, d.error),
+        h('p', { class: 'err', id: 'join-err', role: 'alert', 'data-err': '' }, d.error),
         this.mineButton(),
       ),
       h('p', { class: 'small center', 'data-privacy': '' }, privacyLine(v)),
@@ -395,6 +395,10 @@ export class GuestApp {
       e.preventDefault();
       void this.submitJoin();
     });
+    // A team pick or a new team name clears a team error, as typing a name clears a name error.
+    teams?.addEventListener('change', () => d.error && this.setError(''));
+    teams?.addEventListener('input', () => d.error && this.setError(''));
+    this.markField(form, false);
     return form;
   }
 
@@ -468,13 +472,41 @@ export class GuestApp {
     return b;
   }
 
-  private setError(msg: string, mine = ''): void {
+  /** The join error line, and the field it is about (design-check fix 4): marked invalid, described by the line, focused. */
+  private setError(msg: string, mine = '', field: '' | 'name' | 'team' = ''): void {
     this.draft.error = msg;
     this.draft.mine = mine;
+    this.draft.field = msg ? field : '';
     const e = this.root.querySelector('[data-err]');
     if (e) e.textContent = msg;
     const m = this.root.querySelector<HTMLButtonElement>('[data-mine]');
     if (m) m.hidden = !mine;
+    this.markField(this.root, true);
+  }
+
+  private markField(root: ParentNode, focus: boolean): void {
+    const f = this.draft.field;
+    const name = root.querySelector<HTMLInputElement>('#name');
+    const teams = root.querySelector<HTMLElement>('[data-teams]');
+    const lbl = root.querySelector('#lbl-team');
+    if (name) {
+      name.setAttribute('aria-describedby', f === 'name' ? 'name-hint join-err' : 'name-hint');
+      if (f === 'name') name.setAttribute('aria-invalid', 'true');
+      else name.removeAttribute('aria-invalid');
+    }
+    if (teams) {
+      if (f === 'team') {
+        teams.setAttribute('aria-invalid', 'true');
+        teams.setAttribute('aria-describedby', 'join-err');
+      } else {
+        teams.removeAttribute('aria-invalid');
+        teams.removeAttribute('aria-describedby');
+      }
+    }
+    lbl?.classList.toggle('bad', f === 'team');
+    if (!focus) return;
+    if (f === 'name') name?.focus();
+    else if (f === 'team') (teams?.querySelector<HTMLElement>('input.input, input[type="radio"]:not(:disabled), button.team.new'))?.focus();
   }
 
   async submitJoin(): Promise<void> {
@@ -482,11 +514,11 @@ export class GuestApp {
     const v = this.view;
     if (!v || d.busy) return;
     const name = d.name.trim();
-    if (!name) return this.setError('Type your name first.');
-    if ([...name].length > 20) return this.setError('Names are 1-20 letters.');
+    if (!name) return this.setError('Type your name first.', '', 'name');
+    if ([...name].length > 20) return this.setError('Names are 1-20 letters.', '', 'name');
     const teamsOn = v.teams !== null && v.teams !== undefined;
     const newTeam = d.newTeam.trim();
-    if (teamsOn && !d.team && !(d.making && newTeam)) return this.setError(d.making ? 'Give your new team a name.' : 'Pick a team, or start a new one.');
+    if (teamsOn && !d.team && !(d.making && newTeam)) return this.setError(d.making ? 'Give your new team a name.' : 'Pick a team, or start a new one.', '', 'team');
     d.busy = true;
     this.setBusy(true);
     // v1 takes the team by name: a team on the list or a new one.
@@ -506,15 +538,16 @@ export class GuestApp {
     else if (err === 'ended' || r.status === 410) void this.onGone(410, 'ended');
     else if (err === 'removed' || r.status === 403) void this.onGone(403, 'removed');
     else if (r.status === 404) void this.onGone(404, 'not_found');
-    else if (err === 'team_full') this.setError('That team just filled up. Pick another one.');
-    else if (err === 'name_taken') this.setError('Someone here already has that name. Add a letter, or tap "That\'s me" if it\'s you on a new phone.', name);
+    else if (err === 'team_full') this.setError('That team just filled up. Pick another one.', '', 'team');
+    else if (err === 'name_taken') this.setError('Someone here already has that name. Add a letter, or tap "That\'s me" if it\'s you on a new phone.', name, 'name');
     else if (err === 'not_open_yet') this.setError(`This ${noun(v)} isn't open yet. Try again in a minute.`);
-    else if (err === 'name_too_long') this.setError('Names are 1-20 letters.');
-    else if (err === 'name_empty') this.setError('Type your name first.');
-    else if (err === 'bad_team') this.setError(d.making ? "That team name can't be used here. Try another one." : 'Pick a team, or start a new one.');
+    else if (err === 'name_too_long') this.setError('Names are 1-20 letters.', '', 'name');
+    else if (err === 'name_empty') this.setError('Type your name first.', '', 'name');
+    else if (err === 'name_not_allowed') this.setError("That name can't be used here. Try another one.", '', 'name');
+    else if (err === 'bad_team') this.setError(d.making ? "That team name can't be used here. Try another one." : 'Pick a team, or start a new one.', '', 'team');
     else if (err === 'slow_down' || r.status === 429) this.setError('Too many tries just now. Wait a few seconds and tap Join again.');
     else if (err === 'pin_required' || err === 'wrong_pin' || r.status === 423) this.setError('This name needs its PIN. Ask the host to help you back in.');
-    else if (r.status === 400) this.setError("That name can't be used here. Try another one.");
+    else if (r.status === 400) this.setError("That name can't be used here. Try another one.", '', 'name');
     else if (r.status === 0 || r.status >= 500) this.setError("Couldn't reach the quiz. Check your signal and tap Join again.");
     else this.setError("That didn't work. Tap Join again.");
   }

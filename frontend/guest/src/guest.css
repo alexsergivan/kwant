@@ -134,6 +134,10 @@ svg.pi.ok { color: var(--kw-ok); }
 }
 .g .input:focus { border-color: var(--sky-400); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sky-400) 30%, transparent); }
 .g .input::placeholder { color: var(--zinc-400); }
+/* A join error marks its field too (design-check fix 4); the line under Join says what is wrong. */
+.g .input[aria-invalid="true"] { border-color: var(--kw-bad); }
+.g .input[aria-invalid="true"]:focus { box-shadow: 0 0 0 3px color-mix(in srgb, var(--kw-bad) 30%, transparent); }
+.g .lbl.bad { color: var(--kw-bad); }
 .g .input:disabled { opacity: 0.7; }
 .g .gbtn {
   width: 100%;
@@ -211,16 +215,17 @@ svg.pi.ok { color: var(--kw-ok); }
 .madewith a { color: var(--zinc-300); text-decoration: underline; text-underline-offset: 2px; display: inline-block; line-height: 20px; padding: 12px 8px; margin: -12px -8px; }
 
 /* ---- toast (2c) ---- */
+/* At the bottom, over nothing that matters, and never in the way of a tap (design-check fix 2). */
 .toast {
-  position: fixed; left: 50%; top: 58px; width: min(456px, calc(100% - 24px)); transform: translateX(-50%);
+  position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); pointer-events: none; width: min(456px, calc(100% - 24px)); transform: translateX(-50%);
   border-radius: 14px; padding: 12px 14px; background: var(--kw-surface-overlay); border: 1px solid var(--sky-700);
   font-size: 14px; line-height: 20px; display: flex; gap: 10px; align-items: center; z-index: 5;
   box-shadow: 0 10px 30px rgb(0 0 0 / 0.45);
-  animation: toast-in 180ms var(--kw-ease);
-  transition: opacity 180ms var(--kw-ease);
+  animation: toast-in 160ms var(--kw-ease);
+  transition: opacity 160ms var(--kw-ease);
 }
 .toast.out { opacity: 0; }
-@keyframes toast-in { from { opacity: 0; transform: translate(-50%, -8px); } }
+@keyframes toast-in { from { opacity: 0; transform: translate(-50%, 8px); } }
 
 /* ---- play ---- */
 .qmeta { display: flex; justify-content: space-between; align-items: center; gap: 10px; font-size: 13px; color: var(--zinc-300); font-weight: 600; }
