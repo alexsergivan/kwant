@@ -1,7 +1,7 @@
 // pa5 guest page in a real Chrome under exactly pa1's pocket CSP (guest/fake/views.mjs CSP), from the fake guest port.
 // Fails on: any securitypolicyviolation or CSP console error, a page error, any request that is not same-origin,
 // a missing or different CSP header, sideways scrolling at 390 px, or a visible tap target under 44 px.
-// Also writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
+// Also walks Secret Santa's G1-G11 (pa10a) from the fake santa box. Writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
 // Usage: PW_CORE=<playwright-core/index.mjs> CHROMIUM=<chrome> node guest/e2e/csp.mjs <out dir>
 // Needs the built page in frontend/dist/pocket (npm run build:guest).
 import fs from 'node:fs';
@@ -185,6 +185,121 @@ for (const name of order) {
   if (anim !== 'none') problems.push(`reduced motion: toast animates (${anim})`);
   await check('reduced-motion', page, log);
   await ctx.close();
+}
+
+// pa10a Secret Santa, G1-G11 (guest-brief.md), from the fake santa box (fake/santa.mjs) in Lin's server-impl shapes.
+// Same checks as the quiz screens; shots named santa-g<N>-<what>. The kit comes from the public facts, so the Santa
+// chunk loads lazily, and the walk fails if the quiz screens show instead.
+{
+  const santaShot = async (page, log, name, file = name) => {
+    await page.evaluate(() => document.querySelector('.toast')?.remove());
+    await shot(page, file);
+    await check(file, page, log);
+    results.states[file] = { screen: await page.getAttribute('[data-screen]', 'data-screen') };
+  };
+  const go = async (code, screen, { base = origin, reduced = false } = {}) => {
+    const p = await newPage();
+    if (reduced) await p.page.emulateMedia({ reducedMotion: 'reduce' });
+    const res = await p.page.goto(`${base}/p/${code}`);
+    if (res.headers()['content-security-policy'] !== CSP) problems.push(`${code}: wrong CSP header`);
+    await p.page.waitForSelector(`main.sa[data-screen="${screen}"]`, { timeout: 20000 });
+    return p;
+  };
+
+  // G1 join, then G2 waiting with the wish saved
+  {
+    const { ctx, page, log } = await go('santa-join', 'join');
+    await santaShot(page, log, 'santa-g1-join');
+    await page.fill('#s-name', 'Ana');
+    await page.click('label.creature:nth-child(3)');
+    await page.fill('#s-pin', '1234');
+    const dots = await page.evaluate(() => [...document.querySelectorAll('.pins .pin')].map((b) => b.textContent).join(''));
+    if (dots !== '••••') problems.push(`santa-g1: PIN boxes show "${dots}", not four dots`);
+    await page.fill('#s-wish', 'Warm socks\nA good paperback');
+    await santaShot(page, log, 'santa-g1-join', 'santa-g1-join-filled');
+    await page.click('button[data-join]');
+    await page.waitForSelector('main.sa[data-screen="waiting"]');
+    await page.waitForSelector('text=Edit my wish list');
+    await santaShot(page, log, 'santa-g2-waiting');
+    await ctx.close();
+  }
+  // G3 rejoin
+  {
+    const { ctx, page, log } = await go('santa-join', 'join');
+    await page.click('button[data-to-rejoin]');
+    await page.waitForSelector('main.sa[data-screen="rejoin"]');
+    await santaShot(page, log, 'santa-g3-rejoin');
+    await ctx.close();
+  }
+  // G4 wrong PIN, the tries from the server
+  {
+    const { ctx, page, log } = await go('santa-wrongpin', 'join');
+    await page.click('button[data-to-rejoin]');
+    await page.fill('#s-bname', 'Mia');
+    await page.fill('#s-bpin', '0000');
+    await page.click('button[data-rejoin]');
+    await page.waitForSelector('[data-problem]');
+    const p = await page.textContent('[data-problem]');
+    if (!p.includes('3 more tries')) problems.push(`santa-g4: problem says "${p}"`);
+    await santaShot(page, log, 'santa-g4-wrong-pin');
+    await ctx.close();
+  }
+  // G5 unwrap, G6 match (lid lifts, card pops), G7 Santa asks
+  {
+    const { ctx, page, log } = await go('santa-unwrap', 'unwrap');
+    await santaShot(page, log, 'santa-g5-unwrap');
+    const lid = await page.evaluate(() => getComputedStyle(document.querySelector('.giftbox .lid')).transitionDuration);
+    if (!lid.includes('0.18s')) problems.push(`santa-g5: lid transition is ${lid}, not 180 ms`);
+    await page.click('button[data-open]');
+    await page.waitForSelector('main.sa[data-screen="match"]', { timeout: 10000 });
+    await page.waitForSelector('text=A good paperback, any thriller');
+    await santaShot(page, log, 'santa-g6-match');
+    const remembered = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kp-santa-open:')).length);
+    if (remembered !== 1) problems.push('santa-g6: the unwrap is not remembered on this device');
+    if (await page.$('.kw-sticker-holo')) problems.push('santa-g7: holo on a guest screen');
+    if (!(await page.$('[data-sticker="ink"]'))) problems.push('santa-g7: no ink New sticker for the new question');
+    await page.click('button[data-chip]');
+    await page.locator('#asks-out').scrollIntoViewIfNeeded();
+    await santaShot(page, log, 'santa-g7-asks');
+    await page.click('button[data-send-ask]');
+    await page.waitForSelector("text=Waiting for Jonas's answer");
+    await santaShot(page, log, 'santa-g7-asks', 'santa-g7-asked');
+    // A reload on the same device skips the box.
+    await page.reload();
+    await page.waitForSelector('main.sa[data-screen="match"]', { timeout: 10000 });
+    await ctx.close();
+  }
+  // G5 after match_changed: closed until Open it again
+  {
+    const { ctx, page, log } = await go('santa-changed', 'unwrap');
+    await page.waitForSelector('[data-changed]');
+    await santaShot(page, log, 'santa-g5-match-changed');
+    await ctx.close();
+  }
+  // G8 reveal, G10 late, G11 ended
+  for (const [code, screen, file] of [['santa-reveal', 'reveal', 'santa-g8-reveal'], ['santa-late', 'late', 'santa-g10-late'], ['santa-ended', 'ended', 'santa-g11-ended']]) {
+    const { ctx, page, log } = await go(code, screen);
+    await santaShot(page, log, file);
+    await ctx.close();
+  }
+  // G9 away (served with the boot facts, as pa1 does)
+  {
+    const { ctx, page, log } = await go('santa-away', 'away', { base: bootOrigin });
+    await santaShot(page, log, 'santa-g9-away');
+    await ctx.close();
+  }
+  // Reduced motion: the box opens with no lid transition and no pop
+  {
+    const { ctx, page, log } = await go('santa-unwrap', 'unwrap', { reduced: true });
+    const lid = await page.evaluate(() => getComputedStyle(document.querySelector('.giftbox .lid')).transitionDuration);
+    if (lid !== '0s') problems.push(`santa reduced motion: lid transition ${lid}`);
+    await page.click('button[data-open]');
+    await page.waitForSelector('main.sa[data-screen="match"]', { timeout: 10000 });
+    const anim = await page.evaluate(() => getComputedStyle(document.querySelector('.matchcard')).animationName);
+    if (anim !== 'none') problems.push(`santa reduced motion: match card animates (${anim})`);
+    await check('santa-reduced-motion', page, log);
+    await ctx.close();
+  }
 }
 
 // First paint on throttled networks. DevTools "Slow 4G" (562.5 ms, 180 KB/s down) and Lighthouse's slow 4G

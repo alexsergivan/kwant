@@ -8,6 +8,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, extname } from 'node:path';
 import { FakeBox, CSP, KIWI_SVG } from './views.mjs';
+import { SantaBox } from './santa.mjs';
 
 const DIST = fileURLToPath(new URL('../../dist/pocket/', import.meta.url));
 const TYPES = { '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.html': 'text/html; charset=utf-8' };
@@ -17,7 +18,8 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
   const sockets = new Map(); // code -> Set<socket>
   const log = [];
   const box = (code) => {
-    if (!boxes.has(code)) boxes.set(code, new FakeBox(code));
+    // Codes starting with santa- are Secret Santa pockets (santa.mjs); the rest are quiz scenarios.
+    if (!boxes.has(code)) boxes.set(code, code.startsWith('santa-') ? new SantaBox(code) : new FakeBox(code));
     return boxes.get(code);
   };
 
@@ -46,7 +48,7 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
       }
       return send(res, 200, html, TYPES['.html'], { 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
     }
-    m = p.match(/^\/api\/pocket\/([^/]+)\/(state|info|rejoin|join|action|media\/kiwi\.svg)$/);
+    m = p.match(/^\/api\/pocket\/([^/]+)\/(state|info|rejoin|join|action|notices\/seen|media\/kiwi\.svg)$/);
     if (!m) return send(res, 404, { error: 'not_found' });
     const [, code, what] = m;
     if (what === 'media/kiwi.svg') return send(res, 200, KIWI_SVG, 'image/svg+xml', { 'Cache-Control': 'public, max-age=3600' });
