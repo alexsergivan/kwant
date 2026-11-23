@@ -182,6 +182,19 @@ pub trait Kit: Send + Sync + 'static {
     fn host_summary(&self, _ctx: &KitCtx, _state: &Value) -> Value {
         json!({})
     }
+    /// pa7: `true` once the kit has reached its final state (the Quiz's final scores); the core
+    /// then ends the pocket, which posts the results into the chat it came from. The default
+    /// never finishes: the host's End or the closing time ends the pocket.
+    fn finished(&self, _state: &Value) -> bool {
+        false
+    }
+    /// pa7: the results the person's chat gets once the pocket has ended, in the `results` shape
+    /// of the chat's pocket card (Pixel's pa4/impl.md "PocketBlock"): `{teams: [{name, players,
+    /// points, palette, members}] (1-12, best first), margin, missed, near_misses,
+    /// near_misses_accepted}`. Never a secret or a match. `Null` (the default): no results.
+    fn results(&self, _ctx: &KitCtx, _state: &Value) -> Value {
+        Value::Null
+    }
 }
 
 /// The kit registered under `id`. `test` exists only in debug builds or with
@@ -204,7 +217,8 @@ fn test_kit_allowed() -> bool {
 }
 
 /// A tiny kit for the core's tests. Spec: `title`, optional `pin` (bool), `max_players`,
-/// `retention` (`after_end` | `after_date` | `at_end`), `days`, `reveal_at`, `gift_on`.
+/// `retention` (`after_end` | `after_date` | `at_end`), `days`, `reveal_at`, `gift_on`, and (pa7)
+/// `final_round`: the round after which the kit is finished.
 /// Guests `tap` and `set_secret {secret}` (a private field only its owner sees); the host can
 /// `advance` the round.
 pub struct TestKit;
@@ -242,8 +256,8 @@ impl Kit for TestKit {
         Ok(())
     }
 
-    fn init(&self, _spec: &Value) -> Value {
-        json!({ "round": 0, "taps": {}, "secrets": {} })
+    fn init(&self, spec: &Value) -> Value {
+        json!({ "round": 0, "taps": {}, "secrets": {}, "final_round": spec.get("final_round").and_then(Value::as_i64) })
     }
 
     fn on_remove(&self, _ctx: &mut KitCtx, state: &mut Value, player_id: &str) {
@@ -303,6 +317,30 @@ impl Kit for TestKit {
 
     fn host_summary(&self, _ctx: &KitCtx, state: &Value) -> Value {
         json!({ "round": state["round"], "secrets_set": state["secrets"].as_object().map_or(0, |s| s.len()) })
+    }
+
+    /// With `final_round` in the spec, the pocket ends once the host has advanced to it.
+    fn finished(&self, state: &Value) -> bool {
+        state["final_round"].as_i64().is_some_and(|last| state["round"].as_i64().unwrap_or(0) >= last)
+    }
+
+    /// Each player is a team of one ("Team 1" first: the most taps), at most 12. The team's name
+    /// is a label, the player's name only in `members` (blanked when the data expires); secrets
+    /// never appear.
+    fn results(&self, ctx: &KitCtx, state: &Value) -> Value {
+        if ctx.players.is_empty() {
+            return Value::Null;
+        }
+        let taps = |id: &str| state["taps"][id].as_i64().unwrap_or(0);
+        let mut players: Vec<&Player> = ctx.players.iter().collect();
+        players.sort_by_key(|p| std::cmp::Reverse(taps(&p.id)));
+        let teams: Vec<Value> = players
+            .iter()
+            .take(12)
+            .enumerate()
+            .map(|(i, p)| json!({ "name": format!("Team {}", i + 1), "players": 1, "points": taps(&p.id), "palette": null, "members": [p.name] }))
+            .collect();
+        json!({ "teams": teams, "margin": null, "missed": [], "near_misses": null, "near_misses_accepted": null })
     }
 }
 

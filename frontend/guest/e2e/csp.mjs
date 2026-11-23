@@ -1,13 +1,14 @@
 // pa5 guest page in a real Chrome under exactly pa1's pocket CSP (guest/fake/views.mjs CSP), from the fake guest port.
 // Fails on: any securitypolicyviolation or CSP console error, a page error, any request that is not same-origin,
 // a missing or different CSP header, sideways scrolling at 390 px, or a visible tap target under 44 px.
-// Also writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
+// Also walks Secret Santa's G1-G11 (pa10a) from the fake santa box. Writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
 // Usage: PW_CORE=<playwright-core/index.mjs> CHROMIUM=<chrome> node guest/e2e/csp.mjs <out dir>
 // Needs the built page in frontend/dist/pocket (npm run build:guest).
 import fs from 'node:fs';
 import path from 'node:path';
 import { startFake } from '../fake/server.mjs';
 import { CSP, order } from '../fake/views.mjs';
+import { santaScenarios } from '../fake/santa.mjs';
 
 const pw = await import(process.env.PW_CORE || 'playwright-core');
 const out = path.resolve(process.argv[2] || 'guest-shots');
@@ -185,6 +186,317 @@ for (const name of order) {
   if (anim !== 'none') problems.push(`reduced motion: toast animates (${anim})`);
   await check('reduced-motion', page, log);
   await ctx.close();
+}
+
+// pa10a Secret Santa, G1-G11 (guest-brief.md), from the fake santa box (fake/santa.mjs) in Lin's server-impl shapes.
+// Same checks as the quiz screens; shots named santa-g<N>-<what>. The kit comes from the public facts, so the Santa
+// chunk loads lazily, and the walk fails if the quiz screens show instead.
+{
+  const santaShot = async (page, log, name, file = name) => {
+    await page.evaluate(() => document.querySelector('.toast')?.remove());
+    await shot(page, file);
+    await check(file, page, log);
+    results.states[file] = { screen: await page.getAttribute('[data-screen]', 'data-screen') };
+  };
+  const go = async (code, screen, { base = origin, reduced = false } = {}) => {
+    const p = await newPage();
+    if (reduced) await p.page.emulateMedia({ reducedMotion: 'reduce' });
+    // A pre-seated scenario (state is a seat, not a status) is a guest who joined earlier: give the page its seat
+    // cookie, as pa1 would have set it on join. Without it the box answers 401 and the page rightly shows G10 late.
+    if (typeof santaScenarios[code]?.state === 'object') {
+      await p.ctx.addCookies([{ name: `kp_${code}`, value: 'fake', domain: '127.0.0.1', path: `/api/pocket/${code}`, httpOnly: true, sameSite: 'Strict' }]);
+    }
+    const res = await p.page.goto(`${base}/p/${code}`);
+    if (res.headers()['content-security-policy'] !== CSP) problems.push(`${code}: wrong CSP header`);
+    await p.page.waitForSelector(`main.sa[data-screen="${screen}"]`, { timeout: 20000 });
+    return p;
+  };
+
+  // G1 join, then G2 waiting with the wish saved
+  {
+    const { ctx, page, log } = await go('santa-join', 'join');
+    await santaShot(page, log, 'santa-g1-join');
+    await page.fill('#s-name', 'Ana');
+    await page.click('label.creature:nth-child(3)');
+    await page.fill('#s-pin', '1234');
+    const dots = await page.evaluate(() => [...document.querySelectorAll('.pins .pin')].map((b) => b.textContent).join(''));
+    if (dots !== '••••') problems.push(`santa-g1: PIN boxes show "${dots}", not four dots`);
+    await page.fill('#s-wish', 'Warm socks\nA good paperback');
+    await santaShot(page, log, 'santa-g1-join', 'santa-g1-join-filled');
+    await page.click('button[data-join]');
+    await page.waitForSelector('main.sa[data-screen="waiting"]');
+    await page.waitForSelector('text=Edit my wish list');
+    await santaShot(page, log, 'santa-g2-waiting');
+    await ctx.close();
+  }
+  // G3 rejoin
+  {
+    const { ctx, page, log } = await go('santa-join', 'join');
+    await page.click('button[data-to-rejoin]');
+    await page.waitForSelector('main.sa[data-screen="rejoin"]');
+    await santaShot(page, log, 'santa-g3-rejoin');
+    await ctx.close();
+  }
+  // G4 wrong PIN, the tries from the server
+  {
+    const { ctx, page, log } = await go('santa-wrongpin', 'join');
+    await page.click('button[data-to-rejoin]');
+    await page.fill('#s-bname', 'Mia');
+    await page.fill('#s-bpin', '0000');
+    await page.click('button[data-rejoin]');
+    await page.waitForSelector('[data-problem]');
+    const p = await page.textContent('[data-problem]');
+    if (!p.includes('3 more tries')) problems.push(`santa-g4: problem says "${p}"`);
+    await santaShot(page, log, 'santa-g4-wrong-pin');
+    await ctx.close();
+  }
+  // G5 unwrap, G6 match (lid lifts, card pops), G7 Santa asks
+  {
+    const { ctx, page, log } = await go('santa-unwrap', 'unwrap');
+    await santaShot(page, log, 'santa-g5-unwrap');
+    const lid = await page.evaluate(() => getComputedStyle(document.querySelector('.giftbox .lid')).transitionDuration);
+    if (!lid.includes('0.18s')) problems.push(`santa-g5: lid transition is ${lid}, not 180 ms`);
+    await page.click('button[data-open]');
+    await page.waitForSelector('main.sa[data-screen="match"]', { timeout: 10000 });
+    await page.waitForSelector('text=A good paperback, any thriller');
+    await santaShot(page, log, 'santa-g6-match');
+    const remembered = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kp-santa-open:')).length);
+    if (remembered !== 1) problems.push('santa-g6: the unwrap is not remembered on this device');
+    if (await page.$('.kw-sticker-holo')) problems.push('santa-g7: holo on a guest screen');
+    if (!(await page.$('[data-sticker="ink"]'))) problems.push('santa-g7: no ink New sticker for the new question');
+    await page.click('button[data-chip]');
+    await page.locator('#asks-out').scrollIntoViewIfNeeded();
+    await santaShot(page, log, 'santa-g7-asks');
+    await page.click('button[data-send-ask]');
+    await page.waitForSelector("text=Waiting for Jonas's answer");
+    await santaShot(page, log, 'santa-g7-asks', 'santa-g7-asked');
+    // A reload on the same device skips the box.
+    await page.reload();
+    await page.waitForSelector('main.sa[data-screen="match"]', { timeout: 10000 });
+    await ctx.close();
+  }
+  // G5 after match_changed: closed until Open it again
+  {
+    const { ctx, page, log } = await go('santa-changed', 'unwrap');
+    await page.waitForSelector('[data-changed]');
+    await santaShot(page, log, 'santa-g5-match-changed');
+    await ctx.close();
+  }
+  // G8 reveal, G10 late, G11 ended
+  for (const [code, screen, file] of [['santa-reveal', 'reveal', 'santa-g8-reveal'], ['santa-late', 'late', 'santa-g10-late'], ['santa-ended', 'ended', 'santa-g11-ended']]) {
+    const { ctx, page, log } = await go(code, screen);
+    await santaShot(page, log, file);
+    await ctx.close();
+  }
+  // G9 away (served with the boot facts, as pa1 does)
+  {
+    const { ctx, page, log } = await go('santa-away', 'away', { base: bootOrigin });
+    await santaShot(page, log, 'santa-g9-away');
+    await ctx.close();
+  }
+  // Reduced motion: the box opens with no lid transition and no pop
+  {
+    const { ctx, page, log } = await go('santa-unwrap', 'unwrap', { reduced: true });
+    const lid = await page.evaluate(() => getComputedStyle(document.querySelector('.giftbox .lid')).transitionDuration);
+    if (lid !== '0s') problems.push(`santa reduced motion: lid transition ${lid}`);
+    await page.click('button[data-open]');
+    await page.waitForSelector('main.sa[data-screen="match"]', { timeout: 10000 });
+    const anim = await page.evaluate(() => getComputedStyle(document.querySelector('.matchcard')).animationName);
+    if (anim !== 'none') problems.push(`santa reduced motion: match card animates (${anim})`);
+    await check('santa-reduced-motion', page, log);
+    await ctx.close();
+  }
+}
+
+// pa5b: the big screen at 1920x1080 (and letterboxed at 4:3), same CSP checks, from the fake screen box
+// (fake/screen.mjs). Each load opens /p/screen-<scene>#screen=<token>: the token must be gone from the address bar
+// before the page's first request, the screen must never call a host write, and no text may render under 32 px.
+{
+  const { scenes } = await import('../fake/screen.mjs');
+  const screenPage = async ({ width = 1920, height = 1080, reduced = false } = {}) => {
+    const ctx = await browser.newContext({ viewport: { width, height }, deviceScaleFactor: 1, locale: 'en-US', reducedMotion: reduced ? 'reduce' : 'no-preference' });
+    await ctx.addInitScript(() => {
+      window.__violations = [];
+      document.addEventListener('securitypolicyviolation', (e) => window.__violations.push(`${e.violatedDirective} ${e.blockedURI || ''} ${e.sourceFile || ''}:${e.lineNumber || ''}`.trim()));
+      // What the address bar held at each request the page made (fetch and WebSocket).
+      window.__hashAt = [];
+      const f = window.fetch;
+      window.fetch = (...a) => {
+        window.__hashAt.push(`${location.hash} ${String(a[0])}`);
+        return f(...a);
+      };
+      const W = window.WebSocket;
+      window.WebSocket = class extends W {
+        constructor(u, p) {
+          window.__hashAt.push(`${location.hash} ${String(u)}`);
+          super(u, p);
+        }
+      };
+    });
+    const page = await ctx.newPage();
+    const log = [];
+    page.on('console', (m) => {
+      if (/Content.Security.Policy|Refused to/i.test(m.text())) log.push(`console: ${m.text()}`);
+    });
+    page.on('pageerror', (e) => log.push(`pageerror: ${e.message}`));
+    page.on('request', (r) => {
+      const u = r.url();
+      if (!u.startsWith('http://127.0.0.1:') && !u.startsWith('ws://127.0.0.1:') && !u.startsWith('data:')) log.push(`third-party request: ${u}`);
+    });
+    return { ctx, page, log };
+  };
+  const screenCheck = async (name, page, log, { width = 1920, height = 1080 } = {}) => {
+    for (const x of await page.evaluate(() => window.__violations)) problems.push(`${name}: CSP violation: ${x}`);
+    for (const x of log) problems.push(`${name}: ${x}`);
+    const hashes = await page.evaluate(() => ({ now: location.href, at: window.__hashAt }));
+    if (hashes.now.includes('#')) problems.push(`${name}: the address bar still has a fragment (${hashes.now})`);
+    for (const x of hashes.at) if (x.startsWith('#')) problems.push(`${name}: a request went out with the token still in the address bar: ${x}`);
+    const m = await page.evaluate(() => {
+      const tv = document.querySelector('.tv');
+      const s = Number(getComputedStyle(tv).getPropertyValue('--s')) || 1;
+      const small = [];
+      for (const el of tv.querySelectorAll('*')) {
+        if (el.closest('.vh, svg')) continue;
+        const own = [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim());
+        if (!own) continue;
+        const r = el.getBoundingClientRect();
+        if (!r.width || !r.height) continue;
+        // The sticker's own 12 px type is drawn at scale(3.2) (38.4 px at 1920).
+        const k = el.closest('.bigsticker') ? 3.2 : 1;
+        const px = parseFloat(getComputedStyle(el).fontSize) * k;
+        if (px < 32) small.push(`${el.tagName.toLowerCase()}.${el.className} "${el.textContent.trim().slice(0, 24)}" ${px}px`);
+      }
+      const box = tv.getBoundingClientRect();
+      const unfilled = [...document.querySelectorAll('svg rect')].filter((r) => {
+        const f = r.getAttribute('fill');
+        return f !== 'currentColor' && !/^#[0-9a-f]{6}$/i.test(f ?? '');
+      }).length;
+      return { s, small, box: [box.left, box.top, box.width, box.height].map(Math.round), sw: document.documentElement.scrollWidth, sh: document.documentElement.scrollHeight, unfilled };
+    });
+    for (const x of m.small) problems.push(`${name}: text under 32 px at 1920: ${x}`);
+    if (m.sw > width || m.sh > height) problems.push(`${name}: the page scrolls (${m.sw}x${m.sh})`);
+    if (m.box[2] > width + 1 || m.box[3] > height + 1) problems.push(`${name}: the stage overflows the window (${m.box.join(' ')})`);
+    if (m.unfilled) problems.push(`${name}: ${m.unfilled} svg rect(s) with no real fill`);
+    return m;
+  };
+  const shots = [['lobby', 'lobby'], ['question', 'question'], ['locked', 'question'], ['reveal', 'reveal'], ['leaderboard', 'leaderboard'], ['winners', 'winners'], ['paused', 'paused'], ['away', 'away'], ['ended', 'winners'], ['expired', 'signed-out'], ['solo', 'leaderboard']];
+  results.screen = {};
+  for (const [i, [scene, screen]] of shots.entries()) {
+    const code = `screen-${scene}`;
+    const { ctx, page, log } = await screenPage();
+    // The solo board's creatures come from the lobby roster, so that screen first sees its lobby, as a real TV does.
+    const solo = scene === 'solo';
+    if (solo) fake.push(code, { ...scenes.lobby, teams: false, lobby: scenes.solo.leaderboard.map((r) => ({ name: r.name, team: null })), players: scenes.solo.leaderboard.length });
+    await page.goto(`${origin}/p/${code}#screen=tok-${scene}`);
+    await ready(page, solo ? 'lobby' : screen);
+    if (solo) {
+      fake.push(code, scenes.solo);
+      await ready(page, screen);
+    }
+    await page.waitForTimeout(400);
+    const file = `screen-${String(i + 1).padStart(2, '0')}-${scene}`;
+    const mm = await screenCheck(file, page, log);
+    await page.screenshot({ path: path.join(out, `${file}.png`) });
+    results.screen[scene] = { screen, scale: mm.s, stage: mm.box };
+    const b = fake.box(code);
+    if (b.writes?.length) problems.push(`${file}: the screen called a host write: ${b.writes.join(', ')}`);
+    if (scene !== 'away' && scene !== 'expired' && !(b.signins?.length === 1 && b.signins[0].key === `tok-${scene}`)) problems.push(`${file}: signed in ${JSON.stringify(b.signins)}`);
+    await ctx.close();
+  }
+  // A new player drops in on the live lobby (ws push); a reload of the tab stays a screen (cookie, no token).
+  {
+    const { ctx, page, log } = await screenPage();
+    await page.goto(`${origin}/p/screen-lobby#screen=tok-again`);
+    await ready(page, 'lobby');
+    await page.waitForTimeout(300);
+    fake.push('screen-lobby', { ...scenes.lobby, lobby: [...scenes.lobby.lobby, { name: 'Eli', team: 'Brain Freeze' }], players: 15 });
+    await page.waitForSelector('.player.drop-in', { timeout: 5000 }).catch(() => problems.push('screen-lobby: no drop-in after a ws push'));
+    await page.reload();
+    await ready(page, 'lobby');
+    await screenCheck('screen-lobby-reload', page, log);
+    if (!(await page.textContent('.tvcount')).includes('15 players')) problems.push('screen-lobby-reload: not the live lobby');
+    await ctx.close();
+  }
+  // Letterbox at 4:3 and on an ultra-wide.
+  for (const [w, hgt, scene] of [[1024, 768, 'lobby'], [2560, 1080, 'leaderboard']]) {
+    const { ctx, page, log } = await screenPage({ width: w, height: hgt });
+    await page.goto(`${origin}/p/screen-${scene}#screen=tok-lb`);
+    await ready(page, scene);
+    await page.waitForTimeout(300);
+    await screenCheck(`screen-letterbox-${w}x${hgt}`, page, log, { width: w, height: hgt });
+    await page.screenshot({ path: path.join(out, `screen-letterbox-${w}x${hgt}-${scene}.png`) });
+    await ctx.close();
+  }
+  // pa5b round 2 (Rigel D1): the validator allows 2 to 6 answers, a 300-character question, 80-character answers and a
+  // 280-character line. No answer may sit under the answered row or the Quizmaster, and every block stays on the stage.
+  {
+    const words = (n) => {
+      const w = 'the quick brown fox jumps over a lazy dog while seven wizards quietly box'.split(' ');
+      let t = '';
+      for (let i = 0; t.length < n; i++) t += (t ? ' ' : '') + w[i % w.length];
+      return t.slice(0, n).trim();
+    };
+    const q = scenes.question.question;
+    const cases = [
+      ['5 short answers', 'question', { ...scenes.question, question: { ...q, options: ['One', 'Two', 'Three', 'Four', 'Five'] } }],
+      ['6 short answers', 'question', { ...scenes.question, question: { ...q, options: ['One', 'Two', 'Three', 'Four', 'Five', 'Six'] } }],
+      ['140-character question, 4x30', 'question', { ...scenes.question, question: { ...q, text: words(140), options: [30, 30, 30, 30].map(words) } }],
+      ['locked, 6 answers', 'locked', { ...scenes.locked, question: { ...q, options: ['One', 'Two', 'Three', 'Four', 'Five', 'Six'] } }],
+      ['limits: 300 + 6x80', 'question', { ...scenes.question, question: { ...q, text: words(300), options: Array.from({ length: 6 }, () => words(80)) } }],
+      ['reveal 6 short answers', 'reveal', { ...scenes.reveal, question: { ...q, options: ['One', 'Two', 'Three', 'Four', 'Five', 'Six'] }, reveal: { ...scenes.reveal.reveal, picks: [1, 14, 5, 2, 0, 1] } }],
+      ['reveal limits: 300 + 4x80 + 280 line', 'reveal', { ...scenes.reveal, question: { ...q, text: words(300), options: [80, 80, 80, 80].map(words) }, reveal: { ...scenes.reveal.reveal, source_quote: words(300), line: words(280) } }],
+      // pa5b round 3 (Rigel D2 and D3): the source quote counts, and 5 or 6 answers of 28 to 30 characters can wrap.
+      ['D3 question 120 + 5x30', 'question', { ...scenes.question, question: { ...q, text: words(120), options: Array.from({ length: 5 }, () => words(30)) } }],
+      ['D3 locked 120 + 6x28', 'locked', { ...scenes.locked, question: { ...q, text: words(120), options: Array.from({ length: 6 }, () => words(28)) } }],
+      ['D2 reveal 120 + 5x30 + quote 100', 'reveal', { ...scenes.reveal, question: { ...q, text: words(120), options: Array.from({ length: 5 }, () => words(30)) }, reveal: { ...scenes.reveal.reveal, picks: [1, 14, 5, 2, 0], source_quote: words(100) } }],
+      ['D2 reveal 120 + 4x50 + quote 300', 'reveal', { ...scenes.reveal, question: { ...q, text: words(120), options: [50, 50, 50, 50].map(words) }, reveal: { ...scenes.reveal.reveal, source_quote: words(300) } }],
+      ['every field at the limits: reveal 300 + 6x80 + quote 300 + line 280', 'reveal', { ...scenes.reveal, question: { ...q, text: words(300), options: Array.from({ length: 6 }, () => words(80)) }, reveal: { ...scenes.reveal.reveal, picks: [0, 1, 2, 3, 4, 5], source_quote: words(300), line: words(280) } }],
+    ];
+    for (const [name, scene, view] of cases) {
+      const code = `screen-${scene}`;
+      fake.push(code, scenes[scene]);
+      const { ctx, page, log } = await screenPage();
+      await page.goto(`${origin}/p/${code}#screen=tok-limits`);
+      await ready(page, scene === 'locked' ? 'question' : scene);
+      fake.push(code, view);
+      await page.waitForTimeout(400);
+      await screenCheck(`screen-limits ${name}`, page, log);
+      const bad = await page.evaluate(() => {
+        const out = [];
+        const tv = document.querySelector('.tv').getBoundingClientRect();
+        const ans = [...document.querySelectorAll('.tv .ans, .tv .tvsolo')].map((e) => e.getBoundingClientRect());
+        for (const sel of ['.tvanswered', '.tvq > .tvhost', '.tvsrc']) {
+          const b = document.querySelector(sel)?.getBoundingClientRect();
+          if (b && ans.some((a) => a.bottom > b.top + 1 && a.top < b.bottom - 1)) out.push(`an answer overlaps ${sel}`);
+        }
+        for (const e of document.querySelectorAll('.tv .ans, .tv .tvanswered, .tv .tvhost, .tv .tvsrc, .tv .qbig, .tv .tvclock')) {
+          const r = e.getBoundingClientRect();
+          if (r.bottom > tv.bottom + 1 || r.right > tv.right + 1 || r.top < tv.top - 1) out.push(`${e.className} leaves the stage`);
+        }
+        const col = document.querySelector('.tvq');
+        if (col && col.scrollHeight > col.clientHeight + 1) out.push(`the question column overflows by ${col.scrollHeight - col.clientHeight}px (${col.className})`);
+        const clock = document.querySelector('.tvclock')?.getBoundingClientRect();
+        const head = document.querySelector('.tvtop')?.getBoundingClientRect();
+        const q = document.querySelector('.tvq')?.getBoundingClientRect();
+        if (clock && q && clock.bottom > q.top) out.push('the clock runs into the question');
+        if (clock && head && head.right > clock.left) out.push('the header runs under the clock');
+        return out;
+      });
+      for (const x of bad) problems.push(`screen-limits ${name}: ${x}`);
+      await page.screenshot({ path: path.join(out, `screen-limits-${name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.png`) });
+      await ctx.close();
+    }
+  }
+  // Reduced motion: the winners' stars hold still, the timer bar and new players don't move.
+  {
+    const { ctx, page, log } = await screenPage({ reduced: true });
+    await page.goto(`${origin}/p/screen-winners#screen=tok-rm`);
+    await ready(page, 'winners');
+    const anim = await page.evaluate(() => [...document.querySelectorAll('.tvstar')].map((s) => getComputedStyle(s).animationName));
+    if (anim.some((a) => a !== 'none')) problems.push(`screen reduced motion: stars animate (${anim.join(' ')})`);
+    await screenCheck('screen-reduced-motion', page, log);
+    await ctx.close();
+  }
 }
 
 // First paint on throttled networks. DevTools "Slow 4G" (562.5 ms, 180 KB/s down) and Lighthouse's slow 4G

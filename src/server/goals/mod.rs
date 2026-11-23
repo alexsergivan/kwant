@@ -448,16 +448,20 @@ pub async fn notice(state: &AppState, g: &Goal, kind: &str, title: String, body:
         let _ = state.db.add_goal_event(&g.id, "notice_capped", "kwant", &json!({ "kind": kind })).await;
         return false;
     }
-    let bot = match state.db.get_kwant(&g.kwant_id).await.ok().flatten() {
-        Some(k) => Some(k),
-        None => state.db.list_kwants(&SpaceId::new(&g.space_id)).await.ok().and_then(|ks| ks.into_iter().next()),
-    };
-    let Some(bot) = bot else {
+    let Some(bot) = goal_bot(state, g).await else {
         return false;
     };
     let _ = state.db.add_goal_event(&g.id, "notified", "kwant", &json!({ "kind": kind })).await;
     notify_goal(state, Notification { kind: "goal_alert", kwant_id: bot.id, kwant_name: bot.name, channel_id: None, title, body, thread_id: None, card_id: None }, &g.id).await;
     true
+}
+
+/// The bot a goal's notices come from: its own, else the first of its space.
+async fn goal_bot(state: &AppState, g: &Goal) -> Option<crate::db::models::Kwant> {
+    match state.db.get_kwant(&g.kwant_id).await.ok().flatten() {
+        Some(k) => Some(k),
+        None => state.db.list_kwants(&SpaceId::new(&g.space_id)).await.ok().and_then(|ks| ks.into_iter().next()),
+    }
 }
 
 fn clock(ms: i64) -> String {
@@ -475,10 +479,18 @@ pub async fn on_change(state: &AppState, before: &str, after: &Goal, failing: &[
             return;
         }
         let what = failing.first().cloned().unwrap_or_else(|| "a check".into());
-        let body = format!("Since {}, this isn't true: {what}. kwant checked {} times in a row. Open the Mission board to see what it saw.", clock(now_ms()), after.confirm_failures.max(1));
+        // Since the incident's first failing run, the same time the goal's row shows (34k, Mira's h)
+        let since = state.db.goal_incident_since(&after.id).await.ok().flatten().unwrap_or_else(now_ms);
+        let body = format!("Since {}, this isn't true: {what}. kwant checked {} times in a row. Open the Mission board to see what it saw.", clock(since), after.confirm_failures.max(1));
         notice(state, after, "broken", format!("{} is failing", after.title), body).await;
     } else if after.status == "met" && before != "met" && owed_recovery {
-        notice(state, after, "recovered", format!("{} is OK again", after.title), "Its checks pass again. Nothing else to do.".into()).await;
+        // A fix this incident ran and verified made it pass: say whose (34k, Mira's f)
+        let fixer = if crate::server::goals_remediation::fixed_this_incident(state, after).await { goal_bot(state, after).await.map(|k| k.name) } else { None };
+        let body = match fixer {
+            Some(bot) => format!("{bot}'s fix worked; its checks pass again."),
+            None => "Its checks pass again. Nothing else to do.".into(),
+        };
+        notice(state, after, "recovered", format!("{} is OK again", after.title), body).await;
     }
 }
 

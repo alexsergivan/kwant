@@ -19,6 +19,7 @@ pub mod kits;
 pub mod limits;
 pub mod listener;
 pub mod santa;
+pub mod schedule;
 pub mod words;
 
 use crate::config::Config;
@@ -303,6 +304,10 @@ pub struct CreateRequest {
     pub opens_at: Option<DateTime<Utc>>,
     #[serde(default)]
     pub closes_at: Option<DateTime<Utc>>,
+    /// The chat the pocket came from (pa7): its reminder and results are posted there. Without
+    /// it, the person gets the notifications only.
+    #[serde(default)]
+    pub origin: Option<schedule::Origin>,
 }
 
 /// Makes a pocket; returns it and its host key (shown once, kept only as a hash).
@@ -318,8 +323,18 @@ pub async fn create(state: &AppState, req: CreateRequest) -> PResult<(Arc<Snapsh
             return Err(PocketError::new(StatusCode::BAD_REQUEST, "bad_times", "closes_at must be after opens_at."));
         }
     }
-    let rules = effective_rules(kit, &req.spec);
+    if let Some(o) = &req.origin {
+        schedule::check_origin(state, o).await?;
+    }
     let now = Utc::now();
+    // pa7: a future `when` sets the times the bot didn't (lobby 30 min before, close 4 h after)
+    let (times, mut sched) = schedule::plan(state, &req.spec, req.opens_at, req.closes_at, req.origin.as_ref(), now).await;
+    if let (Some(o), Some(c)) = (times.opens_at, times.closes_at) {
+        if c <= o {
+            return Err(PocketError::new(StatusCode::BAD_REQUEST, "bad_times", "closes_at must be after opens_at."));
+        }
+    }
+    let rules = effective_rules(kit, &req.spec);
     let host_key = keys::new_key();
     let kit_state = serde_json::to_string(&kit.init(&req.spec)).map_err(|_| PocketError::internal())?;
     let title = kit.title(&req.spec);
@@ -334,8 +349,8 @@ pub async fn create(state: &AppState, req: CreateRequest) -> PResult<(Arc<Snapsh
                 spec: &spec_text,
                 kit_state: &kit_state,
                 owner_kwant_id: req.owner_kwant_id.as_deref(),
-                opens_at: req.opens_at,
-                closes_at: req.closes_at,
+                opens_at: times.opens_at,
+                closes_at: times.closes_at,
                 expires_at: rules.retention.expires_at(&req.spec, None),
                 host_key_hash: &keys::hash_key(&host_key),
                 now,
@@ -343,6 +358,8 @@ pub async fn create(state: &AppState, req: CreateRequest) -> PResult<(Arc<Snapsh
             .await;
         match res {
             Ok(()) => {
+                sched.pocket_code = code.clone();
+                state.db.pocket_schedule_insert(&sched).await?;
                 let snap = refresh(state, &code).await?.ok_or_else(PocketError::internal)?;
                 return Ok((snap, host_key));
             }

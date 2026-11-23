@@ -136,6 +136,8 @@ export interface Goal {
   next_check_at: string | null;
   last_checked_at: string | null;
   checking_since: string | null;
+  /** When the open incident began (its first failing run), as the server's notices say it. Absent from older servers. */
+  incident_since?: string | null;
   fail_streak: number;
   version: number;
   created_at: string;
@@ -375,6 +377,7 @@ export function parseGoal(v: unknown): Goal | null {
     next_check_at: time(g.next_check_at),
     last_checked_at: time(g.last_checked_at),
     checking_since: time(g.checking_since),
+    incident_since: time(g.incident_since),
     fail_streak: n(g.fail_streak, 0),
     version: n(g.version, 0),
     created_at: time(g.created_at) ?? '',
@@ -1138,8 +1141,9 @@ export function goalDiagnosis(g: Goal, events: GoalEvent[] = [], now: number = D
   const pick = (k: 'summary' | 'cause' | 'proposed_fix', ...alt: string[]) => own?.[k] ?? m?.[k] ?? alt.map((a) => s(d[a])).find(Boolean) ?? null;
   return {
     observed: c ? `${goalCheckName(c)}: ${desiredVsObserved(c)}` : null,
-    // When it broke, not when it was last seen: no time at all beats a wrong "since 4 min ago".
-    since: broke?.created_at ?? m?.opened_at ?? g.open_fix_task?.created_at ?? null,
+    // When it broke, not when it was last seen: no time at all beats a wrong "since 4 min ago". The server's
+    // incident time (its first failing run) first, so the row, this card and the broken notice say one time (34k).
+    since: g.incident_since ?? time(broke?.detail.since) ?? broke?.created_at ?? m?.opened_at ?? g.open_fix_task?.created_at ?? null,
     cause: pick('cause', 'cause', 'likely_cause'),
     proposed_fix: pick('proposed_fix', 'proposed_fix', 'fix'),
     summary: pick('summary', 'summary', 'report'),

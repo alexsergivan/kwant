@@ -882,3 +882,19 @@ test('Fix it refused with not_held (another tab pressed Run) reloads the goal an
   assert.ok(!m.q('[data-goal-fix]'), 'the stale buttons are gone');
   m.done();
 });
+
+// 34k (Mira's goals UX pass, minor h): one incident, one time. The server sends `incident_since` (the first
+// failing run, the broken notice's "Since"); the row and the decision use it before the event or the mission.
+test('34k: the row and the decision say the incident’s first failing run, the time the broken notice says', () => {
+  const first = NOW - 70 * 60_000;
+  const g = incident({ opened: 20, incident_since: first });
+  assert.equal(g.incident_since, new Date(first).toISOString(), 'epoch ms from the server');
+  const broke = [{ id: 'e1', kind: 'not_met', actor: 'kwant', detail: { since: NOW - 65 * 60_000 }, created_at: minsAgo(60) }];
+  assert.equal(b.goalDiagnosis(g, broke, NOW).since, new Date(first).toISOString(), 'the server’s time wins over the event and the mission');
+  assert.equal(b.goalDiagnosis(g, [], NOW).since, new Date(first).toISOString(), 'even before the events load (the 7:49 screen)');
+  const older = incident({ opened: 20 });
+  assert.equal(older.incident_since, null, 'an older server sends none');
+  assert.equal(b.goalDiagnosis(older, broke, NOW).since, minsAgo(65), 'then the event’s own since');
+  assert.equal(b.goalDiagnosis(older, [{ ...broke[0], detail: {} }], NOW).since, minsAgo(60), 'then the event’s time');
+  assert.equal(b.goalDiagnosis(older, [], NOW).since, minsAgo(20), 'then the mission, as before');
+});
