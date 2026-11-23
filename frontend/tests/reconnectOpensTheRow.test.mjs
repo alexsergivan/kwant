@@ -93,6 +93,11 @@ test('the row has an amber "Sign in again" first in its strip only for a URL too
   }
   assert.equal(doc(ui.row({ c: conn() })).querySelector('[data-sign-in-again]'), null, 'no button without a sign-in to run');
   assert.match(ui.row({ c: conn(), onSignIn: noop, signingIn: true }), /Waiting for sign-in…/);
+  // The strip of a row that needs a sign-in sits on its own line under the details and wraps inside the card,
+  // so the longer waiting text never overflows or moves the row (Mira F1).
+  const actions = (html) => new DOMParser().parseFromString(html, 'text/html').querySelector('[data-row-actions]').className;
+  assert.match(actions(ui.row({ c: conn(), onSignIn: noop, signingIn: true })), /max-w-full basis-full/);
+  assert.doesNotMatch(actions(ui.row({ c: conn({ status: 'connected' }), onSignIn: noop, onCheck: noop })), /basis-full/);
 });
 
 test('opening on a row scrolls to it, lights it for 1.2 s and puts the keyboard on "Sign in again"', async () => {
@@ -103,7 +108,13 @@ test('opening on a row scrolls to it, lights it for 1.2 s and puts the keyboard 
   await tick();
   const lit = () => [...v.host.querySelectorAll('[data-flash]')].map((x) => x.getAttribute('data-connection'));
   assert.deepEqual(lit(), ['mcp:s1']);
-  assert.match(v.host.querySelector('[data-connection="mcp:s1"]').className, /bg-sky-500\/10/);
+  const light = (id) => v.host.querySelector(`[data-connection="${id}"] > [data-row-light]`);
+  assert.match(light('mcp:s1').className, /opacity-100/);
+  assert.match(light('mcp:s1').className, /ring-1 ring-inset ring-sky-500/, 'a 1 px ring says "this one"');
+  assert.match(light('mcp:s1').className, /transition-opacity duration-200/, 'only opacity fades, 200 ms');
+  assert.equal(light('mcp:s1').getAttribute('aria-hidden'), 'true');
+  assert.match(light('mcp:s2').className, /opacity-0/);
+  assert.doesNotMatch(v.host.querySelector('[data-connection="mcp:s1"]').className, /transition-colors|bg-sky/);
   assert.deepEqual(scrolls, [{ scroller: 'settings', behavior: 'smooth' }], 'only the nearest scroller moves');
   assert.equal(document.activeElement?.getAttribute('data-sign-in-again'), 'mcp:s1');
   // A reload of the list doesn't light it again; a new open does.
@@ -115,7 +126,7 @@ test('opening on a row scrolls to it, lights it for 1.2 s and puts the keyboard 
   v.render({ ...props, focusConnection: { id: 'mcp:s1', seq: 2 } });
   await tick();
   assert.deepEqual(scrolls[1], { scroller: 'settings', behavior: 'auto' }, 'reduced motion jumps');
-  assert.match(v.host.querySelector('[data-connection="mcp:s1"]').className, /motion-reduce:transition-none/);
+  assert.match(light('mcp:s1').className, /motion-reduce:transition-none/);
   reduced = false;
   v.unmount();
 });

@@ -44,13 +44,14 @@ test('a connection row says who needs what, with Sign in again (34h: never Recon
   assert.ok(li, 'the row is listed');
   assert.equal(li.getAttribute('data-group'), 'waiting_on_you');
   assert.match(li.textContent, /Gmail needs you to sign in again for Ben/);
-  assert.match(li.textContent, /Sign in again/);
+  assert.equal(li.textContent.match(/Sign in again/g)?.length, 1, 'said once, by the button; the state word is Needs sign-in');
+  assert.match(li.textContent, /Needs sign-in/);
   const btn = li.querySelector('[data-reconnect="msg1"]');
   assert.ok(btn);
   assert.equal(btn.textContent, 'Sign in again', 'named by cause, even on a line stored with "Reconnect"');
   assert.match(btn.className, /h-11/, '44 px on a phone');
-  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open' }), { label: 'Sign in again', tone: 'amber' });
-  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open', cause: 'sign_in' }), { label: 'Sign in again', tone: 'amber' });
+  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open' }), { label: 'Needs sign-in', tone: 'amber' });
+  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open', cause: 'sign_in' }), { label: 'Needs sign-in', tone: 'amber' });
 });
 
 test('a Composio app with no active account says Connect again, on its button too', () => {
@@ -67,11 +68,12 @@ test('a Composio app with no active account says Connect again, on its button to
   const li = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html').querySelector('[data-row="msg2"]');
   assert.ok(li, 'the row is listed');
   assert.match(li.textContent, /Google Calendar needs to be connected again for TechLead/);
-  assert.match(li.textContent, /Connect again/);
+  assert.equal(li.textContent.match(/Connect again/g)?.length, 1, 'said once, by the button; the state word is Disconnected');
+  assert.match(li.textContent, /Disconnected/);
   assert.doesNotMatch(li.textContent, /Sign in again/);
   assert.equal(li.querySelector('[data-reconnect="msg2"]').textContent, 'Connect again');
   assert.doesNotMatch(li.textContent, /Reconnect/);
-  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open', cause: 'reconnect' }), { label: 'Connect again', tone: 'amber' });
+  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open', cause: 'reconnect' }), { label: 'Disconnected', tone: 'amber' });
 });
 
 test('without a way to open Connections there is no button', () => {

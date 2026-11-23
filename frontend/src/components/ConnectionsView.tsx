@@ -108,12 +108,18 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
   const signIn = onSignIn && canSignInAgain(c);
   return (
     <li
-      className={`px-3 py-3 sm:px-4 scroll-mt-4 transition-colors duration-700 motion-reduce:transition-none first:rounded-t-xl last:rounded-b-xl ${flash ? 'bg-sky-500/10' : ''}`}
+      className="relative px-3 py-3 sm:px-4 scroll-mt-4 first:rounded-t-xl last:rounded-b-xl"
       aria-labelledby={`${id}-n`}
       data-connection={c.id}
       data-flash={flash || undefined}
     >
-      <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+      {/* 34h: the "this one" light is its own layer, so only its opacity fades (200 ms, none under reduced motion). */}
+      <span
+        aria-hidden="true"
+        data-row-light
+        className={`pointer-events-none absolute inset-0 rounded-[inherit] bg-sky-500/10 ring-1 ring-inset ring-sky-500 transition-opacity duration-200 motion-reduce:transition-none ${flash ? 'opacity-100' : 'opacity-0'}`}
+      />
+      <div className="relative flex flex-wrap items-start gap-x-3 gap-y-2">
         <span className="mt-0.5 shrink-0 text-zinc-400">{KIND_ICON[c.kind] ?? <Plug size={14} aria-hidden="true" />}</span>
         <div className="min-w-0 flex-1 basis-48">
           <div className="flex flex-wrap items-center gap-2">
@@ -178,7 +184,7 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
           </dl>
         </div>
         {(signIn || canCheck || manage || (onProduction && canMarkProduction(c))) && (
-          <div className="flex flex-wrap gap-2 shrink-0">
+          <div className={`flex flex-wrap gap-2 shrink-0 max-w-full ${signIn ? 'basis-full' : ''}`} data-row-actions>
             {signIn && (
               <button type="button" className={signInBtn} disabled={signingIn} onClick={() => onSignIn!(c)} data-sign-in-again={c.id}>
                 {signingIn && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
@@ -793,7 +799,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
 
           <div role="status" aria-live="polite">
             {notice && (
-              <p role="status" className={`px-3 py-2 rounded-lg border text-xs ${notice.error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-200'}`}>
+              <p className={`px-3 py-2 rounded-lg border text-xs ${notice.error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-200'}`}>
                 {notice.text}
               </p>
             )}

@@ -149,8 +149,8 @@ export function itemLabel(item: Pick<AwayItem, 'kind' | 'status' | 'cause'>): { 
       // 0.9.5: a bot's work stopped and waits for the person; the title says why and what resumes it.
       return { label: 'Stopped', tone: 'amber' };
     case 'connection':
-      // The chat line's cause: an app to connect again (Composio, no active account), else a sign-in.
-      return item.cause === 'reconnect' ? { label: 'Connect again', tone: 'amber' } : { label: 'Sign in again', tone: 'amber' };
+      // 34h: the state, not the action (the button says what to do): Composio with no active account, else a sign-in.
+      return item.cause === 'reconnect' ? { label: 'Disconnected', tone: 'amber' } : { label: 'Needs sign-in', tone: 'amber' };
     case 'routine_run':
       return item.status === 'ok' ? { label: 'Routine ran', tone: 'emerald' } : { label: 'Routine failed', tone: 'rose' };
     case 'delegation':
