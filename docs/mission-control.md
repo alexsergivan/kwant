@@ -1436,7 +1436,8 @@ A goal that stops being met opens a **remediation mission** on the Mission Contr
 - Goals in the same folder that break within 10 minutes (`GROUP_MS`) join one mission: one `broken` notice, one mission, one decision, one `recovered`. The folder of a goal with no folder is its bot's workspace.
 - The mission is "Restore: <goal title>" with two tasks, "Investigate: <check label> failing" and "Fix: <goal title>". Investigate starts on its own (not in `watch` mode), is read-only by its brief, and never raises an approval card. The Fix is held in `suggest` mode and ready in `fix` mode.
 - `goal_mission_links` holds one open link per goal. Mission objects carry `goal_link {id, title}` or `null`. Verified remediation missions leave the board (they stay in the goal timeline).
-- If the goal recovers by itself, a held Fix is withdrawn (outcome `not_needed`, mission `done`). A `recovered` notice goes out only if the person was told it broke.
+- If the goal recovers by itself, a held Fix is withdrawn (outcome `not_needed`, mission `done`). A `recovered` notice goes out only if the person was told it broke. When the incident's own Fix was verified, the `recovered` notice names the goal's bot ("Patch's fix worked; its checks pass again."); otherwise it reads "Its checks pass again. Nothing else to do."
+- An incident's time is its first failing run: the runner stores it as `since` on the incident's `not_met` event, the `broken` notice's "Since" prints it, and goals in an incident carry it as `incident_since` (epoch ms, null otherwise).
 
 ### Bounds
 
@@ -1458,7 +1459,7 @@ POST /api/goals {from_task}                 ACTIVE goal from a verified task who
 POST /api/goals/draft {space_id,kwant_id,text}   202; the bot calls goal_propose and a draft appears
 ```
 
-List rows and `GET /api/goals/:id` carry `open_mission {id,title,status,attempt,opened_at,run_task_id,diagnosis}`, `waiting_for` and `diagnosis`. `run_task_id` is the held Fix: "Fix it" is `POST /api/tasks/:run_task_id/run`.
+List rows and `GET /api/goals/:id` carry `open_mission {id,title,status,attempt,opened_at,run_task_id,diagnosis}`, `waiting_for`, `diagnosis` and `incident_since`. `run_task_id` is the held Fix: "Fix it" is `POST /api/tasks/:run_task_id/run`.
 
 ### Timeline events
 
