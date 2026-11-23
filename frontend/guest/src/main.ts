@@ -1,15 +1,14 @@
-// Entry for /p/<code>. Reads the optional view the server put in the page, then joins the live game.
+// Entry for /p/<code>. Reads the optional v1 state the server put in the page (api.ts fromState checks its shape),
+// then joins the live game.
 import './guest.css';
 import { codeFrom } from './api';
 import { GuestApp } from './app';
-import type { GuestView } from './view';
 
-function boot(): GuestView | null {
+function boot(): unknown {
   const el = document.getElementById('pocket-boot');
   if (!el?.textContent) return null;
   try {
-    const v = JSON.parse(el.textContent);
-    return v && typeof v === 'object' && v.phase ? (v as GuestView) : null;
+    return JSON.parse(el.textContent);
   } catch {
     return null;
   }

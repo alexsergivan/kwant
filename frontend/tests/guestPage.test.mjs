@@ -658,6 +658,8 @@ test('built: at most 80 KB gzipped (JS + CSS + HTML + font)', needBuild, () => {
 
 test('built: index.html fits the CSP with no inline script or style; the app is not in it', needBuild, () => {
   const html = readFileSync(new URL('index.html', dist), 'utf8');
+  // pa1's fill_boot (src/pocket/guest.rs BOOT_SLOT) swaps null for the boot state only on this exact text.
+  assert.ok(html.includes('<script type="application/json" id="pocket-boot">null</script>'), 'boot slot exactly as pa1 looks for it');
   const d = new JSDOM(html).window.document;
   for (const s of d.querySelectorAll('script')) {
     if (s.src) assert.match(s.getAttribute('src'), /^\/p\/_a\/g-[\w-]+\.js$/);
