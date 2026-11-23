@@ -477,7 +477,7 @@ export interface AppsAccountsProps {
   connectApi?: ConnectApi;
   /** Tests: whether Composio has a sign-in for an app (default: ask Composio). */
   appStatus?: (slug: string) => Promise<{ connected: boolean }>;
-  initialSheet?: { slug: string | null; initial?: ConnectSheetProps['initial'] };
+  initialSheet?: { slug: string | null; name?: string; initial?: ConnectSheetProps['initial'] };
   phone?: boolean;
   /** Tests and shots: Find a tool's data and text already typed, and where Add a tool goes. */
   findApi?: FindToolApi;
@@ -500,7 +500,7 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
   const accountsState: ProfilesState = p.profiles !== undefined ? { profiles: p.profiles, error: null, reload: async () => {} } : profilesHook;
   const enginesState: EnginesApi = p.engines !== undefined ? { ...enginesHook, engines: p.engines } : enginesHook;
   const [sheet, setSheet] = useState<{ app: AppTile | null; initial?: ConnectSheetProps['initial'] } | null>(
-    p.initialSheet ? { app: p.initialSheet.slug ? tileFor(APP_TILES.find((t) => t.slug === p.initialSheet!.slug) ?? { slug: p.initialSheet.slug, name: p.initialSheet.slug }) : null, initial: p.initialSheet.initial } : null,
+    p.initialSheet ? { app: p.initialSheet.slug ? tileFor(APP_TILES.find((t) => t.slug === p.initialSheet!.slug) ?? { slug: p.initialSheet.slug, name: p.initialSheet.name || p.initialSheet.slug }) : null, initial: p.initialSheet.initial } : null,
   );
   // ok: earned (the app is signed in). info: true but not the whole story yet (neutral, not green).
   const [notice, setNotice] = useState<{ text: string; tone: 'ok' | 'info' } | null>(null);

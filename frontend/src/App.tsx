@@ -412,7 +412,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     initialView?.kind === 'settings' && initialView.scope === 'space' && initialView.section ? { section: initialView.section, seq: 1 } : null,
   );
   // A connection card's button: the Connect <App> sheet to open in Apps & accounts (cleared by any other way in).
-  const [connectApp, setConnectApp] = useState<{ slug: string; initial: { picked: string[] }; seq: number } | null>(null);
+  const [connectApp, setConnectApp] = useState<{ slug: string; name?: string; initial: { picked: string[] }; seq: number } | null>(null);
   const openSpaceSettings = (tab: SpaceSettingsTab = 'general', section?: AppsSection) => {
     setAppsSection(section ? { section, seq: Date.now() } : null);
     setConnectApp(null);
