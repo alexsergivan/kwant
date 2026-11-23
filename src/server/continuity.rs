@@ -619,6 +619,11 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
             list.extend(super::missions::truth_ledger::tools(board));
         }
     }
+    if super::quizmaster_tools::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
+            list.extend(super::quizmaster_tools::tools());
+        }
+    }
     if super::missions::foundry::enabled(state).await && matches!(state.db.drafting_run_of(&scope.kwant_id).await, Ok(Some(_))) {
         if let Some(list) = tools.as_array_mut() {
             list.push(super::missions::foundry::tool());
@@ -637,6 +642,11 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
     if super::missions::truth_ledger::on(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::missions::truth_ledger::tools(board));
+        }
+    }
+    if super::quizmaster_tools::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
+            list.extend(super::quizmaster_tools::tools());
         }
     }
     tools.as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default()
@@ -1524,6 +1534,7 @@ async fn call_tool(
         n if super::missions::truth_ledger::handles(n) => super::missions::truth_ledger::call(state, scope, n, args).await,
         super::connection_suggest::TOOL if scope.origin.is_some() => super::connection_suggest::tool_call(state, scope, args).await,
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
+        n if super::quizmaster_tools::handles(n) => super::quizmaster_tools::call(state, scope, n, args).await,
         n if super::smart_results::present_result_handles(n) => super::smart_results::present_result_call(state, scope, n, args).await,
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
         n if super::missions::tools::handles(n) => super::missions::tools::call(state, scope, n, args).await,
