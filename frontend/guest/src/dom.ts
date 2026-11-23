@@ -51,7 +51,7 @@ function paint(rects: Rects, cls?: string): SVGGElement {
     r.setAttribute('y', String(y));
     r.setAttribute('width', String(w));
     r.setAttribute('height', String(hh));
-    if (c >= 0) r.setAttribute('fill', PALETTE[c]);
+    r.setAttribute('fill', c >= 0 ? PALETTE[c] : 'currentColor');
     g.append(r);
   }
   return g;

@@ -63,9 +63,12 @@ async function check(name, page, log) {
       if (getComputedStyle(el).visibility === 'hidden') continue;
       if (r.height < 44 || r.width < 44) small.push(`${el.tagName.toLowerCase()}.${el.className} "${(el.textContent || el.getAttribute('aria-label') || '').trim().slice(0, 24)}" ${Math.round(r.width)}x${Math.round(r.height)}`);
     }
-    return { scrollWidth: document.documentElement.scrollWidth, small };
+    // Pixel icons draw in the text colour; a rect with no fill would render black on the dark page.
+    const unfilled = document.querySelectorAll('svg rect:not([fill])').length;
+    return { scrollWidth: document.documentElement.scrollWidth, small, unfilled };
   });
   if (layout.scrollWidth > 390) problems.push(`${name}: scrolls sideways at 390 (${layout.scrollWidth} px)`);
+  if (layout.unfilled) problems.push(`${name}: ${layout.unfilled} svg rect(s) without a fill (would draw black)`);
   for (const s of layout.small) problems.push(`${name}: tap target under 44 px: ${s}`);
 }
 
