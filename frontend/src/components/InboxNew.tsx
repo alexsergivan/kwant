@@ -281,7 +281,7 @@ const PocketRow: React.FC<{ item: InboxItem; selected: boolean; focusable: boole
               {clock(endedAt)}
             </time>
           </span>
-          <span className="block mt-0.5 text-sm font-semibold text-zinc-100 break-words line-clamp-2" data-pocket-title>
+          <span className="mt-0.5 text-sm font-semibold text-zinc-100 break-words line-clamp-2" data-pocket-title>
             {item.title}
           </span>
           <span className="block mt-1 text-xs text-zinc-400">

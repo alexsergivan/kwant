@@ -395,6 +395,7 @@ test('Done row: AnyRow anatomy (kicker + ended time on top), the server title in
   assert.equal(title.textContent.trim(), 'Friday Pub Quiz: Quizzly Bears win');
   assert.doesNotMatch(title.className, /\btruncate\b/, 'the winner name is never cut to one line');
   assert.match(title.className, /line-clamp-2/);
+  assert.doesNotMatch(title.className, /(^|\s)(block|flex|inline-block)(\s|$)/, 'a display class after line-clamp-2 would cancel the clamp (QA N7)');
   const meta = win.querySelector('[data-pocket-meta]');
   assert.equal(meta.textContent, '24 players');
   assert.match(meta.className, /whitespace-nowrap/);
