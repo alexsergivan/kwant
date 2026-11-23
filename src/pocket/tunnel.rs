@@ -651,8 +651,8 @@ impl KeepAwake {
             return;
         }
         *child = None;
-        let Some((bin, args)) = keep_awake_command(std::env::consts::OS, std::process::id()) else { return };
-        match tokio::process::Command::new(bin).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).spawn() {
+        let Some((awake_bin, args)) = keep_awake_command(std::env::consts::OS, std::process::id()) else { return };
+        match tokio::process::Command::new(awake_bin).args(args).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).kill_on_drop(true).spawn() {
             Ok(c) => *child = Some(c),
             Err(e) => tracing::warn!("pocket apps: couldn't keep the Mac awake: {e}"),
         }
