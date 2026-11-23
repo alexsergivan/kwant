@@ -17,6 +17,7 @@ mod chart;
 mod items;
 mod compose;
 mod files;
+mod pocket;
 mod present_result;
 mod recipe;
 mod selector;
@@ -33,7 +34,7 @@ use serde::{Deserialize, Serialize};
 /// The block types this build stores and serves. Taking a type out (a one-line release fallback)
 /// stops new blocks of it and hides stored ones (`results: null`); the chat then shows the
 /// reply's markdown.
-pub const ENABLED_TYPES: &[&str] = &["chart", "comparison", "metrics", "findings", "cards", "steps", "facts", "verification", "files", "recipe"];
+pub const ENABLED_TYPES: &[&str] = &["chart", "comparison", "metrics", "findings", "cards", "steps", "facts", "verification", "files", "recipe", "pocket"];
 /// The payload version this build writes and reads.
 pub const VERSION: u32 = 1;
 /// Largest stored payload, in bytes of JSON.
@@ -96,6 +97,7 @@ pub enum Block {
     Verification(Verification),
     Files(Files),
     Recipe(Recipe),
+    Pocket(Pocket),
 }
 
 impl Block {
@@ -112,6 +114,7 @@ impl Block {
             Block::Verification(_) => "verification",
             Block::Files(_) => "files",
             Block::Recipe(_) => "recipe",
+            Block::Pocket(_) => "pocket",
         }
     }
 
@@ -146,6 +149,7 @@ macro_rules! common {
             Block::Verification($b) => $e,
             Block::Files($b) => $e,
             Block::Recipe($b) => $e,
+            Block::Pocket($b) => $e,
         }
     };
 }
@@ -223,6 +227,86 @@ impl Provenance {
     pub fn bot_declared(tool_call_id: String) -> Self {
         Provenance { kind: "bot_declared".into(), tool_call_id: Some(tool_call_id), reference: None }
     }
+}
+
+/// A Pocket app's card in chat (pa3c; the shape Pixel's pa4 draws, `frontend/src/smartResults.ts`
+/// `PocketBlock`). Only ever built from kwant's own stored quiz draft ([`pocket::candidate`]),
+/// never from a bot's text, so provenance is `kwant_data` and source is `slot`.
+///
+/// `state` is the card's: `writing`, `checking`, `dry_run_stopped`, `ready`, `live` (an open
+/// pocket) or `ended` (a closed one). `draft` is the quiz_drafts id the card's Edit questions
+/// opens, and `yours` the questions the person wrote or changed themselves. `live`, `join`,
+/// `ended`, `budget` and `results` are always null on this block today (the frontend's optional
+/// parts); [`validate`] refuses anything else.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Pocket {
+    pub id: String,
+    #[serde(default)]
+    pub title: Option<String>,
+    pub source: Source,
+    pub provenance: Provenance,
+    /// The pocket's code once it is open; before that, the draft id.
+    pub code: String,
+    pub kit: String,
+    pub name: String,
+    #[serde(default)]
+    pub when: Option<String>,
+    pub state: String,
+    #[serde(default)]
+    pub paused: bool,
+    #[serde(default)]
+    pub progress: Option<PocketProgress>,
+    #[serde(default)]
+    pub rounds: Vec<serde_json::Value>,
+    #[serde(default)]
+    pub checks: Option<PocketChecks>,
+    #[serde(default)]
+    pub dry_run: Option<PocketDryRun>,
+    #[serde(default)]
+    pub eta: Option<String>,
+    #[serde(default)]
+    pub opens_line: Option<String>,
+    #[serde(default)]
+    pub live: Option<serde_json::Value>,
+    #[serde(default)]
+    pub join: Option<serde_json::Value>,
+    #[serde(default)]
+    pub ended: Option<serde_json::Value>,
+    #[serde(default)]
+    pub budget: Option<serde_json::Value>,
+    #[serde(default)]
+    pub results: Option<serde_json::Value>,
+    #[serde(default)]
+    pub draft: Option<String>,
+    #[serde(default)]
+    pub yours: Option<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PocketProgress {
+    pub done: u64,
+    pub total: u64,
+}
+
+/// Answers checked against a source; `swapped` names the questions that failed ("Q3").
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PocketChecks {
+    pub matched: u64,
+    pub total: u64,
+    #[serde(default)]
+    pub swapped: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PocketDryRun {
+    pub players: u64,
+    pub passed: bool,
+    #[serde(default)]
+    pub stopped_at: Option<String>,
+    #[serde(default)]
+    pub what_happened: Option<String>,
+    #[serde(default)]
+    pub what_im_doing: Option<String>,
 }
 
 /// What a comparison column holds; absent (v1) means `label` for the first column and `value`
