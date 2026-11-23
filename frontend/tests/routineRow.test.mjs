@@ -171,3 +171,37 @@ test('unanswered question: RunRow shows the words once, with no card link and no
   assert.doesNotMatch(html, /data-run-card/, 'a question has no approval card to open');
   assert.match(ui.run({ routine, run: runOf('r-a', 'needs_you', APPROVAL_ERROR) }), />Needed your approval, nothing ran</);
 });
+
+// routine-answered-later: a question run whose question the person answered later (the run's API row says
+// `answered_later`) reads "Answered later" in a calm tone, still with no card link. Its status and error are
+// unchanged on the server, so the plain question run (not answered yet, or dismissed) keeps its words.
+test('answered later: a question run answered later reads "Answered later", calm, no card', () => {
+  assert.deepEqual(r.runRowState({ status: 'needs_you', error: QUESTION_ERROR, answered_later: true }), { label: 'Answered later', tone: 'answered', cardId: null });
+  assert.deepEqual(
+    r.runRowState({ status: 'needs_you', error: QUESTION_ERROR, answered_later: true }, { routine_id: 'rt1', waiting: false, approval_id: 'ap1' }),
+    { label: 'Answered later', tone: 'answered', cardId: null },
+    'never a card link',
+  );
+  const plain = { label: 'Needed your answer, didn’t finish', tone: 'needs_you', cardId: null };
+  assert.deepEqual(r.runRowState({ status: 'needs_you', error: QUESTION_ERROR, answered_later: false }), plain);
+  assert.deepEqual(r.runRowState({ status: 'needs_you', error: QUESTION_ERROR }), plain, 'no key: as before');
+  // Only the question run: the flag on anything else changes nothing
+  assert.deepEqual(r.runRowState({ status: 'needs_you', error: APPROVAL_ERROR, answered_later: true }).label, 'Needed your approval, nothing ran');
+  assert.deepEqual(r.runRowState({ status: 'ok', error: null, answered_later: true }).label, 'OK');
+});
+
+test('answered later: RunRow and the card header badge show "Answered later" once, calm, no card link', () => {
+  const routine = { id: 'rt1', kwant_id: 'k1', channel_id: null, thread_id: null, name: 'Weekly digest' };
+  const runOf = (id, answered_later) => ({ id, routine_id: 'rt1', trigger: 'schedule', started_at: '2026-11-19T08:00:00Z', ended_at: null, status: 'needs_you', error: QUESTION_ERROR, message_id: null, note: null, answered_later });
+  const html = ui.run({ routine, run: runOf('r-late', true), onOpenRunCard: () => {} });
+  assert.match(html, /data-run-state="answered"/);
+  assert.match(html, /data-run-badge="answered"/);
+  assert.equal(html.match(/>Answered later</g)?.length, 1);
+  assert.doesNotMatch(html, /amber/, 'not the amber needs_you tone');
+  assert.doesNotMatch(html, /Needed your answer/);
+  assert.doesNotMatch(html, /A step is waiting for your answer/);
+  assert.doesNotMatch(html, /data-run-card/);
+  const plain = ui.run({ routine, run: runOf('r-q', false), onOpenRunCard: () => {} });
+  assert.match(plain, />Needed your answer, didn’t finish</);
+  assert.match(plain, /data-run-state="needs_you"/);
+});
