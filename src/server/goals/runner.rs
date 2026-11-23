@@ -139,7 +139,12 @@ pub async fn run_goal(state: &AppState, g: Goal) -> Option<Goal> {
     let mut events = Vec::new();
     if status != g.status {
         match status.as_str() {
-            "not_met" => events.push(("not_met", json!({ "failing": failing, "confirmed_after": fail_streak }))),
+            // `since`: the incident's first failing run (this one when it is the first), the time
+            // the broken notice and the goal's row both say (34k)
+            "not_met" => {
+                let since = state.db.goal_first_failing_run(&g.id).await.ok().flatten().unwrap_or(now);
+                events.push(("not_met", json!({ "failing": failing, "confirmed_after": fail_streak, "since": since })))
+            }
             "met" => events.push(("met", json!({}))),
             "unknown" => events.push(("unknown", json!({ "reason": status_reason }))),
             _ => {}
