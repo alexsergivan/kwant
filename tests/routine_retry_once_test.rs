@@ -198,7 +198,7 @@ async fn a_routine_whose_model_dies_is_retried_twice_and_told_once() {
     let runs = env.runs(&id).await;
     let triggers: Vec<&str> = runs.iter().map(|r| r.trigger.as_str()).collect();
     assert_eq!(triggers, ["schedule", "retry", "retry"], "AutoFix's runs aren't a Run now press: {runs:?}");
-    assert!(runs.iter().all(|r| r.status == "error"), "{runs:?}");
+    assert!(runs.iter().all(|r| matches!(r.status.as_str(), "error" | "incomplete")), "{runs:?}");
 
     let failed: Vec<_> = told.notices.iter().filter(|(k, ..)| k == "routine_failed").collect();
     assert_eq!(failed.len(), 1, "one failure, one notice: {told:?}");

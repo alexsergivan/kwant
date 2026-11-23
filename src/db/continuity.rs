@@ -1070,6 +1070,44 @@ impl Database {
         Ok(())
     }
 
+    /// routine-retry-once: AutoFix's own run of a failed routine is recorded with trigger `retry`, not
+    /// as a `manual` press the person never made. SQLite can't widen a CHECK, so the table is rebuilt
+    /// once with every row, column and index (after [`Self::migrate_run_statuses`]); old rows keep
+    /// their trigger, and older binaries read a `retry` row as a plain string.
+    pub(super) async fn migrate_run_triggers(&self) -> Result<(), DbError> {
+        let sql: Option<(String,)> = sqlx::query_as(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'routine_runs'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        if sql.is_none_or(|(sql,)| sql.contains("'retry'")) {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        super::spaces::rebuild(
+            &mut tx,
+            "routine_runs",
+            "CREATE TABLE routine_runs__spaces_new (
+                id TEXT PRIMARY KEY,
+                routine_id TEXT NOT NULL,
+                trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual', 'retry')),
+                started_at TIMESTAMP NOT NULL,
+                ended_at TIMESTAMP,
+                status TEXT NOT NULL CHECK (status IN ('running', 'ok', 'error', 'skipped', 'needs_you', 'incomplete')),
+                error TEXT,
+                message_id TEXT,
+                note TEXT
+            )",
+            &[
+                "CREATE INDEX IF NOT EXISTS routine_runs_by_routine ON routine_runs (routine_id, started_at)",
+                "CREATE INDEX IF NOT EXISTS routine_runs_by_end ON routine_runs (status, ended_at) WHERE ended_at IS NOT NULL",
+            ],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// 26b: a manual run's start is the routine's last run too. `next_run_at` is left alone.
     pub async fn set_routine_last_run(&self, id: &str, at: DateTime<Utc>) -> Result<(), DbError> {
         sqlx::query("UPDATE routines SET last_run_at = ? WHERE id = ?")
@@ -1304,5 +1342,53 @@ mod tests {
             Err(MemoryError::TooLong)
         );
     }
-}
 
+    /// routine-retry-once: a database from before `retry` keeps every run (trigger, note, rowid
+    /// order) and then takes a `retry` run; a fresh one takes it at once and isn't rebuilt.
+    #[tokio::test]
+    async fn run_triggers_widen_to_retry_and_keep_old_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let fresh: (String,) = sqlx::query_as("SELECT sql FROM sqlite_master WHERE name = 'routine_runs'").fetch_one(&db.pool).await.unwrap();
+        assert!(fresh.0.contains("'retry'"), "{}", fresh.0);
+        // Back to the table as 0.9.46 has it
+        let mut tx = db.pool.begin().await.unwrap();
+        super::super::spaces::rebuild(
+            &mut tx,
+            "routine_runs",
+            "CREATE TABLE routine_runs__spaces_new (id TEXT PRIMARY KEY, routine_id TEXT NOT NULL,
+                trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual')), started_at TIMESTAMP NOT NULL,
+                ended_at TIMESTAMP,
+                status TEXT NOT NULL CHECK (status IN ('running', 'ok', 'error', 'skipped', 'needs_you', 'incomplete')),
+                error TEXT, message_id TEXT, note TEXT)",
+            &[],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        for (id, trigger, note) in [("a", "schedule", Some("Ran late")), ("b", "manual", None)] {
+            sqlx::query("INSERT INTO routine_runs (id, routine_id, trigger, started_at, status, note) VALUES (?, 'r1', ?, ?, 'error', ?)")
+                .bind(id)
+                .bind(trigger)
+                .bind(Utc::now())
+                .bind(note)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        assert!(db.start_routine_run("r1", "retry", "running", None).await.is_err(), "the old CHECK refuses retry");
+
+        db.migrate_run_triggers().await.unwrap();
+        let rows: Vec<(String, String, Option<String>)> =
+            sqlx::query_as("SELECT id, trigger, note FROM routine_runs ORDER BY rowid").fetch_all(&db.pool).await.unwrap();
+        assert_eq!(rows, vec![("a".into(), "schedule".into(), Some("Ran late".into())), ("b".into(), "manual".into(), None)]);
+        let run = db.start_routine_run("r1", "retry", "running", None).await.unwrap();
+        assert_eq!(run.trigger, "retry");
+        let idx: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'routine_runs' ORDER BY name").fetch_all(&db.pool).await.unwrap();
+        assert_eq!(idx, vec![("routine_runs_by_end".into(),), ("routine_runs_by_routine".into(),)]);
+        // Once is enough
+        db.migrate_run_triggers().await.unwrap();
+        assert_eq!(db.list_routine_runs("r1", 10).await.unwrap().len(), 3);
+    }
+}
