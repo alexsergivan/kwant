@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, Bot, ChevronLeft, ChevronRight, ExternalLink, Github, KeyRound, Loader2, Lock, Mail, Plug, Plus, RefreshCw, Search, Server, StickyNote, UserRound } from 'lucide-react';
-import { scrollInScroller } from '../scrollInScroller';
+import { keepCentred } from '../scrollInScroller';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { relativeTime } from '../away';
 import { quotaLine } from '../clock';
@@ -236,14 +236,17 @@ export function useConnectionFocus(focus: { id: string; seq: number } | null, re
   const [lit, setLit] = useState<string | null>(null);
   const done = useRef<number | null>(null);
   const timer = useRef<number | undefined>(undefined);
-  useEffect(() => () => window.clearTimeout(timer.current), []);
+  const stopCentring = useRef<() => void>(() => {});
+  useEffect(() => () => { window.clearTimeout(timer.current); stopCentring.current(); }, []);
   useEffect(() => {
     if (!focus || !ready || done.current === focus.seq) return;
     const row = document.querySelector<HTMLElement>(`[data-connection="${CSS.escape(focus.id)}"]`);
     if (!row) return;
     done.current = focus.seq;
     const still = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    scrollInScroller(row, 'center', still ? 'auto' : 'smooth');
+    // Sections above the list can still be loading: keep the row centred while it is lit.
+    stopCentring.current();
+    stopCentring.current = keepCentred(row, ROW_FLASH_MS, still ? 'auto' : 'smooth');
     row.querySelector<HTMLElement>('[data-sign-in-again]')?.focus({ preventScroll: true });
     setLit(focus.id);
     window.clearTimeout(timer.current);

@@ -36,7 +36,7 @@ const ui = await loadBundled(`
   import { ToolFailureLine } from './src/components/ToolFailureLine';
   import { parseToolFailureMeta } from './src/toolFailures';
   export * as mcp from './src/mcp';
-  export { scrollInScroller } from './src/scrollInScroller';
+  export { scrollInScroller, keepCentred } from './src/scrollInScroller';
   export { canSignInAgain, ROW_FLASH_MS, parseToolFailureMeta };
   export const row = (props) => renderToStaticMarkup(React.createElement('ul', null, React.createElement(ConnectionRow, props)));
   export const mount = (C, p) => {
@@ -218,4 +218,38 @@ test('a section or row scroll moves its own scroller, never the clipped Settings
   ui.scrollInScroller(el, 'center', 'smooth');
   assert.deepEqual(scrolls, [{ scroller: 'list', behavior: 'auto' }, { scroller: 'list', behavior: 'smooth' }]);
   layer.remove();
+});
+
+test('a section that loads above the lit row after the scroll does not push it off screen; the person\'s own scroll stays', async () => {
+  scrolls.length = 0;
+  const list = document.createElement('div');
+  list.style.overflowY = 'auto';
+  list.setAttribute('data-scroller', 'list');
+  Object.defineProperty(list, 'scrollHeight', { value: 2000, configurable: true });
+  Object.defineProperty(list, 'clientHeight', { value: 600 });
+  let scrollTop = 0;
+  Object.defineProperty(list, 'scrollTop', { get: () => scrollTop, set: (v) => { scrollTop = v; } });
+  list.getBoundingClientRect = () => ({ top: 0, height: 600 });
+  const row = document.createElement('div');
+  let above = 900; // where the row sits in the list's content
+  row.getBoundingClientRect = () => ({ top: above - scrollTop, height: 100 });
+  list.appendChild(row);
+  document.body.appendChild(list);
+  const frame = () => new Promise((r) => requestAnimationFrame(() => r()));
+  const stop = ui.keepCentred(row, 400, 'smooth');
+  assert.equal(scrolls.length, 1, 'centred at once');
+  await frame(); await frame();
+  assert.equal(scrolls.length, 1, 'nothing moved: no new scroll');
+  scrollTop = 120; // the person scrolls
+  await frame(); await frame();
+  assert.equal(scrolls.length, 1, 'their scroll is left alone');
+  above = 1340; // the notes section arrives above the list
+  await frame(); await frame();
+  assert.deepEqual(scrolls.at(-1), { scroller: 'list', behavior: 'smooth' });
+  assert.equal(scrolls.length, 2, 're-centred once');
+  stop();
+  above = 1800;
+  await frame(); await frame();
+  assert.equal(scrolls.length, 2, 'stopped');
+  list.remove();
 });
