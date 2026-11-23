@@ -211,12 +211,13 @@ pub(super) fn item(row: AwayRow) -> Value {
         }
         _ => {
             // A usage-limit line is not a summary of anything (also when an older run saved one)
-            let summary = row
-                .body
-                .as_deref()
-                .filter(|b| !crate::profiles::classify::is_limit_line(b))
-                .map(summarize)
-                .filter(|s| !s.is_empty());
+            let usable = |text: Option<&str>| {
+                text.filter(|b| !crate::profiles::classify::is_limit_line(b))
+                    .map(summarize)
+                    .filter(|s| !s.is_empty())
+            };
+            // A failed run's reply that is no summary falls back to its raw error
+            let summary = usable(row.body.as_deref()).or_else(|| usable(row.fallback.as_deref()));
             (clip_title(&row.title), summary.unwrap_or_else(|| fallback_summary(&row).into()))
         }
     };
@@ -731,6 +732,7 @@ mod tests {
             direct_kwant_id: None,
             choices: None,
             routine_id: None,
+            fallback: None,
         };
         let limit = item(row("You've hit your session limit · resets 3am (Europe/Berlin)"));
         assert_eq!(limit["summary"], "Finished");

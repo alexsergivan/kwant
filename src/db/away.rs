@@ -47,6 +47,10 @@ pub struct AwayRow {
     /// Routine runs only: the run's routine, so a failed one can offer Run again
     /// (`POST /api/routines/:id/run`). `NULL` on every other kind.
     pub routine_id: Option<String>,
+    /// Failed routine runs whose summary is the bot's reply: the run's raw error, the summary
+    /// when the reply is no summary (a usage-limit line). Other queries don't select it.
+    #[sqlx(default)]
+    pub fallback: Option<String>,
 }
 
 const OPEN_QUESTIONS: &str = "
@@ -82,12 +86,18 @@ const DELEGATIONS_STUCK: &str = "
       AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'delegation' AND x.ref_id = d.id)";
 
 /// `?1` = since. A routine posts in its channel, or the kwant's direct chat when it has none.
+/// routine-failed-row-bot-words: a run that failed (`error`, `incomplete`) reads the bot's own
+/// reply when it left one, with the raw step error as `fallback`; no reply, the error. A
+/// `needs_you` run keeps its own wording (26b, unanswered-question-not-ok).
 const ROUTINE_RUNS_ENDED: &str = "
     SELECT 'routine_run' AS kind, r.id, rt.kwant_id, k.name AS kwant_name, rt.name AS title, r.status,
-           CASE WHEN r.status = 'ok' THEN m.text ELSE r.error END AS body, r.ended_at AS at,
+           CASE WHEN r.status = 'ok' THEN m.text
+                WHEN r.status IN ('error', 'incomplete') THEN COALESCE(m.text, r.error)
+                ELSE r.error END AS body, r.ended_at AS at,
            NULL AS thread_id, rt.channel_id,
            CASE WHEN rt.channel_id IS NULL THEN rt.kwant_id END AS direct_kwant_id, NULL AS choices,
-           r.routine_id
+           r.routine_id,
+           CASE WHEN r.status IN ('error', 'incomplete') AND m.text IS NOT NULL THEN r.error END AS fallback
     FROM routine_runs r
     JOIN routines rt ON rt.id = r.routine_id
     LEFT JOIN kwants k ON k.id = rt.kwant_id
