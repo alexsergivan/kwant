@@ -7,7 +7,8 @@ import { Routine, continuityApi, onContinuity } from './continuity';
 type Api = { routines: () => Promise<Routine[]>; updateRoutine: (id: string, body: { enabled: boolean }) => Promise<Routine> };
 
 export interface RoutineStore {
-  /** The routine now; null when the loaded list doesn't have it (deleted); undefined before the first load. */
+  /** The routine now; undefined before the first load, or while a miss waits for a newer list; null (deleted) only
+   *  when a list fetched after the miss was noticed still doesn't have it. */
   get: (id: string) => Routine | null | undefined;
   subscribe: (fn: () => void) => () => void;
   load: () => Promise<void>;
@@ -20,13 +21,20 @@ export function createRoutineStore(api: Api): RoutineStore {
   let byId: Map<string, Routine> | null = null;
   let inflight: Promise<void> | null = null;
   let again = false;
+  // A list can predate a routine (a bot's card renders before its BotActionUpdated), so a miss isn't "deleted" yet:
+  // remember which fetch was the newest when the miss was seen, refetch, and say deleted only if a later one lacks it too.
+  let started = 0;
+  let done = 0;
+  const missedAt = new Map<string, number>();
   const subs = new Set<() => void>();
   const notify = () => subs.forEach((fn) => fn());
 
   const fetchOnce = async () => {
+    const n = ++started;
     try {
       const all = await api.routines();
       byId = new Map(all.map((r) => [r.id, r]));
+      done = n;
       notify();
     } catch {
       // Keep what we had: a card falls back to its stored facts until the next refresh.
@@ -49,7 +57,18 @@ export function createRoutineStore(api: Api): RoutineStore {
   };
 
   return {
-    get: (id) => (byId ? byId.get(id) ?? null : undefined),
+    get: (id) => {
+      if (!byId) return undefined;
+      const r = byId.get(id);
+      if (r) return r;
+      const at = missedAt.get(id);
+      if (at === undefined) {
+        missedAt.set(id, started);
+        queueMicrotask(() => void refresh());
+        return undefined;
+      }
+      return done > at ? null : undefined;
+    },
     subscribe: (fn) => {
       subs.add(fn);
       if (subs.size === 1 && !byId) void refresh();

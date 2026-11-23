@@ -103,6 +103,9 @@ test('Pause and Resume PATCH { enabled } in place and the store shows the new st
   const off = s.subscribe(() => {});
   await s.load();
   assert.equal(s.get('r1').enabled, true);
+  // A miss isn't Deleted until a list fetched after the miss still lacks it (Rigel's F1).
+  assert.equal(s.get('nope'), undefined);
+  await s.refresh();
   assert.equal(s.get('nope'), null);
   assert.equal(await s.setEnabled('r1', false), undefined);
   assert.deepEqual(calls, [['r1', { enabled: false }]]);
@@ -129,4 +132,28 @@ test('one shared request for every card; it refetches when told a routine change
   assert.equal(n, 2);
   a();
   c();
+});
+
+test('a routine missing from an older list is not called Deleted: the card refetches once and finds it (QA F1)', async () => {
+  let n = 0;
+  // The first list was fetched before the bot made the routine; the next one has it.
+  const s = b.createRoutineStore({ routines: async () => (n++ === 0 ? [] : [routine()]), updateRoutine: async () => routine() });
+  const off = s.subscribe(() => {});
+  await s.load();
+  assert.equal(s.get('r1'), undefined, 'a miss first shows the stored facts, not Deleted');
+  await new Promise((r) => setTimeout(r, 0));
+  await s.refresh();
+  assert.equal(s.get('r1').id, 'r1');
+  assert.equal(n >= 2, true);
+  // Truly gone: two lists in a row lack it.
+  let m = 0;
+  const g = b.createRoutineStore({ routines: async () => (m++, []), updateRoutine: async () => routine() });
+  const off2 = g.subscribe(() => {});
+  await g.load();
+  assert.equal(g.get('r1'), undefined);
+  await new Promise((r) => setTimeout(r, 0));
+  await g.refresh();
+  assert.equal(g.get('r1'), null);
+  off();
+  off2();
 });
