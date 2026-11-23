@@ -7,13 +7,13 @@
 
 import React, { useEffect, useId, useRef, useState } from 'react';
 import {
+  ChevronDown,
   AlertTriangle,
   CalendarDays,
   Check,
   CheckCircle2,
   Copy,
   Ellipsis,
-  ExternalLink,
   Eye,
   EyeOff,
   Gift,
@@ -301,12 +301,12 @@ const portOf = (url: string | null) => {
 };
 
 /** The 5-step How-to for Tailscale Funnel, frontend copy (card-impl.md "How-to copy"). */
-export const howToSteps = (port: string | null) => [
-  'Install Tailscale on this Mac from tailscale.com and sign in. The personal plan is free.',
-  'In the Tailscale admin page, turn on HTTPS certificates and allow Funnel for this Mac.',
-  `Open Terminal and run: tailscale funnel --bg ${port ?? '<the port in the Wi-Fi link>'}`,
-  'Ask Santa to check the address again. This card then shows From anywhere and a link that stays the same.',
-  'Send that link to the family chat. It keeps working whenever this Mac is on.',
+export const howToSteps = (port: string | null): { text: string; cmd?: string }[] => [
+  { text: 'Install Tailscale on this Mac from tailscale.com and sign in. The personal plan is free.' },
+  { text: 'In the Tailscale admin page, turn on HTTPS certificates and allow Funnel for this Mac.' },
+  { text: 'Open Terminal and run:', cmd: `tailscale funnel --bg ${port ?? '<the port in the Wi-Fi link>'}` },
+  { text: 'Ask Santa to check the address again. This card then shows From anywhere and a link that stays the same.' },
+  { text: 'Send that link to the family chat. It keeps working whenever this Mac is on.' },
 ];
 
 const HowTo: React.FC<{ port: string | null }> = ({ port }) => {
@@ -315,13 +315,18 @@ const HowTo: React.FC<{ port: string | null }> = ({ port }) => {
   return (
     <div className="flex flex-col gap-2.5">
       <button type="button" className={`${GHOST} self-start`} aria-expanded={open} aria-controls={id} onClick={() => setOpen(!open)} data-action="how-to">
-        <ExternalLink size={14} aria-hidden="true" />
         How to
+        <ChevronDown size={14} aria-hidden="true" className={`transition-transform duration-150 motion-reduce:transition-none ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
         <ol id={id} className="kw-fade-in flex list-decimal flex-col gap-1.5 pl-5 text-[15px] leading-[22px] text-zinc-200 marker:text-zinc-400 sm:text-[13px] sm:leading-5" data-how-to>
-          {howToSteps(port).map((t) => (
-            <li key={t}>{t}</li>
+          {howToSteps(port).map((st) => (
+            <li key={st.text}>
+              {st.text}
+              {st.cmd && (
+                <code className="mt-1 block w-fit max-w-full overflow-x-auto whitespace-nowrap rounded-md border border-hairline bg-surface-main px-2 py-1 font-mono text-[13px] text-zinc-100">{st.cmd}</code>
+              )}
+            </li>
           ))}
         </ol>
       )}
@@ -481,7 +486,7 @@ const CodeBox: React.FC<{ name: string; code: ResetCode; onDone: () => void }> =
         {code.code}
       </span>
       <p className="text-[15px] leading-[22px] text-zinc-300 sm:text-[13px] sm:leading-5">
-        Send it to {name} yourself. It works once, {expiryText(code.expires_at)}. On the page, {name} types the name they joined with, this code, then a new PIN.
+        Send it to {name} yourself. It works once, {expiryText(code.expires_at)}. On the page, {name} types the name "{name}", this code, then a new PIN.
       </p>
       <div className="flex flex-wrap items-center gap-2">
         <button type="button" onClick={copy} className={GHOST} data-action="copy-code">
@@ -609,7 +614,7 @@ export const PeoplePanel: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ bl
         <h4 className="text-[15px] font-semibold text-zinc-100 sm:text-meta">
           People and PINs · {num(people.length)}
         </h4>
-        <span className="text-[13px] font-medium text-sky-300 sm:text-2xs">Matches never show here</span>
+        <span className="text-[13px] font-medium text-zinc-400 sm:text-2xs">Matches never show here</span>
       </header>
       {note && (
         <p role="status" className="flex items-start gap-2 border-b border-hairline px-3.5 py-2 text-[15px] text-ok sm:text-[13px]">
@@ -702,9 +707,11 @@ export const PeoplePanel: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ bl
 
 const CreatureStack: React.FC<{ people: SantaPerson[] }> = ({ people }) =>
   people.length > 0 ? (
-    <span className="flex -space-x-0.5" aria-hidden="true" data-stack>
+    <span className="flex -space-x-1.5" aria-hidden="true" data-stack>
       {people.slice(0, 9).map((p) => (
-        <GuestCreature key={p.id} avatar={p.avatar} size={18} />
+        <span key={p.id} className="rounded-md bg-surface-raised">
+          <GuestCreature avatar={p.avatar} size={22} />
+        </span>
       ))}
     </span>
   ) : null;
@@ -986,16 +993,16 @@ const SantaActions: React.FC<{
           {pageLink(host ? `Join as ${host}` : 'Join on your phone', false, true)}
           {peopleBtn}
           {s.can_draw ? (
-            <button type="button" onClick={() => onConfirm('draw')} className={`kw-btn-ghost ${HALF} col-span-2 sm:col-span-1 sm:ml-auto`} data-action="draw">
+            <button type="button" onClick={() => onConfirm('draw')} className={`kw-btn-ghost ${HALF} col-span-1 sm:ml-auto`} data-action="draw">
               <Shuffle size={14} aria-hidden="true" />
               Draw now
             </button>
           ) : (
-            <LaterButton half icon={<Shuffle size={14} aria-hidden="true" />} why={drawWhy} className="col-span-2 sm:col-span-1 sm:ml-auto">
+            <LaterButton half icon={<Shuffle size={14} aria-hidden="true" />} why={drawWhy} className="col-span-1 sm:ml-auto">
               Draw now
             </LaterButton>
           )}
-          <button type="button" onClick={() => onConfirm('stop')} className={`${STOP} col-span-2 justify-self-center`} data-action="stop">
+          <button type="button" onClick={() => onConfirm('stop')} className={`${STOP} col-span-1 justify-self-stretch`} data-action="stop">
             <Square size={14} aria-hidden="true" />
             Stop
           </button>

@@ -237,7 +237,8 @@ test('join box: Funnel first, Same Wi-Fi second, never a quick link; 1b says why
   const steps = [...nb.querySelectorAll('[data-how-to] li')].map((li) => li.textContent);
   assert.equal(steps.length, 5);
   assert.match(steps[2], /tailscale funnel --bg 7480/, 'the port comes from the Wi-Fi link');
-  assert.deepEqual(m.howToSteps(null)[2].includes('<the port'), true);
+  assert.equal(m.howToSteps(null)[2].cmd.includes('<the port'), true);
+  assert.ok(nb.querySelector('[data-how-to] li code'), 'the command sits in its own code line');
 });
 
 test('Copy invite copies the invite with the link that stays the same', async () => {
