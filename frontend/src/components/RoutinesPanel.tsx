@@ -475,7 +475,8 @@ export const RunRow: React.FC<{
   const t = onOpenRunResult ? runResultTarget(routine, r) : null;
   const card = onOpenRunCard && st.cardId ? st.cardId : null;
   const note = routineRunNote(r);
-  const link = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-info hover:text-sky-200';
+  // Mira's 0945 pass Minor e: a 44 px tall tap target on a phone; desktop as before.
+  const link = 'kw-focus kw-hit inline-flex items-center min-h-11 sm:min-h-0 gap-0.5 rounded font-semibold text-info hover:text-sky-200';
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400" data-run-row={r.id} data-run-state={st.tone}>
       <StatusBadge status={r.status} error={r.error} wait={wait} inHistory />
@@ -602,13 +603,24 @@ export const RoutineRow: React.FC<{
 
   const what = firstLine(routine.instructions);
   const lastRan = lastRanDate(routine.last_run_at);
+  // Mira's 0945 pass Minor k: paused reads as paused. The pill says plain "Paused" and the last result joins the
+  // "last ran" line in the existing status words. A run still going on a paused routine keeps its live badge.
+  const liveWait = liveWaitOf(waits, routine.id);
+  const lastState = routine.last_status ? runRowState({ status: routine.last_status, error: routine.last_error ?? null }, liveWait) : null;
+  const pausedPill = !routine.enabled && lastState?.tone !== 'running' && lastState?.tone !== 'waiting';
+  const lastWord = pausedPill && lastState ? (lastState.label === 'OK' ? 'OK' : lastState.label.charAt(0).toLowerCase() + lastState.label.slice(1)) : null;
+  const lastResult = lastWord ? `, ${lastWord}` : '';
 
   if (removal.pending) return <UndoNotice as="li" text={`Deleted “${routine.name}”. It won’t run again.`} onUndo={removal.undo} />;
 
   return (
     <li ref={rowRef} className={`rounded-xl border bg-zinc-950/60 p-3 space-y-2 ${highlight ? 'border-sky-500/60 ring-1 ring-sky-500/30' : 'border-zinc-800'}`}>
       <div className="flex items-start gap-2.5">
-        <label className="relative inline-flex items-center p-1 -m-1 mt-0 cursor-pointer" title={routine.enabled ? 'Turn off' : 'Turn on'}>
+        {/* Mira's 0945 pass Minor d: on a phone the switch is a 44x44 hit area around the same 28x16 track, without moving it. */}
+        <label
+          className="relative inline-flex shrink-0 items-center justify-center w-11 h-11 -mx-2 -my-3.5 sm:justify-start sm:w-auto sm:h-auto sm:p-1 sm:-m-1 cursor-pointer"
+          title={routine.enabled ? 'Turn off' : 'Turn on'}
+        >
           <input
             type="checkbox"
             role="switch"
@@ -620,13 +632,19 @@ export const RoutineRow: React.FC<{
             onChange={(e) => act(() => continuityApi.updateRoutine(routine.id, { enabled: e.target.checked }))}
           />
           <span className="w-7 h-4 rounded-full bg-zinc-700 peer-checked:bg-sky-600 peer-focus-visible:outline peer-focus-visible:outline-2 peer-focus-visible:outline-sky-500 transition-colors" />
-          <span className="absolute left-1.5 top-1.5 w-3 h-3 rounded-full bg-white transition-transform motion-reduce:transition-none peer-checked:translate-x-3" />
+          <span className="absolute left-2.5 top-4 sm:left-1.5 sm:top-1.5 w-3 h-3 rounded-full bg-white transition-transform motion-reduce:transition-none peer-checked:translate-x-3" />
         </label>
         <div className="flex-1 min-w-0">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
             <span className={`text-xs font-medium break-words ${routine.enabled ? 'text-zinc-100' : 'text-zinc-400'}`}>{routine.name}</span>
             {routine.origin === 'discovery' && <SuggestedBadge />}
-            {routine.last_status && <StatusBadge status={routine.last_status} error={routine.last_error ?? null} wait={liveWaitOf(waits, routine.id)} />}
+            {pausedPill ? (
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium border bg-zinc-700/30 text-zinc-300 border-zinc-500/40" data-routine-paused>
+                Paused
+              </span>
+            ) : (
+              routine.last_status && <StatusBadge status={routine.last_status} error={routine.last_error ?? null} wait={liveWait} />
+            )}
           </div>
           {/* Routines setup F: what it does, then when it runs next, then the schedule, bot and place. */}
           {what.line && (
@@ -643,12 +661,12 @@ export const RoutineRow: React.FC<{
             ) : (
               <span className="text-zinc-300 font-medium">Paused</span>
             )}
-            {lastRan && <span className="hidden sm:inline"> · last ran {lastRan}</span>}
+            {lastRan && <span className="hidden sm:inline"> · last ran {lastRan}{lastResult}</span>}
           </p>
           <p className="text-[11px] text-zinc-500 break-words">
             <span title={routine.schedule_text || undefined}>{scheduleWords(routine.schedule, routine.schedule_text)}</span>
             {kwantName ? ` · ${kwantName}` : ''} · {placeLabel}
-            {lastRan && <span className="sm:hidden"> · last ran {lastRan}</span>}
+            {lastRan && <span className="sm:hidden"> · last ran {lastRan}{lastResult}</span>}
           </p>
         </div>
       </div>
