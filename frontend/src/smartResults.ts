@@ -392,6 +392,10 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   results: PocketResults | null;
   /** kit "santa" only: the Secret Santa card (pa10a). `state` is "live" until the phase is "ended". */
   santa: SantaInfo | null;
+  /** pa4c: the quiz_drafts id (the bot card's `id`) that Edit questions opens. Null or absent: no editor. */
+  draft?: string | null;
+  /** pa4c: questions the person wrote or changed themselves (not source-checked). */
+  yours?: number | null;
 }
 
 export type SmartBlock =

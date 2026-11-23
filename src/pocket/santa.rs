@@ -928,6 +928,10 @@ impl Kit for Santa {
         true
     }
 
+    fn stable_address_only(&self) -> bool {
+        true
+    }
+
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value {
         let s = load(state);
         match viewer {

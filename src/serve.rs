@@ -93,6 +93,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
         state.agent_vm.start_reaper();
     }
     let api_token = state.api_token.clone();
+    let pocket = state.pocket.clone();
     let app = create_router(state);
 
     let addr = format!("{}:{}", config.host, config.port);
@@ -125,6 +126,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
         _ = shutdown => println!("Shutting down…"),
     }
     cancel.cancel();
+    // A quick tunnel never outlives kwant (and a restart never brings it back)
+    pocket.tunnel.stop_all();
+    pocket.awake.set(false);
     browser.shutdown().await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), sidecar).await;
     Ok(())

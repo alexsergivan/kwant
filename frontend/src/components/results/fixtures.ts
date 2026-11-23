@@ -552,3 +552,88 @@ export const FIXTURES = {
   recipe,
   pocket: POCKET_FIXTURES.ready,
 } satisfies Record<string, Fixture>;
+
+// ---------------------------------------------------------------------------------------------------
+// pa4c: a quiz draft for Edit questions (Juno's GET /api/quiz-drafts/:id shape) and the card it sends back.
+// The sample questions and sources are made up for the fixtures.
+
+const DRAFT_ROUNDS = [
+  { n: 1, title: 'Music' },
+  { n: 2, title: 'Sport' },
+  { n: 3, title: 'Pictures' },
+];
+type DQ = [round: number, question: string, answer: string, accepted: string[], source: string];
+const DRAFT_QS: DQ[] = [
+  [1, 'Which band released the album "Rumours" in 1977?', 'Fleetwood Mac', [], 'https://en.wikipedia.org/wiki/Rumours_(album)'],
+  [1, 'How many strings does a standard cello have?', '4', ['four'], 'https://www.britannica.com/art/cello'],
+  [1, 'Which singer is known as the "Queen of Soul"?', 'Aretha Franklin', ['Aretha'], 'https://en.wikipedia.org/wiki/Aretha_Franklin'],
+  [2, 'How many players does a rugby union team have on the pitch?', '15', ['fifteen'], 'https://www.world.rugby/the-game/laws'],
+  [2, 'In which city were the 2012 Summer Olympics held?', 'London', [], 'https://olympics.com/en/olympic-games/london-2012'],
+  [3, 'Which bird is on the New Zealand dollar coin?', 'Kiwi', ['Kiwis', 'Kiwi bird'], 'https://www.rbnz.govt.nz/money-and-cash/coins'],
+  [3, 'Which landmark is in picture 2?', 'Eiffel Tower', ['Eiffel', 'Tour Eiffel'], 'https://www.toureiffel.paris/en'],
+  [3, 'Which animal is in picture 3?', 'Red panda', ['Lesser panda'], 'https://www.britannica.com/animal/red-panda'],
+];
+
+/** A draft in the given state, every question checked unless `yours` lists question numbers. */
+export function quizDraftFixture(over: { state?: string; yours?: number[]; updated_at?: number; questions?: DQ[] } = {}) {
+  const qs = (over.questions ?? DRAFT_QS).map(([round, question, answer, accepted, source], i) => {
+    const n = i + 1;
+    const own = (over.yours ?? []).includes(n);
+    return {
+      n,
+      round,
+      at: `R${round}`,
+      kind: /^\d+$/.test(answer) ? 'number' : 'text',
+      question,
+      answer,
+      accepted,
+      status: own ? 'yours' : 'checked',
+      source_url: own ? null : source,
+      why: null,
+      picture: null,
+    };
+  });
+  const yours = qs.filter((q) => q.status === 'yours').length;
+  const checked = qs.length - yours;
+  const state = over.state ?? 'ready';
+  return {
+    id: 'qd_fq7k2m',
+    title: 'Friday Pub Quiz',
+    state,
+    chip: state === 'ready' ? 'Ready' : state,
+    kwant_id: 'k-quizmaster',
+    pocket_code: 'fq7k2m',
+    updated_at: over.updated_at ?? 1_763_900_000_000,
+    counts: { questions: qs.length, checked, yours, not_checked: 0 },
+    header: `${qs.length} questions · ${checked} checked · ${yours} yours`,
+    dry_run: { ok: true, summary: 'Dry run passed with 30 pretend players.', problems: [] },
+    problems: [],
+    rounds: DRAFT_ROUNDS,
+    questions: qs,
+  };
+}
+
+/** The pa3 card a draft reply carries. */
+export function draftCardFixture(d: ReturnType<typeof quizDraftFixture>) {
+  return {
+    id: d.id,
+    kit: 'quiz',
+    title: d.title,
+    when: null,
+    state: d.state,
+    chip: d.chip,
+    rounds: d.rounds.length,
+    questions: d.counts.questions,
+    checked: d.counts.checked,
+    total: d.counts.checked,
+    yours: d.counts.yours,
+    failed: [],
+    problems: d.problems,
+    dry_run: d.dry_run,
+    lines: [],
+    notes: [],
+    budget: null,
+    pocket: d.pocket_code,
+    next: null,
+  };
+}

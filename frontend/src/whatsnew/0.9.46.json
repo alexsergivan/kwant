@@ -1,0 +1,21 @@
+{
+  "version": "0.9.46",
+  "date": "2026-11-23",
+  "highlights": [
+    {
+      "id": "signin-carries-on",
+      "title": "Sign in again and the work carries on",
+      "text": "When a connection needs you to sign in again, signing in closes its \"needs you\" line for every bot, and each chat it stopped carries on once, by itself.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "suggested-connection-carries-on",
+      "title": "A connection a bot suggested picks up the request",
+      "text": "Connect a server a bot suggested and that chat carries on with the request it was for. Deleting a connection closes its open lines as \"Removed.\"",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}

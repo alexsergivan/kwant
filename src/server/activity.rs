@@ -260,6 +260,16 @@ pub fn refused_as(
     }
 }
 
+/// unanswered-question-not-ok: question `question_id` of turn `turn_id` went unanswered before
+/// the bot's wait ended ([`ActivityLog::question_unanswered`]).
+pub fn question_unanswered(turn_id: &str, question_id: &str, question: &str) {
+    if let Some(turn) = TurnActivity::find(turn_id) {
+        let (held, steps) = turn.with_log(|log| (log.flush_held(), log.question_unanswered(question_id, question)));
+        turn.send_events(held);
+        turn.send(steps);
+    }
+}
+
 /// An approval card for `turn_id` was answered ("ok" allowed, "declined") or stopped waiting.
 pub fn approval_settled(turn_id: &str, ticket: &str, status: &'static str) {
     approval_settled_with(turn_id, ticket, status, None);
