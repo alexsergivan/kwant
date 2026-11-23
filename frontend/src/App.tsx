@@ -523,6 +523,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   const closeSpaceSettings = () => {
     setToolNoteFocus(null);
+    setConnectionFocus(null);
     setSpaceSettingsTab(null);
     setConnectApp(null);
     setSettingsFocusRow(null);
@@ -4556,6 +4557,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       focusNote={toolNoteFocus}
       onClearFocusNote={() => setToolNoteFocus(null)}
       focusConnection={connectionFocus}
+      onFocusConnectionDone={() => setConnectionFocus(null)}
       onSignIn={signInToServer}
       onOpenNoteWhere={(w) => {
         if (spaceSettingsTab) closeSpaceSettings();

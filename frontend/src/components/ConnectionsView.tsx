@@ -224,6 +224,9 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
   );
 };
 
+/** The last open (its seq) that lit a row: kept outside the component so a remount doesn't replay it. */
+let openedSeq: number | null = null;
+
 /** How long an opened row stays lit (34h; Mira's report section 2). */
 export const ROW_FLASH_MS = 1200;
 
@@ -232,17 +235,18 @@ export const ROW_FLASH_MS = 1200;
  * ROW_FLASH_MS and moves keyboard focus to its "Sign in again" when it has one. Returns the lit
  * row's id. Under reduced motion the scroll jumps and the light doesn't fade.
  */
-export function useConnectionFocus(focus: { id: string; seq: number } | null, ready: boolean): string | null {
+export function useConnectionFocus(focus: { id: string; seq: number } | null, ready: boolean, onConsumed?: () => void): string | null {
   const [lit, setLit] = useState<string | null>(null);
-  const done = useRef<number | null>(null);
   const timer = useRef<number | undefined>(undefined);
   const stopCentring = useRef<() => void>(() => {});
   useEffect(() => () => { window.clearTimeout(timer.current); stopCentring.current(); }, []);
   useEffect(() => {
-    if (!focus || !ready || done.current === focus.seq) return;
+    if (!focus || !ready || openedSeq === focus.seq) return;
     const row = document.querySelector<HTMLElement>(`[data-connection="${CSS.escape(focus.id)}"]`);
     if (!row) return;
-    done.current = focus.seq;
+    // One open lights the row once: a later mount of Advanced (Settings reopened from the gear, or
+    // Advanced collapsed and expanded) with the same remembered focus doesn't replay it (Rigel's D1).
+    openedSeq = focus.seq;
     const still = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     // Sections above the list can still be loading: keep the row centred while it is lit.
     stopCentring.current();
@@ -251,6 +255,8 @@ export function useConnectionFocus(focus: { id: string; seq: number } | null, re
     setLit(focus.id);
     window.clearTimeout(timer.current);
     timer.current = window.setTimeout(() => setLit(null), ROW_FLASH_MS);
+    onConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onConsumed is a fresh closure each render
   }, [focus, ready]);
   return lit;
 }
@@ -682,6 +688,8 @@ export interface ConnectionsViewProps extends ManageLinks {
   composioTileApi?: ComposioTileApi;
   /** 34h: open on this connection's row (scrolled to, lit for 1.2 s); seq repeats it. */
   focusConnection?: { id: string; seq: number } | null;
+  /** 34h: the open has been shown; the owner forgets it so nothing replays it. */
+  onFocusConnectionDone?: () => void;
   /** 34h: a row's "Sign in again". */
   onSignIn?: (c: Connection) => void;
   /** The row signing in now. */
@@ -716,12 +724,13 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   onChooseComposioBots,
   composioTileApi,
   focusConnection = null,
+  onFocusConnectionDone,
   onSignIn,
   signingIn = null,
   ...links
 }) => {
   const phoneLayout = usePhoneLayout();
-  const flashing = useConnectionFocus(focusConnection, !!data);
+  const flashing = useConnectionFocus(focusConnection, !!data, onFocusConnectionDone);
   const [noteConnection, setNoteConnection] = useState<string | null>(notesProps.connection ?? null);
   const [noteScroll, setNoteScroll] = useState(0);
   const filterNotes = (name: string | null) => {
@@ -937,11 +946,13 @@ export interface ConnectionsPageProps extends ManageLinks {
   onChooseComposioBots?: () => void;
   /** 34h: open on one connection's row (a chat line's or the Inbox's "Sign in again"). */
   focusConnection?: { id: string; seq: number } | null;
+  /** 34h: the open has been shown; the owner forgets it so nothing replays it. */
+  onFocusConnectionDone?: () => void;
   /** 34h: the shared sign-in (mcp.ts signInToServer); without it rows have no "Sign in again". */
   onSignIn?: (serverId: string) => Promise<SignInToServerResult>;
 }
 
-export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedded, focusNote, onClearFocusNote, onOpenNoteWhere, hideAccounts, onChooseComposioBots, focusConnection, onSignIn, ...links }) => {
+export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedded, focusNote, onClearFocusNote, onOpenNoteWhere, hideAccounts, onChooseComposioBots, focusConnection, onFocusConnectionDone, onSignIn, ...links }) => {
   const [data, setData] = useState<ConnectionsList | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1079,6 +1090,7 @@ export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedd
         hideAccounts={hideAccounts}
         onChooseComposioBots={onChooseComposioBots}
         focusConnection={focusConnection}
+        onFocusConnectionDone={onFocusConnectionDone}
         onSignIn={onSignIn ? signIn : undefined}
         signingIn={signingIn}
         {...links}

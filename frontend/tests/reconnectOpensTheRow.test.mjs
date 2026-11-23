@@ -143,6 +143,38 @@ test('opening before the list has loaded waits for the row', async () => {
   v.unmount();
 });
 
+test('a remembered open doesn\'t replay: remounting Advanced with the same focus scrolls and lights nothing (Rigel D1)', async () => {
+  scrolls.length = 0;
+  const done = [];
+  const props = { data: data([conn()]), loading: false, error: null, onRefresh: noop, onAddComposio: async () => null, onSignIn: noop, focusConnection: { id: 'mcp:s1', seq: 31 }, onFocusConnectionDone: () => done.push(1) };
+  const v = ui.mount('view', props);
+  await tick();
+  assert.equal(scrolls.length, 1, 'the first open scrolls');
+  assert.equal(done.length, 1, 'the owner is told the open was shown, so it can forget it');
+  v.unmount();
+  document.body.focus();
+  // Settings reopened from the gear, or Advanced collapsed and expanded, with the same focus still around.
+  const v2 = ui.mount('view', props);
+  await tick();
+  assert.equal(scrolls.length, 1, 'no second scroll');
+  assert.equal(v2.host.querySelectorAll('[data-flash]').length, 0, 'no second light');
+  assert.notEqual(document.activeElement?.getAttribute('data-sign-in-again'), 'mcp:s1', 'the keyboard is not moved');
+  assert.equal(done.length, 1);
+  v2.unmount();
+  // Also on a row that has since connected.
+  const v3 = ui.mount('view', { ...props, data: data([conn({ status: 'connected' })]) });
+  await tick();
+  assert.equal(scrolls.length, 1);
+  assert.equal(v3.host.querySelectorAll('[data-flash]').length, 0);
+  v3.unmount();
+  // A new open still works after a remount.
+  const v4 = ui.mount('view', { ...props, focusConnection: { id: 'mcp:s1', seq: 32 } });
+  await tick();
+  assert.equal(scrolls.length, 2, 'a new open scrolls');
+  assert.equal(v4.host.querySelectorAll('[data-flash]').length, 1);
+  v4.unmount();
+});
+
 test('the chat line\'s button hands its connection id to Connections', () => {
   const got = [];
   const meta = ui.parseToolFailureMeta({
