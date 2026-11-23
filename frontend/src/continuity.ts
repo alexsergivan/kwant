@@ -99,7 +99,8 @@ export interface Routine {
 export interface RoutineRun {
   id: string;
   routine_id: string;
-  trigger: 'schedule' | 'manual';
+  /** `retry`: AutoFix ran a failed run again (routine-retry-once). */
+  trigger: 'schedule' | 'manual' | 'retry';
   started_at: string;
   ended_at: string | null;
   status: RunStatus;

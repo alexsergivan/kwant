@@ -1,6 +1,7 @@
 //! Orchestrates one message's block set from every candidate source, in priority order (plan.md
-//! §A.2). A bot reply: a grounded `present_result` call first (the bot's own declared pick), then
-//! the deterministic reply-text selectors. A task report card (`meta.kind` "mission" with a
+//! §A.2). A bot reply: the Quizmaster's card when its turn called a Quizmaster tool (pa3c), then a
+//! grounded `present_result` call (the bot's own declared pick), then the deterministic reply-text
+//! selectors. A task report card (`meta.kind` "mission" with a
 //! `task_id`) gets its `verification` block, an agent's shared-file card its `files` block, and no
 //! other card gets anything; each block must be enabled and pass [`super::validate`].
 
@@ -10,7 +11,7 @@ use sqlx::SqliteConnection;
 
 use crate::db::models::{MessageExtra, NewMessage};
 
-use super::{files, present_result, verification, Block, ResultSet, ENABLED_TYPES, VERSION};
+use super::{files, pocket, present_result, verification, Block, ResultSet, ENABLED_TYPES, VERSION};
 
 /// The checked block set for a message being stored on `conn`, or `None` when nothing qualifies.
 /// `root` is the attachments directory, for file previews. Never fails: every step is best-effort,
@@ -29,6 +30,15 @@ pub async fn compute_for_message(
         Some("file") => return from_block(files::candidate(&mut *conn, input, extra, root).await),
         Some(k) if k != "delegation_result" => return None,
         _ => {}
+    }
+    // A turn that called one of kwant's own Quizmaster tools: the card of the bot's own stored
+    // draft (pa3c), before anything the reply's text or a present_result call could give. Boxed:
+    // its sqlx future would otherwise sit inline in every message insert's future, and that
+    // overflowed the 2 MiB test-thread stack in a debug build (#1108 CI).
+    if kind.is_none() {
+        if let Some(set) = from_block(Box::pin(pocket::candidate(&mut *conn, input, extra)).await) {
+            return Some(set);
+        }
     }
     if let Some(set) = from_block(present_result::grounded_candidate(input)) {
         return Some(set);

@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS routines (
 CREATE TABLE IF NOT EXISTS routine_runs (
     id TEXT PRIMARY KEY,
     routine_id TEXT NOT NULL,
-    trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual')),
+    trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual', 'retry')),
     started_at TIMESTAMP NOT NULL,
     ended_at TIMESTAMP,
     status TEXT NOT NULL CHECK (status IN ('running', 'ok', 'error', 'skipped', 'needs_you', 'incomplete')),
