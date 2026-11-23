@@ -804,6 +804,48 @@ mod tests {
         assert_eq!(db.attention_item_owner("routine_run", "r2b").await.unwrap(), None, "only a failed run is dismissable");
     }
 
+    /// routine-inbox-tidy (Minor g): a routine that posts in one of its bot's threads links its
+    /// runs to that thread; once the thread is gone the run still opens the bot's chat, as before.
+    #[tokio::test]
+    async fn a_thread_routines_run_links_its_thread_while_the_thread_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        bot(&db, "k1").await;
+        let t = db.create_thread("k1", "Shop digest", "chat", None, "user").await.unwrap().id;
+        for (id, thread) in [("rt1", Some(t.as_str())), ("rt2", None)] {
+            sqlx::query("INSERT INTO routines (id, kwant_id, name, instructions, schedule, space_id, thread_id) VALUES (?, 'k1', ?, 'do it', '0 9 * * *', 'spc_default', ?)")
+                .bind(id)
+                .bind(format!("routine {id}"))
+                .bind(thread)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        run(&db, "r1", "rt1", "error", 60).await;
+        run(&db, "r2", "rt2", "error", 60).await;
+        run(&db, "r3", "rt1", "ok", 30).await;
+        let space = SpaceId::default_space();
+        let since = Utc::now() - chrono::Duration::days(7);
+        let stuck_before = Utc::now() - chrono::Duration::minutes(30);
+        let link = |rows: &[AwayRow], id: &str| {
+            let r = rows.iter().find(|r| r.id == id).unwrap_or_else(|| panic!("no row {id}: {rows:?}"));
+            (r.thread_id.clone(), r.channel_id.clone(), r.direct_kwant_id.clone())
+        };
+        let finished = db.away_finished(&space, since, 50).await.unwrap();
+        assert_eq!(link(&finished, "r3"), (Some(t.clone()), None, Some("k1".into())));
+        // r3 ran later, so r1 (same routine) left Needs attention; without it, r1 is back
+        sqlx::query("DELETE FROM routine_runs WHERE id = 'r3'").execute(&db.pool).await.unwrap();
+        let failed = db.away_failed(&space, since, stuck_before, 50).await.unwrap();
+        assert_eq!(link(&failed, "r1"), (Some(t.clone()), None, Some("k1".into())));
+        assert_eq!(link(&failed, "r2"), (None, None, Some("k1".into())));
+        // The thread is deleted: the run still opens somewhere, the bot's chat
+        sqlx::query("DELETE FROM threads WHERE id = ?").bind(&t).execute(&db.pool).await.unwrap();
+        let failed = db.away_failed(&space, since, stuck_before, 50).await.unwrap();
+        assert_eq!(link(&failed, "r1"), (None, None, Some("k1".into())));
+        let (_, counted) = db.away_counts(&space, since, stuck_before).await.unwrap();
+        assert_eq!(counted, 2, "both failed runs are still listed and counted");
+    }
+
     /// 22i: a hand-off still running past the stuck threshold closes when it ends (as before) or
     /// when the person dismisses it.
     #[tokio::test]
