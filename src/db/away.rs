@@ -120,7 +120,11 @@ const FINISHED_RUNS: &str = "r.status = 'ok'";
 /// 22i close rules for a failed routine run: its bot or channel is gone, a later run of the same
 /// routine started (Run now or the next schedule), or it is in `attention_closed`. 26b: a run whose
 /// step waits on the person (`needs_you`) or failed (`incomplete`) didn't finish either.
+/// unanswered-question-not-ok: a `needs_you` run that waits on a question
+/// ([`crate::server::scheduler::QUESTION_ERROR`]) isn't listed: its open question is the one
+/// Needs-you item, and answering or dismissing it leaves nothing behind.
 const FAILED_RUNS: &str = "r.status IN ('error', 'incomplete', 'needs_you')
+      AND NOT (r.status = 'needs_you' AND COALESCE(r.error, '') = 'A step is waiting for your answer, so it didn''t finish')
       AND k.id IS NOT NULL
       AND (rt.channel_id IS NULL OR EXISTS (SELECT 1 FROM channels c WHERE c.id = rt.channel_id))
       AND NOT EXISTS (SELECT 1 FROM routine_runs r2 WHERE r2.routine_id = r.routine_id
@@ -598,6 +602,15 @@ fn newest(mut rows: Vec<AwayRow>, limit: i64) -> Vec<AwayRow> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// unanswered-question-not-ok: the SQL leaves out exactly the scheduler's question error,
+    /// quoted for SQL, and only for `needs_you`.
+    #[test]
+    fn failed_runs_leave_out_the_question_error() {
+        let quoted = crate::server::scheduler::QUESTION_ERROR.replace('\'', "''");
+        assert!(FAILED_RUNS.contains(&format!("r.status = 'needs_you' AND COALESCE(r.error, '') = '{quoted}'")), "{FAILED_RUNS}");
+        assert!(!FAILED_RUNS.contains(&crate::server::scheduler::NEEDS_YOU_ERROR.replace('\'', "''")));
+    }
 
     async fn plan(db: &Database, sql: &str) -> Vec<String> {
         let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))

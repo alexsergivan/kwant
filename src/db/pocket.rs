@@ -18,6 +18,10 @@ pub const ENDED: &str = "ended";
 
 /// Guest keys one player may hold at once (phones, a laptop); the oldest goes first.
 pub const MAX_KEYS_PER_PLAYER: i64 = 5;
+/// Host-link sessions (pa1b) one pocket keeps per role (`host`, `screen`); the oldest goes first.
+pub const MAX_LINK_SESSIONS_PER_ROLE: i64 = 5;
+/// Unspent host-link tokens one pocket keeps per role; the oldest goes first.
+pub const MAX_LINK_TOKENS_PER_ROLE: i64 = 10;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct PocketRow {
@@ -176,6 +180,17 @@ impl Database {
                 at TEXT NOT NULL
             )",
             "CREATE INDEX IF NOT EXISTS pocket_events_pocket ON pocket_events(pocket_code, id)",
+            // pa1b host and screen links: a one-time `token` (10 minutes) becomes a `session`
+            // with that role. Only the sha256 of either is kept
+            "CREATE TABLE IF NOT EXISTS pocket_host_links (
+                key_hash TEXT PRIMARY KEY,
+                pocket_code TEXT NOT NULL,
+                kind TEXT NOT NULL CHECK (kind IN ('token', 'session')),
+                role TEXT NOT NULL CHECK (role IN ('host', 'screen')),
+                created_at TEXT NOT NULL,
+                expires_at TEXT
+            )",
+            "CREATE INDEX IF NOT EXISTS pocket_host_links_pocket ON pocket_host_links(pocket_code, kind, role)",
             // pa7 For Friday: a pocket's start time, the chat it came from, and the once-only
             // reminder and results post. One row per pocket, deleted with it.
             "CREATE TABLE IF NOT EXISTS pocket_schedule (
@@ -302,7 +317,7 @@ impl Database {
     /// Deletes the pocket, its players, keys and events. Final: there is no undo.
     pub async fn pocket_delete(&self, code: &str) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
-        for table in ["pocket_events", "pocket_guest_keys", "pocket_players", "pocket_schedule"] {
+        for table in ["pocket_events", "pocket_guest_keys", "pocket_host_links", "pocket_players", "pocket_schedule"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE pocket_code = ?")).bind(code).execute(&mut *tx).await?;
         }
         let done = sqlx::query("DELETE FROM pocket_apps WHERE code = ?").bind(code).execute(&mut *tx).await?;
@@ -523,17 +538,111 @@ impl Database {
         Ok(sqlx::query_as("SELECT player_id, kind, payload FROM pocket_events WHERE pocket_code = ? ORDER BY id").bind(code).fetch_all(&self.pool).await?)
     }
 
-    /// Rows a pocket still has in each table, for tests and the sweeper's checks.
+    /// Rows a pocket still has: `[pocket, players, keys, events]`, where keys are guest keys
+    /// plus host-link tokens and sessions. For tests and the sweeper's checks.
     pub async fn pocket_row_counts(&self, code: &str) -> Result<[i64; 4], DbError> {
         let mut out = [0i64; 4];
-        for (i, (table, col)) in [("pocket_apps", "code"), ("pocket_players", "pocket_code"), ("pocket_guest_keys", "pocket_code"), ("pocket_events", "pocket_code")]
-            .iter()
-            .enumerate()
+        for (i, (table, col)) in [
+            ("pocket_apps", "code"),
+            ("pocket_players", "pocket_code"),
+            ("pocket_guest_keys", "pocket_code"),
+            ("pocket_events", "pocket_code"),
+            ("pocket_host_links", "pocket_code"),
+        ]
+        .iter()
+        .enumerate()
         {
             let (n,): (i64,) = sqlx::query_as(&format!("SELECT COUNT(*) FROM {table} WHERE {col} = ?")).bind(code).fetch_one(&self.pool).await?;
-            out[i] = n;
+            // Host links count with the keys
+            out[if i == 4 { 2 } else { i }] += n;
         }
         Ok(out)
+    }
+
+    // Host and screen links (pa1b)
+
+    /// Saves a one-time link token for `role`, drops this pocket's expired tokens, and keeps only
+    /// the newest [`MAX_LINK_TOKENS_PER_ROLE`] unspent ones of that role.
+    pub async fn pocket_link_token_insert(&self, code: &str, role: &str, token_hash: &str, now: DateTime<Utc>, expires_at: DateTime<Utc>) -> Result<(), DbError> {
+        let mut tx = self.pool.begin().await?;
+        sqlx::query("DELETE FROM pocket_host_links WHERE pocket_code = ? AND kind = 'token' AND expires_at <= ?")
+            .bind(code)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("INSERT INTO pocket_host_links (key_hash, pocket_code, kind, role, created_at, expires_at) VALUES (?, ?, 'token', ?, ?, ?)")
+            .bind(token_hash)
+            .bind(code)
+            .bind(role)
+            .bind(now)
+            .bind(expires_at)
+            .execute(&mut *tx)
+            .await?;
+        Self::keep_newest_links(&mut tx, code, "token", role, MAX_LINK_TOKENS_PER_ROLE).await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Spends a token of `code` that is still good at `now` and saves `session_hash` as a session
+    /// with the token's role, keeping the newest [`MAX_LINK_SESSIONS_PER_ROLE`] of that role.
+    /// `None` for a spent, expired, unknown or other pocket's token. The `bool` is true when an
+    /// older session was dropped to make room.
+    pub async fn pocket_link_spend(&self, code: &str, token_hash: &str, session_hash: &str, now: DateTime<Utc>) -> Result<Option<(String, bool)>, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let spent: Option<(String,)> =
+            sqlx::query_as("DELETE FROM pocket_host_links WHERE key_hash = ? AND pocket_code = ? AND kind = 'token' AND expires_at > ? RETURNING role")
+                .bind(token_hash)
+                .bind(code)
+                .bind(now)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some((role,)) = spent else {
+            tx.commit().await?;
+            return Ok(None);
+        };
+        sqlx::query("INSERT INTO pocket_host_links (key_hash, pocket_code, kind, role, created_at, expires_at) VALUES (?, ?, 'session', ?, ?, NULL)")
+            .bind(session_hash)
+            .bind(code)
+            .bind(&role)
+            .bind(now)
+            .execute(&mut *tx)
+            .await?;
+        let dropped = Self::keep_newest_links(&mut tx, code, "session", &role, MAX_LINK_SESSIONS_PER_ROLE).await?;
+        tx.commit().await?;
+        Ok(Some((role, dropped > 0)))
+    }
+
+    async fn keep_newest_links(tx: &mut sqlx::Transaction<'_, sqlx::Sqlite>, code: &str, kind: &str, role: &str, keep: i64) -> Result<u64, DbError> {
+        let done = sqlx::query(
+            "DELETE FROM pocket_host_links WHERE pocket_code = ? AND kind = ? AND role = ? AND key_hash NOT IN \
+             (SELECT key_hash FROM pocket_host_links WHERE pocket_code = ? AND kind = ? AND role = ? ORDER BY created_at DESC, rowid DESC LIMIT ?)",
+        )
+        .bind(code)
+        .bind(kind)
+        .bind(role)
+        .bind(code)
+        .bind(kind)
+        .bind(role)
+        .bind(keep)
+        .execute(&mut **tx)
+        .await?;
+        Ok(done.rows_affected())
+    }
+
+    /// The role of a link session of `code` (`host` or `screen`), if `session_hash` is one.
+    pub async fn pocket_link_session_role(&self, code: &str, session_hash: &str) -> Result<Option<String>, DbError> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT role FROM pocket_host_links WHERE key_hash = ? AND pocket_code = ? AND kind = 'session'")
+            .bind(session_hash)
+            .bind(code)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Drops every host-role link of `code`, spent or not (a rotated host key). Screen links stay.
+    pub async fn pocket_link_drop_host(&self, code: &str) -> Result<u64, DbError> {
+        let done = sqlx::query("DELETE FROM pocket_host_links WHERE pocket_code = ? AND role = 'host'").bind(code).execute(&self.pool).await?;
+        Ok(done.rows_affected())
     }
 }
 

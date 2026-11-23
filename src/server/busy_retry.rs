@@ -491,7 +491,7 @@ mod tests {
         assert_eq!(err, "the browser stayed busy after 2 automatic retries of `browser_act`");
         let recorded = super::super::routes::routine_turn_error(&err);
         assert_eq!(
-            super::super::scheduler::failed_body("Morning prices", Some(&recorded)),
+            super::super::scheduler::failed_body("Morning prices", Some(&recorded), 0),
             "The routine \"Morning prices\" did not finish: the bot's turn failed: the browser stayed busy after 2 automatic \
              retries of `browser_act`. Open the routine to see the run or run it again."
         );

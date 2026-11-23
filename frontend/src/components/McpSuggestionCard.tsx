@@ -4,6 +4,7 @@ import { ModernAvatar } from './ModernAvatar';
 import { Suggestion, SuggestionMeta, failureText, inputKey, inputLabel, installPayload, runsLine, suggestionView } from '../mcpSuggestions';
 import { inDesktopApp } from '../externalLinks';
 import { type SignInDeadEnd, type SignInDeadEndCode, signInDeadEnd } from '../mcpSignInDeadEnd';
+import type { SuggestionServerState } from '../suggestionServerState';
 
 /** What a sign-in attempt from the card reports: an error message, or a code retrying can't fix. */
 export type SuggestionSignInResult = string | { code: SignInDeadEndCode } | void;
@@ -23,8 +24,11 @@ export interface McpSuggestionCardProps {
    * a next step shows), or nothing once signed in.
    */
   onSignIn: (serverId: string) => Promise<SuggestionSignInResult>;
-  /** The install said this server needs a sign-in that hasn't happened yet. */
-  needsSignIn?: boolean;
+  /**
+   * The installed server's real state (34i): from the connections list, or the install's answer until
+   * the list answers. `needs_sign_in` shows the Sign in row; `removed` says it was removed in Settings.
+   */
+  serverState?: SuggestionServerState;
   flash?: boolean;
 }
 
@@ -42,7 +46,7 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
   onInstall,
   onDismiss,
   onSignIn,
-  needsSignIn,
+  serverState = 'ready',
   flash,
 }) => {
   const view = suggestionView(meta, live);
@@ -58,6 +62,9 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
   const failure = error ?? (view.status === 'pending' ? view.last_error : null);
   const runs = runsLine(view);
   const local = view.runs_on_your_computer || view.transport === 'stdio';
+  const installed = view.status === 'installed';
+  const needsSignIn = installed && serverState === 'needs_sign_in';
+  const removed = installed && serverState === 'removed';
 
   const install = async () => {
     if (!pending || busy) return;
@@ -94,7 +101,7 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
   };
 
   const border =
-    view.status === 'installed' ? 'border-teal-400/30' : view.status === 'dismissed' ? 'border-zinc-800' : failure ? 'border-rose-500/40' : 'border-sky-500/35';
+    installed && !removed ? 'border-teal-400/30' : view.status === 'dismissed' || removed ? 'border-zinc-800' : failure ? 'border-rose-500/40' : 'border-sky-500/35';
 
   return (
     <section data-message-id={messageId} aria-labelledby={headingId} className={`flex items-start gap-3.5 w-full max-w-5xl rounded-xl ${flash ? 'kw-flash' : ''}`}>
@@ -230,6 +237,10 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
                 <span className="inline-flex items-center gap-1.5 text-amber-200">
                   <KeyRound size={13} aria-hidden="true" /> Installed. Sign in to {view.title} so {kwantName} can use it.
                 </span>
+              ) : removed ? (
+                <span className="inline-flex items-center gap-1.5 text-zinc-400">
+                  <MinusCircle size={13} aria-hidden="true" /> Removed in Settings. {kwantName} carries on without it.
+                </span>
               ) : (
                 <span className="inline-flex items-center gap-1.5 text-ok">
                   <CheckCircle2 size={13} aria-hidden="true" /> Ready. {kwantName} can use it from its next reply.
@@ -245,7 +256,7 @@ export const McpSuggestionCard: React.FC<McpSuggestionCardProps> = ({
               <span className="text-zinc-500">Only you can install it. Keys you type are saved hidden and never appear in the chat.</span>
             )}
           </p>
-          {view.status === 'installed' && needsSignIn && view.server_id && (
+          {needsSignIn && view.server_id && (
             <SuggestionSignIn busy={busy === 'signin'} disabled={busy !== null} error={signInError} onSignIn={signIn} />
           )}
           {dismissError && (
