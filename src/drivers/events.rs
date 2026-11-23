@@ -382,6 +382,12 @@ pub enum RuntimeEvent {
     /// A goal changed (status, checks, schedule, its fix task); `GET /api/goals/:id` has the rest.
     #[serde(rename = "goal_updated", alias = "GoalUpdated")]
     GoalUpdated { id: String, status: String, space_id: String },
+    /// 34f: a bot's goal draft turn (Mission board > New goal > Draft checks) ended without saving
+    /// a draft. `reason` is short and plain: kwant's last refusal of its `goal_propose`, else why the
+    /// turn failed, else "it didn't propose any checks". It never holds the person's words or the
+    /// bot's tool arguments.
+    #[serde(rename = "goal_draft_failed", alias = "GoalDraftFailed")]
+    GoalDraftFailed { space_id: String, kwant_id: String, reason: String },
     /// A Dev mode card was added or changed (plan §3.2); refetch `GET /api/spaces/:id/dev/…`.
     /// `kind` is `landed`, `review` or `release_notes`; `status` `pending`, `ready`, `failed` or `stale`.
     #[serde(rename = "dev_card", alias = "DevCard")]
@@ -493,6 +499,15 @@ impl RuntimeEvent {
                 }
                 v
             }
+            // 34f: the bot whose draft failed sits beside `type` and `space_id`, as on scoped
+            // events, so a stream reader can tell whose draft it is without opening `data`
+            RuntimeEvent::GoalDraftFailed { kwant_id, .. } => {
+                let mut v = serde_json::to_value(self).unwrap_or(Value::Null);
+                if let Value::Object(map) = &mut v {
+                    map.insert("kwant_id".into(), Value::String(kwant_id.clone()));
+                }
+                v
+            }
             other => serde_json::to_value(other).unwrap_or(Value::Null),
         }
     }
@@ -541,5 +556,20 @@ mod approval_withdrawn_tests {
         for o in ["expired", "cancelled"] {
             assert!(!RuntimeEvent::is_answer(Some(o)));
         }
+    }
+}
+
+#[cfg(test)]
+mod goal_draft_failed_wire_tests {
+    use super::RuntimeEvent;
+    use serde_json::json;
+
+    #[test]
+    fn a_failed_draft_names_its_bot_on_the_wire() {
+        let e = RuntimeEvent::GoalDraftFailed { space_id: "spc_a".into(), kwant_id: "k1".into(), reason: "no checks".into() };
+        let wire = e.to_wire();
+        assert_eq!(wire["type"], "goal_draft_failed");
+        assert_eq!(wire["kwant_id"], json!("k1"), "the bot sits beside `type`");
+        assert_eq!(wire["data"], json!({"space_id": "spc_a", "kwant_id": "k1", "reason": "no checks"}), "`data` keeps its shape");
     }
 }

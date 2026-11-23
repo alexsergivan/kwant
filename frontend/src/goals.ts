@@ -195,6 +195,28 @@ export interface GoalDraft {
 // Reading the server's answer. Defensive: an older or newer server may leave fields out.
 
 const rec = (v: unknown): Record<string, unknown> => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {});
+
+/** 34f: the server's `goal_draft_failed`: a bot's draft turn ended without a draft. `reason` is short and plain. */
+export interface GoalDraftFailed {
+  space_id: string | null;
+  kwant_id: string;
+  reason: string;
+}
+
+export const GOAL_DRAFT_NO_PROPOSAL = 'it didn’t propose any checks';
+
+/** Reads a `goal_draft_failed` event; null when it names no bot (nothing to match it to). */
+export function parseGoalDraftFailed(v: unknown): GoalDraftFailed | null {
+  const r = rec(v);
+  const kwant = typeof r.kwant_id === 'string' ? r.kwant_id.trim() : '';
+  if (!kwant) return null;
+  const why = typeof r.reason === 'string' ? r.reason.replace(/\s+/g, ' ').trim() : '';
+  return {
+    space_id: typeof r.space_id === 'string' && r.space_id ? r.space_id : null,
+    kwant_id: kwant,
+    reason: (why || GOAL_DRAFT_NO_PROPOSAL).slice(0, 200),
+  };
+}
 const s = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);
 /** A time as ISO text. Storage keeps epoch numbers (seconds or ms); the routes may pass them through as is. */
 const time = (v: unknown): string | null => {

@@ -1,0 +1,104 @@
+//! The person's pocket API on the main port. Every path is person-only in `auth::guard` (bots
+//! and remote callers without the person's token are refused), and a pocket's guest or host key
+//! is never accepted here. While the switch is off the list is empty and the rest is 404.
+//!
+//! - `GET    /api/pockets`                 `{enabled, pocket_port, kits, pockets: [card]}`
+//! - `POST   /api/pockets`                 `{kit, spec, owner_kwant_id?, opens_at?, closes_at?}` → 201 `{pocket: card, host_key}`
+//! - `GET    /api/pockets/:code`           `{pocket: card, summary, removed}` (counts only)
+//! - `POST   /api/pockets/:code/end`       `{pocket: card}`
+//! - `POST   /api/pockets/:code/host-key`  `{host_key}` (the old one stops working)
+//! - `DELETE /api/pockets/:code`           204, final
+
+use super::{keys, PResult, PocketError, Snapshot};
+use crate::server::AppState;
+use axum::extract::{Path, State};
+use axum::http::StatusCode;
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::{Json, Router};
+use serde_json::{json, Value};
+
+pub fn router() -> Router<AppState> {
+    Router::new()
+        .route("/api/pockets", get(list).post(create))
+        .route("/api/pockets/:code", get(read).delete(delete))
+        .route("/api/pockets/:code/end", post(end))
+        .route("/api/pockets/:code/host-key", post(host_key))
+}
+
+fn off() -> PocketError {
+    PocketError::new(StatusCode::NOT_FOUND, "pocket_apps_off", "Pocket apps are off. Turn them on in Settings first.")
+}
+
+async fn on(state: &AppState) -> PResult<()> {
+    if super::enabled(&state.db).await {
+        Ok(())
+    } else {
+        Err(off())
+    }
+}
+
+/// A pocket as the person's list shows it: public facts and counts, never names or guest text.
+pub fn card(s: &Snapshot) -> Value {
+    let mut c = super::pocket_json(s);
+    c["created_at"] = json!(s.row.created_at);
+    c["owner_kwant_id"] = json!(s.row.owner_kwant_id);
+    c["path"] = json!(format!("/p/{}", s.row.code));
+    c
+}
+
+async fn list(State(state): State<AppState>) -> PResult<Json<Value>> {
+    let enabled = super::enabled(&state.db).await;
+    let mut pockets = Vec::new();
+    if enabled {
+        for row in state.db.pocket_list().await? {
+            if let Some(s) = super::snapshot(&state, &row.code).await? {
+                pockets.push(card(&s));
+            }
+        }
+    }
+    Ok(Json(json!({
+        "enabled": enabled,
+        "pocket_port": if enabled { super::pocket_port(&state.config) } else { None },
+        "kits": if enabled { super::kits::kit_ids() } else { Vec::new() },
+        "pockets": pockets,
+    })))
+}
+
+async fn create(State(state): State<AppState>, Json(req): Json<super::CreateRequest>) -> PResult<Response> {
+    on(&state).await?;
+    let (s, host_key) = super::create(&state, req).await?;
+    Ok((StatusCode::CREATED, Json(json!({ "pocket": card(&s), "host_key": host_key }))).into_response())
+}
+
+async fn found(state: &AppState, code: &str) -> PResult<std::sync::Arc<Snapshot>> {
+    on(state).await?;
+    if !keys::valid_code(code) {
+        return Err(PocketError::not_found());
+    }
+    super::snapshot(state, code).await?.ok_or_else(PocketError::not_found)
+}
+
+async fn read(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
+    let s = found(&state, &code).await?;
+    let counts = state.db.pocket_counts(&code).await?;
+    let summary = s.kit().map(|k| k.host_summary(&super::kits::KitCtx::new(&s.spec, &s.players, chrono::Utc::now()), &s.kit_state));
+    Ok(Json(json!({ "pocket": card(&s), "summary": summary, "removed": counts.removed })))
+}
+
+async fn end(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    let s = super::end(&state, &code).await?;
+    Ok(Json(json!({ "pocket": card(&s) })))
+}
+
+async fn host_key(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    Ok(Json(json!({ "host_key": super::rotate_host_key(&state, &code).await? })))
+}
+
+async fn delete(State(state): State<AppState>, Path(code): Path<String>) -> PResult<StatusCode> {
+    found(&state, &code).await?;
+    super::delete(&state, &code).await?;
+    Ok(StatusCode::NO_CONTENT)
+}

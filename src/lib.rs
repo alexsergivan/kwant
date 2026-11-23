@@ -13,6 +13,7 @@ pub(crate) mod helper_process;
 pub mod import;
 pub mod mcp;
 pub mod parallel;
+pub mod pocket;
 pub mod profiles;
 pub mod router;
 pub mod routines;

@@ -1,4 +1,5 @@
 pub mod models;
+pub mod pocket;
 pub mod profiles;
 pub mod browser_sites;
 pub mod continuity;
@@ -316,6 +317,8 @@ impl Database {
         // 0.9.21 26f: what each MCP server says it is (add-only). After every step that can
         // rebuild `mcp_servers`, which would drop its trigger
         db.migrate_mcp_server_facts().await?;
+        // pa1 Pocket apps (add-only; nothing reads them while the `pocket_apps` switch is off)
+        db.migrate_pocket().await?;
         db.pool.close().await;
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal
