@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.45] - 2026-11-23
+
+kwant 0.9.45: goal notices that say who fixed them.
+
+### Fixed
+- When a bot's fix brings a broken goal back, the recovered notice now says so ("{bot}'s fix worked; its checks pass again.") instead of "Its checks pass again. Nothing else to do.", and a broken goal's notice gives the time it first failed, the same time its row shows (#1082)
+
 ## [Mac 0.9.44] - 2026-11-23
 
 kwant 0.9.44: goal drafts that say why they failed.

@@ -16,6 +16,7 @@ pub mod mcp;
 pub mod parallel;
 pub mod pocket;
 pub mod profiles;
+pub mod quizmaster;
 pub mod router;
 pub mod routines;
 pub mod run_check;

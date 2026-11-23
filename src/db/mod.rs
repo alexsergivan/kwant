@@ -64,6 +64,7 @@ pub mod telegram_customers;
 pub mod show_once;
 pub mod isolated_folders;
 pub mod tool_notes;
+pub mod quiz_drafts;
 pub mod receipts;
 pub mod mission_watch;
 pub mod verifier;
@@ -255,6 +256,8 @@ impl Database {
         db.migrate_mission_watch().await?;
         // 0.9.5: an index for the chat's connection-failure lines (add-only)
         db.migrate_tool_failures().await?;
+        // pa3: Quizmaster quiz drafts (add-only)
+        db.migrate_quiz_drafts().await?;
         if spaces {
             let migration = db.migrate_spaces(data_dir, fresh).await?;
             db.require_spaces_schema(&migration).await?;

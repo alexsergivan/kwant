@@ -777,7 +777,10 @@ test('privacy line follows the kit retention', () => {
 // ---------- static rules ----------
 
 const guestSrc = new URL('../guest/src/', import.meta.url);
-const srcFiles = readdirSync(guestSrc).map((f) => [f, readFileSync(new URL(f, guestSrc), 'utf8')]);
+// Every source file, the Santa chunk (guest/src/santa/) too.
+const srcFiles = readdirSync(guestSrc, { recursive: true })
+  .filter((f) => statSync(new URL(f, guestSrc)).isFile())
+  .map((f) => [f, readFileSync(new URL(f, guestSrc), 'utf8')]);
 
 test('source: never HTML from data, no style attributes, no third-party URLs, no emoji', () => {
   for (const [f, s] of srcFiles) {
