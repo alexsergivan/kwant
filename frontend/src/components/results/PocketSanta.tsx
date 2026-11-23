@@ -106,7 +106,8 @@ function validSantaJoin(v: unknown): SantaInfo['join'] | undefined {
   const kind = v.anywhere_kind === undefined || v.anywhere_kind === null ? null : v.anywhere_kind === 'https' || v.anywhere_kind === 'funnel' ? v.anywhere_kind : undefined;
   if (anywhere_url === undefined || wifi_url === undefined || kind === undefined) return undefined;
   // A quick tunnel's address changes on restart: never offered for a pocket that lasts weeks.
-  if (v.quick_tunnel === true || (anywhere_url && /\.trycloudflare\.com(?:[:/]|$)/i.test(new URL(anywhere_url).host + '/'))) return undefined;
+  const quick = (u: string | null) => !!u && /\.trycloudflare\.com$/i.test(new URL(u).hostname);
+  if (v.quick_tunnel === true || quick(anywhere_url) || quick(wifi_url)) return undefined;
   // "From anywhere" needs an address that stays: an own https one or a Funnel one.
   if (v.mode === 'anywhere' && (!anywhere_url || !kind)) return undefined;
   return { mode: v.mode, anywhere_kind: kind, anywhere_url, wifi_url };
@@ -1033,7 +1034,7 @@ const SantaActions: React.FC<{
               Show the reveal now
             </button>
           ) : (
-            <LaterButton icon={<PartyPopper size={14} aria-hidden="true" />} why="You chose to keep it secret forever" className={full}>
+            <LaterButton icon={<PartyPopper size={14} aria-hidden="true" />} why={s.reveal === 'shown' ? 'The reveal is already showing' : 'You chose to keep it secret forever'} className={full}>
               Show the reveal now
             </LaterButton>
           )}

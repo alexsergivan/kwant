@@ -244,7 +244,10 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
   home: ['gold', 'house'],
   /** Pocket apps (pa0a): a violet creature in a white top hat and a gold bow tie. */
   quizmaster: ['violet', 'host'],
-  /** Pocket apps (pa10a): a green creature in a red knit hat (bobble flops left) and a striped scarf. */
+  /**
+   * Pocket apps (pa10a): a green creature in a red knit hat (bobble flops left) and a striped scarf. Picked style
+   * only: no name rule, so agents already named with "santa" keep the creature they have.
+   */
   santa: ['green', 'knithat'],
 };
 
@@ -266,8 +269,6 @@ function pickCreature(role: string, name: string): Creature {
     [['laya'], 'violet', 'crown'],
     // Before 'user'/'player': "Quizmaster" or "Pub quiz" names get the top hat.
     [['quiz'], 'violet', 'host'],
-    // "Santa" or "Secret Santa" names get the knit hat.
-    [['santa'], 'green', 'knithat'],
     [['user', 'player', 'hero', 'you'], 'blue', 'ears'],
     [['architect', 'cyber_mage', 'mage'], 'violet', 'horns'],
     [['tech', 'ninja', 'pixel', 'lead'], 'cyan', 'visor'],

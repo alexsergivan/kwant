@@ -134,6 +134,12 @@ test('junk and contradictions are rejected, so the reply shows as markdown', asy
   bad({ ...raw('collecting'), santa: null }, 'kit santa without its santa part');
   bad({ ...structuredClone(m.POCKET_FIXTURES.live.results.blocks[0]), santa: raw('collecting').santa }, 'a quiz carrying a santa part');
   bad({ ...raw('ended'), results: structuredClone(m.POCKET_FIXTURES.results.results.blocks[0].results) }, 'quiz results on a santa');
+  // F1: a santa joins through santa.join only; a quiz-style top-level join (even a plain Wi-Fi one) rejects it.
+  bad({ ...raw('collecting'), join: { mode: 'anywhere', anywhere_url: 'https://x.trycloudflare.com/p/x', wifi_url: 'http://192.168.1.2:7480/p/x' } }, 'top-level quiz join with a quick link');
+  bad({ ...raw('collecting'), join: { mode: 'wifi', wifi_url: 'http://192.168.1.2:7480/p/x', anywhere_url: null } }, 'any top-level join on a santa');
+  ok({ ...raw('collecting'), join: null });
+  // F5: a quick-tunnel address is refused in the Wi-Fi slot too.
+  bad(withSanta('collecting', { join: { mode: 'wifi', wifi_url: 'https://fuzzy-otter.trycloudflare.com/p/x' } }), 'quick tunnel as the Wi-Fi link');
   const v = await card('collecting', withSanta('collecting', { phase: 'shuffling' }));
   assert.equal(v.host.querySelector('[data-santa]'), null, 'no card');
 });
@@ -423,7 +429,9 @@ test('Santa avatar: a picker style, green with the knit hat; guests get the crea
   assert.ok(m.AVATAR_STYLES.some((s) => s.id === 'santa' && s.label === 'Santa'));
   const c = m.pickCreature('santa', 'Anything');
   assert.equal(c.accessory, 'knithat');
-  assert.equal(m.pickCreature('default', 'Secret Santa helper').accessory, 'knithat');
+  // F10: picked style only. An agent already named with "santa" keeps the creature it had before pa10a.
+  assert.notEqual(m.pickCreature('default', 'Secret Santa helper').accessory, 'knithat');
+  assert.notEqual(m.pickCreature('assistant', 'Santa Cruz trips').accessory, 'knithat');
   assert.equal(Object.keys(m.GUEST_CREATURES).length, 8);
   assert.equal(m.guestCreature('horns').accessory, 'horns');
   assert.equal(m.guestCreature('nope').accessory, m.guestCreature('antenna').accessory, 'unknown falls back to antenna');

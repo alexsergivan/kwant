@@ -174,6 +174,8 @@ export function validPocket(raw: unknown): PocketBlock | null {
   if (santa === undefined || (b.kit === 'santa') !== !!santa || (santa && findMatchLike(raw))) return null;
   if (santa && state !== (santa.phase === 'ended' ? 'ended' : 'live')) return null;
   if (santa && results) return null;
+  // Santa joins live in `santa.join` (no quick tunnel); a quiz-style top-level join never rides along.
+  if (santa && b.join !== undefined && b.join !== null) return null;
   return {
     id: b.id,
     type: 'pocket',
