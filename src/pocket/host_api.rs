@@ -3,9 +3,12 @@
 //! is never accepted here. While the switch is off the list is empty and the rest is 404.
 //!
 //! - `GET    /api/pockets`                 `{enabled, pocket_port, kits, pockets: [card]}`
-//! - `POST   /api/pockets`                 `{kit, spec, owner_kwant_id?, opens_at?, closes_at?}` → 201 `{pocket: card, host_key}`
+//! - `POST   /api/pockets`                 `{kit, spec, owner_kwant_id?, opens_at?, closes_at?, origin?}` → 201 `{pocket: card, host_key}`
+//!   (pa7: a future `spec.when` sets the times not given; `origin` `{kwant_id, channel_id?, thread_id?}`)
 //! - `GET    /api/pockets/:code`           `{pocket: card, summary, removed}` (counts only)
 //! - `POST   /api/pockets/:code/end`       `{pocket: card}`
+//! - `POST   /api/pockets/:code/when`      `{when: RFC 3339 | null}` → `{pocket: card}` (pa7: moves the
+//!   times that came from `when` and re-plans the reminder; open pockets only)
 //! - `POST   /api/pockets/:code/host-key`  `{host_key}` (the old one stops working)
 //! - `DELETE /api/pockets/:code`           204, final
 
@@ -23,6 +26,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/pockets", get(list).post(create))
         .route("/api/pockets/:code", get(read).delete(delete))
         .route("/api/pockets/:code/end", post(end))
+        .route("/api/pockets/:code/when", post(set_when))
         .route("/api/pockets/:code/host-key", post(host_key))
 }
 
@@ -89,6 +93,21 @@ async fn read(State(state): State<AppState>, Path(code): Path<String>) -> PResul
 async fn end(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
     found(&state, &code).await?;
     let s = super::end(&state, &code).await?;
+    Ok(Json(json!({ "pocket": card(&s) })))
+}
+
+#[derive(serde::Deserialize)]
+struct WhenRequest {
+    when: Option<String>,
+}
+
+async fn set_when(State(state): State<AppState>, Path(code): Path<String>, Json(req): Json<WhenRequest>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    let when = match req.when.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
+        Some(w) => Some(chrono::DateTime::parse_from_rfc3339(w).map_err(|_| PocketError::new(StatusCode::BAD_REQUEST, "bad_when", "when must be a date and time with its offset, like 2026-11-27T20:00:00+02:00."))?),
+        None => None,
+    };
+    let s = super::schedule::set_when(&state, &code, when).await?;
     Ok(Json(json!({ "pocket": card(&s) })))
 }
 
