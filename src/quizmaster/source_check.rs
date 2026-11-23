@@ -18,7 +18,7 @@ use crate::kits::quiz::matching::normalise;
 use crate::kits::quiz::spec::{Kind, Question, QuizSpec};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
@@ -120,6 +120,20 @@ pub fn key(q: &Question) -> String {
     digest.iter().take(12).map(|b| format!("{b:02x}")).collect()
 }
 
+/// pa4c: a person's own question's key: what they wrote (text, kind, options, answer and
+/// spellings). The draft keeps these (`quiz_drafts.own_keys`), so only questions the person
+/// wrote skip the source check; a bot writing `{"own": true}` gets "no source" as before.
+pub fn own_key(q: &Question) -> String {
+    let parts = serde_json::json!(["own", q.text.trim(), q.kind.map(Kind::as_str), q.options, q.answer, q.accept, q.tolerance]);
+    let digest = Sha256::digest(parts.to_string().as_bytes());
+    digest.iter().take(12).map(|b| format!("{b:02x}")).collect()
+}
+
+/// Whether a question is one of the person's own (see [`own_key`]).
+pub fn is_own(q: &Question, own: &HashSet<String>) -> bool {
+    q.source.as_ref().is_some_and(|s| s.own) && own.contains(&own_key(q))
+}
+
 /// Every question with where it sits.
 pub fn questions(spec: &QuizSpec) -> Vec<(String, &Question)> {
     let mut out = Vec::new();
@@ -133,8 +147,14 @@ pub fn questions(spec: &QuizSpec) -> Vec<(String, &Question)> {
 
 /// Checks every question's source. A question whose [`key`] is in `cache` keeps that result.
 pub async fn check_spec(spec: &QuizSpec, policy: &Policy, cache: &HashMap<String, SourceResult>) -> Vec<SourceResult> {
+    check_spec_skipping(spec, policy, cache, &HashSet::new()).await
+}
+
+/// [`check_spec`] leaving out the person's own questions ([`is_own`]): they have no result.
+pub async fn check_spec_skipping(spec: &QuizSpec, policy: &Policy, cache: &HashMap<String, SourceResult>, own: &HashSet<String>) -> Vec<SourceResult> {
     use futures::stream::StreamExt;
-    let items: Vec<(usize, String, Question)> = questions(spec).into_iter().enumerate().map(|(n, (at, q))| (n, at, q.clone())).collect();
+    let items: Vec<(usize, String, Question)> =
+        questions(spec).into_iter().enumerate().filter(|(_, (_, q))| !is_own(q, own)).map(|(n, (at, q))| (n, at, q.clone())).collect();
     let mut out: Vec<SourceResult> = futures::stream::iter(items)
         .map(|(n, at, q)| async move {
             let k = key(&q);
@@ -431,7 +451,7 @@ mod tests {
             text: "?".into(),
             answer: Some(answer.into()),
             accept: (!accept.is_empty()).then(|| accept.iter().map(|s| s.to_string()).collect()),
-            source: Some(Source { url: url.into(), quote: quote.into() }),
+            source: Some(Source { url: url.into(), quote: quote.into(), own: false }),
             ..Default::default()
         }
     }
@@ -441,7 +461,7 @@ mod tests {
             kind: Some(Kind::Number),
             text: "?".into(),
             answer: Some(serde_json::json!(answer)),
-            source: Some(Source { url: "https://example.org".into(), quote: quote.into() }),
+            source: Some(Source { url: "https://example.org".into(), quote: quote.into(), own: false }),
             ..Default::default()
         }
     }

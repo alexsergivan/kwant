@@ -138,6 +138,8 @@ pub async fn update_server(
 pub async fn delete_server(State(state): State<AppState>, Path(id): Path<String>) -> ApiResult<Value> {
     if state.db.delete_mcp_server(&id).await.map_err(db_err)? {
         mcp::home_floor::forget(&id);
+        // 34g: its open lines close as "Removed." and leave Needs you; no chat carries on
+        super::tool_failures::resolve_connection(&state, &format!("mcp:{id}"), super::tool_failures::Closed::Removed).await;
         Ok(Json(json!({ "status": "deleted" })))
     } else {
         Err(err(StatusCode::NOT_FOUND, "MCP server not found"))
