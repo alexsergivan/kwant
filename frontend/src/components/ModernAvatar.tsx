@@ -145,7 +145,7 @@ type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
   | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
   | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
-  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'host' | 'none';
+  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'host' | 'knithat' | 'none';
 
 export interface Creature {
   body: string;
@@ -212,6 +212,7 @@ export const AVATAR_STYLES: Array<{ id: string; label: string }> = [
   { id: 'zen', label: 'Wellbeing' },
   { id: 'home', label: 'Home' },
   { id: 'quizmaster', label: 'Quizmaster' },
+  { id: 'santa', label: 'Santa' },
   { id: 'default', label: 'Droid' },
 ];
 
@@ -243,6 +244,8 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
   home: ['gold', 'house'],
   /** Pocket apps (pa0a): a violet creature in a white top hat and a gold bow tie. */
   quizmaster: ['violet', 'host'],
+  /** Pocket apps (pa10a): a green creature in a red knit hat (bobble flops left) and a striped scarf. */
+  santa: ['green', 'knithat'],
 };
 
 /** Style ids (picked or saved), as opposed to a title or name passed as a hint. */
@@ -263,6 +266,8 @@ function pickCreature(role: string, name: string): Creature {
     [['laya'], 'violet', 'crown'],
     // Before 'user'/'player': "Quizmaster" or "Pub quiz" names get the top hat.
     [['quiz'], 'violet', 'host'],
+    // "Santa" or "Secret Santa" names get the knit hat.
+    [['santa'], 'green', 'knithat'],
     [['user', 'player', 'hero', 'you'], 'blue', 'ears'],
     [['architect', 'cyber_mage', 'mage'], 'violet', 'horns'],
     [['tech', 'ninja', 'pixel', 'lead'], 'cyan', 'visor'],
@@ -315,8 +320,20 @@ const FRAME_FILL: Array<[number, number, number, number]> = [
 // The top hat's side shade: sprite art, a step below the violet palette's light (#e1d6ff).
 const HAT_SHADE = '#c9b8f7';
 
+// Santa's knit hat and scarf: sprite art from pa10a/src/santa-sprite.ts (the avatar red palette's colours).
+const KNIT_RED = '#e5484d';
+const KNIT_SHADE = '#a8323a';
+const KNIT_SHINE = '#ff8f8f';
+const KNIT_CUFF_SHADE = '#d2cbec';
+
 function renderAccessory(c: Creature) {
   switch (c.accessory) {
+    case 'knithat':
+      return [
+        px(9, 5, 9, 1, KNIT_RED), px(10, 4, 7, 1, KNIT_RED), px(11, 3, 5, 1, KNIT_RED), px(8, 2, 6, 1, KNIT_RED), px(6, 3, 5, 1, KNIT_RED),
+        px(5, 4, 2, 1, KNIT_SHADE), px(16, 4, 1, 2, KNIT_SHADE), px(15, 3, 1, 1, KNIT_SHADE), px(12, 3, 1, 1, KNIT_SHINE), px(9, 2, 2, 1, KNIT_SHINE),
+        px(4, 5, 2, 2, '#ffffff'), px(4, 6, 1, 1, KNIT_CUFF_SHADE), px(8, 6, 10, 1, '#ffffff'), px(16, 6, 2, 1, KNIT_CUFF_SHADE),
+      ];
     case 'host':
       // Quizmaster's white top hat with a gold band (pa0a/src/quizmaster-sprite.ts).
       return [
@@ -410,6 +427,12 @@ function renderOverlay(c: Creature) {
       return [
         px(7, 8, 12, 1, INK), px(9, 7, 3, 2, c.accent), px(14, 7, 3, 2, c.accent),
         px(9, 7, 1, 1, '#ffffff'), px(14, 7, 1, 1, '#ffffff'),
+      ];
+    case 'knithat':
+      // Santa's red-and-white striped scarf.
+      return [
+        px(8, 16, 10, 1, KNIT_RED), px(10, 16, 1, 1, '#ffffff'), px(13, 16, 1, 1, '#ffffff'), px(16, 16, 1, 1, '#ffffff'),
+        px(12, 17, 2, 2, KNIT_RED), px(12, 18, 2, 1, KNIT_SHADE), px(13, 17, 1, 1, '#ffffff'),
       ];
     case 'host':
       // Quizmaster's gold bow tie with an amber knot.
@@ -532,6 +555,22 @@ export const TEAM_PALETTES = ['cyan', 'coral', 'mint', 'yellow', 'blue', 'green'
 export const isPalette = (name: string): boolean => Object.prototype.hasOwnProperty.call(PALETTES, name);
 /** A plain guest creature (no accessory) in one of the avatar palettes; an unknown name gets cyan. */
 export const paletteCreature = (name: string): Creature => ({ ...(PALETTES[name] ?? PALETTES.cyan), accessory: 'none' });
+/** The 8 creatures a guest picks on the pocket page (pa5 guest/src/dom.ts AVATARS), by id. */
+export const GUEST_CREATURES: Record<string, [string, Accessory]> = {
+  antenna: ['yellow', 'antenna'],
+  ears: ['blue', 'ears'],
+  visor: ['cyan', 'visor'],
+  spikes: ['green', 'spikes'],
+  beret: ['coral', 'beret'],
+  goggles: ['red', 'goggles'],
+  bulb: ['mint', 'bulb'],
+  horns: ['violet', 'horns'],
+};
+/** A guest's creature from its page id; an unknown or missing id gets the first one. */
+export const guestCreature = (id: string | null | undefined): Creature => {
+  const [palette, accessory] = (id && Object.prototype.hasOwnProperty.call(GUEST_CREATURES, id) ? GUEST_CREATURES[id] : null) ?? GUEST_CREATURES.antenna;
+  return { ...PALETTES[palette], accessory };
+};
 
 
 export const ModernAvatar: React.FC<ModernAvatarProps> = ({
