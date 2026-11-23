@@ -5,7 +5,7 @@
 //! host key (cookie `kph_<code>`, or `Authorization: Bearer`) opens one pocket only, and neither
 //! is ever accepted on the main port.
 
-use super::kits::Viewer;
+use super::kits::{KitCtx, Viewer};
 use super::{keys, PResult, PocketError, Snapshot};
 use crate::db::pocket::PlayerRow;
 use crate::server::AppState;
@@ -338,9 +338,11 @@ async fn page_file(Path(file): Path<String>) -> Response {
 }
 
 /// The public facts anyone with the link sees before joining (`info`, and the page's boot
-/// without a seat): `{api, pocket}`. No names, no guest text.
+/// without a seat): `{api, pocket, view}`, where `view` is the kit's `lobby` (or `null`).
+/// No names, no guest text.
 pub fn public_json(s: &Snapshot) -> Value {
-    json!({ "api": super::API_VERSION, "pocket": super::pocket_json(s) })
+    let view = s.kit().map_or(Value::Null, |k| k.lobby(&KitCtx::new(&s.spec, &s.players, Utc::now()), &s.kit_state));
+    json!({ "api": super::API_VERSION, "pocket": super::pocket_json(s), "view": view })
 }
 
 /// What anyone with the link sees before joining: no names, no guest text.
@@ -532,10 +534,19 @@ impl WsWho {
             WsWho::Host { key, .. } => matches!(super::snapshot(state, code).await, Ok(Some(s)) if super::is_host_key(&s, key)),
         }
     }
+
+    /// The host removed this guest (not a PIN reset or a rotated host key).
+    async fn removed(&self, state: &AppState, code: &str) -> bool {
+        match self {
+            WsWho::Guest { id, .. } => matches!(state.db.pocket_player(code, id).await, Ok(Some(p)) if p.removed_at.is_some()),
+            WsWho::Host { .. } => false,
+        }
+    }
 }
 
 /// Live state: `{"type":"state", …the state JSON}` on every change this viewer can see,
-/// `{"type":"signed_out"}` when the key stops working, `{"type":"gone"}` when the pocket is
+/// `{"type":"removed"}` when the host removed this guest, `{"type":"signed_out"}` when the key
+/// otherwise stops working (PIN reset, host key rotated), `{"type":"gone"}` when the pocket is
 /// deleted. The host's remote and big screen pass `?view=host` / `?view=screen` with the host key.
 async fn ws(
     State(state): State<AppState>,
@@ -601,7 +612,9 @@ async fn serve_ws(mut socket: WebSocket, state: AppState, code: String, who: WsW
                 Ok(super::Signal::Changed(_)) | Err(RecvError::Lagged(_)) => send_state = true,
                 Ok(super::Signal::Revoked(_)) => {
                     if !who.still_valid(&state, &code).await {
-                        let _ = socket.send(Message::Text(json!({ "type": "signed_out" }).to_string())).await;
+                        // A removed guest gets its own frame, so the page shows "removed" at once
+                        let kind = if who.removed(&state, &code).await { "removed" } else { "signed_out" };
+                        let _ = socket.send(Message::Text(json!({ "type": kind }).to_string())).await;
                         let _ = socket.send(Message::Close(None)).await;
                         return;
                     }

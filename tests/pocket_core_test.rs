@@ -630,6 +630,16 @@ async fn next_state(ws: &mut Ws) -> Value {
     }
 }
 
+/// The next text frame as sent (with its `type`), skipping pings.
+async fn next_frame(ws: &mut Ws) -> Value {
+    loop {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next()).await.expect("a message within 5 s").unwrap().unwrap();
+        if let Message::Text(t) = msg {
+            return serde_json::from_str(&t).unwrap();
+        }
+    }
+}
+
 #[tokio::test]
 async fn polling_and_websocket_deliver_the_same_state() {
     let t = setup(true).await;
@@ -668,11 +678,20 @@ async fn polling_and_websocket_deliver_the_same_state() {
     let mut req = format!("ws://{addr}/api/pocket/{code}/ws").into_client_request().unwrap();
     req.headers_mut().insert("origin", format!("http://{addr}").parse().unwrap());
     assert!(tokio_tungstenite::connect_async(req).await.is_err());
-    // Removed: the socket says signed_out
+    // Removed by the host: the socket says removed (not signed_out), so the page shows it at once
     let id = polled["me"]["id"].as_str().unwrap().to_string();
     send(&t.guest, "POST", &format!("/api/pocket/{code}/host/remove"), Some(json!({ "player_id": id })), &host_req(&host)).await;
-    let msg = next_state(&mut ws).await;
-    assert_eq!(msg, json!({}), "signed_out carries nothing but its type");
+    assert_eq!(next_frame(&mut ws).await, json!({ "type": "removed" }), "removed carries nothing but its type");
+    // A PIN reset isn't a removal: that guest's socket says signed_out
+    let (pin_code, pin_host) = make(&t, json!({ "title": "Santa", "pin": true })).await;
+    let r = join(&t, &pin_code, json!({ "name": "Ola", "pin": "4821" })).await;
+    assert_eq!(r.status, StatusCode::CREATED, "{}", r.body);
+    let (ola, ola_key) = (r.body["me"]["id"].as_str().unwrap().to_string(), r.cookie(&guest::guest_cookie(&pin_code)).unwrap());
+    let mut ows = ws_connect(addr, &pin_code, Some((guest::guest_cookie(&pin_code), ola_key)), None, None).await;
+    next_state(&mut ows).await;
+    let r = send(&t.guest, "POST", &format!("/api/pocket/{pin_code}/host/reset-pin"), Some(json!({ "player_id": ola })), &host_req(&pin_host)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(next_frame(&mut ows).await, json!({ "type": "signed_out" }));
     // Deleted: a host socket hears gone
     let mut hws = ws_connect(addr, &code, None, Some(host.as_str()), Some("host")).await;
     let hstate = next_state(&mut hws).await;
@@ -857,6 +876,17 @@ async fn the_page_is_no_cache_and_its_boot_is_public() {
     let r = send(&t.guest, "GET", &format!("/api/pocket/{code}/info"), None, &Req::default()).await;
     assert_eq!(r.headers["cache-control"], "no-store");
     assert_eq!(r.body["pocket"]["code"], code.as_str());
+    // The kit's pre-join facts ride along as `view` (the test kit: round and a head count, no names)
+    assert_eq!(r.body["view"], json!({ "round": 0, "players": 1 }));
+    assert!(!r.body.to_string().contains("Mia"), "{}", r.body);
+    if guest::has_page() {
+        let r = send(&t.guest, "GET", &format!("/p/{code}"), None, &Req::default()).await;
+        let html = r.body.as_str().unwrap();
+        let open = r#"<script type="application/json" id="pocket-boot">"#;
+        let start = html.find(open).unwrap() + open.len();
+        let boot: Value = serde_json::from_str(&html[start..start + html[start..].find("</script>").unwrap()]).unwrap();
+        assert_eq!(boot["view"], json!({ "round": 0, "players": 1 }), "the boot is the info JSON");
+    }
     // Off: the files are 404 like everything else
     t.state.db.set_setting(pocket::SETTING, "off").await.unwrap();
     assert!(!listener::reconcile(&t.state).await);

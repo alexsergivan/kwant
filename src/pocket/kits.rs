@@ -155,6 +155,12 @@ pub trait Kit: Send + Sync + 'static {
         false
     }
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value;
+    /// What anyone with the link sees before joining (`info`, and the page's boot without a
+    /// seat, as `view`): for example the Quiz's teams with counts, rounds and start time.
+    /// Never a guest's name, answer, secret or match. `Null` (the default) means nothing.
+    fn lobby(&self, _ctx: &KitCtx, _state: &Value) -> Value {
+        Value::Null
+    }
     /// Counts for the person's pocket card on the main port. Never names a guest's secret,
     /// answer or match: counts only.
     fn host_summary(&self, _ctx: &KitCtx, _state: &Value) -> Value {
@@ -272,6 +278,10 @@ impl Kit for TestKit {
             }),
             Viewer::BigScreen => json!({ "round": state["round"], "total_taps": total, "players": players }),
         }
+    }
+
+    fn lobby(&self, ctx: &KitCtx, state: &Value) -> Value {
+        json!({ "round": state["round"], "players": ctx.players.len() })
     }
 
     fn host_summary(&self, _ctx: &KitCtx, state: &Value) -> Value {
