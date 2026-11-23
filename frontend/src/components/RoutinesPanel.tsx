@@ -472,6 +472,11 @@ export const runCardTarget = (routine: Routine, cardId: string): NotifiedChat =>
 });
 
 /** One run in History: badge, when, how it started, Open the card (26d), Open result and the run's note. */
+/** How a run started, as History says it: a Run now press, AutoFix's own retry of a failed run
+ *  (routine-retry-once: never "Run now" for a press the person didn't make), or the schedule. */
+export const runTriggerLabel = (trigger: string): string =>
+  trigger === 'manual' ? 'Run now' : trigger === 'retry' ? 'Retried automatically' : 'Scheduled';
+
 export const RunRow: React.FC<{
   routine: Routine;
   run: RoutineRun;
@@ -488,7 +493,7 @@ export const RunRow: React.FC<{
     <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400" data-run-row={r.id} data-run-state={st.tone}>
       <StatusBadge status={r.status} error={r.error} answeredLater={r.answered_later} wait={wait} inHistory />
       <span>{formatWhen(r.started_at)}</span>
-      <span className="text-zinc-400">{r.trigger === 'manual' ? 'Run now' : 'Scheduled'}</span>
+      <span className="text-zinc-400">{runTriggerLabel(r.trigger)}</span>
       {/* Mira re-check 6: on a phone the links always sit on their own line under the badge. */}
       {(t || card) && <span className="basis-full h-0 sm:hidden" aria-hidden="true" />}
       {card && (

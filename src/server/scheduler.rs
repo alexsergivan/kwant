@@ -504,6 +504,11 @@ pub async fn run_now(State(state): State<AppState>, Path(id): Path<String>) -> R
     }
 }
 
+/// The trigger of AutoFix's own run of a failed routine (routine-retry-once). Like `schedule`, it is
+/// no press: only `manual` (Run now) takes the press-only paths below. History says "Retried
+/// automatically".
+pub const RETRY: &str = "retry";
+
 /// Records a run and starts it in the background, or records it as skipped when the routine is
 /// still running. `None` if the run couldn't be recorded.
 pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> Option<RoutineRun> {
@@ -599,13 +604,20 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
         state.running_routines.lock().await.remove(&routine.id);
         let _ = state.event_sender.send(RuntimeEvent::RoutineRun {
             routine_id: routine.id.clone(),
-            run_id,
+            run_id: run_id.clone(),
             status: status.into(),
             waiting: false,
             approval_id: None,
         });
-        // A run that needs the person already has its card in the Inbox: no second notice
-        if matches!(status, "error" | "incomplete") {
+        // A run that needs the person already has its card in the Inbox: no second notice. One
+        // failure is one notice: none while AutoFix will run it again, and the last attempt's says
+        // how often it was retried (routine-retry-once)
+        let retries = if matches!(status, "error" | "incomplete") {
+            super::missions::autofix::routine_run_failed(&state, &routine.id, &run_id, status).await
+        } else {
+            None
+        };
+        if let Some(retries) = retries {
             let kwant_name = state
                 .db
                 .get_kwant(&routine.kwant_id)
@@ -622,7 +634,7 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
                     kwant_name,
                     channel_id: routine.channel_id.clone(),
                     title: format!("Routine \"{}\" failed", routine.name),
-                    body: failed_body(&routine.name, err),
+                    body: failed_body(&routine.name, err, retries),
                     thread_id: None,
                     card_id: None,
                 },
@@ -634,16 +646,22 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
 }
 
 /// The notification for a routine run that failed (0.9.5): what stopped, why (the error's first
-/// line, clipped) and what to do about it.
-pub fn failed_body(name: &str, err: Option<&str>) -> String {
+/// line, clipped) and what to do about it; then, when AutoFix ran it again first, how often.
+pub fn failed_body(name: &str, err: Option<&str>, retries: i64) -> String {
     let why = err.map(super::stopped::short_line).filter(|w| !w.is_empty());
     let why: Option<String> = why.map(|w| {
         let w = w.trim_end_matches('.');
         if w.chars().count() > 160 { format!("{}…", w.chars().take(160).collect::<String>().trim_end()) } else { w.to_string() }
     });
-    match why {
+    let body = match why {
         Some(why) => format!("The routine \"{name}\" did not finish: {why}. Open the routine to see the run or run it again."),
         None => format!("The routine \"{name}\" did not finish. Open the routine to see the run or run it again."),
+    };
+    match retries {
+        n if n <= 0 => body,
+        1 => format!("{body} It was retried once."),
+        2 => format!("{body} It was retried twice."),
+        n => format!("{body} It was retried {n} times."),
     }
 }
 
@@ -1268,13 +1286,23 @@ mod no_silent_stop_tests {
     #[test]
     fn a_failed_routine_says_why_and_what_to_do() {
         assert_eq!(
-            failed_body("Daily digest", Some("⚠️ [Ben] The model sent nothing for 300 s, so this reply was stopped.\nmore")),
+            failed_body("Daily digest", Some("⚠️ [Ben] The model sent nothing for 300 s, so this reply was stopped.\nmore"), 0),
             "The routine \"Daily digest\" did not finish: The model sent nothing for 300 s, so this reply was stopped. Open the routine to see the run or run it again."
         );
-        assert_eq!(failed_body("D", None), "The routine \"D\" did not finish. Open the routine to see the run or run it again.");
-        assert_eq!(failed_body("D", Some("  \n ")), failed_body("D", None));
-        let long = failed_body("D", Some(&"x".repeat(500)));
+        assert_eq!(failed_body("D", None, 0), "The routine \"D\" did not finish. Open the routine to see the run or run it again.");
+        assert_eq!(failed_body("D", Some("  \n "), 0), failed_body("D", None, 0));
+        let long = failed_body("D", Some(&"x".repeat(500)), 0);
         assert!(long.contains(&format!("{}…", "x".repeat(160))) && !long.contains(&"x".repeat(161)), "{long}");
+    }
+
+    /// routine-retry-once: the last attempt's notice says how often AutoFix ran it again.
+    #[test]
+    fn a_retried_routine_says_how_often() {
+        let base = "The routine \"D\" did not finish: it died. Open the routine to see the run or run it again.";
+        assert_eq!(failed_body("D", Some("it died"), 0), base);
+        assert_eq!(failed_body("D", Some("it died"), 1), format!("{base} It was retried once."));
+        assert_eq!(failed_body("D", Some("it died"), 2), format!("{base} It was retried twice."));
+        assert_eq!(failed_body("D", Some("it died"), 4), format!("{base} It was retried 4 times."));
     }
 }
 
