@@ -58,6 +58,12 @@ export class GuestApp {
   private toast: HTMLElement | null = null;
   /** Per question: the answer this phone sent first. First tap counts, later taps are ignored. */
   private sent = new Map<string, Answer>();
+  /** Questions whose answer the box has taken (an ok or 409 reply, or a state with `answer`). Until then it is pending. */
+  private confirmed = new Set<string>();
+  private inflight = new Set<string>();
+  /** Questions whose answer failed 6 times in a row: the page says "Couldn't send. Trying again." and keeps trying. */
+  private failing = new Set<string>();
+  private resendTimer = 0;
   private textDraft = '';
   private numDraft: number | null = null;
   private preloaded = new Set<string>();
@@ -113,9 +119,16 @@ export class GuestApp {
     this.env.clearInterval(this.awayTick);
     this.env.clearTimeout(this.toastTimer);
     this.env.clearTimeout(this.infoTimer);
+    this.env.clearTimeout(this.resendTimer);
   }
 
   tryNow = (): void => this.live.now();
+
+  /** The phone woke, came back online or restored the page: a socket may have died quietly, so ask the box now. */
+  wake(): void {
+    if (this.gone || !this.view?.me) return;
+    this.live.now();
+  }
 
   // ---------- incoming ----------
 
@@ -124,7 +137,11 @@ export class GuestApp {
     this.view = v;
     if (v.phase === 'removed') this.gone = 'removed';
     const q = v.question;
-    if (q?.answer) this.sent.set(q.id, q.answer);
+    if (q?.answer) {
+      this.sent.set(q.id, q.answer);
+      this.confirmed.add(q.id);
+      this.failing.delete(q.id);
+    }
     this.stamp = this.env.now();
     if (v.phase === 'lobby' || v.phase === 'between') this.preload(v.preload ?? []);
     const key = this.keyOf(v);
@@ -133,11 +150,22 @@ export class GuestApp {
       this.key = key;
       this.draw();
     }
+    this.resend(v);
+  }
+
+  /** The box is answering again but this question has no answer from this phone: send the pending one again. */
+  private resend(v: GuestView): void {
+    const q = v.question;
+    if (this.away || v.phase !== 'question' || !q || q.answer) return;
+    const a = this.sent.get(q.id);
+    if (!a || this.confirmed.has(q.id) || this.inflight.has(q.id)) return;
+    this.env.clearTimeout(this.resendTimer);
+    void this.send(q, a, this.failing.has(q.id) ? 5 : 0);
   }
 
   private keyOf(v: GuestView): string {
     const q = v.question;
-    const answered = q && this.sent.has(q.id) ? 'a' : '';
+    const answered = q?.answer ? 'L' : q && this.sent.has(q.id) ? 'a' : '';
     const r = v.reveal;
     return [v.phase, q?.id ?? '', answered, r ? `${r.question.id}${r.outcome}` : '', v.between?.after_round ?? '', v.me ? 'me' : ''].join('|');
   }
@@ -710,7 +738,7 @@ export class GuestApp {
       b.addEventListener('click', () => this.tapChoice(q, k, wrap));
       wrap.append(b);
     });
-    const note = h('p', { class: 'small center', 'data-note': '' }, picked ? 'Sent. Waiting for the others.' : 'Tap one. Your first tap counts.');
+    const note = h('p', { class: 'small center', 'data-note': '', role: 'status' }, picked ? this.sendNote(q.id) : 'Tap one. Your first tap counts.');
     return h('div', { class: 'stack' }, wrap, note);
   }
 
@@ -726,7 +754,7 @@ export class GuestApp {
       if (!on) b.disabled = true;
     });
     const n = this.root.querySelector('[data-note]');
-    if (n) n.textContent = 'Sent. Waiting for the others.';
+    if (n) n.textContent = this.sendNote(q.id);
     void this.send(q, a);
   }
 
@@ -745,13 +773,13 @@ export class GuestApp {
     }) as HTMLInputElement;
     input.value = sent && 'text' in sent ? sent.text : this.textDraft;
     input.addEventListener('input', () => (this.textDraft = input.value));
-    const btn = h('button', { type: 'submit', class: 'gbtn', 'data-answer': '', disabled: !!sent }, sent ? 'Sent' : 'Send answer');
+    const btn = h('button', { type: 'submit', class: 'gbtn', 'data-answer': '', 'data-send': '', disabled: !!sent }, sent ? this.sendLabel(q.id) : 'Send answer');
     const form = h(
       'form',
       { class: 'stack' },
       h('div', null, input, h('p', { class: 'small hint' }, q.hint || "Spelling doesn't have to be perfect. Quizmaster settles close ones.")),
       btn,
-      h('p', { class: 'small center', 'data-note': '' }),
+      h('p', { class: 'small center', 'data-note': '', role: 'status' }, sent ? this.failNote(q.id) : ''),
     );
     form.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -761,7 +789,7 @@ export class GuestApp {
       this.sent.set(q.id, a);
       input.disabled = true;
       (btn as HTMLButtonElement).disabled = true;
-      btn.textContent = 'Sent';
+      btn.textContent = this.sendLabel(q.id);
       void this.send(q, a);
     });
     return [form];
@@ -781,7 +809,7 @@ export class GuestApp {
       disabled: !!sent,
     }) as HTMLInputElement;
     input.value = String(val);
-    const send = h('button', { type: 'submit', class: 'gbtn', 'data-answer': '', disabled: !!sent }, `Send ${fmt(val)}`);
+    const send = h('button', { type: 'submit', class: 'gbtn', 'data-answer': '', 'data-send': '', disabled: !!sent }, sent ? this.sendLabel(q.id) : `Send ${fmt(val)}`);
     const set = (x: number) => {
       if (n.min != null) x = Math.max(n.min, x);
       if (n.max != null) x = Math.min(n.max, x);
@@ -808,7 +836,7 @@ export class GuestApp {
       h('div', { class: 'numrow' }, minus, input, plus),
       h('p', { class: 'small center' }, q.hint || 'Closest answer wins. Exact gets a 50 point bonus.'),
       send,
-      h('p', { class: 'small center', 'data-note': '' }),
+      h('p', { class: 'small center', 'data-note': '', role: 'status' }, sent ? this.failNote(q.id) : ''),
     );
     form.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -816,23 +844,76 @@ export class GuestApp {
       const a = { number: val };
       this.sent.set(q.id, a);
       form.querySelectorAll<HTMLButtonElement | HTMLInputElement>('[data-answer]').forEach((b) => (b.disabled = true));
-      send.textContent = 'Sent';
+      send.textContent = this.sendLabel(q.id);
       void this.send(q, a);
     });
     return [form];
   }
 
-  /** Sends an answer; a dropped connection retries the same answer once the box is back (the kit keeps the first). */
+  /** Choice note under a picked answer: pending until the box has it, and honest when it can't be sent. */
+  private sendNote(id: string): string {
+    if (this.failing.has(id)) return "Couldn't send. Trying again.";
+    return this.confirmed.has(id) ? 'Sent. Waiting for the others.' : 'Sending…';
+  }
+
+  private sendLabel(id: string): string {
+    return this.confirmed.has(id) ? 'Sent' : 'Sending…';
+  }
+
+  private failNote(id: string): string {
+    return this.failing.has(id) ? "Couldn't send. Trying again." : '';
+  }
+
+  /** Repaints the note and send button of the question on screen without redrawing it. */
+  private paintSend(id: string): void {
+    if (this.view?.question?.id !== id) return;
+    const n = this.root.querySelector('[data-note]');
+    const b = this.root.querySelector('[data-send]');
+    if (b) {
+      b.textContent = this.sendLabel(id);
+      if (n) n.textContent = this.failNote(id);
+    } else if (n && this.sent.has(id)) n.textContent = this.sendNote(id);
+  }
+
+  /** The question is still open on this phone, so an answer to it is worth sending. */
+  private isOpen(q: Question): boolean {
+    return !this.gone && this.view?.phase === 'question' && this.view.question?.id === q.id;
+  }
+
+  /**
+   * Sends an answer and keeps it pending until the box takes it (ok, or 409: the first one counts). A dropped connection
+   * retries every 2 s; after 6 failures the page says so and keeps trying every 5 s while the question is open. A state
+   * for this question without `answer` (back from away, a wake, a push) sends it again (resend). A refusal frees the pick.
+   */
   private async send(q: Question, a: Answer, attempt = 0): Promise<void> {
+    if (this.confirmed.has(q.id) || this.inflight.has(q.id) || !this.isOpen(q)) return;
+    this.env.clearTimeout(this.resendTimer);
+    this.inflight.add(q.id);
     const r = await this.api.answer(q.id, a);
-    if (r.ok) {
-      if (r.view) this.show(r.view);
-      else if (this.view?.question?.id === q.id && this.view.phase === 'question') this.show({ ...this.view, question: { ...this.view.question, answer: a, secs_left: this.secsLeft(this.view.question) } });
+    this.inflight.delete(q.id);
+    if (r.ok || r.status === 409) {
+      this.confirmed.add(q.id);
+      this.failing.delete(q.id);
+      const cur = this.view?.question;
+      if (r.ok && r.view) this.show(r.view);
+      else if (cur?.id === q.id && this.view?.phase === 'question') this.show({ ...this.view, question: { ...cur, answer: cur.answer ?? a, secs_left: this.secsLeft(cur) } });
       return;
     }
-    if (r.status === 409) return; // already answered: the first one counts
-    if ((r.status === 0 || r.status >= 500) && attempt < 5) {
-      this.env.setTimeout(() => void this.send(q, a, attempt + 1), 2000);
+    if (r.status === 0 || r.status >= 500) {
+      if (attempt >= 5 && !this.failing.has(q.id)) {
+        this.failing.add(q.id);
+        this.paintSend(q.id);
+      }
+      if (this.isOpen(q)) this.resendTimer = this.env.setTimeout(() => void this.send(q, a, attempt + 1), attempt >= 5 ? 5000 : 2000);
+      return;
+    }
+    if (r.status === 401 || r.status === 403 || r.status === 404 || r.status === 410) return void this.onGone(r.status, r.error);
+    // Refused (time's up, not a valid answer): it was not taken, so the pick is freed and the screen says what is true.
+    this.sent.delete(q.id);
+    this.failing.delete(q.id);
+    if (this.isOpen(q) && this.view) {
+      this.key = '';
+      this.show(this.view);
     }
   }
 

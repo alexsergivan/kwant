@@ -479,7 +479,8 @@ test('3a: first tap counts; later taps are ignored; then locked in', async () =>
   assert.ok(btn('B').classList.contains('pick'));
   assert.equal(btn('B').getAttribute('aria-pressed'), 'true');
   assert.equal(btn('C').disabled, true);
-  assert.ok(t.text().includes('Sent. Waiting for the others.'));
+  assert.ok(t.text().includes('Sending…'), 'pending until the box takes it');
+  assert.ok(!t.text().includes('Sent.'));
   release();
   await flush();
   assert.ok(t.text().includes('Locked in'));
@@ -497,6 +498,102 @@ test('3a: an answer sent while the box blinks is retried, and a 409 keeps the fi
   assert.equal(n, 3);
   assert.deepEqual(t.calls.filter((c) => c.what === 'action').map((c) => c.body.body), [{ q: 'q8', choice: 'A' }, { q: 'q8', choice: 'A' }, { q: 'q8', choice: 'A' }]);
   t.app.stop();
+});
+
+test('D1: a lost answer is never shown as sent; it says so after 6 tries and is sent once the network is back', async () => {
+  const t = await open('choice');
+  let down = true;
+  t.box.actionReply = () => (down ? Promise.reject(new TypeError('Failed to fetch')) : null);
+  const reach = () => t.calls.filter((c) => c.what === 'action');
+  click(t.root.querySelector('button[data-answer="B"]'));
+  await flush();
+  assert.ok(t.text().includes('Sending…'));
+  await t.advance(10_500);
+  assert.equal(reach().length, 6);
+  assert.ok(t.text().includes("Couldn't send. Trying again."), t.text());
+  assert.ok(!t.text().includes('Sent.'));
+  assert.equal(t.root.querySelector('[data-note]').getAttribute('role'), 'status');
+  // The network comes back: the same answer goes again without a tap, and the box takes it.
+  down = false;
+  t.box.actionReply = null;
+  await t.advance(5000);
+  assert.deepEqual(reach().at(-1).body, { name: 'answer', body: { q: 'q8', choice: 'B' } });
+  assert.ok(t.text().includes('Locked in'), t.text());
+  const n = reach().length;
+  await t.advance(20_000);
+  assert.equal(reach().length, n, 'nothing more once the box has it');
+  t.app.stop();
+});
+
+test('D1: an answer lost while the box was away is sent again when it is back', async () => {
+  const t = await open('choice', { ws: true });
+  t.sockets[0].onopen();
+  t.box.up = false;
+  click(t.root.querySelector('button[data-answer="C"]'));
+  await flush();
+  t.sockets[0].onclose();
+  await flush();
+  assert.equal(t.screen(), 'away');
+  await t.advance(15_000);
+  t.box.up = true;
+  await t.advance(20_000);
+  assert.equal(t.screen(), 'question');
+  assert.ok(t.text().includes('Locked in'), t.text());
+  const ok = t.calls.filter((c) => c.what === 'action');
+  assert.deepEqual(ok.at(-1).body.body, { q: 'q8', choice: 'C' });
+  t.app.stop();
+});
+
+test('D1: a refused answer (time is up) frees the pick and is not retried', async () => {
+  const t = await open('choice');
+  t.box.actionReply = async () => ({ ok: false, status: 422, json: async () => ({ error: 'closed' }) });
+  click(t.root.querySelector('button[data-answer="A"]'));
+  await flush();
+  await t.advance(15_000);
+  assert.equal(t.calls.filter((c) => c.what === 'action').length, 1);
+  assert.ok(!t.text().includes('Sending…'));
+  assert.ok(!t.text().includes('Sent.'));
+  t.app.stop();
+});
+
+test('R1: a ws removed frame shows the removed screen at once and stops all traffic', async () => {
+  const t = await open('lobby', { ws: true });
+  t.sockets[0].onopen();
+  t.sockets[0].onmessage({ data: JSON.stringify({ type: 'removed' }) });
+  await flush();
+  assert.equal(t.screen(), 'removed');
+  assert.ok(t.sockets[0].closed);
+  const n = t.calls.length;
+  await t.advance(60_000);
+  assert.equal(t.calls.length, n);
+  t.app.stop();
+});
+
+test('R2: waking the phone asks state now and swaps a quiet socket for a fresh one; no seat, no traffic', async () => {
+  const t = await open('lobby', { ws: true });
+  t.sockets[0].onopen();
+  const n = t.calls.length;
+  t.app.wake();
+  await flush();
+  assert.equal(t.calls.length, n + 1);
+  assert.equal(t.calls.at(-1).what, 'state');
+  assert.ok(t.sockets[0].closed);
+  assert.equal(t.sockets.length, 2);
+  t.app.stop();
+
+  const j = await open('join');
+  const k = j.calls.length;
+  j.app.wake();
+  await flush();
+  assert.equal(j.calls.length, k);
+  j.app.stop();
+});
+
+test('R3: with no seat the kit phase never decides the screen', () => {
+  const v = m.fromState({ version: 3, pocket: { kit: 'quiz', state: 'live', title: 'Q' }, view: { phase: 'question' } }).view;
+  assert.equal(v.phase, 'join');
+  const seated = m.fromState({ version: 3, pocket: { kit: 'quiz', state: 'live' }, me: { name: 'Mia', avatar: 'a' }, view: { phase: 'question' } }).view;
+  assert.equal(seated.phase, 'question');
 });
 
 test('3b: text answer sends once and keeps typing across pushes', async () => {

@@ -31,3 +31,11 @@ const app = new GuestApp(
   codeFrom(w.location.pathname),
 );
 void app.start(boot());
+// A socket can die quietly while the phone sleeps or switches network: ask the box again on wake, online and restore.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') app.wake();
+});
+w.addEventListener('online', () => app.wake());
+w.addEventListener('pageshow', (e) => {
+  if (e.persisted) app.wake();
+});

@@ -1,7 +1,7 @@
 // The guest side of pa1's guest port, Pocket API v1 (pa1/impl.md): GET /p/<code> serves this page and
 // /api/pocket/<code>/* is all it talks to. state (?since=<version> gives 204 when nothing changed; the kp_<code> cookie
 // is the seat, 401 signed_out without one), info (public facts, before joining), join {name, avatar, team}, rejoin
-// {name} (by name, for "That's me"), action {name, body}, ws (`{type:"state", ...}` pushes, `signed_out`, `gone`;
+// {name} (by name, for "That's me"), action {name, body}, ws (`{type:"state", ...}` pushes, `signed_out`, `gone`, `removed`;
 // without WebSocket the page polls state every 2 s). Same origin only: the CSP allows nothing else.
 import type { Answer, GuestView, Retention } from './view';
 
@@ -53,7 +53,8 @@ export function fromState(json: unknown): { view: GuestView; version?: number } 
     v: 1,
     kit: str(pocket.kit) ?? kv.kit ?? '',
     title: kv.title ?? str(pocket.title) ?? '',
-    phase: ended ? 'ended' : full ? 'full' : (kv.phase ?? (me ? 'lobby' : 'join')),
+    // With no seat the kit's phase never decides the screen: an unseated guest is drawn the join screen.
+    phase: ended ? 'ended' : full ? 'full' : me ? (kv.phase ?? 'lobby') : 'join',
     max_players: most ?? kv.max_players,
     player_count: kv.player_count ?? players,
     retention: retentionFrom(pocket.retention) ?? kv.retention,
@@ -136,7 +137,7 @@ export class Live {
   private timer = 0;
   private tries = 0;
   private wsFailed = 0;
-  private stopped = false;
+  private stopped = true;
   isAway = false;
 
   constructor(
@@ -162,9 +163,20 @@ export class Live {
     this.ws = null;
   }
 
-  /** "Try now": skip the wait. */
+  /**
+   * "Try now", or the phone woke / came back online: skip the wait and ask `state`. A socket that may have died quietly
+   * (Wi-Fi to cellular, sleep) is dropped first; `retry` opens a fresh one once `state` answers.
+   */
   now(): void {
+    if (this.stopped) return;
     this.env.clearTimeout(this.timer);
+    const old = this.ws;
+    this.ws = null;
+    if (old) {
+      old.onclose = null;
+      old.onmessage = null;
+      old.close();
+    }
     void this.retry();
   }
 
@@ -193,9 +205,10 @@ export class Live {
       } catch {
         return; // ignore a bad frame
       }
-      if (msg?.type === 'signed_out' || msg?.type === 'gone') {
+      if (msg?.type === 'signed_out' || msg?.type === 'gone' || msg?.type === 'removed') {
         this.stop();
-        this.on.gone(msg.type === 'gone' ? 404 : 401, msg.type === 'gone' ? 'not_found' : 'signed_out');
+        if (msg.type === 'removed') this.on.gone(403, 'removed');
+        else this.on.gone(msg.type === 'gone' ? 404 : 401, msg.type === 'gone' ? 'not_found' : 'signed_out');
         return;
       }
       const v = msg?.type === 'state' ? this.api.take(msg) : undefined;
