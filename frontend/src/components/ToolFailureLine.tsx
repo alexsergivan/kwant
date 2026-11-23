@@ -33,7 +33,7 @@ export const ToolFailureLine: React.FC<{
       <p className="min-w-0 break-words">
         {urgent && <span className="sr-only">Needs you: </span>}
         {meta.line}
-        {!open && (removed ? <span className="text-zinc-500"> Removed.</span> : <span className="text-ok"> It works again.</span>)}
+        {!open && (removed ? <span className="text-zinc-400"> Removed.</span> : <span className="text-ok"> It works again.</span>)}
         {open && meta.fix && onFix && (
           <>
             {' '}

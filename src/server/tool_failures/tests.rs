@@ -375,6 +375,6 @@ fn prompt_names_stay_on_one_line() {
     assert_eq!(prompt_name(&"x".repeat(300)).len(), 100);
     assert_eq!(
         signed_in_prompt("Tasklane"),
-        "[You can use Tasklane again: the person signed in.]\nCarry on with what you were doing when it stopped."
+        "[You can use Tasklane again: the person signed in.]\nCarry on with what you were doing when it stopped. If it's already done or no longer needed, say so in one line."
     );
 }

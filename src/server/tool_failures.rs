@@ -853,7 +853,7 @@ pub fn prompt_name(name: &str) -> String {
 /// The first words of the turn that carries a chat on after the person signed in again.
 pub fn signed_in_prompt(connection: &str) -> String {
     format!(
-        "[You can use {} again: the person signed in.]\nCarry on with what you were doing when it stopped.",
+        "[You can use {} again: the person signed in.]\nCarry on with what you were doing when it stopped. If it's already done or no longer needed, say so in one line.",
         prompt_name(connection)
     )
 }
