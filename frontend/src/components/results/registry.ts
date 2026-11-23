@@ -22,6 +22,7 @@ import { Findings, validFindings } from './Findings';
 import { Verification, validVerification } from './Verification';
 import { Files, validFiles } from './Files';
 import { Recipe, validRecipe } from './Recipe';
+import { Pocket, validPocket } from './Pocket';
 
 /** One cell or list item of the reply as react-markdown drew it, plus its plain text for matching. */
 export interface ReplyPart {
@@ -83,6 +84,7 @@ export const REGISTRY: { [T in BlockType]?: Renderer<BlockOf<T>> } = {
   verification: { validate: validVerification, Component: Verification },
   files: { validate: validFiles, Component: Files },
   recipe: { validate: validRecipe, Component: Recipe },
+  pocket: { validate: validPocket, Component: Pocket },
 };
 
 const count = (block: SmartBlock): number | null => {

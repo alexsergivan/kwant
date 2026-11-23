@@ -285,6 +285,148 @@ const files: Fixture = {
   }),
 };
 
+
+// pocket (pa4): the Pocket card in its 7 states (pa0a/design.md §1) plus paused and the results card (§6).
+// A slot block after Quizmaster's reply. Names, scores, addresses and costs are made up, after Mira's mockups.
+const POCKET_WIFI = 'http://192.168.1.20:7480/p/fq7k2m';
+const POCKET_ANYWHERE = 'https://quiet-otter-lamp.trycloudflare.com/p/fq7k2m';
+const ROUNDS = [
+  { label: 'Round 1', topic: 'Music', written: 10, total: 10 },
+  { label: 'Round 2', topic: 'Sport', written: 10, total: 10 },
+  { label: 'Round 3', topic: 'Film', written: 4, total: 10 },
+  { label: 'Round 4', topic: 'Picture round', written: 0, total: 10 },
+];
+const pocketBase = {
+  id: 'b-pocket',
+  type: 'pocket',
+  source: { kind: 'slot' },
+  provenance: { kind: 'kwant_data', ref: 'pocket:fq7k2m' },
+  code: 'fq7k2m',
+  kit: 'quiz',
+  name: 'Friday Pub Quiz',
+  when: 'Fri, Nov 27 · 8:00 PM · 40 questions · teams of up to 4',
+  state: 'writing',
+  paused: false,
+  progress: null,
+  rounds: [],
+  checks: null,
+  dry_run: null,
+  eta: null,
+  opens_line: null,
+  live: null,
+  join: null,
+  ended: null,
+  budget: null,
+  results: null,
+} as const;
+const passedRun = { players: 30, passed: true, stopped_at: null, what_happened: null, what_im_doing: null };
+const pocketFixture = (reply: string, block: Record<string, unknown>): Fixture => ({
+  reply,
+  results: set({ ...pocketBase, ...block } as unknown as SmartBlock),
+});
+export const POCKET_FIXTURES = {
+  writing: pocketFixture("I'm writing your pub quiz now. Here's how it's going.", {
+    state: 'writing',
+    progress: { done: 24, total: 40 },
+    rounds: ROUNDS,
+    dry_run: { ...passedRun, passed: false },
+    eta: 'About 10 minutes.',
+    budget: { calls: 9, usd: 0.02 },
+  }),
+  checking: pocketFixture('All 40 questions are written. Checking every answer against a source now.', {
+    state: 'checking',
+    progress: { done: 31, total: 40 },
+    checks: { matched: 29, total: 40, swapped: ['Q7', 'Q22'] },
+    eta: 'About 4 minutes.',
+    budget: { calls: 13, usd: 0.03 },
+  }),
+  dryRunStopped: pocketFixture("The dry run stopped, so there's no QR code yet.", {
+    state: 'dry_run_stopped',
+    checks: { matched: 40, total: 40, swapped: [] },
+    dry_run: {
+      players: 30,
+      passed: false,
+      stopped_at: 'Round 4, question 3',
+      what_happened: "the picture for Q33 didn't load on 12 of 30 pretend phones, so their timers ran out.",
+      what_im_doing: "swapping in a smaller copy of the picture and running the dry run again. I'll say here when it passes.",
+    },
+    budget: { calls: 16, usd: 0.04 },
+  }),
+  ready: pocketFixture('Your quiz is ready. Every answer has a source and the dry run passed.', {
+    state: 'ready',
+    checks: { matched: 40, total: 40, swapped: [] },
+    dry_run: passedRun,
+    opens_line: 'Joining opens Fri at 7:30 PM, 30 minutes before the start',
+    join: { mode: 'wifi', wifi_url: POCKET_WIFI, anywhere_url: POCKET_ANYWHERE },
+    budget: { calls: 15, usd: 0.04 },
+  }),
+  readyAnywhere: pocketFixture('Your quiz is ready. Every answer has a source and the dry run passed.', {
+    state: 'ready',
+    checks: { matched: 40, total: 40, swapped: [] },
+    dry_run: passedRun,
+    opens_line: 'Joining opens Fri at 7:30 PM, 30 minutes before the start',
+    join: { mode: 'anywhere', wifi_url: POCKET_WIFI, anywhere_url: POCKET_ANYWHERE },
+    budget: { calls: 15, usd: 0.04 },
+  }),
+  live: pocketFixture('The quiz is on.', {
+    state: 'live',
+    dry_run: passedRun,
+    live: {
+      players: 23,
+      teams: 6,
+      leader: { name: 'Quizzly Bears', points: 1840 },
+      now: 'Round 2 of 4 · question 6 of 10',
+      palettes: ['cyan', 'coral', 'mint', 'yellow', 'blue', 'violet'],
+    },
+    join: { mode: 'wifi', wifi_url: POCKET_WIFI, anywhere_url: POCKET_ANYWHERE },
+    budget: { calls: 17, usd: 0.05 },
+  }),
+  paused: pocketFixture('Paused for the break.', {
+    state: 'live',
+    paused: true,
+    dry_run: passedRun,
+    live: {
+      players: 23,
+      teams: 6,
+      leader: { name: 'Quizzly Bears', points: 1840 },
+      now: 'Round 2 of 4 · paused after question 6',
+      palettes: ['cyan', 'coral', 'mint', 'yellow', 'blue', 'violet'],
+    },
+    join: { mode: 'wifi', wifi_url: POCKET_WIFI, anywhere_url: POCKET_ANYWHERE },
+    budget: { calls: 17, usd: 0.05 },
+  }),
+  ended: pocketFixture('That was the Friday Pub Quiz. Well played, everyone.', {
+    state: 'ended',
+    dry_run: passedRun,
+    ended: { at: '10:12 PM', winner: { name: 'Quizzly Bears', points: 3420 }, stats: '23 players in 6 teams · 40 questions', deletes_on: 'Fri, Dec 4' },
+    budget: { calls: 19, usd: 0.05 },
+  }),
+  results: pocketFixture("Here are the results of the Friday Pub Quiz.", {
+    state: 'ended',
+    dry_run: passedRun,
+    ended: { at: '10:12 PM', winner: { name: 'Quizzly Bears', points: 3420 }, stats: '23 players in 6 teams · 40 questions', deletes_on: 'Fri, Dec 4' },
+    budget: { calls: 19, usd: 0.05 },
+    results: {
+      teams: [
+        { name: 'Quizzly Bears', players: 4, points: 3420, palette: 'cyan', members: ['Ana', 'Ben', 'Chloe', 'Dev'] },
+        { name: 'Les Quizerables', players: 4, points: 3180, palette: 'coral', members: [] },
+        { name: 'Agatha Quiztie', players: 4, points: 2960, palette: 'mint', members: [] },
+        { name: 'The Know-It-Ales', players: 4, points: 2710, palette: 'yellow', members: [] },
+        { name: 'Trivia Newton-John', players: 4, points: 2390, palette: 'blue', members: [] },
+        { name: 'Table 6', players: 3, points: 1980, palette: 'violet', members: [] },
+      ],
+      margin: 240,
+      missed: [
+        { label: 'Q33', question: 'Name this bridge', answer: 'Pont du Gard', pct_right: 9 },
+        { label: 'Q18', question: 'Year the first iPod came out', answer: '2001', pct_right: 17 },
+        { label: 'Q27', question: 'Smallest planet', answer: 'Mercury', pct_right: 26 },
+      ],
+      near_misses: 5,
+      near_misses_accepted: 3,
+    },
+  }),
+} satisfies Record<string, Fixture>;
+
 export const FIXTURES = {
   comparison,
   chartLine,
@@ -299,4 +441,5 @@ export const FIXTURES = {
   verification,
   files,
   recipe,
+  pocket: POCKET_FIXTURES.ready,
 } satisfies Record<string, Fixture>;

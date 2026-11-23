@@ -48,6 +48,7 @@ const TYPE_LABEL: Record<SmartBlock['type'], string> = {
   findings: 'Findings',
   verification: 'Checks',
   files: 'Files',
+  pocket: 'Pocket app',
 };
 
 /** Where the block's data came from, in plain words (plan §A.6). */
@@ -55,6 +56,7 @@ export function evidenceText(block: SmartBlock): string {
   const p = block.provenance;
   if (p.kind !== 'kwant_data') return 'From this reply';
   if (p.ref.startsWith('task:')) return 'From task checks';
+  if (p.ref.startsWith('pocket:')) return 'From your pocket app';
   const id = p.ref.slice('attachment:'.length);
   const file = block.type === 'files' ? block.items.find((f) => f.attachment_id === id) : undefined;
   return file ? `From attachment ${file.name}` : block.type === 'files' && block.items.length > 1 ? 'From attachments' : 'From an attachment';
@@ -269,19 +271,22 @@ export const SmartResult: React.FC<SmartResultProps> = ({ raw, reply, messageId,
     setAsText(!asText);
   };
   const name = block.title ?? TYPE_LABEL[block.type];
+  const pocket = block.type === 'pocket';
+  const own = pocket || block.type === 'recipe';
 
   return (
     <div role="group" aria-label={name} data-smart-frame={block.type} className={slot ? 'mt-3 min-w-0 max-w-full' : 'min-w-0 max-w-full'}>
       {/* A recipe's card already leads with the dish name. */}
-      {slot && block.title && block.type !== 'recipe' && <div className="mb-1.5 text-xs font-semibold text-zinc-300">{block.title}</div>}
-      {asText ? (
+      {/* A Pocket card leads with its own name, and has its own actions and footer (pa4). */}
+      {slot && block.title && !own && <div className="mb-1.5 text-xs font-semibold text-zinc-300">{block.title}</div>}
+      {asText && !pocket ? (
         text
       ) : (
         <SmartResultBoundary fallback={text}>
           <Component block={block} messageId={messageId} reply={reply} ask={askAbout} />
         </SmartResultBoundary>
       )}
-      <Footer block={block} messageId={messageId} asText={asText} onToggle={toggle} />
+      {!pocket && <Footer block={block} messageId={messageId} asText={asText} onToggle={toggle} />}
     </div>
   );
 };

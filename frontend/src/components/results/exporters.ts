@@ -37,11 +37,32 @@ export function blockRows(block: SmartBlock): Row[] {
       });
     case 'steps':
       return block.items.map(({ text, done, when, owner }) => ({ ...(when != null ? { when } : {}), step: text, ...(owner != null ? { owner } : {}), ...(done != null ? { done } : {}) }));
+    case 'pocket':
+      // A live thing, not a data set: Show as text and the render-error fallback get its facts in words.
+      return pocketRows(block);
     case 'recipe':
       return block.ingredients.map((i) => ({ ...(i.group ? { group: i.group } : {}), ingredient: i.qty ? joinLine(i.qty, i.text) : i.text }));
     default:
       return block.items.map(({ id: _id, ...rest }) => rest as Row);
   }
+}
+
+const POCKET_STATE_TEXT = { writing: 'Writing', checking: 'Checking', dry_run_stopped: 'Dry run stopped', ready: 'Ready', live: 'Live', ended: 'Ended' } as const;
+
+function pocketRows(block: Extract<SmartBlock, { type: 'pocket' }>): Row[] {
+  const rows: Row[] = [{ what: 'Pocket app', value: block.name }, { what: 'State', value: `${POCKET_STATE_TEXT[block.state]}${block.paused ? ' (paused)' : ''}` }];
+  if (block.when) rows.push({ what: 'When', value: block.when });
+  if (block.progress) rows.push({ what: 'Progress', value: `${block.progress.done} of ${block.progress.total}` });
+  if (block.checks) rows.push({ what: 'Answers checked', value: `${block.checks.matched} of ${block.checks.total}` });
+  if (block.live) rows.push({ what: 'Players', value: `${block.live.players} in ${block.live.teams} teams` });
+  // The join link is shown only once a dry run passed, the same rule as the QR code.
+  const passed = block.state === 'live' || (block.state === 'ready' && block.dry_run?.passed === true);
+  const link = passed && block.join ? (block.join.mode === 'wifi' ? block.join.wifi_url : block.join.anywhere_url) : null;
+  if (link) rows.push({ what: 'Join link', value: link });
+  const teams = block.results?.teams ?? [];
+  teams.forEach((t, i) => rows.push({ what: `${i + 1}. ${t.name}`, value: `${t.points} points` }));
+  if (!teams.length && block.ended?.winner) rows.push({ what: 'Winners', value: `${block.ended.winner.name}, ${block.ended.winner.points} points` });
+  return rows;
 }
 
 const cell = (v: unknown) => (v == null ? '' : typeof v === 'string' ? plainText(v) : String(v));

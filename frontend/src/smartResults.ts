@@ -256,7 +256,87 @@ export interface RecipeBlock extends BlockCommon<'recipe'> {
   notes: string[];
 }
 
+/** Pocket apps (pa4): where a pocket is in its life. `paused` is a flag on `live`, not a state. */
+export type PocketState = 'writing' | 'checking' | 'dry_run_stopped' | 'ready' | 'live' | 'ended';
+export type PocketJoinMode = 'wifi' | 'anywhere';
+export interface PocketRound {
+  /** "Round 1" */
+  label: string;
+  /** "90s music"; null when the round has no topic. */
+  topic: string | null;
+  written: number;
+  total: number;
+}
+export interface PocketTeam {
+  name: string;
+  players: number;
+  points: number;
+  /** An avatar palette ("cyan"); null: the join-order palette (design.md "Team colours"). */
+  palette: string | null;
+  /** First names, results only; never more than the team's players. */
+  members: string[];
+}
+export interface PocketMiss {
+  /** "Q27" */
+  label: string;
+  question: string;
+  answer: string | null;
+  /** 0-100 */
+  pct_right: number;
+}
+export interface PocketResults {
+  /** 1-12 teams, best first. */
+  teams: PocketTeam[];
+  /** Points ahead of second place; null with one team. */
+  margin: number | null;
+  /** 0-3 questions, most missed first. */
+  missed: PocketMiss[];
+  near_misses: number | null;
+  near_misses_accepted: number | null;
+}
+/**
+ * A pocket app's card in chat (pa4, pa0a/design.md §1 and §6); source is always slot. Every time and
+ * date is display text the server wrote for the person's time zone ("Fri, Nov 27 · 8:00 PM").
+ * Emitted by the bot's pocket tools (pa3); impl.md documents the shape.
+ */
+export interface PocketBlock extends BlockCommon<'pocket'> {
+  /** The pocket's code on the box (pocketApi). */
+  code: string;
+  /** "quiz" */
+  kit: string;
+  /** "Friday Pub Quiz" */
+  name: string;
+  /** "Fri, Nov 27 · 8:00 PM · 4 rounds · 40 questions · teams of up to 4" */
+  when: string | null;
+  state: PocketState;
+  /** Live only: the timer is stopped. */
+  paused: boolean;
+  /** Writing: questions written; checking: answers checked. */
+  progress: { done: number; total: number } | null;
+  /** Writing: 0-8 rounds with their counts. */
+  rounds: PocketRound[];
+  /** Answers checked against a source; `swapped` names the replaced questions ("Q14"). */
+  checks: { matched: number; total: number; swapped: string[] } | null;
+  /** The dry run with pretend players. `stopped_at`, `what_happened`, `what_im_doing` on dry_run_stopped. */
+  dry_run: { players: number; passed: boolean; stopped_at: string | null; what_happened: string | null; what_im_doing: string | null } | null;
+  /** "About 1 more minute." while writing or checking. */
+  eta: string | null;
+  /** Ready: "The lobby opens Fri at 7:30 PM by itself. I'll remind you on Thursday evening." */
+  opens_line: string | null;
+  /** Live: the game so far. */
+  live: { players: number; teams: number; leader: { name: string; points: number } | null; now: string | null; palettes: string[] } | null;
+  /** Ready and live: how friends join. A URL that isn't known yet is null. */
+  join: { mode: PocketJoinMode; wifi_url: string | null; anywhere_url: string | null } | null;
+  /** Ended: "10:12 PM", the winner, the stats line, the deletion date ("Fri, Dec 4"). */
+  ended: { at: string; winner: { name: string; points: number } | null; stats: string | null; deletes_on: string | null } | null;
+  /** Bot calls and spend so far on the person's account. */
+  budget: { calls: number; usd: number } | null;
+  /** Ended with results: the card is the results card (design.md §6). */
+  results: PocketResults | null;
+}
+
 export type SmartBlock =
+  | PocketBlock
   | RecipeBlock
   | ComparisonBlock
   | ChartBlock
@@ -348,7 +428,7 @@ export function parseProvenance(v: unknown): Provenance | null {
   if (!isObj(v)) return null;
   if (v.kind === 'reply_text') return { kind: 'reply_text' };
   if (v.kind === 'bot_declared' && isText(v.tool_call_id, 200)) return { kind: 'bot_declared', tool_call_id: v.tool_call_id };
-  if (v.kind === 'kwant_data' && typeof v.ref === 'string' && /^(task|attachment):[\w.-]{1,120}$/.test(v.ref)) return { kind: 'kwant_data', ref: v.ref };
+  if (v.kind === 'kwant_data' && typeof v.ref === 'string' && /^(task|attachment|pocket):[\w.-]{1,120}$/.test(v.ref)) return { kind: 'kwant_data', ref: v.ref };
   return null;
 }
 

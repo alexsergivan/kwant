@@ -145,7 +145,7 @@ type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
   | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
   | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
-  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'none';
+  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'host' | 'none';
 
 export interface Creature {
   body: string;
@@ -211,6 +211,7 @@ export const AVATAR_STYLES: Array<{ id: string; label: string }> = [
   { id: 'builder', label: 'Builder' },
   { id: 'zen', label: 'Wellbeing' },
   { id: 'home', label: 'Home' },
+  { id: 'quizmaster', label: 'Quizmaster' },
   { id: 'default', label: 'Droid' },
 ];
 
@@ -240,6 +241,8 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
   builder: ['steel', 'hardhat'],
   zen: ['blossom', 'flower'],
   home: ['gold', 'house'],
+  /** Pocket apps (pa0a): a violet creature in a white top hat and a gold bow tie. */
+  quizmaster: ['violet', 'host'],
 };
 
 /** Style ids (picked or saved), as opposed to a title or name passed as a hint. */
@@ -258,6 +261,8 @@ function pickCreature(role: string, name: string): Creature {
   const norm = `${role} ${name}`.toLowerCase();
   const rules: Array<[string[], keyof typeof PALETTES, Accessory]> = [
     [['laya'], 'violet', 'crown'],
+    // Before 'user'/'player': "Quizmaster" or "Pub quiz" names get the top hat.
+    [['quiz'], 'violet', 'host'],
     [['user', 'player', 'hero', 'you'], 'blue', 'ears'],
     [['architect', 'cyber_mage', 'mage'], 'violet', 'horns'],
     [['tech', 'ninja', 'pixel', 'lead'], 'cyan', 'visor'],
@@ -307,8 +312,17 @@ const FRAME_FILL: Array<[number, number, number, number]> = [
   [2, 6, 22, 14],
 ];
 
+// The top hat's side shade: sprite art, a step below the violet palette's light (#e1d6ff).
+const HAT_SHADE = '#c9b8f7';
+
 function renderAccessory(c: Creature) {
   switch (c.accessory) {
+    case 'host':
+      // Quizmaster's white top hat with a gold band (pa0a/src/quizmaster-sprite.ts).
+      return [
+        px(10, 2, 6, 3, c.light), px(15, 2, 1, 3, HAT_SHADE), px(11, 2, 1, 2, '#ffffff'),
+        px(10, 5, 6, 1, c.accent), px(7, 6, 12, 1, c.light), px(17, 6, 2, 1, HAT_SHADE),
+      ];
     case 'antenna':
       return [px(15, 6, 1, 1, INK), px(15, 3, 2, 2, c.accent), px(15, 3, 1, 1, '#ffffff')];
     case 'spikes':
@@ -397,6 +411,9 @@ function renderOverlay(c: Creature) {
         px(7, 8, 12, 1, INK), px(9, 7, 3, 2, c.accent), px(14, 7, 3, 2, c.accent),
         px(9, 7, 1, 1, '#ffffff'), px(14, 7, 1, 1, '#ffffff'),
       ];
+    case 'host':
+      // Quizmaster's gold bow tie with an amber knot.
+      return [px(9, 16, 3, 2, c.accent), px(14, 16, 3, 2, c.accent), px(12, 16, 2, 2, '#c9771a'), px(9, 16, 1, 1, '#fff0a0')];
     case 'bowtie':
       return [px(10, 16, 2, 2, c.accent), px(14, 16, 2, 2, c.accent), px(12, 16, 2, 1, '#a8323a'), px(12, 17, 2, 1, c.accent)];
     case 'headband':
@@ -508,7 +525,14 @@ export function useCreatureFor(role: string | undefined, name: string, kwantId?:
   useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
   return pickCreature(avatarStyleFor(role, kwantId, name, isStyleId) ?? 'default', name);
 }
-export { renderCreature };
+export { renderCreature, pickCreature };
+
+/** Pocket apps: team colours in join order (pa0a/design.md "Team colours"); a 9th team starts again. */
+export const TEAM_PALETTES = ['cyan', 'coral', 'mint', 'yellow', 'blue', 'green', 'red', 'violet'] as const;
+export const isPalette = (name: string): boolean => Object.prototype.hasOwnProperty.call(PALETTES, name);
+/** A plain guest creature (no accessory) in one of the avatar palettes; an unknown name gets cyan. */
+export const paletteCreature = (name: string): Creature => ({ ...(PALETTES[name] ?? PALETTES.cyan), accessory: 'none' });
+
 
 export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   role,

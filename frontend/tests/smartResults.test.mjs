@@ -465,7 +465,7 @@ test('a task list only becomes a checklist; nested or quoted lists stay markdown
 
 test('fixtures: one per block type, every block well formed; Pixel’s types render from them', async () => {
   const types = new Set(Object.values(m.FIXTURES).map((f) => f.results.blocks[0].type));
-  assert.deepEqual([...types].sort(), ['cards', 'chart', 'comparison', 'facts', 'files', 'findings', 'metrics', 'recipe', 'steps', 'verification']);
+  assert.deepEqual([...types].sort(), ['cards', 'chart', 'comparison', 'facts', 'files', 'findings', 'metrics', 'pocket', 'recipe', 'steps', 'verification']);
   const strings = (v) => (typeof v === 'string' ? [v] : Array.isArray(v) ? v.flatMap(strings) : v && typeof v === 'object' ? Object.values(v).flatMap(strings) : []);
   for (const [name, f] of Object.entries(m.FIXTURES)) {
     assert.equal(m.resultBlocks(f.results).length, 1, name);
@@ -476,7 +476,7 @@ test('fixtures: one per block type, every block well formed; Pixel’s types ren
       assert.ok(v.host.querySelector('[data-smart-frame]'), `${name} renders`);
     }
   }
-  assert.deepEqual(Object.keys(m.REGISTRY).sort(), ['cards', 'chart', 'comparison', 'facts', 'files', 'findings', 'metrics', 'recipe', 'steps', 'verification']);
+  assert.deepEqual(Object.keys(m.REGISTRY).sort(), ['cards', 'chart', 'comparison', 'facts', 'files', 'findings', 'metrics', 'pocket', 'recipe', 'steps', 'verification']);
 });
 
 test('a slot block renders after the reply with its title; Show as text gives its data as markdown', async () => {
@@ -521,6 +521,8 @@ test('evidence wording follows provenance', () => {
 test('generic Copy data: every fixture exports CSV and Markdown with one row per item', () => {
   for (const [name, f] of Object.entries(m.FIXTURES)) {
     const block = f.results.blocks[0];
+    // A Pocket card is a live thing, not a data set: it has no Copy data (pocket.test.mjs covers its text).
+    if (block.type === 'pocket') continue;
     const rows = m.blockRows(block);
     const n = (block.rows ?? block.points ?? block.checks ?? block.items ?? block.ingredients).length;
     assert.equal(rows.length, n, name);
