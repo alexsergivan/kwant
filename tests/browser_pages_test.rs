@@ -695,3 +695,129 @@ async fn in_local_mode_a_job_page_is_a_window_of_the_same_chrome_with_its_sign_i
     assert_eq!(title_becomes(&b, "other").await, "other", "each job has its own page");
     assert_eq!(eval(&b, "document.cookie").await, json!("kwnt_session=signed-in"), "the same Chrome, so the same sign-ins");
 }
+
+// ---- 31z PROBE (never merges): the #753 repro's connection counts over time, on a CI runner ----
+
+/// Each connection to `port` on this host, by side: `k` = kwnt's end (remote is the browser
+/// port), `c` = the browser's end; with its TCP state (01 ESTABLISHED, 08 CLOSE_WAIT, ...).
+fn probe_sockets(port: u16) -> String {
+    let mut out: Vec<String> = vec![];
+    for path in ["/proc/net/tcp", "/proc/net/tcp6"] {
+        let Ok(text) = std::fs::read_to_string(path) else { continue };
+        for line in text.lines().skip(1) {
+            let cols: Vec<&str> = line.split_whitespace().collect();
+            let (Some(local), Some(remote), Some(st)) = (cols.get(1), cols.get(2), cols.get(3)) else { continue };
+            let p = |addr: &str| addr.rsplit_once(':').and_then(|(_, p)| u16::from_str_radix(p, 16).ok()).unwrap_or(0);
+            if p(local) == port {
+                out.push(format!("c{}:{st}", p(remote)));
+            } else if p(remote) == port {
+                out.push(format!("k{}:{st}", p(local)));
+            }
+        }
+    }
+    out.sort();
+    out.join(" ")
+}
+
+/// Runs of equal values in a timeline as `value@ms`.
+fn probe_runs(samples: &[(u128, usize)]) -> String {
+    let mut out = vec![];
+    let mut last = None;
+    for &(ms, n) in samples {
+        if last != Some(n) {
+            out.push(format!("{n}@{ms}"));
+            last = Some(n);
+        }
+    }
+    out.join(" ")
+}
+
+async fn probe_once(run: usize, load: bool) -> String {
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let spinners: Vec<_> = (0..if load { 4 } else { 0 })
+        .map(|_| {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                let mut x = 0u64;
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+                }
+                x
+            })
+        })
+        .collect();
+    let tmp = tempdir().unwrap();
+    let Some((endpoint, _chrome)) = start_chrome(&tmp.path().join("chrome")).await else { return "no chrome".into() };
+    let port: u16 = endpoint.rsplit(':').next().unwrap().parse().unwrap();
+    let state = container_state(&tmp, endpoint).await;
+    let team = first_bot(&state).await.id;
+    let base = serve().await;
+
+    get_or_create_browser_controller(&state, &team).await.expect("the team page opens");
+    let t = std::time::Instant::now();
+    let mut before_line = vec![];
+    let mut at200 = None;
+    let mut sockets200 = String::new();
+    while t.elapsed() < Duration::from_millis(3000) {
+        let ms = t.elapsed().as_millis();
+        let n = established_connections(port).await;
+        if at200.is_none() && ms >= 200 {
+            at200 = Some(n);
+            sockets200 = probe_sockets(port);
+        }
+        before_line.push((ms, n));
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let before200 = at200.unwrap();
+    let settled = established_connections(port).await;
+    let settled_sockets = probe_sockets(port);
+
+    let mut open_counts = vec![];
+    for i in 0..10 {
+        let chat = format!("c{i}");
+        let ctrl = open_page(&state, &team, &chat).await.expect("a job page opens");
+        ctrl.navigate(&format!("{base}/plain")).await.unwrap();
+        assert_eq!(title_becomes(&ctrl, "plain").await, "plain");
+        open_counts.push(established_connections(port).await);
+        browser_pages::close_page(&state, &job_page_key(&team, "k", &chat).unwrap()).await;
+    }
+    let t = std::time::Instant::now();
+    let mut after_line = vec![];
+    let mut at300 = None;
+    let mut sockets300 = String::new();
+    while t.elapsed() < Duration::from_millis(6000) {
+        let ms = t.elapsed().as_millis();
+        let n = established_connections(port).await;
+        if at300.is_none() && ms >= 300 {
+            at300 = Some(n);
+            sockets300 = probe_sockets(port);
+        }
+        after_line.push((ms, n));
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    let after300 = at300.unwrap();
+    let final_n = established_connections(port).await;
+    let final_sockets = probe_sockets(port);
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for s in spinners {
+        let _ = s.join();
+    }
+    let old_test = if after300 <= before200 + 3 { "pass" } else { "FAIL" };
+    format!(
+        "run {run} load={load}: old test {old_test} (before@200={before200}, after@300={after300}); settled before@3s={settled}, final after@6s={final_n}\n\
+         \x20 before: {}\n\x20 open counts: {open_counts:?}\n\x20 after:  {}\n\
+         \x20 sockets before@200: {sockets200}\n\x20 sockets before@3s:  {settled_sockets}\n\
+         \x20 sockets after@300:  {sockets300}\n\x20 sockets after@6s:   {final_sockets}",
+        probe_runs(&before_line),
+        probe_runs(&after_line),
+    )
+}
+
+#[tokio::test]
+async fn zz_31z_probe_connection_counts_over_time() {
+    let mut report = vec![];
+    for run in 0..20 {
+        report.push(probe_once(run, run >= 10).await);
+    }
+    panic!("31z PROBE REPORT (deliberate failure, never merges)\n{}", report.join("\n"));
+}
