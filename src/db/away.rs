@@ -80,7 +80,9 @@ const DELEGATIONS_STUCK: &str = "
       AND EXISTS (SELECT 1 FROM threads t WHERE t.id = d.thread_id)
       AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'delegation' AND x.ref_id = d.id)";
 
-/// `?1` = since. A routine posts in its channel, or the kwant's direct chat when it has none.
+/// `?1` = since. A routine posts in its channel, or the kwant's direct chat when it has none, or
+/// one of its kwant's threads (routine-inbox-tidy: the item opens that thread while it exists;
+/// once it is gone, the direct chat as before).
 /// routine-failed-row-bot-words: a run that failed (`error`, `incomplete`) reads the bot's own
 /// reply when it left one, with the raw step error as `fallback`; no reply, the error. A
 /// `needs_you` run keeps its own wording (26b, unanswered-question-not-ok).
@@ -89,7 +91,8 @@ const ROUTINE_RUNS_ENDED: &str = "
            CASE WHEN r.status = 'ok' THEN m.text
                 WHEN r.status IN ('error', 'incomplete') THEN COALESCE(m.text, r.error)
                 ELSE r.error END AS body, r.ended_at AS at,
-           NULL AS thread_id, rt.channel_id,
+           CASE WHEN EXISTS (SELECT 1 FROM threads t WHERE t.id = rt.thread_id) THEN rt.thread_id END AS thread_id,
+           rt.channel_id,
            CASE WHEN rt.channel_id IS NULL THEN rt.kwant_id END AS direct_kwant_id, NULL AS choices,
            CASE WHEN r.status IN ('error', 'incomplete') AND m.text IS NOT NULL THEN r.error END AS fallback
     FROM routine_runs r
