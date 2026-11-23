@@ -56,6 +56,7 @@ import {
   inboxStore,
 } from '../inboxStore';
 import { localClock } from '../clock';
+import { fixLabel } from '../toolFailures';
 
 export const WIDE_QUERY = '(min-width: 1024px)';
 
@@ -225,8 +226,8 @@ interface RowProps {
   doneSummary?: string | null;
   /** The conversation it happened in ("@Spring launch"), said before the bot's name like the mockup. */
   place?: string | null;
-  /** 0.9.5: a connection row's Reconnect opens Settings › Connections. */
-  onOpenConnections?: () => void;
+  /** 0.9.5: a connection row's button opens Settings › Connections; 34h: on that connection's row. */
+  onOpenConnections?: (connectionId?: string) => void;
 }
 
 const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, doneSummary, place, onOpenConnections }) => {
@@ -366,9 +367,9 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
 
       {item.kind === 'connection' && onOpenConnections && (
         <div className="px-3 pb-3 pl-[54px]">
-          <button type="button" onClick={onOpenConnections} className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-reconnect={item.id}>
+          <button type="button" onClick={() => onOpenConnections(item.fix?.connection_id ?? undefined)} className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-reconnect={item.id}>
             <Plug size={12} aria-hidden="true" />
-            {item.fix?.label || 'Reconnect'}
+            {fixLabel(item.cause, item.fix?.label)}
           </button>
         </div>
       )}
@@ -685,8 +686,8 @@ export interface InboxNewProps {
   onApprovalResolved?: (id: string) => void;
   /** Phone: back to the chat list. */
   onBack?: () => void;
-  /** 0.9.5: a connection row's Reconnect opens Settings › Connections. */
-  onOpenConnections?: () => void;
+  /** 0.9.5: a connection row's button opens Settings › Connections; 34h: on that connection's row. */
+  onOpenConnections?: (connectionId?: string) => void;
   /** The back crumb: return to the page the item was opened from. */
   onCrumb?: (c: Exclude<Crumb, null>) => void;
   top?: React.ReactNode;

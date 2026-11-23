@@ -50,7 +50,7 @@ export interface AwayItem {
   connection?: string;
   /** "sign_in" or "reconnect" (an app to connect again); older servers may leave it out. */
   cause?: string;
-  fix?: { label: string; opens?: string } | null;
+  fix?: { label: string; opens?: string; connection_id?: string | null } | null;
   /** 22i (Lin's server part): what resolves the item. Older servers leave it out; `askAction` infers it. */
   action?: 'retry' | 'continue' | 'ask_again' | 'answer' | 'decide' | 'browser' | null;
   /** 22i (Lin, #700): whether "Done, clear it" may close it. Older servers leave it out (the strip infers). */

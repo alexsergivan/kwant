@@ -49,7 +49,6 @@ import {
 import { noteTitle, notifyBrowserPages, pageTeam, stepPage } from './browserPages';
 import { AUTO_CLOSE_DELAY_MS, PANE_EXIT_MS, PHONE_PANE_QUERY, type PaneOpener, shouldAutoClose, shouldAutoOpen } from './browserPanel';
 import { McpSuggestionCard, type SuggestionSignInResult } from './components/McpSuggestionCard';
-import { isSignInDeadEndCode } from './mcpSignInDeadEnd';
 import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
 import { connectSheetFor, type ConnectionSuggestionMeta } from './connectionSuggestions';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
@@ -178,7 +177,7 @@ import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
 import { PersonCancelledError, personFetch } from './auth';
 import { ContinueError, continueChatApi, continueErrorLine, continuedLine, forkOf } from './continueChat';
-import { OPEN_ADD_TOOL_EVENT, type OpenAddTool } from './mcp';
+import { OPEN_ADD_TOOL_EVENT, type OpenAddTool, signInToServer } from './mcp';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, placeOfNotification, showDeviceNotification } from './push';
@@ -204,7 +203,6 @@ import { PrepushPointers } from './components/dev/PrepushPointers';
 import { ModernAvatar } from './components/ModernAvatar';
 import { PREPUSH_EVENT, messageNotSent as prepushMessageNotSent, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
 import { StepReview } from './components/ShowOnce';
-import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 import type { FloorResolveOpts } from './dev/types';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
@@ -455,7 +453,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSettingsFocusRow('claude-isolation');
     openAppSettings();
   };
-  const openConnections = () => openSpaceSettings('apps', 'advanced');
+  // 34h: a "Sign in again" from a chat line or the Inbox opens Advanced on that connection's row.
+  const [connectionFocus, setConnectionFocus] = useState<{ id: string; seq: number } | null>(null);
+  const openConnections = (focusId?: string) => {
+    // Callers wired straight to onClick pass an event: only a string is a row.
+    setConnectionFocus(typeof focusId === 'string' && focusId ? { id: focusId, seq: Date.now() } : null);
+    openSpaceSettings('apps', 'advanced');
+  };
   // A bot's "suggests a connection" card: Apps & accounts with that app's Connect sheet open and the bot ticked.
   const openConnectSheet = (meta: ConnectionSuggestionMeta) => {
     openSpaceSettings('apps', 'apps');
@@ -2844,63 +2848,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       return `Couldn't dismiss it: ${errText(err)}`;
     }
   };
-  // Same flow as the servers screen: the window opens inside the click, the address comes after.
-  // In the Mac app the sign-in opens in the default browser and the server is watched instead.
+  // 34h: the flow lives in mcp.ts (signInToServer), shared with the Connections row's "Sign in again".
   const handleSuggestionSignIn = async (serverId: string): Promise<SuggestionSignInResult> => {
-    const macApp = inDesktopApp();
-    const popup = macApp ? null : window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
-    const before = macApp ? await mcpSignIn(serverId).catch(() => undefined) : undefined;
-    let url: string;
-    try {
-      const res = await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}/oauth/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ origin: window.location.origin }),
-      });
-      const data = await res.json().catch(() => null);
-      // A code means retrying can't help: the card swaps its button for a next step.
-      if (!res.ok && isSignInDeadEndCode(data?.code)) {
-        popup?.close();
-        return { code: data.code };
-      }
-      if (!res.ok) throw new Error(typeof data?.error === 'string' ? data.error : `Request failed (HTTP ${res.status}).`);
-      if (typeof data?.authorize_url !== 'string' || !/^https?:\/\//.test(data.authorize_url)) throw new Error('The server didn’t return a sign-in page.');
-      url = data.authorize_url;
-    } catch (err) {
-      popup?.close();
-      return `Couldn't start the sign-in: ${errText(err)}`;
-    }
-    if (!popup || popup.closed) {
-      leaveForSignIn(url);
-      if (!macApp) return;
-      const finished = await new Promise<boolean>((resolve) => {
-        pollUntil(async () => signInChanged(before, await mcpSignIn(serverId)), () => resolve(true), {
-          onTimeout: () => resolve(false),
-        });
-      });
-      if (!finished) return 'The sign-in didn’t finish in your browser. Try again.';
-    } else {
-      popup.location.href = url;
-      popup.focus();
-      await new Promise<void>((resolve) => {
-        const t = window.setInterval(() => {
-          if (popup.closed) {
-            window.clearInterval(t);
-            resolve();
-          }
-        }, 500);
-      });
-    }
-    try {
-      const test = await suggestionsApi.testServer(serverId);
-      if (test.ok) {
-        setNeedsSignIn((prev) => ({ ...prev, [serverId]: false }));
-        return;
-      }
-      return test.auth_required ? 'The sign-in didn’t finish.' : test.error || 'The server still isn’t answering.';
-    } catch (err) {
-      return errText(err);
-    }
+    const result = await signInToServer(serverId);
+    if (result === undefined) setNeedsSignIn((prev) => ({ ...prev, [serverId]: false }));
+    return result;
   };
   const renderMcpSuggestion = (msg: ChatMessage, meta: SuggestionMeta, flash: boolean) => {
     const live = suggestions[meta.suggestion_id];
@@ -4603,6 +4555,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpenLooseEnds={() => showPage('inbox', 'loose')}
       focusNote={toolNoteFocus}
       onClearFocusNote={() => setToolNoteFocus(null)}
+      focusConnection={connectionFocus}
+      onSignIn={signInToServer}
       onOpenNoteWhere={(w) => {
         if (spaceSettingsTab) closeSpaceSettings();
         openPlace({ channel_id: w.channel_id, kwant_id: w.direct_kwant_id, thread_id: w.thread_id, card_id: w.message_id });

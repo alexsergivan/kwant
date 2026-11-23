@@ -37,7 +37,7 @@ test('the meta is read from the saved string, and defensively', () => {
 test('the line says what broke and has a fix button that opens Connections', () => {
   const html = ui.line({ meta: m.parseToolFailureMeta(meta()), messageId: 'm1', onFix: () => {} });
   assert.match(html, /Gmail stopped working for Ben: it needs to be connected again\./);
-  assert.match(html, /<button[^>]*>Reconnect<\/button>/);
+  assert.match(html, /<button[^>]*>Connect again<\/button>/);
   assert.match(html, /data-tool-failure-line="reconnect"/);
   assert.match(html, /text-amber-400/);
   // F2: an MCP server that refused its sign-in says who acts.
@@ -45,14 +45,14 @@ test('the line says what broke and has a fix button that opens Connections', () 
   const html2 = ui.line({ meta: m.parseToolFailureMeta(signIn), messageId: 'm2', onFix: () => {} });
   assert.match(html2, /Notion stopped working for Ben: it needs you to sign in again\./);
   assert.match(html2, /data-tool-failure-line="sign_in"/);
-  assert.match(html2, /<button[^>]*>Reconnect<\/button>/);
+  assert.match(html2, /<button[^>]*>Sign in again<\/button>/);
 });
 
 test('F3: a needs-you line is brighter, its button amber, and a screen reader hears "Needs you"', () => {
   const urgent = ui.line({ meta: m.parseToolFailureMeta(meta()), onFix: () => {} });
   assert.match(urgent, /^<div[^>]*text-zinc-300/);
   assert.match(urgent, /<p[^>]*><span class="sr-only">Needs you: <\/span>Gmail stopped/);
-  assert.match(urgent, /<button[^>]*text-amber-200[^>]*>Reconnect<\/button>/);
+  assert.match(urgent, /<button[^>]*text-amber-200[^>]*>Connect again<\/button>/);
   assert.match(urgent, /<button[^>]*font-medium/);
   assert.match(urgent, /<button[^>]*focus-visible:outline-sky-500/);
   const grey = ui.line({
@@ -92,3 +92,16 @@ test('no button without a place to fix it; a fixed connection says it works agai
   assert.doesNotMatch(fixed, /<button/);
   assert.doesNotMatch(fixed, /text-amber-400/);
 });
+
+// 34h reconnect-opens-the-row: one name for the fix, and the line opens Connections on its row.
+test('34h: the fix is named by cause, so old "Reconnect" lines read the same as new ones', () => {
+  assert.equal(m.fixLabel('sign_in', 'Reconnect'), 'Sign in again');
+  assert.equal(m.fixLabel('reconnect', 'Reconnect'), 'Connect again');
+  assert.equal(m.fixLabel('down', 'Check it'), 'Check it');
+  assert.equal(m.fixLabel('not_started', null), 'Check it');
+  for (const cause of ['sign_in', 'reconnect']) {
+    const html = ui.line({ meta: m.parseToolFailureMeta(meta({ cause, fix: { label: 'Reconnect', connection_id: 'mcp:s1' } })), onFix: () => {} });
+    assert.doesNotMatch(html, />Reconnect</, cause);
+  }
+});
+

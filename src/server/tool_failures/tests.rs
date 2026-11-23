@@ -33,7 +33,7 @@ fn a_401_is_a_sign_in_with_a_fix_link() {
     let m = meta(&f, "k1", "Ben", "t1");
     assert_eq!(m["kind"], KIND);
     assert_eq!(m["needs_you"], true);
-    assert_eq!(m["fix"], json!({"label": "Reconnect", "opens": "connections", "connection_id": "mcp:s-gh"}));
+    assert_eq!(m["fix"], json!({"label": "Sign in again", "opens": "connections", "connection_id": "mcp:s-gh"}));
     assert_eq!(m["cause"], "sign_in");
     assert!(m["resolved_at"].is_null());
     // 403 and an expired token too; a number that merely contains 401 doesn't count

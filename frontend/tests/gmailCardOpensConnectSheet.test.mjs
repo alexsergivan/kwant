@@ -163,7 +163,8 @@ test('3. a card that said "isn’t added yet" turns Connected on focus and when 
 
 test('4. InboxNew and the tool notes still open Advanced; only the card opens the sheet', () => {
   const app = src('App.tsx');
-  assert.match(app, /const openConnections = \(\) => openSpaceSettings\('apps', 'advanced'\);/);
+  // 34h: it takes the row to open on (a chat line's or the Inbox's "Sign in again"), still in Advanced.
+  assert.match(app, /const openConnections = \(focusId\?: string\) => \{[\s\S]{0,300}openSpaceSettings\('apps', 'advanced'\);/);
   assert.equal((app.match(/onOpenConnections=\{openConnections\}/g) ?? []).length, 2, 'InboxNew and the chat view tool notes');
   assert.match(app, /<ConnectionSuggestionCard[\s\S]{0,400}onOpenConnections=\{openConnectSheet\}/);
   assert.match(app, /recheck=\{settingsClosedCount\}/);
