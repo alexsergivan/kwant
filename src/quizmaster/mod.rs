@@ -105,7 +105,7 @@ mod tests {
     async fn missing_lines_and_web_pictures_are_problems() {
         let mut v: serde_json::Value = serde_json::from_str(EXAMPLE).unwrap();
         v["lines"] = serde_json::json!({});
-        v["rounds"][1]["questions"][1]["picture"] = serde_json::json!({"url": "https://upload.example/tower.jpg", "licence": "cc0", "alt": "a tower"});
+        v["rounds"][1]["questions"][1]["picture"] = serde_json::json!({"url": "https://upload.example/tower.jpg", "licence": "cc0", "credit": "A. Photographer", "alt": "a tower"});
         let e = evaluate(&v.to_string(), &HashMap::new(), &Policy::default()).await;
         assert_eq!(e.state, State::Writing);
         let all = e.problems.join("\n");

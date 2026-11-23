@@ -135,9 +135,8 @@ async fn injected_guesses_get_no_verdict_and_no_points() {
         for o in &out {
             assert!(matches!(o, Outcome::NoVerdict { q: 3, .. }), "{o:?}");
         }
-        // Nothing was sent: both still pending, nobody scored
+        // Nothing was sent: both still pending, no answer earns points
         assert_eq!(game.pending().len(), 2);
-        assert_eq!(scores(&game), vec![0, 0]);
         let answers = host_view(&game)["host"]["answers"].clone();
         assert!(answers.as_array().unwrap().iter().all(|a| a["points"] == json!(0)), "{answers}");
         // Each guess went in once, as data, inside the one data block
@@ -146,6 +145,8 @@ async fn injected_guesses_get_no_verdict_and_no_points() {
             assert_eq!(p.matches("</guest_data>").count(), 1);
             assert!(INJECTIONS.contains(&guess_in(p).as_str()));
         }
+        // and once the answer is revealed, nobody has scored
+        reveal_counts_pending_as_zero(&game);
     }
 }
 
@@ -156,15 +157,16 @@ async fn a_fair_yes_is_sent_and_scores() {
     let out = judge.on_answer(&game).await;
     assert!(out.iter().all(|o| matches!(o, Outcome::Sent { q: 3, .. })), "{out:?}");
     assert!(game.pending().is_empty());
-    // Question 4 is worth 1 point
-    assert_eq!(scores(&game), vec![1, 1]);
     // A second call has nothing left to judge and spends nothing
     assert!(judge.on_answer(&game).await.is_empty());
     assert_eq!(judge.budget().used(), 2);
+    // Question 4 is worth 1 point. Scores count only revealed answers, so nothing shows yet
+    assert_eq!(scores(&game), vec![0, 0], "no score before the reveal");
+    assert_eq!(reveal(&game), vec![1, 1]);
 }
 
-/// The host moves on to the reveal while near misses are unsettled: it runs, they count 0.
-fn reveal_counts_pending_as_zero(game: &LockedGame) {
+/// The host moves on to the reveal; returns the players' scores there, highest first.
+fn reveal(game: &LockedGame) -> Vec<i64> {
     let now = Utc::now();
     let mut g = game.game.lock().unwrap();
     for _ in 0..3 {
@@ -175,7 +177,14 @@ fn reveal_counts_pending_as_zero(game: &LockedGame) {
     }
     let v = g.view(&Viewer::Host, now);
     assert_eq!(v["phase"], json!("reveal"), "{v}");
-    assert!(v["host"]["players"].as_array().unwrap().iter().all(|p| p["score"] == json!(0)), "{v}");
+    let mut s: Vec<i64> = v["host"]["players"].as_array().unwrap().iter().map(|p| p["score"].as_i64().unwrap()).collect();
+    s.sort_unstable_by(|a, b| b.cmp(a));
+    s
+}
+
+/// The host moves on to the reveal while near misses are unsettled: it runs, they count 0.
+fn reveal_counts_pending_as_zero(game: &LockedGame) {
+    assert_eq!(reveal(game), vec![0, 0], "unsettled answers count 0 at the reveal");
 }
 
 #[tokio::test]
@@ -214,6 +223,8 @@ async fn budget_of_one_judges_one_and_leaves_the_other_to_the_host() {
     assert_eq!(out.iter().filter(|o| matches!(o, Outcome::BudgetOut { .. })).count(), 1, "{out:?}");
     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
     assert_eq!(game.pending().len(), 1);
+    // The judged answer scores at the reveal; the one left to the host counts 0
+    assert_eq!(reveal(&game), vec![1, 0]);
 }
 
 // ---- the pocket tools, end to end ------------------------------------------------------------
