@@ -565,6 +565,7 @@ impl BrokerApprover {
             return (ApprovalOutcome::Denied, "denied", None);
         }
         card_listed(&req.kwant_id).await;
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await; // RED PROOF ONLY, not committed
         let _ = self.events.send(RuntimeEvent::ApprovalRequired {
             id: ticket.clone(),
             tool_name: req.tool_name.clone(),
