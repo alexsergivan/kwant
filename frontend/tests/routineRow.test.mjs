@@ -139,3 +139,35 @@ test('28f: RunRow draws a said-no run grey and keeps a real failure rose', () =>
   const old = ui.run({ routine, run: runOf('r-old', 'incomplete', 'Bash was denied') });
   assert.match(old, /data-run-state="error"/, "main's denied reason is not proof of a Deny");
 });
+
+// unanswered-question-not-ok: a needs_you run that waits on a question (scheduler.rs QUESTION_ERROR) reads
+// "Needed your answer, didn’t finish"; one that waits on an approval card keeps 26b's words.
+const QUESTION_ERROR = "A step is waiting for your answer, so it didn't finish";
+const APPROVAL_ERROR = "A step is waiting for your approval, so it didn't run";
+
+test('unanswered question: a needs_you run waiting on a question reads "Needed your answer, didn’t finish"', () => {
+  assert.deepEqual(r.runRowState({ status: 'needs_you', error: QUESTION_ERROR }), { label: 'Needed your answer, didn’t finish', tone: 'needs_you', cardId: null });
+  assert.equal(r.questionRun(QUESTION_ERROR), true);
+  for (const error of [APPROVAL_ERROR, null, undefined, `${QUESTION_ERROR}.`, `x ${QUESTION_ERROR}`]) assert.equal(r.questionRun(error), false, String(error));
+});
+
+test('unanswered question: approval runs and every other status keep their words', () => {
+  const approval = { label: 'Needed your approval, nothing ran', tone: 'needs_you', cardId: null };
+  assert.deepEqual(r.runRowState({ status: 'needs_you', error: APPROVAL_ERROR }), approval);
+  assert.deepEqual(r.runRowState({ status: 'needs_you' }), approval, 'no error key');
+  assert.deepEqual(r.runRowState({ status: 'needs_you', error: APPROVAL_ERROR }, { routine_id: 'rt1', waiting: false, approval_id: 'ap1' }).cardId, 'ap1');
+  assert.deepEqual(r.runRowState({ status: 'incomplete', error: QUESTION_ERROR }), { label: 'A step failed', tone: 'error', cardId: null }, 'only needs_you');
+  assert.deepEqual(r.runRowState({ status: 'ok', error: QUESTION_ERROR }), { label: 'OK', tone: 'ok', cardId: null });
+});
+
+test('unanswered question: RunRow shows the words once, with no card link and no repeated error line', () => {
+  const routine = { id: 'rt1', kwant_id: 'k1', channel_id: null, thread_id: null, name: 'Weekly digest' };
+  const runOf = (id, status, error) => ({ id, routine_id: 'rt1', trigger: 'schedule', started_at: '2026-11-19T08:00:00Z', ended_at: null, status, error, message_id: null });
+  const html = ui.run({ routine, run: runOf('r-q', 'needs_you', QUESTION_ERROR), onOpenRunCard: () => {} });
+  assert.match(html, /data-run-state="needs_you"/);
+  assert.match(html, />Needed your answer, didn’t finish</);
+  assert.doesNotMatch(html, /Needed your approval/);
+  assert.doesNotMatch(html, /A step is waiting for your answer/, 'the badge says it; no repeat');
+  assert.doesNotMatch(html, /data-run-card/, 'a question has no approval card to open');
+  assert.match(ui.run({ routine, run: runOf('r-a', 'needs_you', APPROVAL_ERROR) }), />Needed your approval, nothing ran</);
+});

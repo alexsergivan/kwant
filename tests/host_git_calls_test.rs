@@ -52,6 +52,9 @@ const DYNAMIC_OK: &[(&str, &str, &str)] = &[
     ("router/sidecar.rs", "bin", "the router sidecar binary"),
     ("mcp/client.rs", "program", "a stdio MCP server the person added (refused in recorded folders, D4/M2)"),
     ("pocket/address.rs", "bin", "tailscale, from the fixed TAILSCALE_PATHS list, for a read-only `funnel status --json` (pa10a); never git"),
+    ("pocket/tunnel.rs", "bin", "cloudflared, checked with --version: one already installed (PATH or the usual places), or the pinned, SHA-256-checked GitHub release kwant downloaded (pa6); never git"),
+    ("pocket/tunnel.rs", "&bin", "that same checked cloudflared, running the quick tunnel to the guest port (pa6); never git"),
+    ("pocket/tunnel.rs", "awake_bin", "/usr/bin/caffeinate from keep_awake_command, macOS only, holding the Mac awake while pockets are live (pa6); never git"),
 ];
 
 /// Shells started by name, with what they run. A shell can run git, so each is listed.

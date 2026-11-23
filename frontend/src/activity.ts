@@ -3,7 +3,8 @@
 // saved reply keeps them in `meta.activity`.
 import { parseMetaObject } from './questions';
 
-export type StepKind = 'thinking' | 'tool' | 'approval' | 'human_step' | 'note';
+// unanswered-question-not-ok: `question` is a routine turn's ask_user that nobody answered before the bot's wait ended.
+export type StepKind = 'thinking' | 'tool' | 'approval' | 'human_step' | 'note' | 'question';
 // 26b (#766): `unanswered` is a step whose approval card nobody answered in time, so it didn't run; `rehearsed`
 // is a dry run (Skill Foundry) that recorded the call instead of running it. Neither is "ok".
 export type StepStatus = 'running' | 'waiting' | 'ok' | 'failed' | 'done' | 'declined' | 'stopped' | 'unanswered' | 'rehearsed';
@@ -40,7 +41,7 @@ export interface LiveActivity {
   thinking: Record<string, string>;
 }
 
-const KINDS: StepKind[] = ['thinking', 'tool', 'approval', 'human_step', 'note'];
+const KINDS: StepKind[] = ['thinking', 'tool', 'approval', 'human_step', 'note', 'question'];
 const STATUSES: StepStatus[] = ['running', 'waiting', 'ok', 'failed', 'done', 'declined', 'stopped', 'unanswered', 'rehearsed'];
 const str = (v: unknown) => (typeof v === 'string' && v ? v : undefined);
 
@@ -333,7 +334,7 @@ export function statusLabel(s: ActivityStep): string {
     case 'stopped':
       return 'Stopped';
     case 'unanswered':
-      return 'Not approved in time';
+      return s.kind === 'question' ? 'Not answered in time' : 'Not approved in time';
     case 'rehearsed':
       return 'Dry run';
   }

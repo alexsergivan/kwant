@@ -21,6 +21,7 @@ pub mod listener;
 pub mod quiz_kit;
 pub mod santa;
 pub mod schedule;
+pub mod tunnel;
 pub mod words;
 
 use crate::config::Config;
@@ -105,6 +106,10 @@ pub struct Hub {
     /// Mirrors the switch for the guest listener's requests (set by [`listener::reconcile`]).
     pub on: AtomicBool,
     pub listener: listener::ListenerSlot,
+    /// The box's one quick tunnel for join from anywhere (pa6), shared by the pockets that asked.
+    pub tunnel: tunnel::Tunnels,
+    /// macOS: `caffeinate` held while a tunnel or an open pocket runs.
+    pub awake: tunnel::KeepAwake,
 }
 
 impl Hub {
@@ -382,7 +387,29 @@ pub async fn end(state: &AppState, code: &str) -> PResult<Arc<Snapshot>> {
         state.db.pocket_end(code, now, expires).await?;
         changed(state, code).await?;
     }
+    state.pocket.tunnel.release(code);
     snapshot(state, code).await?.ok_or_else(PocketError::not_found)
+}
+
+/// Join from anywhere on or off for one pocket (pa6). On: joins the box's quick tunnel or starts
+/// it in the background; refused (409) for a long-lived kit, an ended pocket or a closed guest
+/// port. Off: this pocket stops using it, and the last user stops it.
+pub async fn set_tunnel(state: &AppState, code: &str, on: bool) -> PResult<()> {
+    let lock = state.pocket.lock_for(code);
+    let _g = lock.lock().await;
+    let s = snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
+    if !on {
+        state.pocket.tunnel.release(code);
+        return Ok(());
+    }
+    if let Some((why, line)) = tunnel::refusal(&s) {
+        return Err(PocketError::new(StatusCode::CONFLICT, why, line));
+    }
+    let Some(guest) = state.pocket.listener.addr() else {
+        return Err(PocketError::new(StatusCode::CONFLICT, "guest_port_closed", "The guest page isn't running yet. Try again in a few seconds."));
+    };
+    tunnel::turn_on(state, code, guest.port());
+    Ok(())
 }
 
 /// Deletes the pocket and everything about its guests now. Final.
@@ -392,6 +419,7 @@ pub async fn delete(state: &AppState, code: &str) -> PResult<bool> {
         let _g = lock.lock().await;
         state.db.pocket_delete(code).await?
     };
+    state.pocket.tunnel.release(code);
     state.pocket.signal(code, Signal::Deleted);
     state.pocket.forget(code);
     Ok(gone)
