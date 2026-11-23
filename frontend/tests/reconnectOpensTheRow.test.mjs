@@ -17,8 +17,12 @@ let reduced = false;
 const scrolls = [];
 dom.window.matchMedia = (q) => ({ matches: q.includes('reduce') ? reduced : false, media: q, addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {} });
 globalThis.matchMedia = dom.window.matchMedia;
+// The row is centred in its own scroller (the host below); nothing else scrolls.
 dom.window.HTMLElement.prototype.scrollIntoView = function (o) {
-  scrolls.push({ id: this.getAttribute('data-connection'), ...o });
+  scrolls.push({ intoView: this.getAttribute('data-connection'), ...o });
+};
+dom.window.HTMLElement.prototype.scrollTo = function (o) {
+  scrolls.push({ scroller: this.getAttribute('data-scroller'), behavior: o.behavior });
 };
 if (!globalThis.CSS) globalThis.CSS = { escape: (s) => String(s) };
 globalThis.ResizeObserver ??= class { observe() {} unobserve() {} disconnect() {} };
@@ -32,10 +36,15 @@ const ui = await loadBundled(`
   import { ToolFailureLine } from './src/components/ToolFailureLine';
   import { parseToolFailureMeta } from './src/toolFailures';
   export * as mcp from './src/mcp';
+  export { scrollInScroller } from './src/scrollInScroller';
   export { canSignInAgain, ROW_FLASH_MS, parseToolFailureMeta };
   export const row = (props) => renderToStaticMarkup(React.createElement('ul', null, React.createElement(ConnectionRow, props)));
   export const mount = (C, p) => {
     const host = document.createElement('div');
+    host.setAttribute('data-scroller', 'settings');
+    host.style.overflowY = 'auto';
+    Object.defineProperty(host, 'scrollHeight', { value: 2000 });
+    Object.defineProperty(host, 'clientHeight', { value: 600 });
     document.body.appendChild(host);
     const root = createRoot(host);
     const render = (q) => flushSync(() => root.render(React.createElement(C === 'view' ? ConnectionsView : ToolFailureLine, q)));
@@ -50,6 +59,11 @@ const conn = (over = {}) => ({
 });
 const data = (connections) => ({ connections, counts: {}, vault: { status: 'ok', logins: 0 }, catalog: [] });
 const noop = () => {};
+// JSDOM has no layout: say a box overflows.
+const tall = (el) => {
+  Object.defineProperty(el, 'scrollHeight', { value: 2000, configurable: true });
+  Object.defineProperty(el, 'clientHeight', { value: 600, configurable: true });
+};
 // Effects run after the commit: let them.
 const tick = () => new Promise((r) => setTimeout(r, 0));
 const doc = (html) => new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
@@ -90,7 +104,7 @@ test('opening on a row scrolls to it, lights it for 1.2 s and puts the keyboard 
   const lit = () => [...v.host.querySelectorAll('[data-flash]')].map((x) => x.getAttribute('data-connection'));
   assert.deepEqual(lit(), ['mcp:s1']);
   assert.match(v.host.querySelector('[data-connection="mcp:s1"]').className, /bg-sky-500\/10/);
-  assert.deepEqual(scrolls, [{ id: 'mcp:s1', behavior: 'smooth', block: 'center' }]);
+  assert.deepEqual(scrolls, [{ scroller: 'settings', behavior: 'smooth' }], 'only the nearest scroller moves');
   assert.equal(document.activeElement?.getAttribute('data-sign-in-again'), 'mcp:s1');
   // A reload of the list doesn't light it again; a new open does.
   v.render({ ...props, data: data([other, conn()]), focusConnection: { id: 'mcp:s1', seq: 1 } });
@@ -100,7 +114,7 @@ test('opening on a row scrolls to it, lights it for 1.2 s and puts the keyboard 
   reduced = true;
   v.render({ ...props, focusConnection: { id: 'mcp:s1', seq: 2 } });
   await tick();
-  assert.deepEqual(scrolls[1], { id: 'mcp:s1', behavior: 'auto', block: 'center' }, 'reduced motion jumps');
+  assert.deepEqual(scrolls[1], { scroller: 'settings', behavior: 'auto' }, 'reduced motion jumps');
   assert.match(v.host.querySelector('[data-connection="mcp:s1"]').className, /motion-reduce:transition-none/);
   reduced = false;
   v.unmount();
@@ -114,7 +128,7 @@ test('opening before the list has loaded waits for the row', async () => {
   await tick();
   v.render({ ...props, loading: false, data: data([conn()]) });
   await tick();
-  assert.deepEqual(scrolls.map((s) => s.id), ['mcp:s1']);
+  assert.deepEqual(scrolls.map((s) => s.scroller), ['settings']);
   v.unmount();
 });
 
@@ -165,4 +179,32 @@ test('signInToServer opens the sign-in window inside the click, then tests the s
     window.open = realOpen;
     globalThis.fetch = realFetch;
   }
+});
+
+test('a section or row scroll moves its own scroller, never the clipped Settings layer around it', () => {
+  scrolls.length = 0;
+  const layer = document.createElement('div');
+  layer.style.overflowY = 'hidden';
+  tall(layer);
+  layer.setAttribute('data-scroller', 'layer');
+  const list = document.createElement('div');
+  list.style.overflowY = 'auto';
+  list.setAttribute('data-scroller', 'list');
+  tall(list);
+  const strip = document.createElement('div');
+  strip.style.overflowX = 'auto'; // computes overflow-y to auto, but doesn't overflow down
+  strip.setAttribute('data-scroller', 'strip');
+  const clip = document.createElement('div');
+  clip.style.overflowY = 'hidden';
+  clip.setAttribute('data-scroller', 'clip');
+  const el = document.createElement('div');
+  clip.appendChild(el);
+  strip.appendChild(clip);
+  list.appendChild(strip);
+  layer.appendChild(list);
+  document.body.appendChild(layer);
+  ui.scrollInScroller(el, 'start');
+  ui.scrollInScroller(el, 'center', 'smooth');
+  assert.deepEqual(scrolls, [{ scroller: 'list', behavior: 'auto' }, { scroller: 'list', behavior: 'smooth' }]);
+  layer.remove();
 });

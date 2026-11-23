@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, Bot, ChevronLeft, ChevronRight, ExternalLink, Github, KeyRound, Loader2, Lock, Mail, Plug, Plus, RefreshCw, Search, Server, StickyNote, UserRound } from 'lucide-react';
+import { scrollInScroller } from '../scrollInScroller';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { relativeTime } from '../away';
 import { quotaLine } from '../clock';
@@ -236,7 +237,7 @@ export function useConnectionFocus(focus: { id: string; seq: number } | null, re
     if (!row) return;
     done.current = focus.seq;
     const still = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    row.scrollIntoView?.({ behavior: still ? 'auto' : 'smooth', block: 'center' });
+    scrollInScroller(row, 'center', still ? 'auto' : 'smooth');
     row.querySelector<HTMLElement>('[data-sign-in-again]')?.focus({ preventScroll: true });
     setLit(focus.id);
     window.clearTimeout(timer.current);
@@ -792,7 +793,7 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
 
           <div role="status" aria-live="polite">
             {notice && (
-              <p className={`px-3 py-2 rounded-lg border text-xs ${notice.error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-200'}`}>
+              <p role="status" className={`px-3 py-2 rounded-lg border text-xs ${notice.error ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-teal-400/30 bg-teal-400/10 text-teal-200'}`}>
                 {notice.text}
               </p>
             )}
