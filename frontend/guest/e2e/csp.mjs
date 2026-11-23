@@ -445,6 +445,12 @@ for (const name of order) {
       ['limits: 300 + 6x80', 'question', { ...scenes.question, question: { ...q, text: words(300), options: Array.from({ length: 6 }, () => words(80)) } }],
       ['reveal 6 short answers', 'reveal', { ...scenes.reveal, question: { ...q, options: ['One', 'Two', 'Three', 'Four', 'Five', 'Six'] }, reveal: { ...scenes.reveal.reveal, picks: [1, 14, 5, 2, 0, 1] } }],
       ['reveal limits: 300 + 4x80 + 280 line', 'reveal', { ...scenes.reveal, question: { ...q, text: words(300), options: [80, 80, 80, 80].map(words) }, reveal: { ...scenes.reveal.reveal, source_quote: words(300), line: words(280) } }],
+      // pa5b round 3 (Rigel D2 and D3): the source quote counts, and 5 or 6 answers of 28 to 30 characters can wrap.
+      ['D3 question 120 + 5x30', 'question', { ...scenes.question, question: { ...q, text: words(120), options: Array.from({ length: 5 }, () => words(30)) } }],
+      ['D3 locked 120 + 6x28', 'locked', { ...scenes.locked, question: { ...q, text: words(120), options: Array.from({ length: 6 }, () => words(28)) } }],
+      ['D2 reveal 120 + 5x30 + quote 100', 'reveal', { ...scenes.reveal, question: { ...q, text: words(120), options: Array.from({ length: 5 }, () => words(30)) }, reveal: { ...scenes.reveal.reveal, picks: [1, 14, 5, 2, 0], source_quote: words(100) } }],
+      ['D2 reveal 120 + 4x50 + quote 300', 'reveal', { ...scenes.reveal, question: { ...q, text: words(120), options: [50, 50, 50, 50].map(words) }, reveal: { ...scenes.reveal.reveal, source_quote: words(300) } }],
+      ['every field at the limits: reveal 300 + 6x80 + quote 300 + line 280', 'reveal', { ...scenes.reveal, question: { ...q, text: words(300), options: Array.from({ length: 6 }, () => words(80)) }, reveal: { ...scenes.reveal.reveal, picks: [0, 1, 2, 3, 4, 5], source_quote: words(300), line: words(280) } }],
     ];
     for (const [name, scene, view] of cases) {
       const code = `screen-${scene}`;
@@ -467,6 +473,8 @@ for (const name of order) {
           const r = e.getBoundingClientRect();
           if (r.bottom > tv.bottom + 1 || r.right > tv.right + 1 || r.top < tv.top - 1) out.push(`${e.className} leaves the stage`);
         }
+        const col = document.querySelector('.tvq');
+        if (col && col.scrollHeight > col.clientHeight + 1) out.push(`the question column overflows by ${col.scrollHeight - col.clientHeight}px (${col.className})`);
         const clock = document.querySelector('.tvclock')?.getBoundingClientRect();
         const head = document.querySelector('.tvtop')?.getBoundingClientRect();
         const q = document.querySelector('.tvq')?.getBoundingClientRect();

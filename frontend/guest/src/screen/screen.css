@@ -75,7 +75,8 @@ html.tvpage, html.tvpage body { height: 100%; overflow: hidden; background: var(
 .tv .tvtop.withclock { right: 340px; }
 /* The question screen is one column from under the header to the stage's bottom margin. The answered row and the
    reveal's Quizmaster are in the flow at its end, so long questions and 5 or 6 answers push them down instead of
-   running under them. Denser content gets the compact (.c1) or tight (.c2) sizes below, never under 32 px. */
+   running under them. Denser content gets the compact (.c1) or tight (.c2) sizes below, never under 32 px; app.ts settle()
+   measures and steps up (to .c2.c3.c4 at most) when the column still overflows. */
 .tv .tvq { position: absolute; left: 72px; right: 72px; top: 170px; bottom: 44px; display: flex; flex-direction: column; gap: 40px; }
 .tv .tvq.rv { top: 140px; gap: 32px; }
 .tv .tvq > .tvanswered, .tv .tvq > .tvhost { margin-top: auto; }
@@ -117,6 +118,19 @@ html.tvpage, html.tvpage body { height: 100%; overflow: hidden; background: var(
 .tv .tvq.c2 .tvsrc > span { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; overflow: hidden; }
 .tv .tvq.c2 .tvhost .b { max-width: 1500px; font-size: 34px; line-height: 44px; padding: 16px 26px; }
 .tv .tvq.c2 .tvhost .tvqm { width: 120px; height: 120px; }
+/* Last steps (.c2.c3, then .c2.c3.c4), chosen only by measuring (app.ts settle): type at 32 to 40 px, shorter boxes and
+   gaps, a wider bubble. */
+.tv .tvq.c3 { gap: 14px; }
+.tv .tvq.c3 .tvans { gap: 10px; }
+.tv .tvq.c3 .qbig { font-size: 40px; line-height: 48px; }
+.tv .tvq.c3 .qbig.small { font-size: 36px; line-height: 44px; }
+.tv .tvq.c3 .ans { min-height: 56px; padding: 6px 22px; line-height: 40px; }
+.tv .tvq.c3 .ans .k { width: 44px; height: 44px; border-radius: 12px; }
+/* Only when .c3 still overflows (every field at the quiz limits): one answer per row, so long answers stop wrapping. */
+.tv .tvq.c4 .tvans { grid-template-columns: 1fr; gap: 8px; }
+.tv .tvq.c3 .tvhost { gap: 20px; }
+.tv .tvq.c3 .tvhost .b { max-width: 1640px; padding: 12px 24px; }
+.tv .tvq.c3 .tvhost .tvqm { width: 96px; height: 96px; }
 .tv .tvn { font-size: 40px; line-height: 46px; font-weight: 800; white-space: nowrap; }
 .tv .who { display: flex; flex-wrap: wrap; gap: 10px; height: 65px; overflow: hidden; }
 .tv .who svg.wc { width: 52px; height: 65px; }

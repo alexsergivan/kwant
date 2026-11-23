@@ -486,3 +486,44 @@ test('the fake uses the real v1.1 messages for a used link and a screen-only ref
   const c = new ScreenBox('screen-lobby');
   assert.equal(c.handle('host/next', {}, { method: 'POST', signed: true }).body.message, 'This screen can only show the game.');
 });
+
+// ---------- pa5b round 3 (Rigel D2 and D3): measure, then step the density up ----------
+
+test('the question column steps up its density (c1, c2, then c2 c3 c4) while it is taller than its box, and never changes what is shown', async () => {
+  const P = dom.window.HTMLElement.prototype;
+  const sh = Object.getOwnPropertyDescriptor(P, 'scrollHeight') ?? Object.getOwnPropertyDescriptor(dom.window.Element.prototype, 'scrollHeight');
+  const ch = Object.getOwnPropertyDescriptor(P, 'clientHeight') ?? Object.getOwnPropertyDescriptor(dom.window.Element.prototype, 'clientHeight');
+  // A column that only fits once it is at c2: before that it is 100 px taller than its box.
+  let fitsAt = 'c2';
+  Object.defineProperty(P, 'clientHeight', { configurable: true, get() { return this.classList.contains('tvq') ? 866 : 0; } });
+  Object.defineProperty(P, 'scrollHeight', { configurable: true, get() { return this.classList.contains('tvq') && !this.classList.contains(fitsAt) ? 966 : 866; } });
+  try {
+    const t = await open('question');
+    assert.equal(t.$('.tvq').className, 'tvq c2', 'short question, but it overflowed: none to c1 to c2');
+    const text = t.text();
+    fitsAt = 'c3';
+    t.push({ ...scenes.reveal });
+    assert.equal(t.$('.tvq').className, 'tvq rv c2 c3', 'a reveal with a quote that still overflows at c2 gets c3 on top');
+    fitsAt = 'never';
+    t.push({ ...scenes.question });
+    assert.equal(t.$('.tvq').className, 'tvq c2 c3 c4', 'stops at the last step');
+    assert.equal(t.text(), text, 'layout only: the same words are shown');
+    fitsAt = 'tvq';
+    t.push({ ...scenes.question });
+    assert.equal(t.$('.tvq').className, 'tvq', 'a column that fits keeps the size density() chose');
+    t.app.gone(401);
+  } finally {
+    if (sh) Object.defineProperty(dom.window.Element.prototype, 'scrollHeight', sh);
+    if (ch) Object.defineProperty(dom.window.Element.prototype, 'clientHeight', ch);
+    delete P.scrollHeight;
+    delete P.clientHeight;
+  }
+});
+
+test('the tight steps keep every font at 32 px or more', () => {
+  const css = readFileSync(new URL('../guest/src/screen/screen.css', import.meta.url), 'utf8');
+  const rules = css.match(/\.tvq\.c[34][^{]*\{[^}]*\}/g) ?? [];
+  assert.ok(rules.length >= 5);
+  for (const r of rules) for (const m of r.matchAll(/font-size: (\d+)px/g)) assert.ok(Number(m[1]) >= 32, r);
+  assert.match(css, /\.tv \.tvq\.c4 \.tvans \{ grid-template-columns: 1fr;/);
+});

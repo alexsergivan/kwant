@@ -89,6 +89,7 @@ export class ScreenApp {
 
   /** Signs in with the link's token once (retrying on the phone page's backoff while the box is away), then goes live. */
   async start(_boot?: unknown): Promise<void> {
+    void document.fonts?.ready.then(() => this.settle());
     this.draw('loading');
     let tries = 0;
     for (;;) {
@@ -210,7 +211,25 @@ export class ScreenApp {
     this.stage.setAttribute('data-screen', s);
     this.stage.replaceChildren(...(Array.isArray(body) ? body : [body]).filter((x): x is Node => x instanceof Node));
     if (s === 'leaderboard') this.reorder(was === 'leaderboard');
+    this.settle();
     if (s !== was) this.say(s, v);
+  }
+
+  /**
+   * Layout only. density() guesses from the text lengths; this measures. If the question column
+   * is taller than its box (a source quote, answers that wrap), step up to the next density
+   * (none, c1, c2, then c2 with c3, then one answer per row with c4) and measure again, so nothing is pushed off the stage. Never changes what is shown.
+   */
+  private settle(): void {
+    const q = this.stage.querySelector<HTMLElement>('.tvq');
+    if (!q) return;
+    const steps = ['c1', 'c2', 'c3', 'c4'];
+    let at = q.classList.contains('c2') ? 1 : q.classList.contains('c1') ? 0 : -1;
+    while (q.scrollHeight > q.clientHeight + 1 && at < steps.length - 1) {
+      at += 1;
+      if (steps[at] === 'c2') q.classList.remove('c1');
+      q.classList.add(steps[at]);
+    }
   }
 
   /** One polite line per screen change for a screen reader; the screens themselves are headed and labelled. */
