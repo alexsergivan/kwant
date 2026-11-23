@@ -145,13 +145,29 @@ pub trait Kit: Send + Sync + 'static {
         spec.get("title").and_then(Value::as_str).unwrap_or("").trim().chars().take(80).collect()
     }
     fn init(&self, spec: &Value) -> Value;
+    /// May someone with this name (its lower-case key) join now? Called before the player is
+    /// saved, with the players already in. Secret Santa refuses after the draw unless the host
+    /// let that name in late. `NotNow` is a 409 `not_now`, `BadInput` a 400 `bad_action`.
+    fn admit(&self, _ctx: &KitCtx, _state: &Value, _name_key: &str) -> Result<(), KitError> {
+        Ok(())
+    }
     fn on_join(&self, _ctx: &mut KitCtx, _state: &mut Value, _player: &Player) {}
+    /// May the host remove this player now? Secret Santa refuses after the draw (it would
+    /// change someone else's match). Same errors as [`Kit::admit`].
+    fn may_remove(&self, _ctx: &KitCtx, _state: &Value, _player_id: &str) -> Result<(), KitError> {
+        Ok(())
+    }
     fn on_remove(&self, _ctx: &mut KitCtx, _state: &mut Value, _player_id: &str) {}
     /// A named action from `actor` (its name is already one the rules list for that actor).
     fn act(&self, ctx: &mut KitCtx, state: &mut Value, actor: &Viewer, name: &str, body: &Value) -> Result<(), KitError>;
     /// Called about once a second while someone is watching; `true` when the state changed
     /// (a timer ran out). Kits without timers keep the default.
     fn tick(&self, _ctx: &mut KitCtx, _state: &mut Value) -> bool {
+        false
+    }
+    /// `true` when the kit's timers must run even while nobody watches (a draw or a reveal
+    /// weeks away): the sweeper then ticks its open pockets once a minute.
+    fn ticks_unwatched(&self) -> bool {
         false
     }
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value;
@@ -173,13 +189,14 @@ pub trait Kit: Send + Sync + 'static {
 pub fn kit(id: &str) -> Option<&'static dyn Kit> {
     match id {
         "test" if test_kit_allowed() => Some(&TestKit),
+        super::santa::ID => Some(&super::santa::Santa),
         _ => None,
     }
 }
 
 /// Every kit id this build can make a pocket with.
 pub fn kit_ids() -> Vec<&'static str> {
-    ["test"].into_iter().filter(|id| kit(id).is_some()).collect()
+    ["test", super::santa::ID].into_iter().filter(|id| kit(id).is_some()).collect()
 }
 
 fn test_kit_allowed() -> bool {

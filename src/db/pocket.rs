@@ -498,6 +498,12 @@ impl Database {
         .await?)
     }
 
+    /// A pocket's event log, oldest first: `(player_id, kind, payload JSON)`. What an export of
+    /// the pocket would read; the privacy tests read it too.
+    pub async fn pocket_events(&self, code: &str) -> Result<Vec<(Option<String>, String, String)>, DbError> {
+        Ok(sqlx::query_as("SELECT player_id, kind, payload FROM pocket_events WHERE pocket_code = ? ORDER BY id").bind(code).fetch_all(&self.pool).await?)
+    }
+
     /// Rows a pocket still has in each table, for tests and the sweeper's checks.
     pub async fn pocket_row_counts(&self, code: &str) -> Result<[i64; 4], DbError> {
         let mut out = [0i64; 4];
