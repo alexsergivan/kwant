@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.46] - 2026-11-23
+
+kwant 0.9.46: chats that carry on once you sign in again.
+
+### Changed
+- Signing in again to a connection now closes its open "needs you" lines for every bot ("It works again.") and each chat it stopped carries on once by itself; the first connect of a server a bot suggested carries that chat on, and deleting a connection closes its open lines as "Removed." (#1089)
+
 ## [Mac 0.9.45] - 2026-11-23
 
 kwant 0.9.45: goal notices that say who fixed them.

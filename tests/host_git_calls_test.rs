@@ -51,6 +51,7 @@ const DYNAMIC_OK: &[(&str, &str, &str)] = &[
     ("router/sidecar.rs", "&cmd.argv[_]", "the router sidecar's install recipe"),
     ("router/sidecar.rs", "bin", "the router sidecar binary"),
     ("mcp/client.rs", "program", "a stdio MCP server the person added (refused in recorded folders, D4/M2)"),
+    ("pocket/address.rs", "bin", "tailscale, from the fixed TAILSCALE_PATHS list, for a read-only `funnel status --json` (pa10a); never git"),
 ];
 
 /// Shells started by name, with what they run. A shell can run git, so each is listed.

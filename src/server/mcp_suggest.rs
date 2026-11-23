@@ -119,6 +119,47 @@ fn suggestion_json(s: &McpSuggestion) -> Value {
     v
 }
 
+/// 34g: the first words of the turn that carries a suggestion's chat on once its server is
+/// connected.
+pub fn connected_prompt(title: &str) -> String {
+    format!("[{} is connected.]\nCarry on with the request you suggested it for.", super::tool_failures::prompt_name(title))
+}
+
+/// Whether the bot is still waiting on `s` in its chat: it hasn't said anything there since the
+/// server was installed. Once it has (it carried on, or moved on), connecting again doesn't carry
+/// the chat on a second time.
+async fn still_waiting(state: &AppState, s: &McpSuggestion) -> bool {
+    let Some(installed) = s.resolved_at else {
+        return false;
+    };
+    let Ok(Some(kwant)) = state.db.get_kwant(&s.kwant_id).await else {
+        return false;
+    };
+    let Ok(messages) = state.db.list_messages(&s.context_id(), 50).await else {
+        return false;
+    };
+    !messages.iter().any(|m| {
+        m.sender_role == "kwant" && (m.sender_id == kwant.id || m.sender_id == kwant.name) && m.created_at.is_some_and(|at| at > installed)
+    })
+}
+
+/// 34g: the person connected server `server_id`, which a bot suggested: installed with no
+/// sign-in needed, or signed in to the first time. The suggestion's chat carries on once.
+/// Returns the chats carried on, as `(kwant id, context id)`.
+pub async fn carry_on_connected(state: &AppState, server_id: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for s in state.db.installed_mcp_suggestions_for_server(server_id).await.unwrap_or_default() {
+        if !still_waiting(state, &s).await {
+            continue;
+        }
+        let context_id = s.context_id();
+        super::tool_failures::carry_on(state, &s.kwant_id, s.channel_id.clone(), s.thread_id.clone(), context_id.clone(), connected_prompt(&s.title))
+            .await;
+        out.push((s.kwant_id.clone(), context_id));
+    }
+    out
+}
+
 async fn changed(state: &AppState, s: &McpSuggestion) {
     if let Some(mid) = &s.message_id {
         let _ = state.db.set_message_meta(mid, &card_meta(s)).await;
@@ -622,6 +663,10 @@ pub async fn install(
     };
     changed(&state, &now).await;
     tracing::info!(suggestion_id = %id, server_id = %created.id, kwant_id = %now.kwant_id, "suggested MCP server installed");
+    if !oauth_required {
+        // 34g: nothing more to do before the bot can use it: its chat carries on now
+        carry_on_connected(&state, &created.id).await;
+    }
     let mut view = McpServerView::from(&created);
     view.disabled_for_kwants = state.db.list_mcp_kwant_opt_outs(&space).await.unwrap_or_default().remove(&created.id).unwrap_or_default();
     Json(json!({

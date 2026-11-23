@@ -1,7 +1,8 @@
 // Pocket apps (pa4): the host's calls from the Pocket card to the main port. Written against Lin's pa1
 // host API ("Pocket API v1", autonomy/pocket-apps/pa1/impl.md; until it merges, pa1/brief.md item 7 and
-// the routes on lin-pa1-pocket-core): list, read one, end, delete. All four are person-only on the main
-// port; a guest or host key is never sent from here. Nothing in the card polls: it reads on demand.
+// the routes on lin-pa1-pocket-core): list, read one, end, delete; pa4b adds mintLink (pa1b "Pocket API v1.1:
+// links"). All are person-only on the main port; a guest or host key is never sent from here. A minted link's
+// token only ever goes into a URL fragment (linkUrl), never a query string. Nothing in the card polls.
 
 /** A pocket as the person's list shows it: public facts and counts, never names or guest text. */
 export interface PocketCard {
@@ -30,11 +31,28 @@ export interface PocketList {
   pockets: PocketCard[];
 }
 
+/** How guests reach the pocket (pa10a): each url ends in /p/<code> on the guest port. */
+export interface PocketJoin {
+  mode: 'wifi' | 'anywhere';
+  anywhere_url: string | null;
+  wifi_url: string | null;
+}
+
 export interface PocketRead {
   pocket: PocketCard;
   /** The kit's host summary (counts only), or null for a kit this box doesn't know. */
   summary: unknown;
   removed: number;
+  join?: PocketJoin | null;
+}
+
+export type PocketLinkRole = 'host' | 'screen';
+
+/** pa1b: a single-use link token, good for 10 minutes. */
+export interface PocketLink {
+  token: string;
+  role: PocketLinkRole;
+  expires_at: string;
 }
 
 export class PocketApiError extends Error {
@@ -108,7 +126,18 @@ export const pocketApi = {
     // Only the two fields, whatever else the answer carried.
     return { code: (r as ResetCode).code, expires_at: (r as ResetCode).expires_at };
   },
+  /** A fresh single-use link for the host remote or the big screen (pa1b). Every call mints a new one. */
+  mintLink: async (code: string, role: PocketLinkRole) => call<PocketLink>('POST', `${one(code)}/link`, { role }),
 };
+
+/**
+ * The page a minted link opens: the join address (`…/p/<code>`) with the token in the fragment, which browsers never
+ * send to a server or put in a Referer. `#remote=` opens the host remote, `#screen=` the big screen.
+ */
+export function linkUrl(joinUrl: string, role: PocketLinkRole, token: string): string {
+  const base = joinUrl.split('#')[0].split('?')[0];
+  return `${base}#${role === 'host' ? 'remote' : 'screen'}=${encodeURIComponent(token)}`;
+}
 
 /** host/reset-pin's answer: the code and when it stops working (RFC 3339). */
 export interface ResetCode {

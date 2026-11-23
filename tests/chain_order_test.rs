@@ -384,8 +384,12 @@ async fn a_leads_add_on_for_a_busy_teammate_waits_for_its_earlier_task() {
     behave("Ld10", "Added to the plan. @Wr10, add the free shipping line ADDON10 under the button.");
     say_in(&env, &channel, "@Ld10 also mention free shipping over EUR 40").await;
     let not_sent = |msgs: &[Message]| msgs.iter().any(|m| m.text.starts_with("Not sent to Wr10"));
+    // The add-on's row is saved (and linked to the first task) before its chat line is posted, so
+    // wait for that line too: two "asked Wr10" lines, whatever the second one says
+    let asked = |msgs: &[Message]| msgs.iter().filter(|m| m.text.starts_with("Ld10 asked Wr10 to work on")).count();
     wait_for("the add-on to be handed on or refused", || async {
-        delegations_to(&env, lead, wr).await.len() == 2 || not_sent(&messages(&env, &channel).await)
+        let msgs = messages(&env, &channel).await;
+        (delegations_to(&env, lead, wr).await.len() == 2 && asked(&msgs) == 2) || not_sent(&msgs)
     })
     .await;
     let msgs = messages(&env, &channel).await;

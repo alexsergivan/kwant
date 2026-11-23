@@ -20,7 +20,7 @@ use crate::kits::quiz::{spec::QuizSpec, validate, QuizKit};
 use crate::kits::Kit;
 use card::{DryRunLine, State};
 use source_check::{Policy, SourceResult};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// Pretend players in the dry run, and how many drop and rejoin (plan section 10, pa3).
 pub const DRY_RUN_PLAYERS: usize = 30;
@@ -60,6 +60,12 @@ pub fn dry_run(spec_json: &str, players: usize) -> Result<DryRunLine, Vec<String
 
 /// Checks a spec end to end. Source results whose question didn't change come from `cache`.
 pub async fn evaluate(spec_json: &str, cache: &HashMap<String, SourceResult>, policy: &Policy) -> Evaluation {
+    evaluate_own(spec_json, cache, policy, &HashSet::new()).await
+}
+
+/// [`evaluate`] where the questions in `own` (pa4c: [`source_check::own_key`]s the person wrote)
+/// aren't source-checked; the rules and the dry run still cover them.
+pub async fn evaluate_own(spec_json: &str, cache: &HashMap<String, SourceResult>, policy: &Policy, own: &HashSet<String>) -> Evaluation {
     let spec = match validate::parse(spec_json) {
         Ok(s) => s,
         Err(problems) => {
@@ -67,7 +73,7 @@ pub async fn evaluate(spec_json: &str, cache: &HashMap<String, SourceResult>, po
         }
     };
     let problems: Vec<String> = card::rule_problems(&spec).into_iter().enumerate().map(|(i, p)| format!("{}. {p}", i + 1)).collect();
-    let sources = source_check::check_spec(&spec, policy, cache).await;
+    let sources = source_check::check_spec_skipping(&spec, policy, cache, own).await;
     let fetched = sources.iter().filter(|r| !cache.contains_key(&r.key) && r.fail != Some(source_check::Fail::NoSource)).count() as u32;
     let dry = dry_run(spec_json, DRY_RUN_PLAYERS).ok();
     let state = if !problems.is_empty() {

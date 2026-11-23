@@ -2,8 +2,9 @@
 // §6, "Rules this design keeps", "Data the app doesn't have yet"). A `pocket` block is always a slot
 // block, drawn after the Quizmaster's reply. The QR code never shows until a dry run passed (ready and
 // live only). Holo is earned: "Checked" on ready, "Winners" on ended and results; everything else is a
-// plain chip. Buttons whose route isn't built yet (pa4b: the remote, editing, the big screen, keeping
-// results) render disabled with a short reason.
+// plain chip. Open the remote and Big screen (pa4b) mint a fresh single-use link per press and show it as a
+// private QR plus Open here; the token only ever goes in the URL fragment. Buttons whose route isn't built yet
+// (editing, pausing from the card, keeping results) render disabled with a short reason.
 
 import React, { useEffect, useId, useRef, useState } from 'react';
 import {
@@ -28,14 +29,18 @@ import {
   Trophy,
   Users,
   Wifi,
+  X,
   Zap,
 } from 'lucide-react';
 import type { PocketBlock, PocketJoinMode, PocketMiss, PocketResults, PocketRound, PocketState, PocketTeam } from '../../smartResults';
 import { inRange, isHttpUrl, isIndex, isNum, isObj, isText, optText, parseCommon } from '../../smartResults';
 import { Sticker } from '../Sticker';
-import { BTN, Bar, Callout, GHOST, ICON, LATER_CLS, LaterButton, LinkField, NoLinkYet, PRIMARY, Qr, Row, STOP, WARN_FILL } from './pocketParts';
+import { QrImage } from '../DeviceSignIn';
+import { BTN, Bar, Callout, GHOST, HALF, ICON, LATER_CLS, LaterButton, LinkField, NoLinkYet, PRIMARY, Qr, Row, STOP, WARN_FILL } from './pocketParts';
 import { TEAM_PALETTES, isPalette, paletteCreature, renderCreature } from '../ModernAvatar';
-import { pocketApi, PocketApiError } from '../../pocketApi';
+import { linkUrl, pocketApi, PocketApiError } from '../../pocketApi';
+import type { PocketLinkRole } from '../../pocketApi';
+import { useMedia } from '../../useMedia';
 import { SantaCard, findMatchLike, validSanta } from './PocketSanta';
 import type { RendererProps } from './registry';
 
@@ -229,11 +234,8 @@ export function budgetLine(b: PocketBlock): string {
 
 /** Hover reasons for buttons whose route comes later (impl.md "Disabled until pa4b"). */
 export const LATER = {
-  remote: 'Comes with the remote',
   edit: 'Comes with question editing',
-  bigScreen: 'Comes with the big screen',
-  pause: 'Comes with the remote',
-  keep: 'Comes with the remote',
+  keep: 'Comes with a later update',
   editRound1: 'Edit opens when round 1 is written',
 } as const;
 
@@ -647,6 +649,83 @@ const deletionLine = (b: PocketBlock) =>
   `The link is closed. Names and answers are deleted ${b.ended?.deletes_on ? `on ${b.ended.deletes_on}` : b.kit === 'quiz' ? '7 days after the quiz' : 'when the keep time ends'}.`;
 
 // ---------------------------------------------------------------------------------------------------
+// Remote and big screen links (pa4b)
+
+type Link =
+  | { role: PocketLinkRole; phase: 'busy' }
+  | { role: PocketLinkRole; phase: 'ready'; url: string }
+  | { role: PocketLinkRole; phase: 'old' }
+  | { role: PocketLinkRole; phase: 'error'; text: string };
+
+const LINK_TEXT: Record<PocketLinkRole, { title: string; where: string; wherePhone: string; qr: string }> = {
+  host: {
+    title: 'Your remote',
+    where: 'Only you see this · scan with your phone',
+    // A phone can't scan its own screen, so on a phone Open here leads (Mira round 1, fix 4).
+    wherePhone: 'Only you see this · press Open here, or scan from another phone',
+    qr: 'QR code that opens your remote',
+  },
+  screen: {
+    title: 'Big screen',
+    where: 'Only you see this · press Open here on the computer plugged into the TV, or scan it with the tablet or laptop that’s on the TV.',
+    wherePhone: 'Only you see this · press Open here on the computer plugged into the TV, or scan it with the tablet or laptop that’s on the TV.',
+    qr: 'QR code that opens the big screen',
+  },
+};
+/** The card's phone breakpoint: under Tailwind's sm. */
+const PHONE = '(max-width: 639px)';
+const LINK_MINUTES = 10;
+
+const LinkPanel: React.FC<{ id: string; link: Link; name: string; onOpenHere: () => void; onAgain: () => void; onClose: () => void }> = ({ id, link, name, onOpenHere, onAgain, onClose }) => {
+  const t = LINK_TEXT[link.role];
+  const phone = useMedia(PHONE);
+  return (
+    <div id={id} role="region" aria-label={`${t.title} for ${name}`} className="flex flex-col gap-3.5 rounded-2xl border border-sky-800/70 bg-surface-rail/40 p-3.5 sm:flex-row" data-link-panel={link.role} data-link={link.phase}>
+      {link.phase === 'ready' ? (
+        <div className="mx-auto w-[200px] shrink-0 rounded-[10px] bg-white p-2 sm:mx-0 sm:w-[168px]" data-qr>
+          <QrImage text={link.url} label={t.qr} />
+        </div>
+      ) : (
+        <div className="mx-auto grid h-[200px] w-[200px] shrink-0 place-items-center rounded-[10px] border border-dashed border-hairline-strong text-zinc-400 sm:mx-0 sm:h-[168px] sm:w-[168px]" aria-hidden="true">
+          {link.phase === 'busy' ? <Loader2 size={22} className="animate-spin motion-reduce:animate-none" /> : link.phase === 'old' ? <Hourglass size={22} /> : <AlertTriangle size={22} className="text-bad" />}
+        </div>
+      )}
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <div className="flex items-start gap-2">
+          <Lock size={15} className={`${ICON} text-sky-300`} aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <div className="text-[15px] font-semibold text-zinc-50 sm:text-[14px]">{t.title}</div>
+            <p className="text-[13px] leading-5 text-zinc-300 sm:text-meta" data-where>{phone ? t.wherePhone : t.where}</p>
+          </div>
+          <button type="button" onClick={onClose} className="-mr-1 -mt-1 grid h-11 w-11 shrink-0 place-items-center rounded-lg text-zinc-400 hover:bg-white/[0.05] hover:text-zinc-100 kw-focus sm:h-9 sm:w-9" aria-label={`Close ${t.title.toLowerCase()}`} data-link-close>
+            <X size={16} aria-hidden="true" />
+          </button>
+        </div>
+        <p role="status" className={`text-[13px] leading-5 sm:text-meta ${link.phase === 'error' ? 'text-bad' : 'text-zinc-400'}`}>
+          {link.phase === 'busy'
+            ? 'Making a fresh link…'
+            : link.phase === 'ready'
+              ? `Works once, for ${LINK_MINUTES} minutes. Each press makes a new one.`
+              : link.phase === 'old'
+                ? `This code is more than ${LINK_MINUTES} minutes old now. Make a new one.`
+                : link.text}
+        </p>
+        <div className="mt-auto grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
+          <button type="button" onClick={onOpenHere} disabled={link.phase === 'busy'} className={`${phone ? `${PRIMARY} col-span-2` : GHOST} disabled:opacity-50`} data-action="open-here">
+            {link.role === 'host' ? <Smartphone size={14} aria-hidden="true" /> : <Monitor size={14} aria-hidden="true" />}
+            Open here
+          </button>
+          <button type="button" onClick={onAgain} disabled={link.phase === 'busy'} className={`${GHOST} ${phone ? 'col-span-2' : ''} disabled:opacity-50`} data-action="new-link">
+            <Repeat size={14} aria-hidden="true" />
+            New code
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------------------------------
 // Actions
 
 const Actions: React.FC<{
@@ -655,7 +734,18 @@ const Actions: React.FC<{
   ask: (t: string) => void;
   onStop: () => void;
   onEnd: () => void;
-}> = ({ block, url, ask, onStop, onEnd }) => {
+  /** Mint a fresh link for the remote or the big screen and show its panel (pa4b). */
+  onLink: (role: PocketLinkRole) => void;
+  /** The role whose panel is open, for aria-expanded. */
+  shown: PocketLinkRole | null;
+  panelId: string;
+}> = ({ block, url, ask, onStop, onEnd, onLink, shown, panelId }) => {
+  const bigScreen = (
+    <button type="button" onClick={() => onLink('screen')} aria-expanded={shown === 'screen'} aria-controls={panelId} className={`kw-btn-ghost ${HALF}`} data-action="screen">
+      <Monitor size={14} aria-hidden="true" />
+      Big screen
+    </button>
+  );
   const stop = (
     <button type="button" onClick={onStop} className={`${STOP} col-span-2 justify-self-center sm:ml-auto`} data-action="stop">
       <Square size={14} aria-hidden="true" />
@@ -704,9 +794,7 @@ const Actions: React.FC<{
               Try it as a player
             </button>
           )}
-          <LaterButton half icon={<Monitor size={14} aria-hidden="true" />} why={LATER.bigScreen}>
-            Big screen
-          </LaterButton>
+          {bigScreen}
           {React.cloneElement(edit, { half: true })}
           {stop}
         </div>
@@ -714,16 +802,12 @@ const Actions: React.FC<{
     case 'live':
       return (
         <div className={grid}>
-          <button type="button" aria-disabled="true" title={LATER.remote} aria-description={LATER.remote} data-later={LATER.remote} onClick={(e) => e.preventDefault()} className={`${PRIMARY} ${full} ${LATER_CLS}`}>
+          <button type="button" onClick={() => onLink('host')} aria-expanded={shown === 'host'} aria-controls={panelId} className={`${PRIMARY} ${full}`} data-action="remote">
             <Smartphone size={14} aria-hidden="true" />
             Open the remote
           </button>
-          <LaterButton half icon={<Monitor size={14} aria-hidden="true" />} why={LATER.bigScreen}>
-            Big screen
-          </LaterButton>
-          <LaterButton half icon={<Pause size={14} aria-hidden="true" />} why={LATER.pause}>
-            {block.paused ? 'Resume' : 'Pause'}
-          </LaterButton>
+          {/* No dead Pause here: the remote pauses (Mira round 1, fix 1). */}
+          {React.cloneElement(bigScreen, { className: `${GHOST} ${full}` })}
           <button type="button" onClick={onEnd} className={`${STOP} col-span-2 justify-self-center sm:ml-auto`} data-action="end">
             <Square size={14} aria-hidden="true" />
             End quiz
@@ -888,6 +972,11 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block, ask }) => {
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<Done>(null);
   const opener = useRef<HTMLDivElement | null>(null);
+  const [link, setLink] = useState<Link | null>(null);
+  const linkTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const linkSeq = useRef(0);
+  const panelId = useId();
+  useEffect(() => () => clearTimeout(linkTimer.current), []);
 
   if (block.state === 'ended' && block.results) return <ResultsCard block={block} results={block.results} ask={ask} />;
 
@@ -903,6 +992,57 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block, ask }) => {
     } finally {
       setBusy(false);
     }
+  };
+  /** A fresh single-use link's page: the box's current join address (its card copy if that read fails) + the token. */
+  const mint = async (role: PocketLinkRole): Promise<{ url: string; expires: number }> => {
+    let join = block.join;
+    try {
+      join = (await pocketApi.read(block.code)).join ?? join;
+    } catch {
+      // keep the card's copy
+    }
+    const base = join ? urlFor(join, mode) ?? urlFor(join, mode === 'wifi' ? 'anywhere' : 'wifi') : null;
+    if (!base) throw new PocketApiError("Your box hasn't said its address yet. Try again in a moment.", 0, 'no_address');
+    const minted = await pocketApi.mintLink(block.code, role);
+    const at = Date.parse(minted.expires_at);
+    return { url: linkUrl(base, role, minted.token), expires: Number.isFinite(at) ? at : Date.now() + LINK_MINUTES * 60_000 };
+  };
+  const linkError = (role: PocketLinkRole, e: unknown) =>
+    `Couldn't make a ${role === 'host' ? 'remote' : 'big screen'} link: ${e instanceof PocketApiError ? e.message : 'something went wrong.'}`;
+  const showLink = async (role: PocketLinkRole) => {
+    const seq = ++linkSeq.current;
+    clearTimeout(linkTimer.current);
+    setLink({ role, phase: 'busy' });
+    try {
+      const { url: page, expires } = await mint(role);
+      if (seq !== linkSeq.current) return;
+      setLink({ role, phase: 'ready', url: page });
+      linkTimer.current = setTimeout(() => setLink((l) => (l && l.role === role && l.phase === 'ready' ? { role, phase: 'old' } : l)), Math.max(0, expires - Date.now()));
+    } catch (e) {
+      if (seq === linkSeq.current) setLink({ role, phase: 'error', text: linkError(role, e) });
+    }
+  };
+  /** Open here: its own fresh link (the QR's stays good), in a tab opened before the await so no popup blocker stops it. */
+  const openHere = async (role: PocketLinkRole) => {
+    const tab = window.open('', '_blank');
+    if (tab) tab.opener = null;
+    // A panel closed or reopened meanwhile bumps linkSeq: then a late failure doesn't reopen it (Rigel N2).
+    const seq = linkSeq.current;
+    try {
+      const { url: page } = await mint(role);
+      if (tab) tab.location.href = page;
+      else if (seq === linkSeq.current) setLink({ role, phase: 'error', text: 'Your browser blocked the new tab. Scan the code instead, or allow pop-ups for this page.' });
+    } catch (e) {
+      tab?.close();
+      if (seq === linkSeq.current) setLink({ role, phase: 'error', text: linkError(role, e) });
+    }
+  };
+  const closeLink = () => {
+    const role = link?.role;
+    linkSeq.current++;
+    clearTimeout(linkTimer.current);
+    setLink(null);
+    opener.current?.querySelector<HTMLButtonElement>(`[data-action="${role === 'host' ? 'remote' : 'screen'}"]`)?.focus();
   };
   const close = () => {
     setConfirm(null);
@@ -946,9 +1086,12 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block, ask }) => {
           <ConfirmBox block={block} kind={confirm.kind} busy={busy} onYes={() => act(confirm.kind)} onNo={close} />
         ) : done?.kind === 'ok' ? null : (
           <div ref={opener}>
-            <Actions block={block} url={url} ask={ask} onStop={() => setConfirm({ kind: 'stop' })} onEnd={() => setConfirm({ kind: 'end' })} />
+            <Actions block={block} url={url} ask={ask} onStop={() => setConfirm({ kind: 'stop' })} onEnd={() => setConfirm({ kind: 'end' })} onLink={showLink} shown={link?.role ?? null} panelId={panelId} />
           </div>
         )}
+        {link && !confirm && done?.kind !== 'ok' && (block.state === 'live' || block.state === 'ready') ? (
+          <LinkPanel id={panelId} link={link} name={block.name} onOpenHere={() => void openHere(link.role)} onAgain={() => void showLink(link.role)} onClose={closeLink} />
+        ) : null}
       </div>
       <footer className="relative -mx-4 -mb-4 flex items-start gap-2 border-t border-hairline px-4 py-3 text-meta text-zinc-400 sm:-mx-[18px] sm:-mb-[18px] sm:px-[18px]" data-budget>
         <Zap size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
