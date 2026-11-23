@@ -56,6 +56,7 @@ import {
   inboxStore,
 } from '../inboxStore';
 import { localClock } from '../clock';
+import { runAgain, runAgainId } from '../routineRunAgain';
 
 export const WIDE_QUERY = '(min-width: 1024px)';
 
@@ -221,6 +222,8 @@ interface RowProps {
   onResolve: (i: InboxItem, d: ApprovalDecision, withoutBackup?: boolean, reason?: string) => void;
   /** 0.9.5: Retry on a stopped item whose approval expired unanswered. */
   onRetry?: (i: InboxItem, approvalId: string) => void;
+  /** routine-run-again: Run again on a failed routine run that names its routine. */
+  onRunAgain?: (i: InboxItem) => void;
   /** A routine's review task in Done: its run's first line, as the run's own row would show it. */
   doneSummary?: string | null;
   /** The conversation it happened in ("@Spring launch"), said before the bot's name like the mockup. */
@@ -229,8 +232,9 @@ interface RowProps {
   onOpenConnections?: () => void;
 }
 
-const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, doneSummary, place, onOpenConnections }) => {
+const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, onRunAgain, doneSummary, place, onOpenConnections }) => {
   const stopped = isReview(item) ? null : stoppedAction(item as AwayItem);
+  const runId = isReview(item) || !onRunAgain ? null : runAgainId(item as AwayItem);
   const review = isReview(item) ? item : null;
   const title = rowTitle(item);
   // The server decides one_tap; an item with no verdict (Not checked yet, Being checked) never gets inline Approve.
@@ -358,6 +362,23 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
         </div>
       )}
 
+      {runId && onRunAgain && (
+        <div className="px-3 pb-3 pl-[54px]">
+          <button
+            type="button"
+            disabled={disabled}
+            aria-busy={busy === item.id || undefined}
+            aria-label={`Run “${title}” again`}
+            onClick={() => onRunAgain(item)}
+            className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`}
+            data-run-again={item.id}
+          >
+            {busy === item.id ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <RotateCcw size={12} aria-hidden="true" />}
+            Run again
+          </button>
+        </div>
+      )}
+
       {item.kind === 'approval' && (
         <div className="px-3 pb-1 sm:pl-[54px] [&>div]:my-0 [&>div]:mb-2">
           <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} stackWhy onResolve={(_, d, opts) => onResolve(item, d as ApprovalDecision, opts?.withoutBackup, opts?.reason)} />
@@ -375,7 +396,7 @@ const QueueRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, o
 
       {busy === item.id && !review && (
         <p className="px-3 pb-3 pl-[54px] inline-flex items-center gap-1.5 text-[11px] text-zinc-400">
-          <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Sending…
+          <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> {runId ? 'Starting…' : 'Sending…'}
         </p>
       )}
     </li>
@@ -809,7 +830,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
     [onOpen],
   );
 
-  const act = async (item: InboxItem, run: () => Promise<unknown>, denied = false) => {
+  const act = async (item: InboxItem, run: () => Promise<unknown>, denied = false, said?: (reply: unknown) => string) => {
     if (inboxStore.get().busy) return;
     inboxStore.patch({ busy: item.id, notice: null });
     const title = awayTitle(item as AwayItem);
@@ -817,7 +838,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
       const reply = await run();
       const late = item.kind === 'approval' && !denied ? lateAnswerText(reply, item.kwant_name) : null;
       const done = denied ? 'Denied, nothing ran:' : late ?? `Sent to ${item.kwant_name}:`;
-      inboxStore.patch({ busy: null, notice: { text: `${done} “${title}”`, tone: 'ok' } });
+      inboxStore.patch({ busy: null, notice: { text: said ? said(reply) : `${done} “${title}”`, tone: 'ok' } });
     } catch (err) {
       const n = failureNotice(err, title);
       inboxStore.patch({ busy: null, notice: { text: n.text, tone: n.error ? 'error' : 'info' } });
@@ -828,6 +849,12 @@ export const InboxNew: React.FC<InboxNewProps> = ({
 
   const onAnswer = (item: InboxItem, choice: number) => act(item, () => awayApi.answer(item.id, choice));
   const onRetry = (item: InboxItem, approvalId: string) => act(item, () => awayApi.retryApproval(approvalId));
+  // routine-run-again: "Started." as Routines says it; the row leaves Needs you once the run starts (the reload).
+  const onRunAgain = (item: InboxItem) =>
+    act(item, () => runAgain(item as AwayItem), false, (r) => {
+      const t = `“${awayTitle(item as AwayItem)}”`;
+      return r === 'skipped' ? `${t} is already running; this one was skipped.` : `Started: ${t}`;
+    });
   const onResolve = (item: InboxItem, decision: ApprovalDecision, withoutBackup?: boolean, reason?: string) =>
     act(
       item,
@@ -948,6 +975,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
                   onAnswer={onAnswer}
                   onResolve={onResolve}
                   onRetry={onRetry}
+                  onRunAgain={onRunAgain}
                   doneSummary={sections.runFor[i.id]?.summary || null}
                   place={i.link?.channel_id ? (placeName?.(i.link.channel_id) ?? null) : null}
                   onOpenConnections={onOpenConnections}

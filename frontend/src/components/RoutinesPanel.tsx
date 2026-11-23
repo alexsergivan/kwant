@@ -59,7 +59,8 @@ const MONTH_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 /** Which routine to show when Space settings opens from a card, and why. */
 export interface RoutineFocus {
   id: string;
-  mode: 'edit' | 'pause';
+  /** `run` (routine-run-again): a failed run's toast; the row comes into view with its History open. */
+  mode: 'edit' | 'pause' | 'run';
   /** Changes each time a card asks, so the same routine can be opened twice. */
   nonce: number;
 }
@@ -546,6 +547,8 @@ const RunHistory: React.FC<{
 
 const NO_WAITS: Record<string, RunWait> = {};
 
+const motionOk = () => typeof window !== 'undefined' && !!window.matchMedia && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 export const RoutineRow: React.FC<{
   routine: Routine;
   kwantName?: string;
@@ -553,6 +556,8 @@ export const RoutineRow: React.FC<{
   tick: number;
   /** Opened from a card's Pause: scrolls here, focuses the switch and says how to pause. */
   focusPause?: number;
+  /** routine-run-again: opened from a failed run's toast: scrolls here, opens History and focuses Run now. */
+  focusRun?: number;
   onEdit: () => void;
   /** 0.9.5 F: History rows link to each run's result message. */
   onOpenRunResult?: (t: MessageTarget) => void;
@@ -562,7 +567,7 @@ export const RoutineRow: React.FC<{
   onChanged: () => void;
   /** Tests: start in the Undo window. */
   initialPending?: boolean;
-}> = ({ routine, kwantName, placeLabel, tick, focusPause, onEdit, onOpenRunResult, waits = NO_WAITS, onOpenRunCard, onChanged, initialPending = false }) => {
+}> = ({ routine, kwantName, placeLabel, tick, focusPause, focusRun, onEdit, onOpenRunResult, waits = NO_WAITS, onOpenRunCard, onChanged, initialPending = false }) => {
   const rowRef = useRef<HTMLLIElement>(null);
   const switchRef = useRef<HTMLInputElement>(null);
   const [highlight, setHighlight] = useState(false);
@@ -573,6 +578,14 @@ export const RoutineRow: React.FC<{
     setHighlight(true);
   }, [focusPause]);
   const [open, setOpen] = useState(false);
+  const runRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!focusRun) return;
+    setOpen(true);
+    setHighlight(true);
+    rowRef.current?.scrollIntoView?.({ block: 'center', behavior: motionOk() ? 'smooth' : 'auto' });
+    runRef.current?.focus({ preventScroll: true });
+  }, [focusRun]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -654,7 +667,7 @@ export const RoutineRow: React.FC<{
       </div>
       {/* Phone: four 44 px buttons in one row, no indent, so Delete never wraps. Desktop is as before. */}
       <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:pl-9">
-        <button type="button" onClick={runNow} disabled={busy} className={`${rowSmallBtn} ${rowBtn} border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}>
+        <button ref={runRef} type="button" onClick={runNow} disabled={busy} data-routine-run={routine.id} className={`${rowSmallBtn} ${rowBtn} border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}>
           <Play size={11} aria-hidden="true" /> Run now
         </button>
         <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls={historyId} className={`${rowQuietBtn} ${rowBtn}`}>
@@ -672,7 +685,7 @@ export const RoutineRow: React.FC<{
           <Trash2 size={11} aria-hidden="true" /> Delete
         </button>
         {notice && <span className="col-span-4 text-[11px] text-zinc-400" role="status">{notice}</span>}
-        {highlight && routine.enabled && !notice && (
+        {highlight && !!focusPause && routine.enabled && !notice && (
           <span className="col-span-4 text-[11px] text-sky-200" role="status">Turn the switch off to pause it.</span>
         )}
       </div>
@@ -842,6 +855,7 @@ export const RoutinesPanel: React.FC<{
                 placeLabel={place(r)}
                 tick={tick}
                 focusPause={focus?.mode === 'pause' && focus.id === r.id ? focus.nonce : undefined}
+                focusRun={focus?.mode === 'run' && focus.id === r.id ? focus.nonce : undefined}
                 onEdit={() => setEditing(r)}
                 onOpenRunResult={onOpenRunResult}
                 waits={waits}
