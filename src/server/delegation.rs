@@ -440,6 +440,10 @@ pub(super) async fn create(state: &AppState, req: StartRequest) -> Result<Create
     if let Some(p) = &prereq {
         m["after_delegation_id"] = json!(p.id);
     }
+    // RED PROOF ONLY (never merged): widen the gap between the saved row and its chat line
+    if prereq.is_some() {
+        tokio::time::sleep(std::time::Duration::from_millis(1500)).await;
+    }
     post_to_origin(state, &d, "system", "kwnt", started, m).await;
     emit_thread(state, &thread);
     emit_delegation(state, &d);
