@@ -1,0 +1,21 @@
+{
+  "version": "0.9.44",
+  "date": "2026-11-23",
+  "highlights": [
+    {
+      "id": "goal-draft-says-why",
+      "title": "A failed goal draft tells you why",
+      "text": "When a bot can't draft the checks for a new goal, the Mission board says why and offers Write the checks yourself, with your words already in the form. Before, it kept saying it was drafting.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "goal-draft-write-checks",
+      "title": "Write a goal's checks yourself",
+      "text": "If a bot's draft fails, Write the checks yourself opens the New goal form with what you typed still in it, so you finish the goal without starting over.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}
