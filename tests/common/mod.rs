@@ -3,7 +3,8 @@
 //! own tools (`kwnt_tools`) over HTTP the way the real CLI does, so a test drives a whole turn:
 //!
 //! - `CALLTOOL:<tool>:<base64 json args>` in the prompt: call that tool and reply with its text
-//!   (the last marker counts, and each marker runs once: later turns see it again in history).
+//!   (the last marker counts, and each marker runs once per kwant instance, so per test: later
+//!   turns see it again in history, while another test sending the same marker gets its call).
 //!   It calls kwnt's own tools straight away; with `ASKFIRST` in the prompt too it first asks
 //!   kwnt's permission prompt (`--permission-prompt-tool`), as claude does, and on a deny replies
 //!   `TOOLDENIED[<what kwnt said>]` without calling. `ASKAS:<tool>` too (say `ASKAS:Bash`): the
@@ -32,6 +33,10 @@
 //!   the response>]`; once per marker.
 //! - `STREAMLINES:<base64 text>`: print that text (claude `stream-json` lines: an init line, tool
 //!   calls and their results) before the reply; once per marker.
+//!
+//! Each "once" above is once per kwant instance (the test's own `setup()`), never shared with
+//! another test in the binary. `REPLYSEQ`'s planned answers stay one set per binary: the test
+//! writes them before its kwant starts, so give each test its own tag.
 //!
 //! Each test file that uses it is its own binary, because it changes PATH.
 #![allow(dead_code)]
@@ -62,6 +67,21 @@ prompt = args[-1] if args else ""
 out_dir = os.environ["KWNT_TEST_PROMPTS"]
 with open(os.path.join(out_dir, "%d-%d" % (os.getpid(), time.time_ns())), "w") as f:
     f.write("\n".join(args))
+# The once-flags below (called-, hooked-, …) are kept per kwant instance, so two tests that send
+# the same marker don't race: in a folder named for the instance's data folder (the one holding
+# kwnt.db, which every turn's working folder sits in). A turn run anywhere else keeps them next to
+# the prompts folder, one per test binary, as before.
+def once_dir():
+    import hashlib
+    d = os.getcwd()
+    while not os.path.exists(os.path.join(d, "kwnt.db")):
+        if os.path.dirname(d) == d:
+            return os.path.dirname(out_dir)
+        d = os.path.dirname(d)
+    f = os.path.join(os.path.dirname(out_dir), "once-" + hashlib.sha1(os.path.realpath(d).encode()).hexdigest()[:16])
+    os.makedirs(f, exist_ok=True)
+    return f
+flags = once_dir()
 # FAILTURN: the CLI dies with no output (exit 3), so the turn fails
 if "FAILTURN" in prompt:
     sys.exit(3)
@@ -69,7 +89,7 @@ if "FAILTURN" in prompt:
 # APIERRORPLAIN:<tag>: the same error as plain text, not JSON. Once per tag (later turns see it
 # in history).
 ae = re.findall(r"APIERROR(PLAIN)?:([A-Za-z0-9_]+)", prompt)
-ae_flag = ae and os.path.join(os.path.dirname(out_dir), "apierror-" + ae[-1][1])
+ae_flag = ae and os.path.join(flags, "apierror-" + ae[-1][1])
 if ae and not os.path.exists(ae_flag):
     open(ae_flag, "w").close()
     if ae[-1][0]:
@@ -79,7 +99,7 @@ if ae and not os.path.exists(ae_flag):
     sys.exit(1)
 # SLEEPONCE:<tag>:<ms>: wait silently that long first, once per tag
 so = re.findall(r"SLEEPONCE:([A-Za-z0-9_]+):([0-9]+)", prompt)
-so_flag = so and os.path.join(os.path.dirname(out_dir), "slept-" + so[-1][0])
+so_flag = so and os.path.join(flags, "slept-" + so[-1][0])
 if so and not os.path.exists(so_flag):
     open(so_flag, "w").close()
     time.sleep(int(so[-1][1]) / 1000.0)
@@ -91,7 +111,7 @@ if "--tools" in args:
 # QUOTAALWAYS: every call does. QUOTARESET:<secs> sets a later reset.
 reset = int((re.findall(r"QUOTARESET:([0-9]+)", prompt) or ["2"])[-1])
 q = re.findall(r"QUOTAONCE:([A-Za-z0-9_]+)", prompt)
-flag = q and os.path.join(os.path.dirname(out_dir), "quota-" + q[-1])
+flag = q and os.path.join(flags, "quota-" + q[-1])
 if "QUOTAALWAYS" in prompt or (flag and not os.path.exists(flag)):
     if flag:
         open(flag, "w").close()
@@ -130,7 +150,7 @@ if fs:
 sl = re.findall(r"STREAMLINES:([A-Za-z0-9+/=]+)", prompt)
 if sl:
     import hashlib
-    sl_flag = os.path.join(os.path.dirname(out_dir), "streamed-" + hashlib.sha1(sl[-1].encode()).hexdigest())
+    sl_flag = os.path.join(flags, "streamed-" + hashlib.sha1(sl[-1].encode()).hexdigest())
     if not os.path.exists(sl_flag):
         open(sl_flag, "w").close()
         sys.stdout.write(base64.b64decode(sl[-1]).decode())
@@ -178,7 +198,7 @@ reply = []
 mh = re.findall(r"MCPHOOK:([A-Za-z0-9+/=]+)", prompt)
 if mh:
     import hashlib, subprocess
-    mh_flag = os.path.join(os.path.dirname(out_dir), "hooked-" + hashlib.sha1(mh[-1].encode()).hexdigest())
+    mh_flag = os.path.join(flags, "hooked-" + hashlib.sha1(mh[-1].encode()).hexdigest())
     if not os.path.exists(mh_flag):
         open(mh_flag, "w").close()
         c = json.loads(base64.b64decode(mh[-1]))
@@ -203,7 +223,7 @@ m = ([None] + list(re.finditer(r"CALLTOOL:([a-z_]+):([A-Za-z0-9+/=]+)", prompt))
 done = None
 if m:
     import hashlib
-    done = os.path.join(os.path.dirname(out_dir), "called-" + hashlib.sha1(m.group(0).encode()).hexdigest())
+    done = os.path.join(flags, "called-" + hashlib.sha1(m.group(0).encode()).hexdigest())
     if os.path.exists(done):
         m = None
 if m and "--mcp-config" in args:
