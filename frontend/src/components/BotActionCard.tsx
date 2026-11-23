@@ -30,7 +30,7 @@ export interface BotActionCardProps {
 type Busy = BotActionDecision | 'pause' | 'resume';
 
 const btn =
-  'inline-flex items-center justify-center gap-1.5 min-h-[40px] sm:min-h-[32px] px-3 rounded-xl text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2';
+  'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 rounded-xl text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2';
 const quiet = `${btn} text-zinc-200 border border-zinc-700 hover:bg-zinc-800 focus-visible:outline-zinc-500`;
 
 /**
@@ -70,7 +70,7 @@ export const BotActionCard: React.FC<BotActionCardProps> = (props) => {
   };
 
   const headingId = `bot-action-${messageId}`;
-  const state = routineDeleted ? { label: 'Deleted. It’s no longer in Routines.', tone: 'off' as const } : actionStateText(view, gone);
+  const state = routineDeleted ? { label: 'It’s since been deleted, so it won’t run again.', tone: 'off' as const } : actionStateText(view, gone);
   const facts = routineFacts(view, routine);
   const { edit, pause, resume } = routineButtons(view, routine);
   const reason = view.status === 'pending' && typeof view.details.reason === 'string' ? view.details.reason : '';
@@ -92,7 +92,7 @@ export const BotActionCard: React.FC<BotActionCardProps> = (props) => {
             </span>
           </span>
           <p className={`text-sm break-words leading-relaxed ${resolved ? 'text-zinc-400 line-through decoration-zinc-600' : 'text-zinc-100'}`}>
-            {sentence(summaryText(view, { dropSchedule: facts.some((f) => f.label === 'When') })) || 'A change in the app.'}
+            {sentence(summaryText(view, { dropSchedule: facts.some((f) => f.label === 'When') || routineDeleted })) || 'A change in the app.'}
           </p>
           {reason && (
             <p className="text-sm text-zinc-300 break-words leading-relaxed">
@@ -163,7 +163,7 @@ export const BotActionCard: React.FC<BotActionCardProps> = (props) => {
                 </button>
               )}
               {(pause || resume) && view.target_id && (
-                <button type="button" onClick={() => setEnabled(resume)} disabled={busy !== null} className={quiet}>
+                <button type="button" onClick={() => setEnabled(resume)} aria-disabled={busy !== null} className={`${quiet} aria-disabled:opacity-50`}>
                   {busy === 'pause' || busy === 'resume' ? (
                     <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
                   ) : resume ? (

@@ -229,7 +229,7 @@ export function routineFacts(m: BotActionMeta, now?: Routine | null): Array<{ la
   const gone = routineGone(m, now);
   const rows: Array<{ label: string; value: string }> = [];
   if (cur) rows.push({ label: 'When', value: scheduleWords(cur.schedule, cur.schedule_text) });
-  else if (d.schedule || d.schedule_text) rows.push({ label: 'When', value: scheduleWords(d.schedule, d.schedule_text) });
+  else if (!gone && (d.schedule || d.schedule_text)) rows.push({ label: 'When', value: scheduleWords(d.schedule, d.schedule_text) });
   if (str(d.bot_name)) rows.push({ label: 'Runs as', value: d.bot_name as string });
   if (str(d.delivers_to)) rows.push({ label: 'Posts in', value: d.delivers_to as string });
   if (m.action === 'routine_run_now') {

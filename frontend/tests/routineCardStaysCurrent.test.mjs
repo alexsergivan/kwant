@@ -60,11 +60,11 @@ test('the headline does not repeat the schedule the table shows', () => {
   assert.match(t, /Created routine 'Morning brief', delivering to #general/, t);
 });
 
-test('a routine that is gone keeps the stored facts, says Deleted and offers no Edit or Pause', () => {
+test('a routine that is gone has no When row or raw schedule, says it won\'t run again and offers no buttons', () => {
   const html = ui.action(props(meta(), { routine: null }));
   const t = text(html);
-  assert.match(t, /Deleted/, t);
-  assert.match(t, /When Weekdays at 8:00 AM/, t);
+  assert.match(t, /It's since been deleted, so it won't run again\./, t);
+  assert.doesNotMatch(t, /When|8:00|08:00|weekly/, t);
   assert.doesNotMatch(t, /Next run/, t);
   assert.deepEqual(buttons(html), []);
 });
