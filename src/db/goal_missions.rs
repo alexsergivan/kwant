@@ -322,6 +322,40 @@ impl Database {
         Ok(row.and_then(|r| r.0))
     }
 
+    /// When the goal's current failing stretch began: its oldest run (`checked`) that failed since
+    /// the newest one that passed or its newest `met`. None when no run has failed since. The
+    /// runner reads it before logging its own run, so the run that confirms a failure finds the
+    /// earlier failures (34k).
+    pub async fn goal_first_failing_run(&self, goal_id: &str) -> Result<Option<i64>, DbError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT created_at FROM goal_events WHERE goal_id = ? AND kind = 'checked' AND json_extract(detail, '$.verdict') = 'not_met'
+             AND id > COALESCE((SELECT MAX(id) FROM goal_events WHERE goal_id = ?
+                                AND (kind = 'met' OR (kind = 'checked' AND json_extract(detail, '$.verdict') = 'met'))), 0)
+             ORDER BY id LIMIT 1",
+        )
+        .bind(goal_id)
+        .bind(goal_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
+    /// When the goal's open incident began, as every screen and notice says it: the first failing
+    /// run its oldest `not_met` since the newest `met` recorded (`since`), else that event's own
+    /// time. None if it logged no `not_met` since then.
+    pub async fn goal_incident_since(&self, goal_id: &str) -> Result<Option<i64>, DbError> {
+        let row: Option<(i64,)> = sqlx::query_as(
+            "SELECT COALESCE(CAST(json_extract(detail, '$.since') AS INTEGER), created_at) FROM goal_events WHERE goal_id = ? AND kind = 'not_met'
+             AND id > COALESCE((SELECT MAX(id) FROM goal_events WHERE goal_id = ? AND kind = 'met'), 0)
+             ORDER BY id LIMIT 1",
+        )
+        .bind(goal_id)
+        .bind(goal_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|r| r.0))
+    }
+
     /// The kind of the goal's newest event among `kinds`.
     pub async fn last_goal_event_of(&self, goal_id: &str, kinds: &[&str]) -> Result<Option<String>, DbError> {
         let marks = vec!["?"; kinds.len()].join(", ");

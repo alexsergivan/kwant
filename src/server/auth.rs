@@ -383,6 +383,9 @@ pub fn person_only(method: &Method, path: &str) -> bool {
         // Pocket apps (pa1): only the person lists, reads, makes, ends and deletes pockets; guest
         // and host keys of a pocket work only on the guest port, never here
         ["", "api", "pockets", ..] => true,
+        // pa4c: a quiz draft's questions as the person edits them; a bot changes its own drafts
+        // through its Pocket tools only
+        ["", "api", "quiz-drafts", ..] => true,
         // Raw clicks by position are the person's live view: a bot clicking by coordinates would
         // skip the payment floor, which reads the element under a label (bots use /act)
         ["", "api", "sandbox", _, "interact"] => true,
@@ -1025,6 +1028,11 @@ mod tests {
         assert!(person_only(&get, "/api/pockets/abcdef"));
         assert!(person_only(&del, "/api/pockets/abcdef"));
         assert!(person_only(&post, "/api/pockets/abcdef/host-key"));
+        assert!(person_only(&post, "/api/pockets/abcdef/when"));
+        assert!(person_only(&get, "/api/quiz-drafts/qd_1"));
+        assert!(person_only(&post, "/api/quiz-drafts/qd_1/questions"));
+        assert!(person_only(&Method::PATCH, "/api/quiz-drafts/qd_1/questions/2"));
+        assert!(person_only(&del, "/api/quiz-drafts/qd_1/questions/2"));
         assert!(!person_only(&get, "/api/pocket/abcdef/state"), "the guest API isn't on the main port at all");
         assert!(person_only(&get, "/api/glance"));
         assert!(person_only(&post, "/api/glance/ask"));
