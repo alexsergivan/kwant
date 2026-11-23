@@ -1,7 +1,9 @@
-// The guest side of pa1's guest port: GET /p/<code> serves this page, /api/pocket/<code>/* is all it talks to.
-// state (this guest's view), join, rejoin (guest-key cookie, HttpOnly), action (a named action + JSON body), ws (state
-// pushes; without WebSocket the page polls state every 2 s). Same origin only: the CSP allows nothing else.
-import type { Answer, GuestView } from './view';
+// The guest side of pa1's guest port, Pocket API v1 (pa1/impl.md): GET /p/<code> serves this page and
+// /api/pocket/<code>/* is all it talks to. state (?since=<version> gives 204 when nothing changed; the kp_<code> cookie
+// is the seat, 401 signed_out without one), info (public facts, before joining), join {name, avatar, team}, rejoin
+// {name} (by name, for "That's me"), action {name, body}, ws (`{type:"state", ...}` pushes, `signed_out`, `gone`;
+// without WebSocket the page polls state every 2 s). Same origin only: the CSP allows nothing else.
+import type { Answer, GuestView, Retention } from './view';
 
 export interface Env {
   fetch: typeof fetch;
@@ -13,6 +15,63 @@ export interface Env {
 
 export type Reply = { ok: true; view?: GuestView } | { ok: false; status: number; error?: string };
 
+type Obj = Record<string, unknown>;
+const obj = (x: unknown): Obj | undefined => (x && typeof x === 'object' && !Array.isArray(x) ? (x as Obj) : undefined);
+const str = (x: unknown): string | undefined => (typeof x === 'string' ? x : undefined);
+const num = (x: unknown): number | undefined => (typeof x === 'number' && Number.isFinite(x) ? x : undefined);
+
+/** pa1's `retention.describe()`: after_end {days}, after_date {fields, days}, at_end. Anything else: not shown. */
+export function retentionFrom(x: unknown): Retention | undefined {
+  const r = obj(x);
+  const kind = str(r?.kind);
+  if (kind === 'at_end') return { kind };
+  if ((kind === 'after_end' || kind === 'after_date') && num(r?.days) !== undefined) return { kind, days: num(r?.days) };
+  return undefined;
+}
+
+/**
+ * One v1 state (from state, join, rejoin, action, info, a ws `state` frame or the boot JSON) as the page's GuestView.
+ * The kit's `view` gives the game (phase, question, reveal, between, teams...); `pocket` and `me` give the facts pa1 owns
+ * and win over the kit for those. Nothing is worked out here: values are copied or left out.
+ */
+export function fromState(json: unknown): { view: GuestView; version?: number } | undefined {
+  const j = obj(json);
+  if (!j) return undefined;
+  const pocket = obj(j.pocket);
+  if (!pocket) return undefined;
+  const kv = (obj(j.view) ?? {}) as Partial<GuestView>;
+  const me = obj(j.me);
+  const kme = obj(kv.me) as Partial<NonNullable<GuestView['me']>> | undefined;
+  const ended = str(pocket.state) === 'ended';
+  const expires = str(pocket.expires_at);
+  const most = num(pocket.max_players);
+  const players = num(pocket.players);
+  // No seat and no room left: the full screen (a comparison only; the page shows pa1's own numbers).
+  const full = !me && most !== undefined && players !== undefined && players >= most;
+  const view: GuestView = {
+    ...kv,
+    v: 1,
+    kit: str(pocket.kit) ?? kv.kit ?? '',
+    title: kv.title ?? str(pocket.title) ?? '',
+    phase: ended ? 'ended' : full ? 'full' : (kv.phase ?? (me ? 'lobby' : 'join')),
+    max_players: most ?? kv.max_players,
+    player_count: kv.player_count ?? players,
+    retention: retentionFrom(pocket.retention) ?? kv.retention,
+    deletes_on: kv.deletes_on ?? (expires && /^\d{4}-\d{2}-\d{2}/.test(expires) ? expires.slice(0, 10) : undefined),
+    me: me
+      ? {
+          score: 0,
+          ...kme,
+          name: str(me.name) ?? kme?.name ?? '',
+          avatar: str(me.avatar) ?? kme?.avatar ?? '',
+          team_name: kme?.team_name ?? str(me.team),
+        }
+      : undefined,
+  };
+  if (!me) delete view.me;
+  return { view, version: num(j.version) };
+}
+
 /** The pocket code is the path segment after /p/. */
 export const codeFrom = (pathname: string): string => decodeURIComponent(pathname.split('/')[2] || '');
 
@@ -23,6 +82,8 @@ export const POLL_MS = 2000;
 
 export class Api {
   readonly base: string;
+  /** The last state version seen, for `state?since=`. */
+  version: number | undefined;
   constructor(private env: Env, readonly code: string) {
     this.base = `/api/pocket/${encodeURIComponent(code)}`;
   }
@@ -40,21 +101,30 @@ export class Api {
     } catch {
       return { ok: false, status: 0 };
     }
-    let json: { view?: GuestView; error?: string } & Partial<GuestView> = {};
+    if (res.status === 204) return { ok: true };
+    let json: unknown = {};
     try {
       json = await res.json();
     } catch {
       /* empty or not JSON */
     }
-    if (!res.ok) return { ok: false, status: res.status, error: json.error };
-    const view = json.view ?? (json.phase ? (json as GuestView) : undefined);
-    return { ok: true, view };
+    if (!res.ok) return { ok: false, status: res.status, error: str(obj(json)?.error) };
+    return { ok: true, view: this.take(json) };
   }
 
-  state = () => this.call('state');
-  rejoin = () => this.call('rejoin', {});
-  join = (body: { name: string; avatar: string; team?: string; new_team?: string }) => this.call('join', body);
-  answer = (q: string, answer: Answer) => this.call('action', { name: 'answer', q, body: answer });
+  /** Reads a v1 state and remembers its version. */
+  take(json: unknown): GuestView | undefined {
+    const s = fromState(json);
+    if (s?.version !== undefined) this.version = s.version;
+    return s?.view;
+  }
+
+  /** Full state, or with `changed` only what is newer than the last version (204 gives no view). */
+  state = (changed = false) => this.call(changed && this.version !== undefined ? `state?since=${this.version}` : 'state');
+  info = () => this.call('info');
+  rejoin = (name: string) => this.call('rejoin', { name });
+  join = (body: { name: string; avatar: string; team?: string }) => this.call('join', body);
+  answer = (q: string, answer: Answer) => this.call('action', { name: 'answer', body: { q, ...answer } });
 }
 
 /**
@@ -117,13 +187,19 @@ export class Live {
       this.wsFailed = 0;
     };
     ws.onmessage = (e) => {
+      let msg: Obj | undefined;
       try {
-        const msg = JSON.parse(String(e.data));
-        const v: GuestView | undefined = msg.view ?? (msg.phase ? msg : undefined);
-        if (v) this.on.view(v);
+        msg = obj(JSON.parse(String(e.data)));
       } catch {
-        /* ignore a bad frame */
+        return; // ignore a bad frame
       }
+      if (msg?.type === 'signed_out' || msg?.type === 'gone') {
+        this.stop();
+        this.on.gone(msg.type === 'gone' ? 404 : 401, msg.type === 'gone' ? 'not_found' : 'signed_out');
+        return;
+      }
+      const v = msg?.type === 'state' ? this.api.take(msg) : undefined;
+      if (v) this.on.view(v);
     };
     ws.onclose = () => {
       if (this.ws !== ws || this.stopped) return;
@@ -137,7 +213,7 @@ export class Live {
   private poll(): void {
     if (this.stopped) return;
     this.timer = this.env.setTimeout(async () => {
-      const r = await this.api.state();
+      const r = await this.api.state(true);
       if (this.stopped) return;
       if (r.ok) {
         if (r.view) this.on.view(r.view);

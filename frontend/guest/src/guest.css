@@ -154,6 +154,7 @@ svg.pi.ok { color: var(--kw-ok); }
 .g .gbtn:disabled { background: var(--zinc-800); border-color: var(--zinc-700); color: var(--zinc-400); box-shadow: none; }
 .g .gbtn.ghost { background: transparent; box-shadow: none; border-color: var(--kw-hairline-strong); color: var(--zinc-100); font-size: 16px; min-height: 52px; }
 .g .gbtn.ghost:disabled { opacity: 0.5; }
+.g [hidden] { display: none; }
 .stick { position: sticky; bottom: 0; padding: 10px 0 4px; margin: -10px 0 0; background: linear-gradient(to bottom, transparent, var(--kw-surface-rail) 30%); z-index: 2; display: grid; gap: 6px; }
 .err { color: var(--kw-bad); font-size: 14px; line-height: 20px; text-align: center; min-height: 0; }
 .err:empty { display: none; }

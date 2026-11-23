@@ -7,32 +7,24 @@ import { createHash } from 'node:crypto';
 import { readFileSync, existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { join, extname } from 'node:path';
-import { scenarios, CSP, KIWI_SVG } from './views.mjs';
+import { FakeBox, CSP, KIWI_SVG } from './views.mjs';
 
 const DIST = fileURLToPath(new URL('../../dist/pocket/', import.meta.url));
 const TYPES = { '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.html': 'text/html; charset=utf-8' };
 
-const fill = (v, code) => (v && typeof v === 'object' ? JSON.parse(JSON.stringify(v).replaceAll('/CODE/', `/${code}/`)) : v);
-
 export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot = false } = {}) {
-  const seats = new Map(); // code -> view after join
+  const boxes = new Map(); // code -> FakeBox (one per scenario code, like one pocket)
   const sockets = new Map(); // code -> Set<socket>
   const log = [];
-
-  const viewFor = (code, what) => {
-    const s = scenarios[code];
-    if (!s) return 404;
-    if (what === 'rejoin' && seats.has(code)) return seats.get(code);
-    if (what === 'state' && seats.has(code)) return seats.get(code);
-    const v = s[what] ?? (what === 'state' ? s.rejoin : undefined);
-    return fill(v, code);
+  const box = (code) => {
+    if (!boxes.has(code)) boxes.set(code, new FakeBox(code));
+    return boxes.get(code);
   };
 
   const send = (res, status, body, type = 'application/json', extra = {}) => {
     res.writeHead(status, { 'Content-Type': type, 'Cache-Control': 'no-store', ...extra });
     res.end(typeof body === 'string' || Buffer.isBuffer(body) ? body : JSON.stringify(body));
   };
-  const reply = (res, v) => (typeof v === 'number' ? send(res, v, { error: v === 410 ? 'removed' : v === 401 ? 'no_seat' : 'unavailable' }) : send(res, 200, { view: v }));
 
   const server = createServer((req, res) => {
     const url = new URL(req.url, 'http://x');
@@ -47,34 +39,30 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
     if (m) {
       let html = readFileSync(join(dist, 'index.html'), 'utf8');
       if (boot) {
-        const v = viewFor(m[1], 'state');
-        if (typeof v === 'object') html = html.replace('>null</script>', `>${JSON.stringify(v).replaceAll('<', '\\u003c')}</script>`);
+        // What pa5 asks pa1 for: this phone's state (or the public info) in the page, `<` escaped.
+        let r = box(m[1]).handle('state');
+        if (r.status === 401) r = box(m[1]).handle('info');
+        if (r.status === 200) html = html.replace('>null</script>', `>${JSON.stringify(r.body).replaceAll('<', '\\u003c')}</script>`);
       }
       return send(res, 200, html, TYPES['.html'], { 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' });
     }
-    m = p.match(/^\/api\/pocket\/([^/]+)\/(state|rejoin|join|action|media\/kiwi\.svg)$/);
+    m = p.match(/^\/api\/pocket\/([^/]+)\/(state|info|rejoin|join|action|media\/kiwi\.svg)$/);
     if (!m) return send(res, 404, { error: 'not_found' });
     const [, code, what] = m;
     if (what === 'media/kiwi.svg') return send(res, 200, KIWI_SVG, 'image/svg+xml', { 'Cache-Control': 'public, max-age=3600' });
     let body = '';
     req.on('data', (c) => (body += c));
     req.on('end', () => {
-      if (what === 'state' || what === 'rejoin') return reply(res, viewFor(code, what));
-      if (what === 'join') {
-        const v = fill(scenarios[code]?.join, code);
-        if (!v) return send(res, 409, { error: 'ended' });
-        const b = JSON.parse(body || '{}');
-        const seated = { ...v, me: { ...v.me, name: b.name ?? v.me.name, avatar: b.avatar ?? v.me.avatar } };
-        seats.set(code, seated);
-        return send(res, 200, { view: seated });
-      }
-      // action: answer
-      const v = fill(scenarios[code]?.action, code);
-      setTimeout(() => {
-        if (!v) return send(res, 200, {});
-        seats.set(code, v);
-        send(res, 200, { view: v });
-      }, actionDelayMs);
+      const answer = () => {
+        const r = box(code).handle(`${what}${url.search}`, JSON.parse(body || '{}'));
+        if (r.status === 204) {
+          res.writeHead(204, { 'Cache-Control': 'no-store' });
+          return res.end();
+        }
+        send(res, r.status, r.body);
+      };
+      if (what === 'action') setTimeout(answer, actionDelayMs);
+      else answer();
     });
   });
 
@@ -83,8 +71,7 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
     const key = req.headers['sec-websocket-key'];
     if (!m || !key) return socket.destroy();
     const code = m[1];
-    const v = viewFor(code, 'state');
-    if (typeof v === 'number') return socket.destroy();
+    if (box(code).handle('state').status !== 200) return socket.destroy();
     const accept = createHash('sha1').update(key + '258EAFA5-E914-47DA-95CA-C5AB0DC85B11').digest('base64');
     socket.write(`HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`);
     log.push(`WS ${code}`);
@@ -95,10 +82,11 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
     socket.on('data', () => {}); // client frames (pings, close) are ignored
   });
 
-  /** Push a view to every socket of a code (what pa1 does on any change). */
+  /** Push a flat view to every socket of a code as a v1 `{type:"state", ...}` frame (what pa1 does on any change). */
   const push = (code, view) => {
-    seats.set(code, view);
-    const data = Buffer.from(JSON.stringify({ view }));
+    const b = box(code);
+    b.set(view);
+    const data = Buffer.from(JSON.stringify({ type: 'state', ...b.env(view) }));
     const head = data.length < 126 ? Buffer.from([0x81, data.length]) : Buffer.from([0x81, 126, data.length >> 8, data.length & 255]);
     for (const s of sockets.get(code) ?? []) s.write(Buffer.concat([head, data]));
   };

@@ -7,7 +7,7 @@ import { JSDOM } from 'jsdom';
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { loadBundled } from './bundle.mjs';
-import { scenarios, order, CSP } from '../guest/fake/views.mjs';
+import { scenarios, order, CSP, FakeBox, envelope } from '../guest/fake/views.mjs';
 
 const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', { url: 'http://localhost/p/join', pretendToBeVisual: true });
 const g = globalThis;
@@ -18,7 +18,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInputEle
 
 const m = await loadBundled(`
   export { GuestApp, privacyLine, day } from './guest/src/app';
-  export { BACKOFF, backoff, codeFrom } from './guest/src/api';
+  export { BACKOFF, backoff, codeFrom, fromState, retentionFrom } from './guest/src/api';
 `);
 const settle = () => new Promise((r) => setTimeout(r, 0));
 const flush = async () => {
@@ -28,31 +28,21 @@ const clone = (v) => (v && typeof v === 'object' ? JSON.parse(JSON.stringify(v).
 
 /** A fake box (pa1's guest API, from views.mjs) and a hand-driven clock. */
 function harness(name, { ws = false, overrides = {} } = {}) {
-  const s = { ...scenarios[name], ...overrides };
   const calls = [];
   let now = 1_000_000;
   let timers = [];
   let nextId = 1;
-  let seat = null;
-  const box = { up: true, s, actionReply: null };
-  const json = (status, body) => ({ ok: status < 400, status, json: async () => body });
-  const answer = (v) => (typeof v === 'number' ? json(v, { error: v === 410 ? 'removed' : 'x' }) : json(200, { view: clone(v) }));
+  const box = new FakeBox(name, { code: 't', overrides });
+  box.up = true;
+  box.actionReply = null;
   const fetch = async (url, init = {}) => {
-    const what = url.split('/').pop();
-    calls.push({ at: now, what, body: init.body ? JSON.parse(init.body) : undefined });
+    const path = url.split('/api/pocket/t/')[1] ?? '';
+    const what = path.split('?')[0];
+    calls.push({ at: now, what, path, body: init.body ? JSON.parse(init.body) : undefined });
     if (!box.up) throw new TypeError('Failed to fetch');
-    if (what === 'state') return answer(seat ?? box.s.state ?? box.s.rejoin);
-    if (what === 'rejoin') return answer(seat ?? box.s.rejoin);
-    if (what === 'join') {
-      if (box.joinError) return json(409, { error: box.joinError });
-      seat = clone(box.s.join);
-      return json(200, { view: seat });
-    }
-    if (what === 'action') {
-      if (box.actionReply) return box.actionReply();
-      return box.s.action ? answer(box.s.action) : json(200, {});
-    }
-    return json(404, {});
+    if (what === 'action' && box.actionReply) return box.actionReply();
+    const r = box.handle(path, init.body ? JSON.parse(init.body) : {});
+    return { ok: r.status < 400, status: r.status, json: async () => (r.body === null ? Promise.reject(new SyntaxError('empty')) : r.body) };
   };
   const sockets = [];
   class FakeWS {
@@ -102,6 +92,11 @@ function harness(name, { ws = false, overrides = {} } = {}) {
   return { app, root, calls, box, sockets, advance, env, screen: () => root.querySelector('[data-screen]')?.getAttribute('data-screen'), text: () => root.textContent.replace(/\s+/g, ' ') };
 }
 
+/** A ws push as pa1 sends it: {type:"state", ...v1 state}. */
+const frame = (flat, version = 50) => ({ data: JSON.stringify({ type: 'state', ...envelope(clone(flat), { code: 't', version }) }) });
+/** An HTTP reply with a v1 state body. */
+const stateReply = (flat, status = 200) => ({ ok: true, status, json: async () => envelope(clone(flat), { code: 't', version: 60 }) });
+
 async function open(name, opts) {
   const t = harness(name, opts);
   await t.app.start(null);
@@ -120,7 +115,7 @@ const submit = (form) => form.dispatchEvent(new dom.window.Event('submit', { bub
 
 const expect = {
   join: ['join', ['Friday Pub Quiz', 'Hosted by Dana · 4 rounds · teams of up to 4', 'Your name', 'Pick your creature', 'Quizzly Bears', 'Full', 'Start a new team', 'Join the quiz', 'Your name and answers are deleted 7 days after the quiz.', 'made with kwant']],
-  'join-solo': ['lobby', ["You're in, Mia!"]],
+  'join-solo': ['lobby', ["You're in, Ana!"]],
   lobby: ['lobby', ["You're in, Mia!", 'Quizzly Bears · 3 of 4', 'Grab a seat. When the TV shows question 1, your answers appear right here.', '14 players · 5 teams', 'Jonas', 'Keep this page open.', 'Starts 8:00 PM']],
   rejoin: ['question', ['1,240 pts', 'Round 2 · 90s music', 'Question 8 of 10', 'Tap one. Your first tap counts.']],
   full: ['full', ['This quiz is full', '60 players have joined, the most this quiz takes. Ask the host if a team has room for one more.']],
@@ -136,6 +131,7 @@ const expect = {
   wrong: ['reveal', ['Not this time', 'You said 212. The answer is 206.', '+40', 'for being close']],
   between: ['between', ['After round 2 of 4', 'Round 3 in 0:40', 'Quizzly Bears jump to first', 'Fact Hunters', '▲ 2', '▼ 1', 'Your team: up 2 places this round']],
   paused: ['paused', ['Back in a moment', 'The host paused the quiz. Your answers and score are safe: 1,240.']],
+  missing: ['missing', ['Nothing here', "This link doesn't open a pocket app any more."]],
   removed: ['removed', ["You've been removed from this quiz", "If that's a mistake, have a word with the host.", 'Your name and answers are deleted with the quiz.']],
 };
 
@@ -200,13 +196,14 @@ test('join: name, creature and team go to join; errors are plain words', async (
   submit(t.root.querySelector('form'));
   await flush();
   const join = t.calls.filter((c) => c.what === 'join').at(-1);
-  assert.deepEqual(join.body, { name: 'Mia', avatar: 'visor', team: 't1' });
+  assert.deepEqual(join.body, { name: 'Mia', avatar: 'visor', team: 'Quizzly Bears' }, 'v1 takes the team by name');
+  assert.equal(join.path, 'join');
   assert.equal(t.screen(), 'lobby');
   assert.ok(t.text().includes("You're in, Mia!"));
   t.app.stop();
 });
 
-test('join: a new team sends new_team; a full quiz shows the full screen', async () => {
+test('join: a new team goes by its name; a full quiz shows the full screen', async () => {
   const t = await open('join');
   type(t.root.querySelector('#name'), 'Leo');
   click([...t.root.querySelectorAll('button.team')].find((b) => b.textContent.includes('Start a new team')));
@@ -217,26 +214,160 @@ test('join: a new team sends new_team; a full quiz shows the full screen', async
   t.box.joinError = 'full';
   submit(t.root.querySelector('form'));
   await flush();
-  assert.deepEqual(t.calls.filter((c) => c.what === 'join').at(-1).body, { name: 'Leo', avatar: 'antenna', new_team: 'Brain Freeze' });
+  assert.deepEqual(t.calls.filter((c) => c.what === 'join').at(-1).body, { name: 'Leo', avatar: 'antenna', team: 'Brain Freeze' });
   assert.equal(t.screen(), 'full');
   t.app.stop();
 });
 
-test('join: a name typed survives a lobby push (patch, not redraw)', async () => {
+test('join: no seat means no socket; info every 10 s, and a name typed survives it (patch, not redraw)', async () => {
   const t = await open('join', { ws: true });
+  assert.deepEqual(t.calls.map((c) => c.what), ['state', 'info'], 'state answers 401 signed_out, then the public info');
+  assert.equal(t.sockets.length, 0, "pa1's ws needs a seat");
   const name = t.root.querySelector('#name');
   type(name, 'Pri');
   name.focus();
-  const ws = t.sockets[0];
-  ws.onopen();
-  const v = clone(scenarios.join.state);
+  const v = clone(scenarios.join.info);
   v.teams[0].count = 3;
-  ws.onmessage({ data: JSON.stringify({ view: v }) });
-  await flush();
+  t.box.s.info = v;
+  await t.advance(10000);
+  assert.equal(t.calls.at(-1).what, 'info');
   assert.equal(t.root.querySelector('#name'), name, 'same input element');
   assert.equal(name.value, 'Pri');
   assert.equal(document.activeElement, name);
   assert.ok(t.text().includes('3 of 4'));
+  t.app.stop();
+});
+
+// ---------- Pocket API v1 (pa1/impl.md) ----------
+
+test('v1: the state envelope maps to the page view; pa1 owns pocket and me facts, nothing is computed', () => {
+  const env = envelope(clone(scenarios.right.state), { code: 't', version: 7 });
+  assert.equal(env.api, 'pocket/1');
+  assert.equal(env.me.team, 'Quizzly Bears', 'v1 me.team is the team name');
+  const { view, version } = m.fromState(env);
+  assert.equal(version, 7);
+  assert.equal(view.phase, 'reveal');
+  assert.equal(view.title, 'Friday Pub Quiz');
+  assert.equal(view.max_players, 60);
+  assert.deepEqual(view.retention, { kind: 'after_end', days: 7 });
+  assert.equal(view.me.name, 'Mia');
+  assert.equal(view.me.team_name, 'Quizzly Bears');
+  assert.equal(view.me.score, 1360, 'score comes from the kit view');
+  assert.equal(view.reveal.points, 120);
+  // An ended pocket is the ended screen whatever the kit says; expires_at gives the deletion day.
+  const ended = m.fromState({ ...env, pocket: { ...env.pocket, state: 'ended', expires_at: '2026-12-04T22:10:00Z' } }).view;
+  assert.equal(ended.phase, 'ended');
+  assert.equal(ended.deletes_on, '2026-12-04');
+  // describe(): after_date keeps its days, unknown kinds are dropped, not guessed.
+  assert.deepEqual(m.retentionFrom({ kind: 'after_date', fields: ['date'], days: 3 }), { kind: 'after_date', days: 3 });
+  assert.equal(m.retentionFrom({ kind: 'forever' }), undefined);
+  assert.equal(m.retentionFrom(null), undefined);
+  // Not an envelope: ignored.
+  assert.equal(m.fromState({ phase: 'lobby' }), undefined);
+  assert.equal(m.fromState('x'), undefined);
+});
+
+test('v1: info with no room left (players = max_players) shows the full screen', async () => {
+  const t = await open('full');
+  assert.equal(t.screen(), 'full');
+  assert.ok(t.text().includes('60 players have joined'));
+  t.app.stop();
+});
+
+test('v1: boot JSON in the page skips the first round trip', async () => {
+  const t = harness('lobby', { ws: true });
+  await t.app.start(envelope(clone(scenarios.lobby.state), { code: 't', version: 3 }));
+  await flush();
+  assert.equal(t.screen(), 'lobby');
+  assert.equal(t.calls.length, 0, 'no state call before the socket');
+  assert.equal(t.sockets.length, 1);
+  t.app.stop();
+  const j = harness('join', { ws: true });
+  await j.app.start(envelope(clone(scenarios.join.info), { code: 't', version: 3 }));
+  await flush();
+  assert.equal(j.screen(), 'join');
+  assert.equal(j.calls.length, 0);
+  assert.equal(j.sockets.length, 0);
+  j.app.stop();
+});
+
+test("v1: name_taken offers That's me, which rejoins by name and says so", async () => {
+  const t = await open('join');
+  const mine = () => t.root.querySelector('[data-mine]');
+  assert.equal(mine().hidden, true);
+  type(t.root.querySelector('#name'), 'Mia');
+  const bears = t.root.querySelector('input[value="t1"]');
+  bears.checked = true;
+  bears.dispatchEvent(new dom.window.Event('change', { bubbles: true }));
+  t.box.joinError = 'name_taken';
+  submit(t.root.querySelector('form'));
+  await flush();
+  assert.match(t.root.querySelector('[data-err]').textContent, /already has that name/);
+  assert.equal(mine().hidden, false);
+  click(mine());
+  await flush();
+  assert.deepEqual(t.calls.at(-1), { at: t.calls.at(-1).at, what: 'rejoin', path: 'rejoin', body: { name: 'Mia' } });
+  assert.equal(t.screen(), 'question');
+  assert.match(document.querySelector('.toast').textContent, /^You're back, Mia\./);
+  t.app.stop();
+});
+
+test('v1: join errors from pa1 are plain words', async () => {
+  const t = await open('join-solo');
+  type(t.root.querySelector('#name'), 'Ana');
+  const cases = {
+    not_open_yet: "This quiz isn't open yet. Try again in a minute.",
+    name_too_long: 'Names are 1-20 letters.',
+    name_not_allowed: "That name can't be used here. Try another one.",
+    slow_down: 'Too many tries just now. Wait a few seconds and tap Join again.',
+    pin_required: 'This name needs its PIN. Ask the host to help you back in.',
+  };
+  for (const [code, line] of Object.entries(cases)) {
+    t.box.joinError = code;
+    submit(t.root.querySelector('form'));
+    await flush();
+    assert.equal(t.root.querySelector('[data-err]').textContent, line, code);
+  }
+  t.app.stop();
+});
+
+test('v1: ws signed_out goes back to the join screen; gone ends the page; 410 is the ended screen', async () => {
+  const a = await open('lobby', { ws: true });
+  a.sockets[0].onopen();
+  a.box.s = { ...a.box.s, state: 401, info: scenarios.join.info };
+  a.sockets[0].onmessage({ data: JSON.stringify({ type: 'signed_out' }) });
+  await flush();
+  assert.equal(a.screen(), 'join');
+  assert.equal(a.calls.at(-1).what, 'info');
+  a.app.stop();
+
+  const b = await open('lobby', { ws: true });
+  b.sockets[0].onopen();
+  b.sockets[0].onmessage({ data: JSON.stringify({ type: 'gone' }) });
+  await flush();
+  assert.equal(b.screen(), 'missing');
+  const n = b.calls.length;
+  await b.advance(60000);
+  assert.equal(b.calls.length, n, 'no traffic after gone');
+  b.app.stop();
+
+  const c = await open('lobby');
+  c.box.seat = null;
+  c.box.s = { ...c.box.s, state: 410 };
+  await c.advance(2000);
+  assert.equal(c.screen(), 'ended');
+  c.app.stop();
+});
+
+test('v1: a ws state frame updates the page; an older-style frame is ignored', async () => {
+  const t = await open('lobby', { ws: true });
+  t.sockets[0].onopen();
+  t.sockets[0].onmessage({ data: JSON.stringify({ view: { ...scenarios.choice.state } }) });
+  await flush();
+  assert.equal(t.screen(), 'lobby');
+  t.sockets[0].onmessage(frame(scenarios.choice.state));
+  await flush();
+  assert.equal(t.screen(), 'question');
   t.app.stop();
 });
 
@@ -298,16 +429,20 @@ test('2d: box away retries on 2, 5, 10, 20, then every 20 s; Try now; back with 
 test('2d: no WebSocket: polls state every 2 s, and away after the first failed poll', async () => {
   const t = await open('lobby');
   await t.advance(4000);
-  assert.equal(t.calls.filter((c) => c.what === 'state').length, 2);
+  const polls = t.calls.filter((c) => c.what === 'state');
+  assert.equal(polls.length, 3);
+  assert.deepEqual(polls.map((c) => c.path), ['state', 'state?since=1', 'state?since=1'], 'polls ask only for what changed (204)');
+  assert.equal(t.screen(), 'lobby');
   t.box.up = false;
   await t.advance(2000);
   assert.equal(t.screen(), 'away');
   t.app.stop();
 });
 
-test('3j: removed stops all traffic and never offers rejoin', async () => {
+test('3j: removed (403) stops all traffic and never offers rejoin', async () => {
   const t = await open('choice', { ws: true });
-  t.box.s = { ...t.box.s, state: 410, rejoin: 410 };
+  t.box.seat = null;
+  t.box.s = { ...t.box.s, state: 403 };
   t.sockets[0].onopen();
   t.sockets[0].onclose();
   await flush();
@@ -324,7 +459,7 @@ test('3j: removed stops all traffic and never offers rejoin', async () => {
 test('3a: first tap counts; later taps are ignored; then locked in', async () => {
   const t = await open('choice');
   let release;
-  t.box.actionReply = () => new Promise((r) => (release = () => r({ ok: true, status: 200, json: async () => ({ view: clone(scenarios.choice.action) }) })));
+  t.box.actionReply = () => new Promise((r) => (release = () => r({ ok: true, status: 200, json: async () => envelope(clone(scenarios.choice.action), { code: 't', version: 9 }) })));
   const btn = (k) => t.root.querySelector(`button[data-answer="${k}"]`);
   assert.equal(btn('B').getAttribute('aria-label'), 'B: 1996');
   click(btn('B'));
@@ -333,7 +468,7 @@ test('3a: first tap counts; later taps are ignored; then locked in', async () =>
   await flush();
   const sent = t.calls.filter((c) => c.what === 'action');
   assert.equal(sent.length, 1);
-  assert.deepEqual(sent[0].body, { name: 'answer', q: 'q8', body: { choice: 'B' } });
+  assert.deepEqual(sent[0].body, { name: 'answer', body: { q: 'q8', choice: 'B' } });
   assert.ok(btn('B').classList.contains('pick'));
   assert.equal(btn('B').getAttribute('aria-pressed'), 'true');
   assert.equal(btn('C').disabled, true);
@@ -353,7 +488,7 @@ test('3a: an answer sent while the box blinks is retried, and a 409 keeps the fi
   await flush();
   await t.advance(4500);
   assert.equal(n, 3);
-  assert.deepEqual(t.calls.filter((c) => c.what === 'action').map((c) => c.body.body), [{ choice: 'A' }, { choice: 'A' }, { choice: 'A' }]);
+  assert.deepEqual(t.calls.filter((c) => c.what === 'action').map((c) => c.body.body), [{ q: 'q8', choice: 'A' }, { q: 'q8', choice: 'A' }, { q: 'q8', choice: 'A' }]);
   t.app.stop();
 });
 
@@ -362,7 +497,7 @@ test('3b: text answer sends once and keeps typing across pushes', async () => {
   const input = t.root.querySelector('input[data-answer]');
   type(input, 'Canbera');
   t.sockets[0].onopen();
-  t.sockets[0].onmessage({ data: JSON.stringify({ view: { ...clone(scenarios.text.rejoin), question: { ...scenarios.text.rejoin.question, secs_left: 20 } } }) });
+  t.sockets[0].onmessage(frame({ ...scenarios.text.state, question: { ...scenarios.text.state.question, secs_left: 20 } }));
   await flush();
   assert.equal(t.root.querySelector('input[data-answer]'), input);
   assert.equal(input.value, 'Canbera');
@@ -371,7 +506,7 @@ test('3b: text answer sends once and keeps typing across pushes', async () => {
   await flush();
   const sent = t.calls.filter((c) => c.what === 'action');
   assert.equal(sent.length, 1);
-  assert.deepEqual(sent[0].body.body, { text: 'Canbera' });
+  assert.deepEqual(sent[0].body, { name: 'answer', body: { q: 'q3', text: 'Canbera' } });
   assert.ok(t.text().includes('Locked in'));
   assert.ok(t.text().includes('Canbera'));
   t.app.stop();
@@ -387,7 +522,7 @@ test('3c: number answer steps within bounds and sends the number', async () => {
   assert.ok(t.text().includes('Send 213'));
   submit(t.root.querySelector('form'));
   await flush();
-  assert.deepEqual(t.calls.filter((c) => c.what === 'action')[0].body.body, { number: 213 });
+  assert.deepEqual(t.calls.filter((c) => c.what === 'action')[0].body.body, { q: 'q2', number: 213 });
   t.app.stop();
 });
 
@@ -431,7 +566,7 @@ test('lobby preloads pictures one at a time, same origin only', async () => {
     }
   };
   try {
-    const t = await open('lobby', { overrides: { rejoin: { ...scenarios.lobby.rejoin, preload: ['/a.png', 'https://evil.example/x.png', '/b.png'] } } });
+    const t = await open('lobby', { overrides: { state: { ...scenarios.lobby.state, preload: ['/a.png', 'https://evil.example/x.png', '/b.png'] } } });
     assert.deepEqual(made, ['/a.png']);
     t.app.stop();
   } finally {

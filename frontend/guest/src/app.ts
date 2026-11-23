@@ -43,7 +43,7 @@ export function answerText(q: Question, a: Answer | undefined): string {
 
 const LETTERS = 'ABCDEFGH';
 
-type Draft = { name: string; avatar: string; team: string; newTeam: string; making: boolean; error: string; busy: boolean };
+type Draft = { name: string; avatar: string; team: string; newTeam: string; making: boolean; error: string; busy: boolean; mine: string };
 
 export class GuestApp {
   view: GuestView | null = null;
@@ -62,10 +62,12 @@ export class GuestApp {
   private numDraft: number | null = null;
   private preloaded = new Set<string>();
   private preloading: HTMLImageElement[] = [];
-  private draft: Draft = { name: '', avatar: AVATARS[0], team: '', newTeam: '', making: false, error: '', busy: false };
-  private gone: 'removed' | null = null;
+  private draft: Draft = { name: '', avatar: AVATARS[0], team: '', newTeam: '', making: false, error: '', busy: false, mine: '' };
+  private gone: 'removed' | 'missing' | null = null;
   /** Local clock reading when the current timer value arrived. */
   private stamp = 0;
+  /** Before joining there is no socket (pa1's ws needs a seat): the join screen re-reads `info` every 10 s. */
+  private infoTimer = 0;
 
   constructor(root: HTMLElement, private env: Env & { now: () => number; setInterval: (f: () => void, ms: number) => number; clearInterval: (id: number) => void }, code: string) {
     this.root = root;
@@ -74,29 +76,33 @@ export class GuestApp {
       view: (v) => this.show(v),
       away: (secs, tries) => this.goAway(secs, tries),
       back: () => this.comeBack(),
-      gone: (status, error) => this.onGone(status, error),
+      gone: (status, error) => void this.onGone(status, error),
     });
   }
 
-  /** Boot: the server may put this guest's view in the first HTML; otherwise ask for it. Then rejoin if we have a seat. */
-  async start(boot?: GuestView | null): Promise<void> {
-    if (boot) this.show(boot);
-    const r = await this.api.rejoin();
+  /**
+   * Boot (Pocket API v1): the server may put this guest's state in the first HTML; then `state` with the kp_<code>
+   * cookie brings back a seat this phone already has (with the "You're back" toast). 401 means no seat yet, so the
+   * public `info` draws the join screen; 403 removed, 410 ended and 404 end the page.
+   */
+  async start(boot?: unknown): Promise<void> {
+    const b = boot ? this.api.take(boot) : undefined;
+    if (b) {
+      // The box put this phone's state (or the public info) in the page: no first round trip.
+      this.show(b);
+      if (b.me) {
+        if (b.phase !== 'lobby' && b.phase !== 'join') this.sayBack(b);
+        this.live.start();
+      } else this.watchInfo();
+      return;
+    }
+    const r = await this.api.state();
     if (r.ok && r.view) {
       this.show(r.view);
       if (r.view.me && r.view.phase !== 'lobby' && r.view.phase !== 'join') this.sayBack(r.view);
-    } else if (!r.ok && r.status === 410) {
-      this.onGone(410, r.error);
-      return;
-    } else if (!boot || !r.ok) {
-      const s = await this.api.state();
-      if (s.ok && s.view) this.show(s.view);
-      else if (!s.ok && (s.status === 0 || s.status >= 500)) {
-        this.live.start();
-        return;
-      }
-    }
-    this.live.start();
+      this.live.start();
+    } else if (!r.ok && (r.status === 0 || r.status >= 500)) this.live.start();
+    else if (!r.ok) await this.onGone(r.status, r.error);
   }
 
   stop(): void {
@@ -104,6 +110,7 @@ export class GuestApp {
     this.env.clearInterval(this.tick);
     this.env.clearInterval(this.awayTick);
     this.env.clearTimeout(this.toastTimer);
+    this.env.clearTimeout(this.infoTimer);
   }
 
   tryNow = (): void => this.live.now();
@@ -133,14 +140,49 @@ export class GuestApp {
     return [v.phase, q?.id ?? '', answered, r ? `${r.question.id}${r.outcome}` : '', v.between?.after_round ?? '', v.me ? 'me' : ''].join('|');
   }
 
-  private onGone(status: number, error?: string): void {
-    if (status === 410 || error === 'removed') {
-      this.gone = 'removed';
+  /** A refusal from state, a poll or the socket. 401: no seat on this phone (never joined, or the key stopped working). */
+  private async onGone(status: number, error?: string): Promise<void> {
+    if (status === 401 || error === 'signed_out') {
       this.live.stop();
       this.away = null;
-      this.key = 'removed';
-      this.draw();
+      const i = await this.api.info();
+      if (i.ok && i.view) {
+        this.key = '';
+        this.show(i.view);
+        this.watchInfo();
+      } else if (!i.ok && (i.status === 0 || i.status >= 500)) this.live.start();
+      else if (!i.ok && i.status !== 401) await this.onGone(i.status, i.error);
+      return;
     }
+    if (status === 403 || error === 'removed') this.end('removed');
+    else if (status === 410 || error === 'ended') this.end('ended');
+    else if (status === 404 || error === 'not_found') this.end('missing');
+  }
+
+  private watchInfo(): void {
+    this.env.clearTimeout(this.infoTimer);
+    this.infoTimer = this.env.setTimeout(async () => {
+      if (this.view?.me || this.gone) return;
+      const i = await this.api.info();
+      if (this.view?.me || this.gone) return;
+      if (i.ok && i.view) this.show(i.view);
+      else if (!i.ok && i.status > 0 && i.status < 500) return void this.onGone(i.status, i.error);
+      if (this.view?.phase !== 'ended') this.watchInfo();
+    }, 10_000);
+  }
+
+  private end(why: 'removed' | 'ended' | 'missing'): void {
+    this.env.clearTimeout(this.infoTimer);
+    this.live.stop();
+    this.away = null;
+    if (why === 'ended') {
+      if (this.view) this.show({ ...this.view, phase: 'ended' });
+      else this.end('missing');
+      return;
+    }
+    this.gone = why;
+    this.key = why;
+    this.draw();
   }
 
   private goAway(secs: number, tries: number): void {
@@ -207,6 +249,7 @@ export class GuestApp {
     const kids: Kid[] = [];
     let scr: string;
     if (this.gone === 'removed') [scr, kids[0]] = ['removed', this.removed()];
+    else if (this.gone === 'missing') [scr, kids[0]] = ['missing', this.missing()];
     else if (this.away) [scr, kids[0]] = ['away', this.awayScreen()];
     else if (!v) [scr, kids[0]] = ['loading', this.loading()];
     else {
@@ -314,6 +357,7 @@ export class GuestApp {
         { class: 'stick' },
         h('button', { class: 'gbtn', type: 'submit', 'data-join': '', 'aria-busy': d.busy ? 'true' : null }, d.busy ? 'Joining…' : `Join the ${noun(v)}`),
         h('p', { class: 'err', role: 'alert', 'data-err': '' }, d.error),
+        this.mineButton(),
       ),
       h('p', { class: 'small center', 'data-privacy': '' }, privacyLine(v)),
     );
@@ -386,10 +430,21 @@ export class GuestApp {
     return h('div', null, h('div', { class: 'lbl', id: 'lbl-team' }, 'Your team ', h('small', null, each)), list);
   }
 
-  private setError(msg: string): void {
+  /** Shown only after name_taken: rejoins the seat with that name (v1 rejoin by name). */
+  private mineButton(): HTMLElement {
+    const d = this.draft;
+    const b = h('button', { type: 'button', class: 'gbtn ghost', 'data-mine': '', hidden: !d.mine }, "That's me");
+    b.addEventListener('click', () => void this.rejoinAs(d.mine));
+    return b;
+  }
+
+  private setError(msg: string, mine = ''): void {
     this.draft.error = msg;
+    this.draft.mine = mine;
     const e = this.root.querySelector('[data-err]');
     if (e) e.textContent = msg;
+    const m = this.root.querySelector<HTMLButtonElement>('[data-mine]');
+    if (m) m.hidden = !mine;
   }
 
   async submitJoin(): Promise<void> {
@@ -404,24 +459,61 @@ export class GuestApp {
     if (teamsOn && !d.team && !(d.making && newTeam)) return this.setError(d.making ? 'Give your new team a name.' : 'Pick a team, or start a new one.');
     d.busy = true;
     this.setBusy(true);
-    const r = await this.api.join({ name, avatar: d.avatar, ...(teamsOn ? (d.making ? { new_team: newTeam } : { team: d.team }) : {}) });
+    // v1 takes the team by name: a team on the list or a new one.
+    const teamName = d.making ? newTeam : v.teams?.find((t) => t.id === d.team)?.name;
+    const r = await this.api.join({ name, avatar: d.avatar, ...(teamsOn && teamName ? { team: teamName } : {}) });
     d.busy = false;
     if (r.ok) {
       d.error = '';
+      this.env.clearTimeout(this.infoTimer);
       if (r.view) this.show(r.view);
+      this.live.start();
       return;
     }
     this.setBusy(false);
     const err = r.error;
     if (err === 'full') this.show({ ...v, phase: 'full' });
-    else if (err === 'ended') this.show({ ...v, phase: 'ended' });
-    else if (err === 'removed' || r.status === 410) this.onGone(410, 'removed');
+    else if (err === 'ended' || r.status === 410) void this.onGone(410, 'ended');
+    else if (err === 'removed' || r.status === 403) void this.onGone(403, 'removed');
+    else if (r.status === 404) void this.onGone(404, 'not_found');
     else if (err === 'team_full') this.setError('That team just filled up. Pick another one.');
-    else if (err === 'name_taken') this.setError('Someone here already has that name. Add a letter or pick another one.');
-    else if (err === 'team_name') this.setError("That team name can't be used here. Try another one.");
-    else if (err === 'name' || r.status === 400) this.setError("That name can't be used here. Try another one.");
+    else if (err === 'name_taken') this.setError('Someone here already has that name. Add a letter, or tap "That\'s me" if it\'s you on a new phone.', name);
+    else if (err === 'not_open_yet') this.setError(`This ${noun(v)} isn't open yet. Try again in a minute.`);
+    else if (err === 'name_too_long') this.setError('Names are 1-20 letters.');
+    else if (err === 'name_empty') this.setError('Type your name first.');
+    else if (err === 'bad_team') this.setError(d.making ? "That team name can't be used here. Try another one." : 'Pick a team, or start a new one.');
+    else if (err === 'slow_down' || r.status === 429) this.setError('Too many tries just now. Wait a few seconds and tap Join again.');
+    else if (err === 'pin_required' || err === 'wrong_pin' || r.status === 423) this.setError('This name needs its PIN. Ask the host to help you back in.');
+    else if (r.status === 400) this.setError("That name can't be used here. Try another one.");
     else if (r.status === 0 || r.status >= 500) this.setError("Couldn't reach the quiz. Check your signal and tap Join again.");
     else this.setError("That didn't work. Tap Join again.");
+  }
+
+  /** "That's me": the name is taken because it is this guest on a new phone. v1 rejoins by name. */
+  async rejoinAs(name: string): Promise<void> {
+    const d = this.draft;
+    if (d.busy) return;
+    d.busy = true;
+    this.setBusy(true);
+    const r = await this.api.rejoin(name);
+    d.busy = false;
+    if (r.ok) {
+      d.error = '';
+      this.env.clearTimeout(this.infoTimer);
+      if (r.view) {
+        this.show(r.view);
+        this.sayBack(r.view);
+      }
+      this.live.start();
+      return;
+    }
+    this.setBusy(false);
+    if (r.status === 403) void this.onGone(403, 'removed');
+    else if (r.status === 410) void this.onGone(410, 'ended');
+    else if (r.error === 'pin_required' || r.error === 'wrong_pin' || r.status === 423) this.setError('This name needs its PIN. Ask the host to help you back in.');
+    else if (r.status === 429) this.setError('Too many tries just now. Wait a few seconds and try again.');
+    else if (r.status === 0 || r.status >= 500) this.setError("Couldn't reach the quiz. Check your signal and try again.");
+    else this.setError("That didn't work. Check the name and try again.");
   }
 
   private setBusy(busy: boolean): void {
@@ -502,6 +594,11 @@ export class GuestApp {
       `The host took you out of ${v?.title ?? `this ${n}`}. If that's a mistake, have a word with the host.`,
       `Your name and answers are deleted with the ${n}.`,
     );
+  }
+
+  // 404, or the socket said the pocket is gone
+  private missing(): HTMLElement {
+    return this.message(quizmaster(96), 'Nothing here', "This link doesn't open a pocket app any more. Check the link with the host.");
   }
 
   private paused(v: GuestView): HTMLElement {
