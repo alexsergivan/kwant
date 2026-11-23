@@ -830,7 +830,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
     [onOpen],
   );
 
-  const act = async (item: InboxItem, run: () => Promise<unknown>, denied = false, said?: (reply: unknown) => string) => {
+  const act = async (item: InboxItem, run: () => Promise<unknown>, denied = false, said?: (reply: unknown) => { text: string; tone: 'ok' | 'info' }) => {
     if (inboxStore.get().busy) return;
     inboxStore.patch({ busy: item.id, notice: null });
     const title = awayTitle(item as AwayItem);
@@ -838,7 +838,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
       const reply = await run();
       const late = item.kind === 'approval' && !denied ? lateAnswerText(reply, item.kwant_name) : null;
       const done = denied ? 'Denied, nothing ran:' : late ?? `Sent to ${item.kwant_name}:`;
-      inboxStore.patch({ busy: null, notice: { text: said ? said(reply) : `${done} “${title}”`, tone: 'ok' } });
+      inboxStore.patch({ busy: null, notice: said ? said(reply) : { text: `${done} “${title}”`, tone: 'ok' } });
     } catch (err) {
       const n = failureNotice(err, title);
       inboxStore.patch({ busy: null, notice: { text: n.text, tone: n.error ? 'error' : 'info' } });
@@ -853,7 +853,8 @@ export const InboxNew: React.FC<InboxNewProps> = ({
   const onRunAgain = (item: InboxItem) =>
     act(item, () => runAgain(item as AwayItem), false, (r) => {
       const t = `“${awayTitle(item as AwayItem)}”`;
-      return r === 'skipped' ? `${t} is already running; this one was skipped.` : `Started: ${t}`;
+      // Skipped is news, not success: the info tone (Mira's design check, fix 2).
+      return r === 'skipped' ? { text: `${t} is already running, so nothing new started.`, tone: 'info' } : { text: `Started: ${t}`, tone: 'ok' };
     });
   const onResolve = (item: InboxItem, decision: ApprovalDecision, withoutBackup?: boolean, reason?: string) =>
     act(

@@ -4502,8 +4502,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
     if (action === 'run_again') {
       // routine-run-again: the routine runs again; the item leaves Needs you once the run starts.
-      if ((await runAgain(item)) === 'skipped') throw new Error('it’s already running');
-      return;
+      // 'skipped' (a run is still going) goes back to the strip, which says so in its hint (Mira's design check).
+      return runAgain(item);
     }
     if (action === 'ask_again') {
       if (item.retry?.type !== 'approval') throw new Error('this ask has no approval to ask again');

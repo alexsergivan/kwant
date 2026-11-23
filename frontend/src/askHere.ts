@@ -120,6 +120,9 @@ export function askHint(item: Pick<AwayItem, 'kind' | 'status'>, action: AskActi
   return `There’s no button for this one. Write to ${bot}, or clear it once it’s handled.`;
 }
 
+/** Run again while the routine is still running: nothing new started, and that is not an error (Mira's design check). */
+export const RUN_AGAIN_SKIPPED = 'It’s already running, so nothing new started. Clear this once that run is done.';
+
 /** The action button's accessible name: its words plus whose ask it is (design.md §5). */
 export function actionName(action: AskAction, bot: string): string {
   switch (action) {

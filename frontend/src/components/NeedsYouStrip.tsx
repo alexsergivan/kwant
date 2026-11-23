@@ -7,6 +7,7 @@ import {
   ACTION_LABEL,
   BUSY_LABEL,
   RESOLVES,
+  RUN_AGAIN_SKIPPED,
   actionName,
   askAction,
   askHint,
@@ -87,6 +88,8 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
   const [sent, setSent] = useState(false);
   // routine-run-again: Run again says "Started." at once and holds its button until the run takes the item away.
   const [started, setStarted] = useState(false);
+  // A Run again the server skipped because a run is still going: said in the hint, and the button comes back.
+  const [skipped, setSkipped] = useState(false);
   const [gone, setGone] = useState(false);
   // A dismiss the server refused (409 use_*): the ask's own button instead, and no Done.
   const [switched, setSwitched] = useState<AskAction | null>(null);
@@ -133,6 +136,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
       setClearing(false);
       setSent(false);
       setStarted(false);
+      setSkipped(false);
       setGone(false);
       setSwitched(null);
       actLock.current = false;
@@ -243,6 +247,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
     actLock.current = true;
     setError(null);
     setSent(false);
+    setSkipped(false);
     setActing(true);
     let waiting = false;
     try {
@@ -250,8 +255,11 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
         const found = onShow ? await onShow(item) : true;
         if (!found) setGone(true);
       } else {
-        await onAction(item, action);
-        if (resolving) {
+        const r = await onAction(item, action);
+        if (action === 'run_again' && r === 'skipped') {
+          setSkipped(true);
+          setSaid(RUN_AGAIN_SKIPPED);
+        } else if (resolving) {
           // Sent: wait for the close event. Still open after 5 s, the button comes back with a note.
           waiting = true;
           if (action === 'run_again') {
@@ -281,7 +289,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
 
   const stacked = phone || narrow;
   const btnH = phone ? 'h-11 text-[14px]' : 'h-8';
-  const Icon = gone ? Inbox : action ? ICON[action] : null;
+  const Icon = gone ? Inbox : started ? Check : action ? ICON[action] : null;
   const busyAct = acting && resolving;
   const label = gone ? 'Open in Inbox' : action ? (busyAct ? BUSY_LABEL[action] ?? ACTION_LABEL[action] : started ? 'Started' : ACTION_LABEL[action]) : '';
   // After a 409 switch: why Done went away (Mira's fix 5).
@@ -293,7 +301,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
         : switched === 'browser'
           ? `This one clears when you finish or decline it in ${bot}’s browser.`
           : null;
-  const hint = gone ? 'Its card isn’t in this chat anymore.' : sent ? (action === 'run_again' ? 'Started.' : `Sent. This clears once ${bot} answers.`) : switchedHint ?? askHint(item, action, bot, clearable);
+  const hint = gone ? 'Its card isn’t in this chat anymore.' : sent ? (action === 'run_again' ? 'Started.' : `Sent. This clears once ${bot} answers.`) : skipped ? RUN_AGAIN_SKIPPED : switchedHint ?? askHint(item, action, bot, clearable);
   const stepBtn =
     'kws-hit inline-flex items-center justify-center w-7 h-7 rounded-lg border border-hairline-strong text-zinc-200 hover:bg-white/[0.08] disabled:opacity-40 disabled:cursor-default kw-focus';
 
@@ -342,7 +350,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
         tabIndex={-1}
         data-needs-you-strip={item.id}
         data-action={action ?? 'none'}
-        data-strip-state={clearing ? 'clearing' : busyAct ? 'busy' : gone ? 'gone' : error ? 'error' : started ? 'started' : sent ? 'sent' : 'idle'}
+        data-strip-state={clearing ? 'clearing' : busyAct ? 'busy' : gone ? 'gone' : error ? 'error' : skipped ? 'skipped' : started ? 'started' : sent ? 'sent' : 'idle'}
         aria-labelledby={headId}
         onFocus={() => (hadFocus.current = true)}
         onBlur={(e) => {
