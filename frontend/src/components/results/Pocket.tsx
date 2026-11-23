@@ -233,10 +233,11 @@ export const LATER = {
 
 /** The kit's pixel "?" (quiz) or trophy (results), in the 44 px tile. currentColor only. */
 const PixelGlyph: React.FC<{ kind: 'quiz' | 'trophy' }> = ({ kind }) => {
-  const q: Array<[number, number, number, number]> = [[3, 1, 4, 1], [2, 2, 1, 2], [7, 2, 1, 2], [6, 4, 1, 1], [5, 5, 1, 2], [5, 8, 1, 1]];
+  // The kit glyph from pa0a card-1440.html `.kittile` (9×10 grid, 2-px strokes).
+  const q: Array<[number, number, number, number]> = [[2, 0, 5, 1], [1, 1, 2, 1], [6, 1, 2, 1], [0, 2, 2, 1], [7, 2, 2, 1], [7, 3, 2, 1], [6, 4, 2, 1], [4, 5, 3, 1], [4, 6, 2, 1], [4, 8, 2, 1], [4, 9, 2, 1]];
   const t: Array<[number, number, number, number]> = [[2, 1, 6, 1], [1, 2, 1, 2], [8, 2, 1, 2], [2, 2, 6, 3], [3, 5, 4, 1], [4, 6, 2, 1], [3, 7, 4, 1], [2, 8, 6, 1]];
   return (
-    <svg viewBox="0 0 10 10" width="22" height="22" aria-hidden="true" style={{ shapeRendering: 'crispEdges' }}>
+    <svg viewBox={kind === 'quiz' ? '0 0 9 10' : '0 0 10 10'} width={kind === 'quiz' ? 20 : 22} height="22" aria-hidden="true" data-glyph={kind} style={{ shapeRendering: 'crispEdges' }}>
       {(kind === 'quiz' ? q : t).map(([x, y, w, h]) => (
         <rect key={`${x}-${y}-${w}`} x={x} y={y} width={w} height={h} fill="currentColor" />
       ))}
@@ -245,7 +246,7 @@ const PixelGlyph: React.FC<{ kind: 'quiz' | 'trophy' }> = ({ kind }) => {
 };
 
 const Tile: React.FC<{ kind: 'quiz' | 'trophy' }> = ({ kind }) => (
-  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-sky-700 bg-sky-950 text-zinc-100" aria-hidden="true">
+  <span className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl border border-sky-700 bg-sky-950 text-sky-200" aria-hidden="true">
     <PixelGlyph kind={kind} />
   </span>
 );
@@ -288,8 +289,9 @@ const StateChip: React.FC<{ block: PocketBlock }> = ({ block }) => {
               Paused
             </span>
           )}
-          <span className="kw-chip kw-chip-accent">
-            <span className={`kw-status-dot bg-sky-200 ${block.paused ? '' : 'kw-pulse'}`} aria-hidden="true" />
+          {/* pa0a pocket.css `.chip.live`: the state the host glances for. White on sky-600 is 5.1:1. */}
+          <span className="kw-chip border-sky-400 bg-sky-600 font-semibold text-white" data-chip="live">
+            <span className={`kw-status-dot bg-white ${block.paused ? '' : 'kw-pulse'}`} aria-hidden="true" />
             Live
           </span>
         </span>
@@ -309,10 +311,13 @@ const Row: React.FC<{ icon: React.ReactNode; children: React.ReactNode; aside?: 
   </li>
 );
 
+/** `warn` is a text colour only in tailwind.config, so the fill reads the token directly. */
+export const WARN_FILL = 'bg-[color:var(--kw-warn)]';
 const Bar: React.FC<{ value: number; label: string; tone?: 'accent' | 'warn' }> = ({ value, label, tone = 'accent' }) => (
   <div className="h-1.5 w-full overflow-hidden rounded-full bg-white/[0.06]" role="progressbar" aria-label={label} aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(value * 100)}>
     <div
-      className={`h-full w-full origin-left rounded-full ${tone === 'warn' ? 'bg-warn' : 'bg-sky-400'}`}
+      className={`h-full w-full origin-left rounded-full ${tone === 'warn' ? WARN_FILL : 'bg-sky-400'}`}
+      data-tone={tone}
       style={{ transform: `scaleX(${Math.max(0, Math.min(1, value))})`, transition: 'transform 200ms var(--kw-ease)' }}
     />
   </div>
@@ -329,15 +334,17 @@ const Callout: React.FC<{ tone?: 'warn'; children: React.ReactNode }> = ({ tone,
 );
 
 // Buttons: 44 px on phone, 36 px on desktop, 15 px type on phone (design.md §1 "Phone 390").
-const BTN = 'min-h-[44px] sm:min-h-[36px] text-[15px] sm:text-meta';
+const BTN = 'min-h-[44px] sm:min-h-[36px] whitespace-nowrap text-[15px] sm:text-meta';
+// Half-width secondary buttons on phone (two columns): 14 px and tighter padding so labels stay on one line.
+const HALF = 'min-h-[44px] sm:min-h-[36px] whitespace-nowrap text-[14px] px-2.5 sm:px-3 sm:text-meta';
 const PRIMARY = `kw-btn-primary kw-hover-deepen ${BTN}`;
 const GHOST = `kw-btn-ghost ${BTN}`;
 const STOP = `inline-flex items-center justify-center gap-1.5 rounded-xl px-3 font-medium text-bad hover:bg-rose-300/10 kw-focus ${BTN}`;
 const LATER_CLS = 'aria-disabled:cursor-not-allowed aria-disabled:opacity-50 aria-disabled:hover:bg-white/[0.03] aria-disabled:hover:text-zinc-200';
 
 /** A button whose route comes later: focusable, says why on hover and to a screen reader, does nothing. */
-const LaterButton: React.FC<{ icon: React.ReactNode; why: string; primary?: boolean; className?: string; children: React.ReactNode }> = ({ icon, why, primary, className = '', children }) => (
-  <button type="button" aria-disabled="true" title={why} aria-description={why} data-later={why} onClick={(e) => e.preventDefault()} className={`${primary ? GHOST : GHOST} ${LATER_CLS} ${className}`}>
+const LaterButton: React.FC<{ icon: React.ReactNode; why: string; half?: boolean; className?: string; children: React.ReactNode }> = ({ icon, why, half, className = '', children }) => (
+  <button type="button" aria-disabled="true" title={why} aria-description={why} data-later={why} onClick={(e) => e.preventDefault()} className={`${half ? `kw-btn-ghost ${HALF}` : GHOST} ${LATER_CLS} ${className}`}>
     {icon}
     {children}
   </button>
@@ -437,7 +444,7 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
         <div id={labelId} className="text-[13px] font-semibold text-zinc-200 sm:text-meta">
           How friends join
         </div>
-        <div role="radiogroup" aria-labelledby={labelId} onKeyDown={onKey} className="inline-flex w-full rounded-xl border border-hairline-strong bg-surface-rail p-1 sm:w-auto sm:self-start">
+        <div role="radiogroup" aria-labelledby={labelId} onKeyDown={onKey} className="inline-flex self-start rounded-xl border border-hairline-strong bg-surface-rail p-1">
           {modes.map((m, i) => {
             const on = m === mode;
             const Icon = m === 'wifi' ? Wifi : Globe;
@@ -450,7 +457,7 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
                 aria-checked={on}
                 tabIndex={on ? 0 : -1}
                 onClick={() => setMode(m)}
-                className={`flex min-h-[44px] flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-[15px] sm:px-3 font-semibold kw-focus sm:min-h-[32px] sm:flex-none sm:text-meta ${
+                className={`flex min-h-[44px] flex-none items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-3 text-meta font-semibold kw-focus sm:min-h-[32px] ${
                   on ? 'bg-sky-600 text-white' : 'text-zinc-300 hover:text-zinc-100'
                 }`}
               >
@@ -550,7 +557,9 @@ const Progress: React.FC<{ block: PocketBlock; verb: string }> = ({ block, verb 
     <div className="flex flex-col gap-2">
       <p className="flex items-center gap-2 text-[15px] text-zinc-200 sm:text-[13px]">
         <Loader2 size={14} className="motion-safe:animate-spin text-sky-300" aria-hidden="true" />
-        {verb} · <strong className="font-semibold text-zinc-50">{num(p.done)} of {num(p.total)}</strong>
+        <span className="min-w-0">
+          {verb} · <strong className="whitespace-nowrap font-semibold text-zinc-50">{num(p.done)} of {num(p.total)}</strong>
+        </span>
       </p>
       <Bar value={p.done / p.total} label={`${verb}: ${p.done} of ${p.total}`} />
     </div>
@@ -564,7 +573,9 @@ const CheckRow: React.FC<{ block: PocketBlock; aside?: React.ReactNode }> = ({ b
     </Row>
   ) : null;
 
-const Body: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: PocketJoinMode) => void }> = ({ block, mode, setMode }) => {
+const Body: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: PocketJoinMode) => void; closed?: boolean }> = ({ block, mode, setMode, closed }) => {
+  // After a successful Stop or End the link is closed on the box: no QR or Copy link, even before a new block arrives.
+  const qr = showsQr(block) && !closed;
   const dr = block.dry_run;
   switch (block.state) {
     case 'writing':
@@ -659,7 +670,7 @@ const Body: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: Po
             )}
             {block.opens_line && <Row icon={<CalendarClock size={15} />}>{block.opens_line}</Row>}
           </ul>
-          {showsQr(block) && <JoinBox block={block} mode={mode} setMode={setMode} />}
+          {qr && <JoinBox block={block} mode={mode} setMode={setMode} />}
         </>
       );
     case 'live': {
@@ -693,7 +704,7 @@ const Body: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: Po
             )}
             <Row icon={<Hourglass size={15} />}>This box stays awake until the quiz ends.</Row>
           </ul>
-          {showsQr(block) && <CompactJoin block={block} />}
+          {qr && <CompactJoin block={block} />}
         </>
       );
     }
@@ -782,10 +793,10 @@ const Actions: React.FC<{
               Try it as a player
             </button>
           )}
-          <LaterButton icon={<Monitor size={14} aria-hidden="true" />} why={LATER.bigScreen}>
+          <LaterButton half icon={<Monitor size={14} aria-hidden="true" />} why={LATER.bigScreen}>
             Big screen
           </LaterButton>
-          {edit}
+          {React.cloneElement(edit, { half: true })}
           {stop}
         </div>
       );
@@ -796,10 +807,10 @@ const Actions: React.FC<{
             <Smartphone size={14} aria-hidden="true" />
             Open the remote
           </button>
-          <LaterButton icon={<Monitor size={14} aria-hidden="true" />} why={LATER.bigScreen}>
+          <LaterButton half icon={<Monitor size={14} aria-hidden="true" />} why={LATER.bigScreen}>
             Big screen
           </LaterButton>
-          <LaterButton icon={<Pause size={14} aria-hidden="true" />} why={LATER.pause}>
+          <LaterButton half icon={<Pause size={14} aria-hidden="true" />} why={LATER.pause}>
             {block.paused ? 'Resume' : 'Pause'}
           </LaterButton>
           <button type="button" onClick={onEnd} className={`${STOP} col-span-2 justify-self-center sm:ml-auto`} data-action="end">
@@ -1010,7 +1021,7 @@ export const Pocket: React.FC<RendererProps<PocketBlock>> = ({ block, ask }) => 
         </span>
       </header>
       <div className="relative flex flex-col gap-4">
-        <Body block={block} mode={mode} setMode={setMode} />
+        <Body block={block} mode={mode} setMode={setMode} closed={done?.kind === 'ok'} />
         {done ? (
           <p role="status" className={`flex items-start gap-2 text-[15px] sm:text-[13px] ${done.kind === 'ok' ? 'text-ok' : 'text-bad'}`} data-done={done.kind}>
             {done.kind === 'ok' ? <Check size={15} className={ICON} aria-hidden="true" /> : <AlertTriangle size={15} className={ICON} aria-hidden="true" />}

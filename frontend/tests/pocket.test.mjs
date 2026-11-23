@@ -26,7 +26,7 @@ const m = await loadBundled(`
   export { createRoot } from 'react-dom/client';
   export { MarkdownRenderer } from './src/components/MarkdownRenderer';
   export { COMPOSE_PREFILL_EVENT } from './src/components/results/SmartResult';
-  export { Pocket, validPocket, showsQr, earnedChecked, budgetLine, LATER } from './src/components/results/Pocket';
+  export { Pocket, validPocket, showsQr, earnedChecked, budgetLine, LATER, WARN_FILL } from './src/components/results/Pocket';
   export { POCKET_FIXTURES, FIXTURES } from './src/components/results/fixtures';
   export { REGISTRY, resolveBlock } from './src/components/results/registry';
   export { blockMarkdown, blockRows } from './src/components/results/exporters';
@@ -311,6 +311,49 @@ test('the results card: winner strip, scores best first, missed most, the deleti
   assert.match(v.host.textContent, /19 bot calls in all, about \$0\.05/);
   assert.match(v.host.textContent, /Names and answers are deleted on Fri, Dec 4\. Keeping the results saves names and scores only\./);
   assert.equal(m.blockRows(m.validPocket(raw('results'))).filter((r) => /^\d\./.test(r.what)).length, 6, 'Show as text lists the scores');
+});
+
+test('Missed most: the warn bar fill is a class Tailwind really generates, using the --kw-warn token', async () => {
+  const v = await card('results');
+  const warn = [...v.host.querySelectorAll('[data-tone="warn"]')];
+  assert.equal(warn.length, 3, 'all three missed-most bars are warn');
+  for (const el of warn) assert.ok(el.classList.contains(m.WARN_FILL), el.className);
+  assert.ok(!v.host.innerHTML.includes('bg-warn'), 'bg-warn has no CSS: warn is a text colour only');
+  const { default: postcss } = await import('postcss');
+  const { default: tailwind } = await import('tailwindcss');
+  const { default: config } = await import('../tailwind.config.js');
+  const out = await postcss([tailwind({ ...config, content: [{ raw: `<div class="${warn[0].className}"></div>` }] })]).process('@tailwind utilities;', { from: undefined });
+  assert.match(out.css, /\.bg-\\\[color\\:var\\\(--kw-warn\\\)\\\]\s*\{[^}]*background-color:\s*var\(--kw-warn\)/, 'the fill rule exists');
+});
+
+test('round 2: kit glyph, Live chip, join segment, one-line buttons and count, QR gone after Stop', async () => {
+  const ready = await card('ready');
+  const tile = ready.host.querySelector('[data-glyph="quiz"]');
+  assert.equal(tile.getAttribute('viewBox'), '0 0 9 10');
+  assert.equal(tile.querySelectorAll('rect').length, 11);
+  assert.ok(tile.parentElement.classList.contains('text-sky-200'));
+  const seg = ready.host.querySelector('[role="radiogroup"]');
+  assert.ok(seg.classList.contains('self-start') && !seg.classList.contains('w-full'));
+  for (const r of seg.querySelectorAll('[role="radio"]')) assert.ok(r.classList.contains('flex-none') && r.classList.contains('text-meta') && r.classList.contains('min-h-[44px]'));
+  const edit = button(ready, 'Edit questions');
+  assert.ok(edit.classList.contains('whitespace-nowrap') && edit.classList.contains('text-[14px]'), edit.className);
+  assert.ok(button(ready, 'Try it as a player').classList.contains('text-[15px]'), 'primary stays 15 px');
+  const live = await card('live');
+  const chip = live.host.querySelector('[data-chip="live"]');
+  assert.ok(chip.classList.contains('bg-sky-600') && chip.classList.contains('text-white'));
+  assert.ok(chip.querySelector('.kw-pulse'));
+  const paused = await card('paused');
+  assert.equal(paused.host.querySelector('[data-chip="live"] .kw-pulse'), null, 'no pulse while paused');
+  const checking = await card('checking');
+  const count = [...checking.host.querySelectorAll('strong')].find((s) => /of/.test(s.textContent) && s.classList.contains('whitespace-nowrap'));
+  assert.ok(count && count.parentElement.tagName === 'SPAN', 'verb and count share one span');
+  g.fetch = async () => new Response(JSON.stringify({ pocket: { code: 'fq7k2m' } }), { status: 200 });
+  assert.ok(live.host.querySelector('[data-qr]'));
+  await click(button(live, 'End quiz'));
+  await click(button(live, 'End and show winners'));
+  assert.ok(live.host.querySelector('[data-done="ok"]'));
+  assert.equal(live.host.querySelector('[data-qr]'), null, 'the closed link is no longer offered');
+  assert.equal(live.host.querySelector('[data-copy-link]'), null);
 });
 
 // ---------------------------------------------------------------------------------------------------
