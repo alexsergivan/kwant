@@ -307,7 +307,11 @@ async fn the_guest_port_answers_only_its_routes_and_one_pocket_per_key() {
     assert_eq!(r.status, StatusCode::OK);
     assert_eq!(r.headers["content-security-policy"], guest::CSP);
     let html = r.body.as_str().unwrap();
-    assert!(html.contains("A &lt;b&gt;") && !html.contains("<script") && !html.contains("style="), "{html}");
+    if guest::has_page() {
+        assert!(html.contains(r#"id="pocket-boot">{"#) && !html.contains("A <b>"), "{html}");
+    } else {
+        assert!(html.contains("A &lt;b&gt;") && !html.contains("<script") && !html.contains("style="), "{html}");
+    }
     for (method, path) in [
         ("GET", "/".to_string()),
         ("GET", "/index.html".into()),
@@ -316,6 +320,13 @@ async fn the_guest_port_answers_only_its_routes_and_one_pocket_per_key() {
         ("GET", "/api/auth/status".into()),
         ("GET", "/p/zzzzzz".into()),
         ("GET", "/p/NOTACODE".into()),
+        ("GET", "/p/_a".into()),
+        ("GET", "/p/_a/".into()),
+        ("GET", "/p/_a/index.html".into()),
+        ("GET", "/p/_a/..%2Fx".into()),
+        ("GET", "/p/_a/..%2F..%2Findex.html".into()),
+        ("GET", "/p/_a/g-nosuchfile.js".into()),
+        ("POST", "/p/_a/g-nosuchfile.js".into()),
         ("GET", format!("/p/{a}/x")),
         ("GET", format!("/api/pocket/{a}")),
         ("GET", format!("/api/pocket/{a}/nope")),
@@ -816,4 +827,40 @@ async fn switched_off_nothing_starts_and_nothing_answers() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     assert!(refused, "the port closes");
+}
+
+/// pa5's page: the same page for every code, never cached stale; its files are hashed and
+/// immutable (unit tests in `guest.rs` serve a fake build); the boot carries only public facts.
+#[tokio::test]
+async fn the_page_is_no_cache_and_its_boot_is_public() {
+    let t = setup(true).await;
+    let (code, _) = make(&t, json!({ "title": "Quiz </script><script>x()</script>" })).await;
+    let (_, key) = joined(&t, &code, "Mia").await;
+    for r in [send(&t.guest, "GET", &format!("/p/{code}"), None, &Req::default()).await, send(&t.guest, "GET", &format!("/p/{code}"), None, &guest_req(&code, &key)).await] {
+        assert_eq!(r.status, StatusCode::OK);
+        assert_eq!(r.headers["content-security-policy"], guest::CSP);
+        assert_eq!(r.headers["cache-control"], "no-cache");
+        assert_eq!(r.headers["content-type"], "text/html; charset=utf-8");
+        let html = r.body.as_str().unwrap();
+        assert!(!html.contains("<script>x()"), "{html}");
+        if guest::has_page() {
+            let open = r#"<script type="application/json" id="pocket-boot">"#;
+            let start = html.find(open).unwrap() + open.len();
+            let boot: Value = serde_json::from_str(&html[start..start + html[start..].find("</script>").unwrap()]).unwrap();
+            assert_eq!(boot["pocket"]["code"], code.as_str());
+        }
+    }
+    // An unknown code is 404 (and still no-cache, so a later pocket with it isn't hidden)
+    let r = send(&t.guest, "GET", "/p/zzzzzz", None, &Req::default()).await;
+    assert_eq!((r.status, r.headers["cache-control"].to_str().unwrap()), (StatusCode::NOT_FOUND, "no-cache"));
+    // API answers keep no-store
+    let r = send(&t.guest, "GET", &format!("/api/pocket/{code}/info"), None, &Req::default()).await;
+    assert_eq!(r.headers["cache-control"], "no-store");
+    assert_eq!(r.body["pocket"]["code"], code.as_str());
+    // Off: the files are 404 like everything else
+    t.state.db.set_setting(pocket::SETTING, "off").await.unwrap();
+    assert!(!listener::reconcile(&t.state).await);
+    for path in [format!("/p/{code}"), "/p/_a/g-nosuchfile.js".to_string()] {
+        assert_eq!(send(&t.guest, "GET", &path, None, &Req::default()).await.status, StatusCode::NOT_FOUND, "{path}");
+    }
 }

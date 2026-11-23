@@ -1,5 +1,6 @@
-//! The guest port's router (Pocket API v1). It answers only `GET /p/<code>` and
-//! `/api/pocket/<code>/*`; everything else is 404, and so is everything while the switch is off.
+//! The guest port's router (Pocket API v1). It answers only `GET /p/<code>`, the page's own files
+//! under `GET /p/_a/<file>`, and `/api/pocket/<code>/*`; everything else is 404, and so is
+//! everything while the switch is off.
 //! There is no `auth::guard` here: guests have no account. A guest key (cookie `kp_<code>`) or a
 //! host key (cookie `kph_<code>`, or `Authorization: Bearer`) opens one pocket only, and neither
 //! is ever accepted on the main port.
@@ -18,6 +19,7 @@ use axum::{Json, Router};
 use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::borrow::Cow;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -38,6 +40,7 @@ const WS_MAX_MESSAGE: usize = 4 * 1024;
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/p/:code", get(page))
+        .route("/p/_a/:file", get(page_file))
         .route("/api/pocket/:code/info", get(info))
         .route("/api/pocket/:code/join", post(join))
         .route("/api/pocket/:code/rejoin", post(rejoin))
@@ -81,7 +84,8 @@ async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Respon
     h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
     h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // The page (no-cache) and its hashed files (immutable) set their own; everything else is no-store
+    h.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("no-store"));
     res
 }
 
@@ -191,25 +195,158 @@ fn html_escape(s: &str) -> String {
         .collect()
 }
 
-/// The guest page. pa5 replaces this placeholder; it has no inline script or style, as the CSP needs.
-async fn page(State(state): State<AppState>, Path(code): Path<String>) -> Response {
-    let (status, title, line) = match pocket(&state, &code).await {
-        Ok(s) if s.row.state == crate::db::pocket::ENDED => (StatusCode::OK, s.row.title.clone(), "This pocket app has ended."),
-        Ok(s) => (StatusCode::OK, s.row.title.clone(), "This pocket app's page is on its way."),
-        Err(_) => (StatusCode::NOT_FOUND, "Not found".to_string(), "There's no pocket app here."),
+/// The guest page (pa5), from the build's `frontend/dist/pocket/`. The same file for every code.
+const PAGE_DIR: &str = "pocket/";
+const PAGE_INDEX: &str = "index.html";
+/// The page's boot slot: the server swaps `null` for this visitor's first state.
+const BOOT_SLOT: &str = r#"<script type="application/json" id="pocket-boot">null</script>"#;
+const BOOT_OPEN: &str = r#"<script type="application/json" id="pocket-boot">"#;
+
+fn page_asset(name: &str) -> Option<Cow<'static, [u8]>> {
+    crate::embedded::Assets::get(&format!("{PAGE_DIR}{name}")).map(|f| f.data)
+}
+
+/// True when this build carries pa5's page (otherwise `/p/<code>` serves the placeholder).
+pub fn has_page() -> bool {
+    page_asset(PAGE_INDEX).is_some()
+}
+
+/// JSON that is safe inside `<script type="application/json">`: nothing in it can close the
+/// element or start a comment, whatever a title or a name says.
+pub fn boot_json(v: &Value) -> String {
+    let text = serde_json::to_string(v).unwrap_or_else(|_| "null".into());
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '<' => out.push_str("\\u003c"),
+            '>' => out.push_str("\\u003e"),
+            '&' => out.push_str("\\u0026"),
+            '\u{2028}' => out.push_str("\\u2028"),
+            '\u{2029}' => out.push_str("\\u2029"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The page with its boot slot filled. A page without the exact slot is served as built.
+pub fn fill_boot(index: &str, boot: &Value) -> String {
+    match index.find(BOOT_SLOT) {
+        Some(at) => {
+            let mut out = String::with_capacity(index.len() + 512);
+            out.push_str(&index[..at]);
+            out.push_str(BOOT_OPEN);
+            out.push_str(&boot_json(boot));
+            out.push_str("</script>");
+            out.push_str(&index[at + BOOT_SLOT.len()..]);
+            out
+        }
+        None => index.to_string(),
+    }
+}
+
+fn html_response(status: StatusCode, body: String) -> Response {
+    let mut res = (status, Html(body)).into_response();
+    let h = res.headers_mut();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8"));
+    // Always asks again, so a new build's page (and its new file names) reaches phones at once
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+    res
+}
+
+/// What this visitor's page starts with: their own state with a seat, else the public facts.
+/// (The seat cookie's Path is `/api/pocket/<code>`, so browsers don't send it here: in practice
+/// the boot is the public facts and the page asks `state` for the seat.)
+async fn boot_state(state: &AppState, s: &Snapshot, code: &str, headers: &HeaderMap) -> Value {
+    match guest(state, code, headers).await {
+        Ok(Some(p)) => super::view_json(s, &Viewer::Guest(p.id), Utc::now()),
+        _ => public_json(s),
+    }
+}
+
+/// `GET /p/<code>`: pa5's page with the boot filled in, or a placeholder when this build has no
+/// page. 404 for a malformed or unknown code.
+async fn page(State(state): State<AppState>, Path(code): Path<String>, headers: HeaderMap) -> Response {
+    let s = match pocket(&state, &code).await {
+        Ok(s) => s,
+        Err(_) => return html_response(StatusCode::NOT_FOUND, placeholder("Not found", "There's no pocket app here.")),
     };
-    let title = html_escape(&title);
-    let body = format!(
+    if let Some(index) = page_asset(PAGE_INDEX) {
+        let boot = boot_state(&state, &s, &code, &headers).await;
+        return html_response(StatusCode::OK, fill_boot(&String::from_utf8_lossy(&index), &boot));
+    }
+    let line = if s.row.state == crate::db::pocket::ENDED { "This pocket app has ended." } else { "This pocket app's page is on its way." };
+    html_response(StatusCode::OK, placeholder(&s.row.title, line))
+}
+
+/// The page before pa5 is in the build. No inline script or style, as the CSP needs.
+fn placeholder(title: &str, line: &str) -> String {
+    let title = html_escape(title);
+    format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">\
          <meta name=\"referrer\" content=\"no-referrer\"><title>{title}</title></head><body><main><h1>{title}</h1><p>{line}</p></main></body></html>"
-    );
-    (status, Html(body)).into_response()
+    )
+}
+
+/// The content type for one of the page's files, by extension. Anything else isn't served.
+pub fn page_file_type(name: &str) -> Option<&'static str> {
+    let ext = name.rsplit_once('.')?.1.to_ascii_lowercase();
+    Some(match ext.as_str() {
+        "js" | "mjs" => "application/javascript; charset=utf-8",
+        "css" => "text/css; charset=utf-8",
+        "woff2" => "font/woff2",
+        "svg" => "image/svg+xml",
+        "png" => "image/png",
+        "webp" => "image/webp",
+        "jpg" | "jpeg" => "image/jpeg",
+        "ico" => "image/x-icon",
+        _ => return None,
+    })
+}
+
+/// A flat file name from the page's folder: no folders, no way up, never the page itself.
+pub fn page_file_name_ok(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 128
+        && name != PAGE_INDEX
+        && !name.starts_with('.')
+        && !name.contains(['/', '\\', '\0'])
+        && !name.contains("..")
+        && page_file_type(name).is_some()
+}
+
+/// One of the page's files, through `lookup` (the build's files; tests pass their own).
+pub fn page_file_response(name: &str, lookup: impl Fn(&str) -> Option<Cow<'static, [u8]>>) -> Response {
+    let (true, Some(mime)) = (page_file_name_ok(name), page_file_type(name)) else {
+        return PocketError::not_found().into_response();
+    };
+    let Some(data) = lookup(name) else {
+        return PocketError::not_found().into_response();
+    };
+    let mut res = (StatusCode::OK, data.into_owned()).into_response();
+    let h = res.headers_mut();
+    h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
+    // Names carry a content hash, so a file never changes under its name
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=31536000, immutable"));
+    res
+}
+
+/// `GET /p/_a/<file>`: the page's hashed scripts, styles and fonts. Can't meet a pocket code:
+/// codes never contain `_`.
+async fn page_file(Path(file): Path<String>) -> Response {
+    page_file_response(&file, page_asset)
+}
+
+/// The public facts anyone with the link sees before joining (`info`, and the page's boot
+/// without a seat): `{api, pocket}`. No names, no guest text.
+pub fn public_json(s: &Snapshot) -> Value {
+    json!({ "api": super::API_VERSION, "pocket": super::pocket_json(s) })
 }
 
 /// What anyone with the link sees before joining: no names, no guest text.
 async fn info(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
     let s = pocket(&state, &code).await?;
-    Ok(Json(json!({ "api": super::API_VERSION, "pocket": super::pocket_json(&s) })))
+    Ok(Json(public_json(&s)))
 }
 
 fn signed_in(state_json: Value, cookie: HeaderValue, status: StatusCode) -> Response {
@@ -486,5 +623,63 @@ async fn serve_ws(mut socket: WebSocket, state: AppState, code: String, who: WsW
                 Some(Ok(_)) => {}
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::body::to_bytes;
+
+    fn files(name: &str) -> Option<Cow<'static, [u8]>> {
+        match name {
+            "g-3f9a1c.js" => Some(Cow::Borrowed(b"console.log(1)")),
+            "g-77aa01.css" => Some(Cow::Borrowed(b"body{}")),
+            "inter-guest-0b1c.woff2" => Some(Cow::Borrowed(b"wOF2")),
+            "index.html" => Some(Cow::Borrowed(b"<!doctype html>")),
+            _ => None,
+        }
+    }
+
+    #[tokio::test]
+    async fn hashed_files_are_immutable_with_their_type() {
+        for (name, mime) in [
+            ("g-3f9a1c.js", "application/javascript; charset=utf-8"),
+            ("g-77aa01.css", "text/css; charset=utf-8"),
+            ("inter-guest-0b1c.woff2", "font/woff2"),
+        ] {
+            let res = page_file_response(name, files);
+            assert_eq!(res.status(), StatusCode::OK, "{name}");
+            assert_eq!(res.headers()[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
+            assert_eq!(res.headers()[header::CONTENT_TYPE], mime);
+            assert!(!to_bytes(res.into_body(), usize::MAX).await.unwrap().is_empty());
+        }
+    }
+
+    #[test]
+    fn the_page_itself_and_anything_outside_the_folder_are_404() {
+        // `..%2Fx` reaches the handler decoded as `../x`
+        for name in ["index.html", "../x", "..", "a/g-3f9a1c.js", "a\\g-3f9a1c.js", "..\\x.js", ".hidden.js", "g-0000.js", "x.exe", "noext", ""] {
+            let res = page_file_response(name, files);
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "{name:?}");
+            assert!(res.headers().get(header::CACHE_CONTROL).is_none(), "{name:?}: the gate adds no-store");
+        }
+    }
+
+    #[test]
+    fn the_boot_json_cannot_close_its_script() {
+        let page = r#"<html><body><div id="app"></div><script type="application/json" id="pocket-boot">null</script><script src="/p/_a/g-1.js"></script></body></html>"#;
+        let evil = json!({ "pocket": { "title": "</script><script>alert(1)</script><!-- & \u{2028}" } });
+        let out = fill_boot(page, &evil);
+        let open = r#"<script type="application/json" id="pocket-boot">"#;
+        let start = out.find(open).unwrap() + open.len();
+        let end = start + out[start..].find("</script>").unwrap();
+        let slot = &out[start..end];
+        assert!(!slot.contains('<') && !slot.contains('>') && !slot.contains('&') && !slot.contains('\u{2028}'), "{slot}");
+        assert_eq!(serde_json::from_str::<Value>(slot).unwrap(), evil, "the page reads back the same JSON");
+        assert!(out.ends_with(r#"<script src="/p/_a/g-1.js"></script></body></html>"#));
+        assert_eq!(out.matches("</script>").count(), 2);
+        // No slot: the page goes out as built
+        assert_eq!(fill_boot("<html></html>", &evil), "<html></html>");
     }
 }
