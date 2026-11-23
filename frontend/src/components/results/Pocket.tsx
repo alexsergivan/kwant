@@ -281,7 +281,7 @@ const StateChip: React.FC<{ block: PocketBlock }> = ({ block }) => {
       );
     case 'live':
       return (
-        <span className="flex flex-wrap justify-end gap-1.5">
+        <span className="flex flex-wrap justify-start gap-1.5 sm:justify-end">
           {block.paused && (
             <span className="kw-chip">
               <Pause size={12} aria-hidden="true" />
@@ -450,7 +450,7 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
                 aria-checked={on}
                 tabIndex={on ? 0 : -1}
                 onClick={() => setMode(m)}
-                className={`flex min-h-[44px] flex-1 items-center justify-center gap-1.5 rounded-lg px-3 text-[15px] font-semibold kw-focus sm:min-h-[32px] sm:flex-none sm:text-meta ${
+                className={`flex min-h-[44px] flex-1 items-center justify-center gap-1.5 whitespace-nowrap rounded-lg px-2 text-[15px] sm:px-3 font-semibold kw-focus sm:min-h-[32px] sm:flex-none sm:text-meta ${
                   on ? 'bg-sky-600 text-white' : 'text-zinc-300 hover:text-zinc-100'
                 }`}
               >
@@ -847,21 +847,24 @@ const ResultsCard: React.FC<{ block: PocketBlock; results: PocketResults; ask: (
         </div>
       </header>
       <div className="relative flex flex-wrap items-center gap-3 rounded-2xl border border-sky-700 bg-sky-500/[0.08] px-3.5 py-3" data-winner>
-        <span className="flex -space-x-0.5" aria-hidden="true">
+        <span className="flex shrink-0 -space-x-0.5 [&>svg]:h-[22px] [&>svg]:w-[22px] sm:[&>svg]:h-[30px] sm:[&>svg]:w-[30px]" aria-hidden="true">
           {Array.from({ length: faces }, (_, i) => (
             <TeamCreature key={i} palette={TEAM_PALETTES[(startAt + i) % TEAM_PALETTES.length]} size={30} />
           ))}
         </span>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-[10rem] flex-1">
           <p className="text-[17px] font-bold text-zinc-50">{win.name} win</p>
           <p className="text-[13px] text-zinc-400 sm:text-meta">
             {win.members.length > 0 ? `${win.members.join(', ')} · ` : ''}
             {num(win.points)} points{results.margin !== null ? ` · ${num(results.margin)} ahead` : ''}
           </p>
         </div>
-        <Sticker tone="holo" icon={<Trophy size={12} aria-hidden="true" />} ariaLabel={`Winners: ${win.name}`}>
-          Winners
-        </Sticker>
+        {/* Phone: the sticker takes its own line, so the team name keeps the width. */}
+        <span className="basis-full sm:basis-auto">
+          <Sticker tone="holo" icon={<Trophy size={12} aria-hidden="true" />} ariaLabel={`Winners: ${win.name}`}>
+            Winners
+          </Sticker>
+        </span>
       </div>
       <div className="relative grid grid-cols-1 gap-5 sm:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
         <div className="min-w-0">
@@ -883,9 +886,8 @@ const ResultsCard: React.FC<{ block: PocketBlock; results: PocketResults; ask: (
                   <td className="py-2 pl-2 tabular-nums">{i + 1}</td>
                   <td className="py-2">
                     <span className="flex items-center gap-2">
-                      <span className="inline-block h-3.5 w-1.5 shrink-0 overflow-hidden rounded-sm" aria-hidden="true">
-                        <TeamCreature palette={teamPalette(t, i)} size={14} />
-                      </span>
+                      {/* The team's colour: its creature's body colour, from the avatar palettes. */}
+                      <span className="inline-block h-3.5 w-1.5 shrink-0 rounded-sm" style={{ backgroundColor: paletteCreature(teamPalette(t, i)).body }} aria-hidden="true" />
                       <span className="min-w-0 truncate">{t.name}</span>
                     </span>
                   </td>
@@ -995,11 +997,15 @@ export const Pocket: React.FC<RendererProps<PocketBlock>> = ({ block, ask }) => 
         <div className="min-w-0 flex-1">
           <div className="text-2xs font-semibold text-sky-300">Pocket app · {kitLabel(block.kit)}</div>
           <h3 className="text-[20px] font-bold leading-[26px] text-zinc-50 sm:text-[19px]">{block.name}</h3>
+          {/* Phone: the state chip sits under the name, so a long name keeps the width. */}
+          <span className="mt-1.5 block sm:hidden">
+            <StateChip block={block} />
+          </span>
           {(block.state === 'live' ? block.live?.now ?? block.when : block.when) && (
             <p className="text-[13px] text-zinc-300">{block.state === 'live' ? block.live?.now ?? block.when : block.when}</p>
           )}
         </div>
-        <span className="shrink-0">
+        <span className="hidden shrink-0 sm:block">
           <StateChip block={block} />
         </span>
       </header>
