@@ -517,6 +517,12 @@ impl Database {
         .await?)
     }
 
+    /// A pocket's event log, oldest first: `(player_id, kind, payload JSON)`. What an export of
+    /// the pocket would read; the privacy tests read it too.
+    pub async fn pocket_events(&self, code: &str) -> Result<Vec<(Option<String>, String, String)>, DbError> {
+        Ok(sqlx::query_as("SELECT player_id, kind, payload FROM pocket_events WHERE pocket_code = ? ORDER BY id").bind(code).fetch_all(&self.pool).await?)
+    }
+
     /// Rows a pocket still has in each table, for tests and the sweeper's checks.
     pub async fn pocket_row_counts(&self, code: &str) -> Result<[i64; 4], DbError> {
         let mut out = [0i64; 4];
@@ -652,6 +658,23 @@ impl Database {
         .fetch_all(&self.pool)
         .await?;
         Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// pa4c: ended pockets whose results were posted, with when (Inbox › Done). Their window and
+    /// expiry are read by the caller; this lists every one still kept.
+    pub async fn pocket_results_posted(&self) -> Result<Vec<(String, DateTime<Utc>)>, DbError> {
+        Ok(sqlx::query_as(
+            "SELECT s.pocket_code, s.results_posted_at FROM pocket_schedule s JOIN pocket_apps p ON p.code = s.pocket_code \
+             WHERE p.state = 'ended' AND s.results_posted_at IS NOT NULL ORDER BY s.results_posted_at DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
+    /// pa4c: the results post a pocket left in its chat, while it is kept.
+    pub async fn pocket_result_post_of(&self, code: &str) -> Result<Option<String>, DbError> {
+        let row: Option<(String,)> = sqlx::query_as("SELECT message_id FROM pocket_result_posts WHERE pocket_code = ? ORDER BY message_id LIMIT 1").bind(code).fetch_optional(&self.pool).await?;
+        Ok(row.map(|r| r.0))
     }
 
     /// Remembers a results message that still names guests.

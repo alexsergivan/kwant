@@ -29,7 +29,7 @@ export function add(el: Element, kids: Kid[]): void {
 
 const NS = 'http://www.w3.org/2000/svg';
 
-export function svg(viewBox: string, rects: Rects, cls: string, label?: string): SVGSVGElement {
+export function svg(viewBox: string, rects: Rects, cls: string, label?: string, palette: readonly string[] = PALETTE): SVGSVGElement {
   const s = document.createElementNS(NS, 'svg');
   s.setAttribute('viewBox', viewBox);
   s.setAttribute('class', cls);
@@ -38,11 +38,11 @@ export function svg(viewBox: string, rects: Rects, cls: string, label?: string):
     s.setAttribute('role', 'img');
     s.setAttribute('aria-label', label);
   } else s.setAttribute('aria-hidden', 'true');
-  s.append(paint(rects));
+  s.append(paint(rects, undefined, palette));
   return s;
 }
 
-function paint(rects: Rects, cls?: string): SVGGElement {
+export function paint(rects: Rects, cls?: string, palette: readonly string[] = PALETTE): SVGGElement {
   const g = document.createElementNS(NS, 'g');
   if (cls) g.setAttribute('class', cls);
   for (const [x, y, w, hh, c] of rects) {
@@ -51,7 +51,7 @@ function paint(rects: Rects, cls?: string): SVGGElement {
     r.setAttribute('y', String(y));
     r.setAttribute('width', String(w));
     r.setAttribute('height', String(hh));
-    r.setAttribute('fill', c >= 0 ? PALETTE[c] : 'currentColor');
+    r.setAttribute('fill', c >= 0 ? palette[c] : 'currentColor');
     g.append(r);
   }
   return g;

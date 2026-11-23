@@ -206,11 +206,23 @@ impl Question {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Source {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub url: String,
     /// The line on that page that holds the answer, quoted.
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub quote: String,
+    /// pa4c: the person wrote or changed this question themselves (`{"own": true}`), so it has
+    /// no page and isn't source-checked. Only the person's draft edit API sets it; Quizmaster
+    /// takes it as the person's only for a question the server recorded (`quiz_drafts.own_keys`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub own: bool,
+}
+
+impl Source {
+    /// The person's own answer: no page, no quote.
+    pub fn own() -> Self {
+        Self { url: String::new(), quote: String::new(), own: true }
+    }
 }
 
 /// The licences a picture may have (plan section 8 rule 8).

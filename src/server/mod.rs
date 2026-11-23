@@ -57,12 +57,15 @@ pub mod openai_key;
 pub mod transcribe;
 pub mod connection_suggest;
 pub mod bot_actions;
+pub mod quiz_draft_api;
+pub mod quizmaster_tools;
 pub mod hires;
 pub mod concierge;
 pub mod rerouting;
 pub mod import_routes;
 pub mod inbox;
 pub mod inbox_done;
+pub mod inbox_pockets;
 pub mod isolated_folders_routes;
 pub mod always_allowed;
 pub mod approval_modes;
@@ -655,6 +658,8 @@ pub fn create_router(state: AppState) -> Router {
         .route("/api/events", get(sse::sse_handler))
         .merge(show_once::routes::router())
         .merge(crate::pocket::host_api::router())
+        // pa4c: the person's edits to a quiz draft's questions (person only, behind pocket_apps)
+        .merge(quiz_draft_api::router())
         .fallback(crate::embedded::static_handler)
         .layer(axum::middleware::from_fn_with_state(state.clone(), spaces::row_guard))
         .layer(axum::middleware::from_fn_with_state(state.clone(), auth::guard))
