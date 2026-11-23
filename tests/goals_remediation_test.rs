@@ -1488,3 +1488,184 @@ async fn g_r_34b_a_goal_whose_bot_is_gone_is_not_called_unfixable() {
     assert_eq!(needs_you_sent(&e, &g.id).await, 0);
     assert!(e.state.db.list_missions(&SpaceId::default_space(), None).await.unwrap().is_empty());
 }
+
+// -- 34k goal-recovered-says-who (Mira's goals UX pass at 0.9.40, minors f and h) -----------------
+
+use kwnt::drivers::events::RuntimeEvent;
+
+/// The goal notices (title, body) sent since `rx` subscribed, oldest first.
+fn goal_notices(rx: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>) -> Vec<(String, String)> {
+    use tokio::sync::broadcast::error::TryRecvError;
+    let mut out = Vec::new();
+    loop {
+        match rx.try_recv() {
+            Ok(RuntimeEvent::Notify { kind, title, body, .. }) if kind == "goal_alert" => out.push((title, body)),
+            Ok(_) => {}
+            Err(TryRecvError::Lagged(n)) => panic!("missed {n} events"),
+            Err(_) => break,
+        }
+    }
+    out
+}
+
+async fn bot_name(e: &Env) -> String {
+    e.state.db.get_kwant(&e.bot).await.unwrap().unwrap().name
+}
+
+fn clock(ms: i64) -> String {
+    chrono::DateTime::from_timestamp_millis(ms).unwrap().format("%H:%M UTC").to_string()
+}
+
+/// A raw connection to the test's database, to move a logged run back in time.
+async fn raw(e: &Env) -> sqlx::SqlitePool {
+    sqlx::SqlitePool::connect(&format!("sqlite://{}", e._tmp.path().join("kwnt.db").display())).await.unwrap()
+}
+
+/// Breaks the goal for real (its file is missing, one run confirms), lets the tick open the
+/// remediation, finishes Investigate, makes the fix (the file is back) and verifies it. The goal
+/// itself hasn't run again yet: its next run is the one that finds it met.
+async fn fixed_but_not_rechecked(e: &Env, g: &Goal) -> kwnt::db::goal_missions::GoalLink {
+    let _ = std::fs::remove_file(e.folder.join("ok.txt"));
+    assert_eq!(run_now(e, &g.id).await.status, "not_met");
+    tick_at(&e.state, now()).await;
+    let l = open_link(e, &g.id).await;
+    investigated(e, &l).await;
+    std::fs::write(e.folder.join("ok.txt"), "x").unwrap();
+    assert_eq!(finish(e, &l.fix_task_id).await, StatusCode::OK);
+    tick_at(&e.state, now()).await;
+    assert_eq!(open_link(e, &g.id).await.id, l.id, "the link waits for the goal's own re-check");
+    l
+}
+
+const ON_ITS_OWN: &str = "Its checks pass again. Nothing else to do.";
+
+// f: the run that finds the goal met again comes before the tick that logs `fix_verified`, so the
+// recovered notice reads the incident's verified fix itself
+#[tokio::test]
+async fn g_r_27_a_fix_that_worked_names_the_bot_in_the_recovered_notice() {
+    let e = setup().await;
+    let name = bot_name(&e).await;
+    std::fs::write(e.folder.join("ok.txt"), "x").unwrap();
+    let g = goal_with(&e, "Site is up", &e.folder.to_string_lossy(), "fix", 2, "ok.txt", 1).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    fixed_but_not_rechecked(&e, &g).await;
+    let mut rx = e.state.event_sender.subscribe();
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    assert_eq!(goal_notices(&mut rx), [("Site is up is OK again".to_string(), format!("{name}'s fix worked; its checks pass again."))]);
+    tick_at(&e.state, now()).await;
+    assert!(kinds(&e, &g.id).await.contains(&"fix_verified".to_string()));
+    assert_eq!(notified(&e, &g.id).await, ["broken", "recovered"]);
+}
+
+#[tokio::test]
+async fn g_r_28_a_goal_that_recovers_on_its_own_keeps_the_old_words() {
+    let e = setup().await;
+    // Suggest mode: the fix is still held when the goal passes again, nothing ran
+    let g = goal(&e, "Site is up", "suggest").await;
+    break_logged(&e, &g.id).await;
+    tick_at(&e.state, now()).await;
+    let l = open_link(&e, &g.id).await;
+    investigated(&e, &l).await;
+    tick_at(&e.state, now()).await;
+    assert_eq!(status(&e, &g.id).await, ("needs_you".into(), "fix_ready".into()));
+    let mut rx = e.state.event_sender.subscribe();
+    mend_logged(&e, &g.id).await;
+    assert_eq!(goal_notices(&mut rx), [("Site is up is OK again".to_string(), ON_ITS_OWN.to_string())]);
+    // And with no remediation at all (watch mode), in a folder of its own so it isn't grouped
+    let other = e._tmp.path().join("other");
+    std::fs::create_dir_all(&other).unwrap();
+    let w = goal_in(&e, "Watched", &other, "watch", 2).await;
+    break_logged(&e, &w.id).await;
+    tick_at(&e.state, now()).await;
+    let mut rx = e.state.event_sender.subscribe();
+    mend_logged(&e, &w.id).await;
+    assert_eq!(goal_notices(&mut rx), [("Watched is OK again".to_string(), ON_ITS_OWN.to_string())]);
+}
+
+#[tokio::test]
+async fn g_r_29_a_fix_from_an_earlier_incident_does_not_count() {
+    let e = setup().await;
+    let name = bot_name(&e).await;
+    std::fs::write(e.folder.join("ok.txt"), "x").unwrap();
+    let g = goal_with(&e, "Site is up", &e.folder.to_string_lossy(), "fix", 2, "ok.txt", 1).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    // Incident 1: fixed by the bot, and verified
+    fixed_but_not_rechecked(&e, &g).await;
+    let mut rx = e.state.event_sender.subscribe();
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    assert_eq!(goal_notices(&mut rx)[0].1, format!("{name}'s fix worked; its checks pass again."));
+    tick_at(&e.state, now()).await;
+    assert_eq!(e.state.db.goal_links(&g.id, 5).await.unwrap()[0].outcome.as_deref(), Some("verified"));
+    // Incident 2: it breaks again and comes back before any fix ran
+    std::fs::remove_file(e.folder.join("ok.txt")).unwrap();
+    assert_eq!(run_now(&e, &g.id).await.status, "not_met");
+    tick_at(&e.state, now()).await;
+    assert_ne!(task(&e, &open_link(&e, &g.id).await.fix_task_id).await.state, "verified");
+    std::fs::write(e.folder.join("ok.txt"), "x").unwrap();
+    let mut rx = e.state.event_sender.subscribe();
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    assert_eq!(goal_notices(&mut rx), [("Site is up is OK again".to_string(), ON_ITS_OWN.to_string())], "incident 1's fix_verified isn't this incident's");
+    assert_eq!(notified(&e, &g.id).await, ["broken", "recovered", "broken", "recovered"]);
+}
+
+// h: with confirm_failures 2 the broken notice goes out a run after the first failure. Its "Since"
+// is that first failing run, and the goal says the same time (`incident_since`) for the row.
+#[tokio::test]
+async fn g_q_31_the_broken_notice_says_since_the_first_failing_run() {
+    let e = setup().await;
+    std::fs::write(e.folder.join("ok.txt"), "x").unwrap();
+    let g = goal_with(&e, "Site is up", &e.folder.to_string_lossy(), "watch", 2, "ok.txt", 2).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    let (_, v) = send(&e, "GET", &format!("/api/goals/{}", g.id), None, None, None).await;
+    assert_eq!(v["goal"]["incident_since"], Value::Null, "a met goal has no incident");
+    std::fs::remove_file(e.folder.join("ok.txt")).unwrap();
+    assert_eq!(run_now(&e, &g.id).await.status, "met", "one failure is not news");
+    // That first failing run was three hours ago, so its time can't be mistaken for the notice's
+    let pool = raw(&e).await;
+    sqlx::query("UPDATE goal_events SET created_at = created_at - ? WHERE goal_id = ? AND kind = 'checked' AND json_extract(detail, '$.verdict') = 'not_met'")
+        .bind(180 * MIN)
+        .bind(&g.id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let (first,): (i64,) = sqlx::query_as("SELECT created_at FROM goal_events WHERE goal_id = ? AND kind = 'checked' AND json_extract(detail, '$.verdict') = 'not_met'")
+        .bind(&g.id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert!(now() - first >= 179 * MIN);
+    let mut rx = e.state.event_sender.subscribe();
+    assert_eq!(run_now(&e, &g.id).await.status, "not_met");
+    let got = goal_notices(&mut rx);
+    assert_eq!(got.len(), 1, "{got:?}");
+    assert!(got[0].1.starts_with(&format!("Since {}, this isn't true: ", clock(first))), "{}", got[0].1);
+    // The incident's `not_met` event keeps that time, and the goal reads it back
+    let broke = e.state.db.goal_events(&g.id, 50).await.unwrap().into_iter().find(|ev| ev.kind == "not_met").unwrap();
+    assert_eq!(broke.detail_value()["since"], json!(first));
+    let (_, v) = send(&e, "GET", &format!("/api/goals/{}", g.id), None, None, None).await;
+    assert_eq!(v["goal"]["incident_since"], json!(first));
+    // Later runs of the same incident keep it
+    run_now(&e, &g.id).await;
+    let (_, v) = send(&e, "GET", "/api/goals", None, None, None).await;
+    let row = v["goals"].as_array().unwrap().iter().find(|x| x["id"] == json!(g.id)).cloned().unwrap();
+    assert_eq!(row["incident_since"], json!(first), "the list row says the same time");
+    // It passes again: no incident, no time
+    std::fs::write(e.folder.join("ok.txt"), "x").unwrap();
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    let (_, v) = send(&e, "GET", &format!("/api/goals/{}", g.id), None, None, None).await;
+    assert_eq!(v["goal"]["incident_since"], Value::Null);
+}
+
+#[tokio::test]
+async fn g_q_32_with_one_confirming_run_the_since_is_that_run() {
+    let e = setup().await;
+    std::fs::write(e.folder.join("ok.txt"), "x").unwrap();
+    let g = goal_with(&e, "Site is up", &e.folder.to_string_lossy(), "watch", 2, "ok.txt", 1).await;
+    assert_eq!(run_now(&e, &g.id).await.status, "met");
+    std::fs::remove_file(e.folder.join("ok.txt")).unwrap();
+    assert_eq!(run_now(&e, &g.id).await.status, "not_met");
+    let broke = e.state.db.goal_events(&g.id, 50).await.unwrap().into_iter().find(|ev| ev.kind == "not_met").unwrap();
+    assert_eq!(broke.detail_value()["since"], json!(broke.created_at), "the confirming run is the first failure");
+    let (_, v) = send(&e, "GET", &format!("/api/goals/{}", g.id), None, None, None).await;
+    assert_eq!(v["goal"]["incident_since"], json!(broke.created_at));
+}

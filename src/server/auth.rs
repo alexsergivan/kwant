@@ -1025,6 +1025,7 @@ mod tests {
         assert!(person_only(&get, "/api/pockets/abcdef"));
         assert!(person_only(&del, "/api/pockets/abcdef"));
         assert!(person_only(&post, "/api/pockets/abcdef/host-key"));
+        assert!(person_only(&post, "/api/pockets/abcdef/when"));
         assert!(!person_only(&get, "/api/pocket/abcdef/state"), "the guest API isn't on the main port at all");
         assert!(person_only(&get, "/api/glance"));
         assert!(person_only(&post, "/api/glance/ask"));
