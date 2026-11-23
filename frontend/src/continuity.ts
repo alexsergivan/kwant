@@ -84,6 +84,8 @@ export interface Routine {
   last_status: RunStatus | null;
   /** 28f: the last run's reason, sent from 28b round 2 (absent on older servers, where the card badge reads as before). */
   last_error?: string | null;
+  /** routine-answered-later: the last run's question was answered after it ended (absent on older servers). */
+  last_answered_later?: boolean;
   created_at: string;
   /** The schedule in the server's words, e.g. "monthly on day 1 at 09:00 Europe/Berlin". */
   schedule_text?: string;
@@ -105,6 +107,8 @@ export interface RoutineRun {
   status: RunStatus;
   error: string | null;
   message_id: string | null;
+  /** routine-answered-later: the run ended waiting on a question the person answered later (absent on older servers). */
+  answered_later?: boolean;
 }
 
 export interface RoutineInput {

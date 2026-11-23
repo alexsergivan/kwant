@@ -245,6 +245,10 @@ pub struct RoutineRow {
     pub last_status: Option<String>,
     /// The last run's error (28b round 2); `None` with no run or none recorded.
     pub last_error: Option<String>,
+    /// routine-answered-later: the last run's question was answered after the run ended (see
+    /// [`RoutineRun::answered_later`]).
+    #[sqlx(default)]
+    pub last_answered_later: bool,
     /// Its kwant's space; the channel, when set, is in the same one.
     pub space_id: String,
     /// Delivers into this thread of its kwant (then `channel_id` is empty).
@@ -275,6 +279,10 @@ pub struct RoutineRun {
     /// A line for the run's history, e.g. "Ran late: Pixel was paused at its monthly budget." (G2)
     #[sqlx(default)]
     pub note: Option<String>,
+    /// routine-answered-later: the run ended waiting on a question (`needs_you`, the question
+    /// error) and the person answered it later. Status and error stay as they were.
+    #[sqlx(default)]
+    pub answered_later: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -302,7 +310,9 @@ const ROUTINE_SELECT: &str = "SELECT r.id, r.kwant_id, r.channel_id, r.name, r.i
      r.next_run_at, r.last_run_at, r.created_at, r.space_id, r.thread_id, r.context_message_id, \
      r.origin, r.suggestion_id, r.task_class, r.acceptance, r.checks, \
      (SELECT status FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_status, \
-     (SELECT error FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_error \
+     (SELECT error FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_error, \
+     EXISTS (SELECT 1 FROM questions q WHERE q.status = 'answered' AND q.routine_run_id = \
+       (SELECT id FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1)) AS last_answered_later \
      FROM routines r";
 
 impl Database {
@@ -1139,6 +1149,7 @@ impl Database {
             error: error.map(Into::into),
             message_id: None,
             note: None,
+            answered_later: false,
         })
     }
 
@@ -1219,8 +1230,9 @@ impl Database {
         limit: i64,
     ) -> Result<Vec<RoutineRun>, DbError> {
         Ok(sqlx::query_as::<_, RoutineRun>(
-            "SELECT id, routine_id, trigger, started_at, ended_at, status, error, message_id, note FROM routine_runs \
-             WHERE routine_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?",
+            "SELECT id, routine_id, trigger, started_at, ended_at, status, error, message_id, note, \
+             EXISTS (SELECT 1 FROM questions q WHERE q.routine_run_id = routine_runs.id AND q.status = 'answered') AS answered_later \
+             FROM routine_runs WHERE routine_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?",
         )
         .bind(routine_id)
         .bind(limit.clamp(1, MAX_RUNS_KEPT))

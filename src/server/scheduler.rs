@@ -64,6 +64,9 @@ pub struct RoutineView {
     /// The last run's error, e.g. "You said no to Bash; nothing ran" (28b round 2), so the routine
     /// card can tell a no from a failure. `null`: no run yet, or it had none.
     pub last_error: Option<String>,
+    /// routine-answered-later: the last run's question was answered after it ended, so the
+    /// card's header badge reads "Answered later".
+    pub last_answered_later: bool,
     pub created_at: DateTime<Utc>,
     /// The schedule in words, e.g. "monthly on the 1st at 09:00 Europe/Berlin".
     pub schedule_text: String,
@@ -106,6 +109,7 @@ impl From<RoutineRow> for RoutineView {
             last_run_at: r.last_run_at,
             last_status: r.last_status,
             last_error: r.last_error,
+            last_answered_later: r.last_answered_later,
             created_at: r.created_at,
         }
     }
@@ -847,10 +851,12 @@ fn take(left: &mut Vec<&str>, tool: &str) -> bool {
 /// The meta key of a routine run's id on each reply of its turn (see `run_routine_turn`).
 pub(super) const ROUTINE_RUN_KEY: &str = "routine_run";
 
-/// What a run's own replies show: their steps, and the id of the last one.
+/// What a run's own replies show: their steps, the id of the last one, and the questions
+/// (`ask_user` ids) they left unanswered.
 struct OwnReplies {
     steps: Vec<StepSeen>,
     last_id: Option<String>,
+    questions: Vec<String>,
 }
 
 /// The bot's replies after the routine's message (`prompt_id`) that belong to run `run_id` (its
@@ -865,7 +871,7 @@ async fn own_replies(
     run_id: &str,
 ) -> OwnReplies {
     let messages = state.db.list_messages(chat, 40).await.unwrap_or_default();
-    let mut own = OwnReplies { steps: Vec::new(), last_id: None };
+    let mut own = OwnReplies { steps: Vec::new(), last_id: None, questions: Vec::new() };
     let Some(start) = messages.iter().position(|m| m.id == prompt_id) else {
         return own;
     };
@@ -882,9 +888,21 @@ async fn own_replies(
             continue;
         }
         own.steps.extend(steps_seen(parse(&m.tool_calls).as_ref(), meta.as_ref()));
+        own.questions.extend(unanswered_questions(meta.as_ref()));
         own.last_id = Some(m.id.clone());
     }
     own
+}
+
+/// routine-answered-later: the ids of the questions a reply's activity (`meta.activity`) shows
+/// unanswered (`activity.rs` `question_unanswered`: kind "question", the question id in `ref_id`).
+fn unanswered_questions(meta: Option<&serde_json::Value>) -> Vec<String> {
+    meta.and_then(|m| m["activity"]["steps"].as_array())
+        .into_iter()
+        .flatten()
+        .filter(|s| s["kind"] == "question" && s["status"] == "unanswered")
+        .filter_map(|s| s["ref_id"].as_str().map(str::to_string))
+        .collect()
 }
 
 /// 26b: routine runs whose turn is going, by bot and chat (one reply per bot per chat at a time),
@@ -1019,9 +1037,18 @@ async fn execute(state: &AppState, routine: &RoutineRow, run_id: &str) -> Result
     .await?;
     drop(in_chat);
     let own = own_replies(state, &chat, &kwant.name, &saved.id, run_id).await;
+    let outcome = run_outcome(&own.steps);
+    // routine-answered-later: a run that ends waiting on its questions is linked to them, so
+    // answering one later (on its card, in the chat or elsewhere) shows on the run's History row.
+    // Linked before the run's status is written: an answer in between still counts
+    if outcome.1.as_deref() == Some(QUESTION_ERROR) {
+        if let Err(e) = state.db.link_questions_to_run(&own.questions, run_id).await {
+            tracing::warn!(error = %e, run_id, "could not link the run's open questions");
+        }
+    }
     // The run's own last reply; the turn's answer is the chat's latest reply by the bot, which
     // can be another run's when two share the chat
-    Ok(Ran { reply_id: own.last_id.or(reply_id), outcome: run_outcome(&own.steps) })
+    Ok(Ran { reply_id: own.last_id.or(reply_id), outcome })
 }
 
 /// The chat id a routine delivers to: its thread, its channel, or its bot's direct chat.
@@ -1298,6 +1325,22 @@ mod run_outcome_tests {
         assert_eq!(run_outcome(&seen), ("needs_you", Some(QUESTION_ERROR.into())));
         let card = json!({"activity": {"steps": [{"kind": "approval", "tool": "ask_user", "status": "unanswered"}]}});
         assert_eq!(run_outcome(&steps_seen(None, Some(&card))), ("needs_you", Some(NEEDS_YOU_ERROR.into())));
+    }
+
+    /// routine-answered-later: only a reply's unanswered question steps name the questions its run
+    /// is linked to; an approval card's ticket or an answered ask never does.
+    #[test]
+    fn a_reply_names_only_its_unanswered_questions() {
+        let meta = json!({"activity": {"steps": [
+            {"kind": "question", "tool": "ask_user", "status": "unanswered", "ref_id": "q1"},
+            {"kind": "approval", "tool": "Bash", "status": "unanswered", "ref_id": "ticket1"},
+            {"kind": "tool", "tool": "mcp__kwnt__ask_user", "status": "ok", "ref_id": "q0"},
+            {"kind": "question", "tool": "ask_user", "status": "unanswered"},
+            {"kind": "question", "tool": "ask_user", "status": "unanswered", "ref_id": "q2"},
+        ]}});
+        assert_eq!(unanswered_questions(Some(&meta)), vec!["q1".to_string(), "q2".to_string()]);
+        assert!(unanswered_questions(None).is_empty());
+        assert!(unanswered_questions(Some(&json!({}))).is_empty());
     }
 
     /// A step the person said no to on its card (28b).
