@@ -135,6 +135,8 @@ import {
   writingBadge,
   threadsApi,
   turnsIn,
+  rereadDue,
+  unlistedLive,
   upsertThread,
 } from './threads';
 import { createStreamText, NO_STREAM } from './streamText';
@@ -1107,35 +1109,66 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       });
     }, () => undefined);
     try {
-      const { turns: list } = await threadsApi.turns();
-      const map = hydrateTurns(list);
-      setDeciding(hydrateDeciding(list));
-      for (const t of Object.values(map)) if (t.thread_id) knownThreadsRef.current.add(t.thread_id);
-      turnsRef.current = map;
-      setTurns(map);
-      resetTurns(Object.values(map).filter((t) => t.state === 'running'));
-      // A page opened (or back) mid-turn: what each running bot is doing now, not "getting started".
-      let seeded = activityRef.current;
-      for (const t of Object.values(map)) {
-        const next = t.state === 'running' ? seedActivity(seeded[t.turn_id], t.turn_id, t.activity) : null;
-        if (next) seeded = { ...seeded, [t.turn_id]: { ...next, ctx: t.context_id } };
-      }
-      if (seeded !== activityRef.current) setActivityMap(seeded);
-      const busy = new Set(Object.values(map).map((t) => t.context_id));
-      for (const ctx of Object.keys(liveRef.current)) {
-        if (!busy.has(ctx) && !discussionInProgressRef.current) clearLive(ctx);
-      }
-      // The strip names the bot that is replying: queued turns first, so a running one in the same chat wins.
-      for (const t of liveNamingOrder(Object.values(map))) markLiveKwant(t.context_id, t.kwant_id);
-      // Titles for the "working on" badges
-      for (const t of Object.values(map)) {
-        if (t.thread_id && !threadsByKwantRef.current[t.kwant_id]) loadThreads(t.kwant_id);
-      }
+      await rereadTurns();
     } catch {
       clearAllTurns();
     }
     setTurnsHydrated((n) => n + 1);
   };
+
+  /** Bumped by every live turn event, so a re-read that a newer event overtook is dropped. */
+  const turnEventsRef = useRef(0);
+  /**
+   * The running turns from the server; chats no longer listed stop showing a reply. On every connect,
+   * and (stuck-getting-started, 0.9.51) when the window comes back and after Stop: a `turn_ended` the
+   * app missed left a chat "getting started" for hours. `fresh`: dropped when a live turn event came
+   * in while it loaded (that event is newer than the list).
+   */
+  const rereadTurns = async (fresh = false) => {
+    const seen = turnEventsRef.current;
+    const { turns: list } = await threadsApi.turns();
+    if (fresh && turnEventsRef.current !== seen) return;
+    const map = hydrateTurns(list);
+    setDeciding(hydrateDeciding(list));
+    for (const t of Object.values(map)) if (t.thread_id) knownThreadsRef.current.add(t.thread_id);
+    turnsRef.current = map;
+    setTurns(map);
+    resetTurns(Object.values(map).filter((t) => t.state === 'running'));
+    // A page opened (or back) mid-turn: what each running bot is doing now, not "getting started".
+    let seeded = activityRef.current;
+    for (const t of Object.values(map)) {
+      const next = t.state === 'running' ? seedActivity(seeded[t.turn_id], t.turn_id, t.activity) : null;
+      if (next) seeded = { ...seeded, [t.turn_id]: { ...next, ctx: t.context_id } };
+    }
+    if (seeded !== activityRef.current) setActivityMap(seeded);
+    for (const ctx of unlistedLive(liveRef.current, map)) {
+      if (!discussionInProgressRef.current) clearLive(ctx);
+    }
+    // The strip names the bot that is replying: queued turns first, so a running one in the same chat wins.
+    for (const t of liveNamingOrder(Object.values(map))) markLiveKwant(t.context_id, t.kwant_id);
+    // Titles for the "working on" badges
+    for (const t of Object.values(map)) {
+      if (t.thread_id && !threadsByKwantRef.current[t.kwant_id]) loadThreads(t.kwant_id);
+    }
+  };
+  const rereadTurnsRef = useRef(rereadTurns);
+  rereadTurnsRef.current = rereadTurns;
+  // Back to the window (focus, or the tab shown again): what runs now, at most every few seconds.
+  useEffect(() => {
+    let last = 0;
+    const onBack = () => {
+      const now = Date.now();
+      if (!rereadDue(last, now, document.visibilityState === 'hidden')) return;
+      last = now;
+      rereadTurnsRef.current(true).catch(() => undefined);
+    };
+    window.addEventListener('focus', onBack);
+    document.addEventListener('visibilitychange', onBack);
+    return () => {
+      window.removeEventListener('focus', onBack);
+      document.removeEventListener('visibilitychange', onBack);
+    };
+  }, []);
 
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
   // Team that a newly created bot should join (set by a team's "Add member")
@@ -1389,6 +1422,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
     const setTurnMap = (next: TurnMap) => {
       if (next === turnsRef.current) return;
+      turnEventsRef.current += 1;
       turnsRef.current = next;
       setTurns(next);
     };
@@ -2055,9 +2089,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setRoutingState(null);
       streamingContextIdRef.current = null;
     }
-    refreshContext(ctx).then(() => {
-      if (turnsIn(turnsRef.current, ctx).length === 0) clearLive(ctx);
-    });
+    // stuck-getting-started (0.9.51): the running turns again first. A turn whose end the app missed
+    // stayed in its list, so Stop never cleared the chat
+    refreshContext(ctx)
+      .then(() => rereadTurns(true))
+      .catch(() => undefined)
+      .then(() => {
+        if (turnsIn(turnsRef.current, ctx).length === 0) clearLive(ctx);
+      });
   };
 
   const handleSendMessage = async (text: string, attachments: AttachmentRef[] = [], opts: SendOptions = {}): Promise<boolean | string> => {
