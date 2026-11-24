@@ -284,7 +284,8 @@ export function formatClock(ms: number): string {
   return h > 0 ? `${h}:${String(m).padStart(2, '0')}:${sec}` : `${m}:${sec}`;
 }
 
-/** "Worked 0:41 · 12 steps" (the strip's last time, same start), "1 step", plus "· 2 failed" when any failed,
+/** "Worked 0:41 · 12 steps" (the strip's last time, same start), "1 step", plus "· 2 failed" when the turn ended on a
+ *  failed step, "· 1 retried" when the bot went on past one (36a),
  *  "· 1 didn't run" when an approval went unanswered (26d) and "· you said no to 1" when the person denied a call (28a).
  *  Counts read the rows Details draws: a folded card and its command count once (28t). */
 export function activitySummary(a: SavedActivity): string {
@@ -293,8 +294,11 @@ export function activitySummary(a: SavedActivity): string {
   const steps = `${n} ${n === 1 ? 'step' : 'steps'}`;
   const span = activitySpan(a.steps);
   const parts = span !== null && span >= 1000 ? [`Worked ${formatClock(span)}`, steps] : [steps];
-  const failed = a.steps.filter((s) => s.status === 'failed').length;
+  // 36a: a failed step the bot went on past reads "retried"; "failed" counts only the steps the turn ended on.
+  const retried = retriedSteps(a.steps, false);
+  const failed = a.steps.filter((s) => s.status === 'failed' && !retried.has(s.id)).length;
   if (failed) parts.push(`${failed} failed`);
+  if (retried.size) parts.push(`${retried.size} retried`);
   // Raw status, not shownStatus: a human step nobody finished in time (28n) doesn't count here.
   // Read the folded rows Details draws, so a card and its command count once (28t).
   const unanswered = foldAnswers(a.steps).rows.filter((s) => s.status === 'unanswered').length;
@@ -311,12 +315,43 @@ const timedOutHumanStep = (s: ActivityStep) => s.kind === 'human_step' && s.outc
  * The status a step is drawn with (icon, chip). 28n: a human step nobody finished in time looks like an approval
  * nobody answered (⏱, amber) instead of ✓ Done. `status` itself stays `ok`, so counts and follow-through are as before.
  */
-export function shownStatus(s: ActivityStep): StepStatus {
+export function shownStatus(s: ActivityStep, retried = false): ShownStatus {
+  if (retried && s.status === 'failed') return 'retried';
   return timedOutHumanStep(s) ? 'unanswered' : s.status;
 }
 
+/** 36a: how a step is drawn. `retried` is a failed step the bot went on past (see `retriedSteps`). */
+export type ShownStatus = StepStatus | 'retried';
+
+/** The steps that show the bot carried on after a failure: a question, an approval, a human step or another tool. */
+const CARRIES_ON: ReadonlySet<StepKind> = new Set(['tool', 'approval', 'human_step', 'question']);
+
+/**
+ * 36a one-status-steps: the failed steps that read "Retried" (grey) instead of "Failed" (rose). While the turn runs
+ * (`live`) every failed step does: the turn hasn't ended on it. On a saved reply a failed step does when a later
+ * tool, approval, human step or question shows the bot carried on; one the turn ended on stays "Failed". Notes and
+ * thinking after it don't count. Draw time only: `status` stays `failed`, so follow-through reads the steps as before.
+ */
+export function retriedSteps(steps: readonly ActivityStep[], live: boolean): Set<string> {
+  const out = new Set<string>();
+  let later = false;
+  for (let i = steps.length - 1; i >= 0; i--) {
+    const s = steps[i];
+    if (s.status === 'failed' && s.kind !== 'note' && (live || later)) out.add(s.id);
+    if (CARRIES_ON.has(s.kind)) later = true;
+  }
+  return out;
+}
+
+/** 36a: " · 1 retried" for the live rows, or "" (every failed step of a running turn is retried). */
+export const retriedNote = (steps: readonly ActivityStep[], live: boolean): string => {
+  const n = retriedSteps(steps, live).size;
+  return n ? ` · ${n} retried` : '';
+};
+
 /** What a step's status reads as, for screen readers and the row's label. */
-export function statusLabel(s: ActivityStep): string {
+export function statusLabel(s: ActivityStep, retried = false): string {
+  if (retried && s.status === 'failed') return 'Retried';
   if (timedOutHumanStep(s)) return 'Not done in time';
   switch (s.status) {
     case 'running':

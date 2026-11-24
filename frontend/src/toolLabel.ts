@@ -296,3 +296,78 @@ export function homePhrase(h: HomeAction, form: 'base' | 'ing' | 'past'): string
   const head = sp ? `${sp[1]} something ${sp[2]}` : /\bthe\b/.test(words) ? words : `${words} something`;
   return [head, h.rest].filter(Boolean).join(' ');
 }
+
+// ---- 36a one-status-steps: shell steps in plain words ----
+
+/** The command a shell step ran, from its title (server `summarize`: "Running `…`", cut at 80 with "…"), or null. */
+export function shellCommandOf(title: string): string | null {
+  const m = /^Running `([\s\S]+)`$/.exec(title.trim());
+  return m ? m[1] : null;
+}
+
+/** ssh options that take a value (OpenSSH), so the value isn't read as the host. */
+const SSH_VALUE_OPTS = new Set('BbcDEeFIiJLlmOoPpQRSWw'.split(''));
+
+/**
+ * The host an `ssh` command connects to ("root@203.0.113.66" → "203.0.113.66"), or null when the command isn't
+ * ssh or the host isn't plain (letters, digits, dots, dashes, colons for IPv6). Words only: nothing is resolved.
+ */
+export function sshHost(cmd: string): string | null {
+  const words = cmd.trim().split(/\s+/);
+  if (!words.length || !/(^|\/)(ssh|mosh)$/.test(words[0])) return null;
+  for (let i = 1; i < words.length; i++) {
+    const w = words[i];
+    if (w === '--') {
+      i++;
+      if (i < words.length) return plainHost(words[i]);
+      return null;
+    }
+    if (w.startsWith('-') && w.length > 1) {
+      // "-p 22" takes the next word; "-p22" and "-oX=Y" carry their own; flags like "-tt" take none.
+      const last = w[w.length - 1];
+      if (w.length === 2 && SSH_VALUE_OPTS.has(last)) i++;
+      continue;
+    }
+    return plainHost(w);
+  }
+  return null;
+}
+
+function plainHost(dest: string): string | null {
+  let h = dest.replace(/^ssh:\/\//, '').replace(/^['"]|['"]$/g, '');
+  h = h.slice(h.lastIndexOf('@') + 1).replace(/\/.*$/, '');
+  if (/^\[[0-9a-fA-F:.]+\](:\d+)?$/.test(h)) h = h.slice(1, h.indexOf(']'));
+  else if (/^[^:]+:\d+$/.test(h)) h = h.slice(0, h.indexOf(':'));
+  return /^[A-Za-z0-9][A-Za-z0-9.\-_:]{0,252}$/.test(h) ? h : null;
+}
+
+/** Words that say a command couldn't reach its host (ssh, curl, git), so a retried step can say "didn't connect". */
+const NO_CONNECT = /connection (timed out|refused|reset|closed)|could not resolve|no route to host|network is unreachable|operation timed out|connect to host|timed out/i;
+
+/**
+ * 36a: a shell step's title in words, with the host it ran on when it is ssh ("Running a command on 203.0.113.66").
+ * A step the bot retried after says what happened: "A command on 203.0.113.66 didn't connect, so Quant tried again".
+ * `host` is set so the row can set it in bold. Null for any other step (its title stays as readableStepTitle makes it).
+ */
+export function plainShellTitle(step: { title: string; detail?: string }, retried = false, who?: string): { text: string; host: string | null } | null {
+  const cmd = shellCommandOf(step.title);
+  if (!cmd) return null;
+  const host = sshHost(cmd);
+  if (retried) {
+    const verb = NO_CONNECT.test(step.detail ?? '') ? 'didn’t connect' : 'didn’t work';
+    const name = who?.trim() || 'the bot';
+    return { text: `${host ? `A command on ${host}` : 'A command'} ${verb}, so ${name} tried again`, host };
+  }
+  return { text: host ? `Running a command on ${host}` : 'Running a command', host };
+}
+
+/**
+ * 36a: the command behind "Show command": the step's detail when it is the whole command (a running or finished
+ * step), else the title's (cut at 80, ending "…"; a failed step's detail is its error, not the command).
+ */
+export function shellCommandText(step: { title: string; detail?: string }): string | null {
+  const cmd = shellCommandOf(step.title);
+  if (!cmd) return null;
+  const head = cmd.endsWith('…') ? cmd.slice(0, -1) : cmd;
+  return step.detail && step.detail.startsWith(head) ? step.detail : cmd;
+}

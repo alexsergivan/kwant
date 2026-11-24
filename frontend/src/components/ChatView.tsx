@@ -2257,7 +2257,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             >
               {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
               {savedActivity && (
-                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`} openRequest={detailsAsk[msg.id]} focusStep={outcome?.stepId ?? null}>
+                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`} openRequest={detailsAsk[msg.id]} focusStep={outcome?.stepId ?? null} who={displayName}>
                   {msg.tool_calls && (
                     <div className="border-t border-zinc-800/60 p-2">
                       <ToolCallsList raw={msg.tool_calls} />
@@ -2726,6 +2726,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       idBase={`live-${liveActivity.turnId}`}
       compact={phone}
       folded={stepsBelow}
+      who={liveSpeaker}
       lead={
         livePages.length > 0 ? (
           <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
