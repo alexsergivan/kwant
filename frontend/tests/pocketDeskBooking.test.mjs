@@ -223,6 +223,15 @@ test('each booking state draws its chip, Booking Desk label, and holo never show
   }
 });
 
+test('the who line says how long ago the guest asked, never a bare length', async () => {
+  const v = await deskCard('requests', { open: null });
+  const cards = [...v.host.querySelectorAll('[data-booking-allow="open"]')].map((c) => c.textContent);
+  assert.match(cards[0], /asked 10:32 AM · 1 hour ago/);
+  assert.match(cards[1], /asked 11:05 AM · 35 min ago/);
+  v.done();
+  mounted.delete(v);
+});
+
 test('requests: at most 3 cards, oldest first, then N more opens the Inbox', async () => {
   stub();
   const v = await deskCard('manyRequests');
@@ -374,7 +383,11 @@ test('edit times: a lock tap shows the refusal and keeps the editor open; 409 sl
   await click(act(w, 'save-times'));
   await settle();
   assert.match(w.host.querySelector('[data-refusal]')?.textContent ?? '', /Emma/);
-  assert.ok(w.host.querySelector('[data-slot="2026-12-02T10:00"][data-refused]'), 'the time gets the warn ring');
+  const ring = w.host.querySelector('[data-slot="2026-12-02T10:00"][data-refused]');
+  assert.ok(ring, 'the time gets the warn ring');
+  // Design check FIX 1/3: the warn border beats the requested chip's sky border; no ring animation under reduced motion.
+  assert.match(ring.className, /!border-\[color-mix\(in_srgb,var\(--kw-warn\)/);
+  assert.match(ring.className, /motion-reduce:transition-none/);
   await settle();
   assert.equal(posts()[0][2].name, 'set_slots');
   assert.ok(act(w, 'save-times'), 'editor stays open');

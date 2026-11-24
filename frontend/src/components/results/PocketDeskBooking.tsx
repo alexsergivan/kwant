@@ -59,17 +59,17 @@ const stamp = (s: string | null | undefined) => {
   const t = Date.parse(s);
   return Number.isNaN(t) ? null : t;
 };
-/** "1 hour", "6 min", "2 days": how long ago, for "asked 11:32 AM · 1 hour". */
+/** "8 min ago", "1 hour ago": how long ago, for "asked 11:32 AM · 8 min ago" (says "ago" so it doesn't read as a booking length). */
 function ago(at: string | null): string | null {
   const t = stamp(at);
   if (t === null) return null;
   const m = Math.max(0, Math.round((bookingClock.now().getTime() - t) / 60_000));
   if (m < 1) return 'just now';
-  if (m < 60) return `${m} min`;
+  if (m < 60) return `${m} min ago`;
   const h = Math.round(m / 60);
-  if (h < 24) return h === 1 ? '1 hour' : `${h} hours`;
+  if (h < 24) return h === 1 ? '1 hour ago' : `${h} hours ago`;
   const d = Math.round(h / 24);
-  return d === 1 ? '1 day' : `${d} days`;
+  return d === 1 ? '1 day ago' : `${d} days ago`;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -122,14 +122,14 @@ export function refusalLine(start: string, slot: DeskSlot | null, name?: string 
 // ---------------------------------------------------------------------------------------------------
 // One time: a chip (design "Chip sizes"; booking.css .sl)
 
-const CHIP = 'relative flex min-h-[44px] min-w-0 items-center gap-1.5 rounded-lg border px-2 text-[14px] font-semibold tabular-nums transition-shadow duration-120 sm:min-h-[32px] sm:text-[13px]';
+const CHIP = 'relative flex min-h-[44px] min-w-0 items-center gap-1.5 rounded-lg border px-2 text-[14px] font-semibold tabular-nums transition-shadow duration-120 motion-reduce:transition-none sm:min-h-[32px] sm:text-[13px]';
 const TONE = {
   open: 'border-hairline-strong bg-surface-main text-zinc-100',
   past: 'border-transparent bg-transparent font-medium text-zinc-500',
   req: 'border-dashed border-sky-400 bg-sky-500/[0.14] text-zinc-100',
   ok: 'border-[color-mix(in_srgb,var(--kw-ok)_45%,transparent)] bg-[color-mix(in_srgb,var(--kw-ok)_8%,var(--kw-surface-main))] text-zinc-100',
 };
-const REFUSE = 'border-[color-mix(in_srgb,var(--kw-warn)_70%,transparent)] shadow-[0_0_0_3px_color-mix(in_srgb,var(--kw-warn)_18%,transparent)]';
+const REFUSE = '!border-[color-mix(in_srgb,var(--kw-warn)_70%,transparent)] shadow-[0_0_0_3px_color-mix(in_srgb,var(--kw-warn)_18%,transparent)]';
 const CTRL = '-mr-2 ml-auto inline-grid h-11 w-11 shrink-0 place-items-center rounded-md text-zinc-400 hover:bg-white/[0.06] hover:text-zinc-100 kw-focus sm:mr-0 sm:h-5 sm:w-5';
 
 export type SlotState = 'open' | 'past' | 'req' | 'ok';
@@ -867,7 +867,7 @@ export const OddAllow: React.FC<{
         {head}
       </h4>
       {quote ? <Quote name={name} quote={quote} /> : null}
-      {a?.phase === 'failed' && <Failed text={missing ? `Booking for a guest needs a newer kwant on this Mac. Write ${name} a reply instead.` : failText(a.error, name)} />}
+      {a?.phase === 'failed' && <Failed text={missing ? `Booking for a guest isn’t on this Mac yet. Write ${name} a reply instead.` : failText(a.error, name)} />}
       {writing ? (
         <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
           <label className="sr-only" htmlFor={`odd-${k}`}>
