@@ -730,7 +730,8 @@ export class DeskApp {
     }
     // K6: after "can't do", with no booking now, the next step is right there.
     const lastBook = [...v.messages].reverse().find((m) => m.note?.startsWith('book'));
-    if (bk && !v.my_booking && lastBook?.note === 'booking_declined') {
+    const declined = !!(bk && !v.my_booking && lastBook?.note === 'booking_declined');
+    if (declined) {
       const again = h('button', { type: 'button', class: 'gsmall pri again', 'data-k': 'pk-open-again', 'data-pick-again': '' }, dIcon('cal'), book.pick_again);
       again.addEventListener('click', () => this.openPick('', 'pk-open-again'));
       items.push(again);
@@ -753,10 +754,11 @@ export class DeskApp {
       pill.setAttribute('hidden', '');
     });
     const empty = !v.messages.some((m) => m.from === 'guest') && !this.outbox.items.length;
-    // pa13b K4/K5: while a time is held the mockup shows no starters at all; the strip is the next step.
-    const quick = empty && !slow && !(bk && v.my_booking) ? v.starters : [];
+    // pa13b K4/K5: while a time is held the mockup shows no starters at all; the strip is the next step. K6: nor while
+    // "Pick another time" shows (Mira's design check FIX 1: one picker button).
+    const quick = empty && !slow && !(bk && v.my_booking) && !declined ? v.starters : [];
     // pa13b K2: "Pick a time" comes first, and stays while the guest has no booking (with nothing open it opens K8).
-    const pickChip = bk && !v.my_booking;
+    const pickChip = bk && !v.my_booking && !declined;
     let starters: HTMLElement | null = null;
     if (quick.length || pickChip) {
       const chips = quick.map((s) => {

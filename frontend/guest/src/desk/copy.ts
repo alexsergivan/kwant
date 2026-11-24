@@ -71,13 +71,13 @@ export function sayCopy(r: Fail): string {
 
 export const book = {
   join_say: (n: Names, what?: string): string =>
-    what ? `Pick a time for ${what} and ${n.host} will confirm it here. Ask me anything about the studio too.` : `Pick a time and ${n.host} will confirm it here. Ask me anything too.`,
+    what ? `Pick a time for ${what} and ${n.host} will confirm it here. Ask me anything else too.` : `Pick a time and ${n.host} will confirm it here. Ask me anything too.`,
   join_button: 'See open times',
   join_nobook: (n: Names): string => `${n.bot} can't book you. You ask for a time and ${n.host} confirms it. Nothing to pay here.`,
   /** `days` is the box's keep_days (7 in the design). */
   keep_booking: (n: Names, days = 7): string =>
     `${n.Host} and ${n.hosts} bot, ${n.bot}, read this chat. Messages are deleted ${fmt(days)} day${days === 1 ? '' : 's'} after your last one, or the day after your booking if that's later.`,
-  hello: (name: string, n: Names): string => `Hi ${name}! I'm ${n.bot}, ${n.hosts} bot. Pick a time and ${n.host} will confirm it, or ask me about the studio.`,
+  hello: (name: string, n: Names): string => `Hi ${name}! I'm ${n.bot}, ${n.hosts} bot. Pick a time and ${n.host} will confirm it, or ask me anything else.`,
   starter_pick: 'Pick a time',
   sheet_title: 'Pick a time',
   day_open: (count: number): string => `${fmt(count)} open`,
@@ -104,13 +104,13 @@ export const book = {
   no_slot: (n: Names): string => `${n.Host} changed the times. Pick again.`,
   ended_title: (n: Names): string => (n.anon ? 'Bookings are closed' : `${n.Host} closed bookings`),
   ended_booked: (n: Names): string => `Your booking stays · confirmed by ${n.host}`,
-  ended_change: (n: Names): string => `To change it, write to ${n.host} the way you found the studio.`,
+  ended_change: (n: Names): string => `To change it, write to ${n.host} the way you found this page.`,
   /** Not in the copy table: K11 for a guest with no booking. */
-  ended_none: (n: Names): string => `For anything else, write to ${n.host} the way you found this page.`,
+  ended_none: (n: Names): string => `If ${n.host} confirmed a time for you, it stays. For anything else, write to ${n.host} the way you found this page.`,
   ended_keep: (date: string): string => `Your messages are deleted on ${date}, the day after your booking.`,
   offers_label: (n: Names): string => `Times ${n.bot} found`,
   /** Not in the copy table (Vega's request limit, 429 slow_down): flagged for Mira in pa13b-guest-impl.md. */
-  slow: (time: string): string => (time ? `That's a lot of requests for one hour. You can ask again at ${time}.` : "That's a lot of requests for one hour. You can ask again soon."),
+  slow: (time: string): string => (time ? `That's a lot of requests this hour. You can ask again at ${time}.` : "That's a lot of requests this hour. You can ask again soon."),
   /** Not in the copy table: a note over limits.note_max_chars (the page checks first; 413 too_long says the same). */
   note_long: (max: number): string => `A note can be up to ${fmt(max)} characters.`,
   /** Not in the copy table: any other refusal of a request or a cancel. */

@@ -443,6 +443,8 @@ test('K6 declined: Pick another time opens the sheet', async () => {
   const t = await open('desk-book-declined');
   const again = t.$('[data-pick-again]');
   assert.ok(again);
+  assert.equal(t.root.querySelectorAll('[data-pick-again], [data-pick-open]').length, 1, 'one picker button (no starter row beside it)');
+  assert.equal(t.$('.gstart'), null);
   again.click();
   await flush();
   assert.ok(t.$('[data-sheet]'));
