@@ -489,7 +489,8 @@ async fn only_the_hosts_confirm_makes_a_booking_confirmed() {
     let prompt = invocations_with(&b64(fake)).pop().expect("Ann's turn");
     assert!(prompt.contains("only the host confirms"), "{prompt}");
     assert!(
-        prompt.contains("This guest's booking: Morning cut, requested"),
+        prompt.contains("(Morning cut), requested, waiting for")
+            && prompt.contains("This guest's booking: "),
         "{prompt}"
     );
     assert!(prompt.contains("payment details"), "{prompt}");

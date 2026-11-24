@@ -641,6 +641,13 @@ fn messages(g: Option<&G>, with_client_ids: bool) -> Vec<Value> {
                 if let Some(n) = &m.note {
                     v["note"] = json!(n);
                 }
+                // pa13b: a booking note names its slot and start (design: thread notes)
+                if let Some(x) = &m.slot {
+                    v["slot"] = json!(x);
+                }
+                if let Some(x) = &m.start {
+                    v["start"] = json!(x);
+                }
                 if with_client_ids {
                     if let Some(c) = &m.client_id {
                         v["client_id"] = json!(c);
