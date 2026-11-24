@@ -1094,7 +1094,11 @@ export const WallCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
         )}
         <ul className="flex flex-col gap-2">
           {w.state === 'open' && (
-            <Row icon={<ShieldCheck size={15} aria-hidden="true" />}>You approve each photo before it shows on the TV or anyone's phone.</Row>
+            <Row icon={<ShieldCheck size={15} aria-hidden="true" />}>
+              {stage === 'ready'
+                ? 'Nothing shows on the TV or other phones until you approve it. Location and camera details are removed when a photo arrives.'
+                : "You approve each photo before it shows on the TV or anyone's phone."}
+            </Row>
           )}
           <Row icon={<Download size={15} aria-hidden="true" />}>{keepLine(w)}</Row>
           {stage === 'picking' && (
@@ -1136,23 +1140,27 @@ export const WallCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
                     ) : (
                       <ul>
                         {undo && !undoGroup && <UndoRow u={undo} onUndo={undoHide} />}
-                        {groups.map((g) => {
+                        {groups.map((g, gi) => {
                           if (budget <= 0) return null;
                           const rows = g.photos.slice(0, budget);
                           budget -= rows.length;
+                          const n = g.photos.filter((p) => !pending[p.id]).length;
                           return (
                             <li key={g.by} data-group={g.name}>
-                              {g.photos.filter((p) => !pending[p.id]).length > 1 && (
-                                <div className="flex items-center gap-2.5 border-b border-hairline bg-sky-500/[0.05] px-3.5 py-2.5 text-[14px] text-zinc-200 sm:text-[13px]">
+                              {n > 0 && (
+                                <div className={`flex min-h-[44px] items-center gap-2.5 border-b border-hairline bg-sky-500/[0.05] px-3.5 py-0 text-[14px] text-zinc-200 sm:text-[13px] ${gi > 0 ? 'border-t' : ''}`} data-group-header>
                                   <WallCreature n={g.creature} />
                                   <span className="min-w-0 flex-1 truncate">
                                     <b className="font-semibold text-zinc-50">{g.name}</b>
-                                    <span className="max-sm:sr-only"> · {num(g.photos.filter((p) => !pending[p.id]).length)} waiting</span>
+                                    {/* With 2+ the Approve all button carries the count on phones; with 1 the header does. */}
+                                    <span className={n > 1 ? 'max-sm:sr-only' : ''}> · {num(n)} waiting</span>
                                   </span>
-                                  <button type="button" onClick={() => approveAll(g)} className={`kw-btn-ghost ${HALF} ml-auto`} data-action="approve-all">
-                                    <Check size={14} aria-hidden="true" />
-                                    Approve all {num(g.photos.filter((p) => !pending[p.id]).length)}
-                                  </button>
+                                  {n > 1 && (
+                                    <button type="button" onClick={() => approveAll(g)} className={`kw-btn-ghost ${HALF} ml-auto`} data-action="approve-all">
+                                      <Check size={14} aria-hidden="true" />
+                                      Approve all {num(n)}
+                                    </button>
+                                  )}
                                 </div>
                               )}
                               <ul>

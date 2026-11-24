@@ -370,6 +370,23 @@ const JOIN_TEXT: Record<PocketJoinMode, { label: string; body: string; limit: st
     limit: 'Uses a free Cloudflare quick link: a new address each time and no uptime promise. Fine for a quiz night of up to 60 players.',
   },
 };
+/** The Photo wall's join copy (pa14 card-design-check 1). Quiz keeps JOIN_TEXT. */
+const WALL_JOIN_TEXT: Record<PocketJoinMode, { label: string; body: string; limit: string }> = {
+  wifi: {
+    label: 'Same Wi-Fi',
+    body: "Guests on your Wi-Fi scan the code and add photos in their phone's browser. No app, no account.",
+    limit: "Phones on mobile data can't reach your Wi-Fi. At a venue, pick From anywhere.",
+  },
+  anywhere: {
+    label: 'From anywhere',
+    body: "Guests on Wi-Fi or mobile data scan the code and add photos in their phone's browser. No app, no account.",
+    limit: 'Uses a free Cloudflare quick link: a new address each time and no uptime promise. Fine for a party of up to 60 guests.',
+  },
+};
+const joinCopy = (block: PocketBlock) =>
+  block.wall
+    ? { heading: 'How guests add photos', text: WALL_JOIN_TEXT, hint: 'Print the QR for the tables, or put it on the TV: the slideshow shows it in a corner.' }
+    : { heading: 'How friends join', text: JOIN_TEXT, hint: null };
 const urlFor = (join: NonNullable<PocketBlock['join']>, mode: PocketJoinMode) => (mode === 'wifi' ? join.wifi_url : join.anywhere_url);
 
 
@@ -379,6 +396,7 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
   const radios = useRef<Array<HTMLButtonElement | null>>([]);
   const labelId = useId();
   const modes: PocketJoinMode[] = ['wifi', 'anywhere'];
+  const copy = joinCopy(block);
   const onKey = (e: React.KeyboardEvent) => {
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
     e.preventDefault();
@@ -395,7 +413,7 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
       ) : null}
       <div className="flex min-w-0 flex-1 flex-col gap-2.5">
         <div id={labelId} className="text-[13px] font-semibold text-zinc-200 sm:text-meta">
-          How friends join
+          {copy.heading}
         </div>
         <div role="radiogroup" aria-labelledby={labelId} onKeyDown={onKey} className="inline-flex self-start rounded-xl border border-hairline-strong bg-surface-rail p-1">
           {modes.map((m, i) => {
@@ -415,13 +433,18 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
                 }`}
               >
                 <Icon size={14} aria-hidden="true" />
-                {JOIN_TEXT[m].label}
+                {copy.text[m].label}
               </button>
             );
           })}
         </div>
-        <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">{JOIN_TEXT[mode].body}</p>
-        <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">{JOIN_TEXT[mode].limit}</p>
+        <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">{copy.text[mode].body}</p>
+        <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">{copy.text[mode].limit}</p>
+        {copy.hint && (
+          <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-join-hint>
+            {copy.hint}
+          </p>
+        )}
         {url ? <LinkField url={url} /> : <NoLinkYet mode={mode} />}
       </div>
     </div>
@@ -1049,7 +1072,7 @@ export const Pocket: React.FC<RendererProps<PocketBlock>> = (props) =>
     <QuizPocket {...props} />
   );
 
-/** The Wall's Ready state uses the quiz's join box (QR, Same Wi-Fi / From anywhere, Copy link). */
+/** The Wall's Ready state uses the quiz's join box (QR, Same Wi-Fi / From anywhere, Copy link) with the wall's own copy. */
 const WallJoin: React.FC<{ block: PocketBlock }> = ({ block }) => {
   const [mode, setMode] = useState<PocketJoinMode>(block.join?.mode === 'anywhere' && block.join.anywhere_url ? 'anywhere' : 'wifi');
   return <JoinBox block={block} mode={mode} setMode={setMode} />;

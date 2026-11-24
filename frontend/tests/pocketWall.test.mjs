@@ -212,6 +212,39 @@ test('the queue: groups per guest, 5 rows then "Show 4 more waiting", counts and
   assert.match(v.host.textContent, /Hide takes a photo off the TV and every phone at once and deletes it\./);
 });
 
+test('every guest in the queue gets a group row, N = 1 too, with no Approve all for one photo', async () => {
+  box('waiting');
+  const v = await card('waiting');
+  const heads = [...v.host.querySelectorAll('[data-group-header]')];
+  const groupsWithRows = [...v.host.querySelectorAll('[data-group]')].filter((li) => li.querySelector('[data-row]'));
+  assert.equal(heads.length, groupsWithRows.length, 'one header per guest with rows shown');
+  const one = heads.find((hd) => / · 1 waiting/.test(hd.textContent));
+  assert.ok(one, 'a guest with 1 waiting has a header');
+  assert.ok(!one.querySelector('[data-action="approve-all"]'), 'no Approve all for 1');
+  assert.ok(!one.querySelector('.max-sm\\:sr-only'), 'the count stays visible on phones for 1');
+  assert.match(one.className, /min-h-\[44px\]/);
+  assert.match(one.className, /border-t/, 'a hairline above a later group');
+  assert.equal(rows(v).length, 5, 'the 5-row cap counts photos, not headers');
+});
+
+test('Ready: the wall join box speaks of guests and photos, with the hint and the strip promise; quiz is unchanged', async () => {
+  const v = await inChat('ready');
+  const t = v.host.textContent;
+  assert.match(t, /How guests add photos/);
+  assert.doesNotMatch(t, /How friends join|quiz night|play in their phone/);
+  assert.match(t, /Print the QR for the tables, or put it on the TV: the slideshow shows it in a corner\./);
+  assert.match(t, /Nothing shows on the TV or other phones until you approve it\. Location and camera details are removed when a photo arrives\./);
+  assert.match(t, /Guests on Wi-Fi or mobile data scan the code and add photos in their phone's browser\. No app, no account\./);
+  assert.match(t, /Fine for a party of up to 60 guests\./);
+  const wifi = [...v.host.querySelectorAll('[role="radio"]')].find((r) => r.textContent.includes('Same Wi-Fi'));
+  await click(wifi);
+  assert.match(v.host.textContent, /Guests on your Wi-Fi scan the code and add photos in their phone's browser\. No app, no account\./);
+  assert.match(v.host.textContent, /At a venue, pick From anywhere\./);
+  const q = await mount(h(m.MarkdownRenderer, { content: 'x', results: { version: 1, blocks: [structuredClone(Object.values(m.POCKET_FIXTURES).find((f) => f.results?.blocks?.[0]?.join?.wifi_url)?.results.blocks[0])] }, messageId: 'm-quiz' }));
+  assert.match(q.host.textContent, /How friends join/);
+  assert.doesNotMatch(q.host.textContent, /How guests add photos|Print the QR for the tables/);
+});
+
 test('approve is optimistic: the row goes and counts move at once; on failure it comes back with a plain line', async () => {
   let release;
   const gate = new Promise((r) => (release = r));
