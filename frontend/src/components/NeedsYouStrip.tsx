@@ -102,15 +102,26 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
   // Leaving: the last ask fades for 120 ms (none under reduced motion) instead of vanishing mid-read.
   const [ghost, setGhost] = useState<AwayItem[] | null>(null);
   const prevAsks = useRef<AwayItem[]>(asks);
+  // chat-gap-scroll: the fade's timer lives in a ref, not in the effect's cleanup. The parent passes a new `asks`
+  // array on every render, so a cleanup-owned timer was cancelled by any re-render inside the 120 ms (the stream
+  // starting, the inbox refetch) and the ghost stayed mounted, invisible and full height, above the composer.
+  const ghostTimer = useRef<number | null>(null);
+  const stopGhostTimer = () => {
+    if (ghostTimer.current !== null) window.clearTimeout(ghostTimer.current);
+    ghostTimer.current = null;
+  };
+  useEffect(() => stopGhostTimer, []);
   const shown = asks.length ? asks : ghost ?? [];
   const leaving = !asks.length && !!ghost;
   useLayoutEffect(() => {
     const before = prevAsks.current;
     prevAsks.current = asks;
-    if (asks.length || !before.length) {
-      if (asks.length) setGhost(null);
+    if (asks.length) {
+      stopGhostTimer();
+      setGhost(null);
       return;
     }
+    if (!before.length) return;
     // The strip is going: focus that was in it goes to the composer, never to the page body.
     if (hadFocus.current) {
       hadFocus.current = false;
@@ -118,8 +129,11 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
     }
     if (!motionOk()) return;
     setGhost(before);
-    const t = window.setTimeout(() => setGhost(null), 120);
-    return () => window.clearTimeout(t);
+    stopGhostTimer();
+    ghostTimer.current = window.setTimeout(() => {
+      ghostTimer.current = null;
+      setGhost(null);
+    }, 120);
   }, [asks]);
 
   const i = stripIndex(shown, shownId.current, index);
