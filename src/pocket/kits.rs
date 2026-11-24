@@ -176,6 +176,11 @@ pub trait Kit: Send + Sync + 'static {
     fn tick(&self, _ctx: &mut KitCtx, _state: &mut Value) -> bool {
         false
     }
+    /// Host actions that still work after the pocket ended, while its data is kept (pa14b: the
+    /// Wall's `set_best`, so the host can show the best 30 picked the morning after). None by default.
+    fn host_actions_after_end(&self) -> &'static [&'static str] {
+        &[]
+    }
     /// `true` when the kit's timers must run even while nobody watches (a draw or a reveal
     /// weeks away): the sweeper then ticks its open pockets once a minute.
     fn ticks_unwatched(&self) -> bool {

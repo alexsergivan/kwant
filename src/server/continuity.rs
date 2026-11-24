@@ -498,6 +498,8 @@ pub(crate) const READ_ONLY_SELF_TOOLS: &[&str] = &[
     BROWSER_CITE,
     "task_list",
     "tier_status",
+    // pa14b: small previews of a wall's approved photos, only while its bot picks the best 30
+    crate::pocket::wall_pick::TOOL_PHOTOS,
 ];
 
 #[async_trait]
@@ -535,6 +537,8 @@ impl ToolApprover for SelfToolsApprover {
             || req.tool == super::tool_notes::TOOL
             // A goal proposal only writes a draft; the person approves it on the board (30x)
             || req.tool == super::goals::tool::TOOL
+            // pa14b: the best-30 proposal only waits for the host, who shows it or not
+            || req.tool == crate::pocket::wall_pick::TOOL_PROPOSE
             || super::missions::auditor::take_retry(&req.kwant_id, &req.tool, &req.arguments);
         if req.server == SELF_SERVER_NAME && free {
             // Flight School: a tier below act cards kwant's own tools that change things
@@ -626,6 +630,12 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
             list.extend(super::quizmaster_tools::tools());
         }
     }
+    // pa14b: a wall's two pick tools, only while this bot picks a wall's best 30
+    if crate::pocket::wall_pick::picking_bot(state, &scope.kwant_id) {
+        if let Some(list) = tools.as_array_mut() {
+            list.extend(crate::pocket::wall_pick::tools());
+        }
+    }
     if super::missions::foundry::enabled(state).await && matches!(state.db.drafting_run_of(&scope.kwant_id).await, Ok(Some(_))) {
         if let Some(list) = tools.as_array_mut() {
             list.push(super::missions::foundry::tool());
@@ -649,6 +659,11 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
     if super::quizmaster_tools::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::quizmaster_tools::tools());
+        }
+    }
+    if crate::pocket::wall_pick::picking_bot(state, &scope.kwant_id) {
+        if let Some(list) = tools.as_array_mut() {
+            list.extend(crate::pocket::wall_pick::tools());
         }
     }
     tools.as_array().map(|a| a.iter().filter_map(|t| t["name"].as_str().map(String::from)).collect()).unwrap_or_default()
@@ -1351,6 +1366,9 @@ pub async fn self_endpoint(
                 super::attachments::tool_read(&state, &scope, args).await
             } else if name == BROWSER_SCREENSHOT {
                 browser_screenshot_tool(&state, &scope, args).await
+            } else if crate::pocket::wall_pick::handles(name) {
+                // pa14b: previews come back as image blocks
+                crate::pocket::wall_pick::call(&state, &scope.kwant_id, name, args).await
             } else {
                 let (text, is_error) = call_tool(&state, &scope, name, args).await;
                 (json!([{"type": "text", "text": text}]), is_error)
