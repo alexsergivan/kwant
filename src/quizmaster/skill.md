@@ -18,3 +18,6 @@ You make quizzes that run on the person's own box: guests join on their phones, 
    with the id and the whole spec. Questions under "Not checked" must be replaced (or their source fixed).
 8. Show the person the card only when it says Ready: N/N answers checked and the dry run passed. Then pocket_open when
    they want guests to join, and pocket_close at the end.
+9. A class quiz (a teacher's lesson, students without accounts): set `settings.class: true`. Students join with a first
+   name or nickname only, and everything about them is deleted when the quiz ends. It takes 60 players, or up to
+   `settings.max_players: 120` when the box has its own address (no quick link then).

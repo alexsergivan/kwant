@@ -12,6 +12,8 @@ pub enum NameError {
     Empty,
     TooLong,
     NotAllowed,
+    /// A class quiz (pa11): more than two words, or an email or phone number shape.
+    NotFirstName,
 }
 
 impl NameError {
@@ -20,6 +22,7 @@ impl NameError {
             NameError::Empty => "name_empty",
             NameError::TooLong => "name_too_long",
             NameError::NotAllowed => "name_not_allowed",
+            NameError::NotFirstName => "name_first_only",
         }
     }
 
@@ -28,6 +31,7 @@ impl NameError {
             NameError::Empty => "Type a name.",
             NameError::TooLong => "Names are at most 20 characters.",
             NameError::NotAllowed => "Pick another name.",
+            NameError::NotFirstName => "First name or nickname only, please: no surname, email or phone number.",
         }
     }
 }
@@ -55,6 +59,27 @@ pub fn clean_name(raw: &str) -> Result<(String, String), NameError> {
         return Err(NameError::NotAllowed);
     }
     Ok((shown, key))
+}
+
+/// Digits in a name from which it reads as a phone number (a nickname like "Kid2012" has 4).
+const PHONE_DIGITS: usize = 6;
+
+/// A class quiz's extra rule (pa11, plan rule 9) on a name [`clean_name`] already let through:
+/// one or two words, no `@` (an email), and fewer than 6 digits (a phone number). It can't tell
+/// a first name plus surname from a two-word nickname, so two words are fine; the page asks for a
+/// first name or nickname, and the host removes the rest with one tap.
+///
+/// The name is NFKC-folded first, so full-width digits and the compatibility at signs (`＠`, the
+/// small `﹫`) count as their plain forms, and a digit is any Unicode digit (Arabic-Indic,
+/// Devanagari and the rest), not ASCII only (pa11 qa F2).
+pub fn first_name_only(shown: &str) -> Result<(), NameError> {
+    let folded: String = shown.nfkc().collect();
+    let words = folded.split_whitespace().count();
+    let digits = folded.chars().filter(|c| c.is_numeric()).count();
+    if words > 2 || folded.contains('@') || digits >= PHONE_DIGITS {
+        return Err(NameError::NotFirstName);
+    }
+    Ok(())
 }
 
 /// Short guest text other guests see (team names, later answers on a big screen): same filter.
@@ -169,6 +194,28 @@ fn is_format(c: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_class_quiz_takes_first_names_or_nicknames() {
+        for ok in ["Mia", "Big Sam", "Zoë", "Leo B", "Kid2012", "J-P", "Ana-María"] {
+            assert_eq!(first_name_only(ok), Ok(()), "{ok}");
+        }
+        for bad in ["Mia Rose Jones", "mia@school.org", "mia＠school", "07700 900123", "+447700900123", "Mia 0770090", "a b c"] {
+            assert_eq!(first_name_only(bad), Err(NameError::NotFirstName), "{bad}");
+        }
+        assert_eq!(NameError::NotFirstName.code(), "name_first_only");
+    }
+
+    #[test]
+    fn other_digits_and_at_signs_count_too() {
+        // qa F2: full-width and Arabic-Indic phone numbers, the small at sign, a 3-word NBSP name
+        for bad in ["０７７００９００１２３", "٠٧٧٠٠٩٠٠١٢٣", "०७७००९००१२", "mia﹫school.org", "Mia\u{A0}Rose\u{A0}Jones"] {
+            assert_eq!(first_name_only(bad), Err(NameError::NotFirstName), "{bad}");
+        }
+        for ok in ["12345", "Kid２０１２", "Žofia", "李小龙", "Mary Ann"] {
+            assert_eq!(first_name_only(ok), Ok(()), "{ok}");
+        }
+    }
 
     #[test]
     fn names() {

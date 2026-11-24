@@ -236,9 +236,12 @@ impl Provenance {
 ///
 /// `state` is the card's: `writing`, `checking`, `dry_run_stopped`, `ready`, `live` (an open
 /// pocket) or `ended` (a closed one). `draft` is the quiz_drafts id the card's Edit questions
-/// opens, and `yours` the questions the person wrote or changed themselves. `live`, `join`,
-/// `ended`, `budget` and `results` are always null on this block today (the frontend's optional
-/// parts); [`validate`] refuses anything else.
+/// opens, and `yours` the questions the person wrote or changed themselves. `live`, `ended`,
+/// `budget` and `results` are always null on this block today (the frontend's optional parts);
+/// [`validate`] refuses anything else. `join` is null too, except on a ready or live pocket that
+/// is never offered a quick link (a class quiz over 60, pa11): then it is
+/// `{mode: "anywhere", wifi_url: null, anywhere_url: null, quick_tunnel: false}`. `notice` is the
+/// kit's own line (a class quiz's), absent otherwise.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pocket {
     pub id: String,
@@ -281,6 +284,9 @@ pub struct Pocket {
     pub draft: Option<String>,
     #[serde(default)]
     pub yours: Option<u64>,
+    /// pa11: the kit's line shown before anyone types (`pocket.notice`); absent on the wire when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub notice: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

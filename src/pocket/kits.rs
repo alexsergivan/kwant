@@ -11,6 +11,10 @@ use serde_json::{json, Value};
 
 /// Players a pocket takes unless its kit asks for fewer (quick tunnels cap requests in flight).
 pub const DEFAULT_MAX_PLAYERS: usize = 60;
+/// The most a kit may raise [`Kit::player_ceiling`] to (a class quiz, pa11). A pocket over
+/// [`DEFAULT_MAX_PLAYERS`] is never offered a quick tunnel: it needs an address that stays the
+/// same (own https, Funnel or Same Wi-Fi).
+pub const STABLE_MAX_PLAYERS: usize = 120;
 
 /// How long a kit keeps guest data (plan section 8 rule 11). The sweeper deletes the pocket, its
 /// players, keys and events once `expires_at` passes; deleting is final.
@@ -67,7 +71,8 @@ pub struct KitRules {
     pub retention: Retention,
     /// Joining picks a 4-digit PIN and rejoining needs it (Secret Santa).
     pub needs_pin: bool,
-    /// At most [`DEFAULT_MAX_PLAYERS`]; the core clamps a bigger number.
+    /// At most [`Kit::player_ceiling`] ([`DEFAULT_MAX_PLAYERS`] unless the kit raises it); the
+    /// core clamps a bigger number.
     pub max_players: usize,
     /// Action names a guest may send; anything else is a 400.
     pub guest_actions: &'static [&'static str],
@@ -181,6 +186,22 @@ pub trait Kit: Send + Sync + 'static {
     /// or Same Wi-Fi (pa6).
     fn stable_address_only(&self) -> bool {
         false
+    }
+    /// The most players this spec may take (pa11): [`DEFAULT_MAX_PLAYERS`], or up to
+    /// [`STABLE_MAX_PLAYERS`] for a kit that allows more (a class quiz). The core clamps
+    /// `rules().max_players` to it, and a pocket over 60 gets no quick tunnel.
+    fn player_ceiling(&self, _spec: &Value) -> usize {
+        DEFAULT_MAX_PLAYERS
+    }
+    /// `true` when joining takes a first name or nickname only (pa11 class quiz, plan rule 9):
+    /// [`super::words::first_name_only`] refuses longer names and email or phone shapes.
+    fn first_names_only(&self, _spec: &Value) -> bool {
+        false
+    }
+    /// A plain line the guest page and the person's card show before anyone types (plan rules 9
+    /// and 11), beside the retention line. `None` (the default): nothing beyond retention.
+    fn notice(&self, _spec: &Value) -> Option<&'static str> {
+        None
     }
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value;
     /// What anyone with the link sees before joining (`info`, and the page's boot without a
