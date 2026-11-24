@@ -519,8 +519,18 @@ fn check_pocket(p: &super::Pocket) -> Result<(), String> {
             check_text(t, max, what)?;
         }
     }
-    if !p.rounds.is_empty() || p.live.is_some() || p.join.is_some() || p.ended.is_some() || p.budget.is_some() || p.results.is_some() {
+    if !p.rounds.is_empty() || p.live.is_some() || p.ended.is_some() || p.budget.is_some() || p.results.is_some() {
         return Err("a pocket part kwant doesn't fill".into());
+    }
+    // pa11: the only join kwant fills says "no quick link" on a ready or live card
+    if let Some(j) = &p.join {
+        let no_quick = serde_json::json!({ "mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false });
+        if *j != no_quick || !matches!(p.state.as_str(), "ready" | "live") {
+            return Err("a pocket part kwant doesn't fill".into());
+        }
+    }
+    if let Some(n) = &p.notice {
+        check_text(n, super::pocket::NOTICE_MAX, "pocket notice")?;
     }
     if p.draft.as_deref().is_some_and(|d| !id_like(d, 64)) {
         return Err("pocket draft".into());

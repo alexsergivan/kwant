@@ -271,7 +271,8 @@ impl QuizGame {
         &self.option_order[q]
     }
     pub(crate) fn max_players(&self) -> usize {
-        self.spec.settings.max_players.unwrap_or(MAX_PLAYERS).min(MAX_PLAYERS) as usize
+        let s = &self.spec.settings;
+        s.max_players.unwrap_or(MAX_PLAYERS).min(s.player_ceiling()) as usize
     }
     pub(crate) fn player(&self, id: &str) -> Option<&Player> {
         self.players.iter().find(|p| p.id == id)

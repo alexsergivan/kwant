@@ -433,3 +433,46 @@ async fn without_an_origin_only_the_notification_goes() {
     );
     assert!(cards(&t.state, &k).await.is_empty());
 }
+
+/// pa11 qa F3: a pocket that keeps nothing after it ends and finishes by itself is ended by the
+/// run's own tick, a moment after the run's `now`; its results still reach the chat without names.
+#[tokio::test]
+async fn a_keep_nothing_pocket_that_finishes_by_itself_never_shows_names() {
+    let t = setup().await;
+    let k = bot(&t, "Quizmaster").await;
+    let code = make(&t, json!({ "title": "Two rounds", "final_round": 2, "retention": "at_end" }), origin(&k), None).await;
+    join(&t, &code, CANARY).await;
+    pocket::act(&t.state, &code, &Viewer::Host, "advance", &json!({})).await.unwrap();
+    pocket::act(&t.state, &code, &Viewer::Host, "advance", &json!({})).await.unwrap();
+    // The tick's `now` is taken before the run ends the pocket
+    let now = Utc::now();
+    let ran = schedule::run_once(&t.state, now).await;
+    assert_eq!((ran.ended, ran.results.clone()), (1, vec![code.clone()]));
+    let c = cards(&t.state, &k).await;
+    assert_eq!(c.len(), 1);
+    assert!(!c[0].2.to_string().contains("Zyxqv"), "a guest's name reached the chat for a tick: {}", c[0].2);
+    assert!(c[0].2["block"]["results"]["names_deleted_at"].is_string());
+    assert_eq!(pocket::sweep(&t.state, now + Duration::minutes(1)).await.deleted, 1);
+}
+
+/// pa11 qa F1: an open pocket that keeps nothing after it ends, with no closing time, is ended
+/// 12 hours after it opened (results posted without names, then swept). One that keeps its data
+/// after it ends, or has its own closing time, is left to that.
+#[tokio::test]
+async fn a_keep_nothing_pocket_nobody_ends_is_ended_after_12_hours() {
+    let t = setup().await;
+    let k = bot(&t, "Quizmaster").await;
+    let lost = make(&t, json!({ "title": "Lost quiz", "retention": "at_end" }), origin(&k), None).await;
+    let kept = make(&t, json!({ "title": "Kept quiz" }), origin(&k), None).await;
+    join(&t, &lost, CANARY).await;
+    join(&t, &kept, "Mia").await;
+    let start = Utc::now();
+    assert_eq!(schedule::run_once(&t.state, start + Duration::hours(11) + Duration::minutes(59)).await.ended, 0);
+    let now = start + pocket::AT_END_MAX_OPEN + Duration::minutes(1);
+    let ran = schedule::run_once(&t.state, now).await;
+    assert_eq!((ran.ended, ran.results.clone()), (1, vec![lost.clone()]), "only the keep-nothing pocket");
+    assert!(!cards(&t.state, &k).await.iter().any(|c| c.2.to_string().contains("Zyxqv")));
+    assert_eq!(pocket::sweep(&t.state, now).await.deleted, 1);
+    assert_eq!(t.state.db.pocket_row_counts(&lost).await.unwrap(), [0, 0, 0, 0]);
+    assert_eq!(t.state.db.pocket_get(&kept).await.unwrap().unwrap().state, "open");
+}

@@ -224,7 +224,7 @@ pub type PResult<T> = Result<T, PocketError>;
 
 fn effective_rules(kit: &dyn Kit, spec: &Value) -> KitRules {
     let mut r = kit.rules(spec);
-    r.max_players = r.max_players.clamp(1, kits::DEFAULT_MAX_PLAYERS);
+    r.max_players = r.max_players.clamp(1, kit.player_ceiling(spec).min(kits::STABLE_MAX_PLAYERS));
     r
 }
 
@@ -283,6 +283,8 @@ pub fn pocket_json(s: &Snapshot) -> Value {
         "max_players": rules.as_ref().map(|r| r.max_players),
         "needs_pin": rules.as_ref().is_some_and(|r| r.needs_pin),
         "retention": rules.as_ref().map(|r| r.retention.describe()),
+        "first_names_only": s.kit().is_some_and(|k| k.first_names_only(&s.spec)),
+        "notice": s.kit().and_then(|k| k.notice(&s.spec)),
     });
     if private {
         out["players"] = Value::Null;
@@ -433,6 +435,20 @@ async fn fill_answer_bot(state: &AppState, req: &mut CreateRequest) -> PResult<(
         spec.insert("bot".into(), json!({ "name": bot.name, "sprite": desk::SPRITE }));
     }
     Ok(())
+}
+
+/// How long a pocket that keeps nothing after it ends (`Retention::AtEnd`, a class quiz) may stay
+/// open with no closing time before the minute tick ends it for the host (pa11 qa F1): a lesson
+/// is long over by then, and a quiz nobody pressed End on must not keep its players for good.
+pub const AT_END_MAX_OPEN: chrono::Duration = chrono::Duration::hours(12);
+
+/// `true` for an open `AtEnd` pocket with no closing time that opened [`AT_END_MAX_OPEN`] or more
+/// before `now`. A pocket with a closing time is ended at that time instead.
+pub fn abandoned(s: &Snapshot, now: DateTime<Utc>) -> bool {
+    s.row.state == OPEN
+        && s.row.closes_at.is_none()
+        && s.rules().is_some_and(|r| matches!(r.retention, kits::Retention::AtEnd))
+        && s.row.opens_at.unwrap_or(s.row.created_at).max(s.row.created_at) + AT_END_MAX_OPEN <= now
 }
 
 /// Ends an open pocket and sets when its data goes (from the kit's retention).
@@ -660,6 +676,9 @@ pub async fn join(state: &AppState, code: &str, req: JoinRequest) -> PResult<(Pl
     let rules = effective_rules(kit, &s.spec);
     let now = Utc::now();
     open_check(&s, now)?;
+    if kit.first_names_only(&s.spec) {
+        words::first_name_only(&name).map_err(|e| PocketError::new(StatusCode::BAD_REQUEST, e.code(), e.message()))?;
+    }
     let pin = match (rules.needs_pin, req.pin.as_deref()) {
         (true, Some(p)) if keys::valid_pin(p) => Some(p),
         (true, _) => return Err(PocketError::new(StatusCode::BAD_REQUEST, "pin_required", "Pick a 4-digit PIN.")),
