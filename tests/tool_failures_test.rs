@@ -113,7 +113,7 @@ async fn a_401_posts_one_line_with_a_fix_link_and_needs_you_until_it_works() {
     );
     assert_eq!(v["cause"], "sign_in");
     assert_eq!(v["needs_you"], true);
-    assert_eq!(v["fix"], json!({"label": "Reconnect", "opens": "connections", "connection_id": format!("mcp:{}", gh.id)}));
+    assert_eq!(v["fix"], json!({"label": "Sign in again", "opens": "connections", "connection_id": format!("mcp:{}", gh.id)}));
     assert_eq!(v["tool"], "github · list_issues");
     // The line comes before the turn's reply
     let all = messages(&env, &env.a).await;

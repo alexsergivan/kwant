@@ -1,6 +1,6 @@
 // 0.9.5: the line kwnt posts in a chat when one of a bot's connections fails (meta kind
 // "tool_failure", see src/server/tool_failures.rs): "Gmail stopped working for Ben: it needs to be
-// connected again. Reconnect". One per connection per turn; nothing when a retry fixed it.
+// connected again. Connect again". One per connection per turn; nothing when a retry fixed it.
 import { parseMetaObject } from './questions';
 
 export type ToolFailureCause = 'sign_in' | 'reconnect' | 'not_started' | 'down';
@@ -22,6 +22,14 @@ export interface ToolFailureMeta {
   /** 34g: closed because the connection was deleted ("Removed."), not because it works again. */
   removed: boolean;
 }
+
+/**
+ * 34h: one name for the fix everywhere (chat line, Inbox): "Sign in again" for an expired sign-in,
+ * "Connect again" for an app to connect again (Composio), and the server's own word otherwise.
+ * By cause, so lines posted before 0.9.47 (label "Reconnect") read the same.
+ */
+export const fixLabel = (cause: string | null | undefined, label?: string | null): string =>
+  cause === 'sign_in' ? 'Sign in again' : cause === 'reconnect' ? 'Connect again' : label || 'Check it';
 
 const CAUSES: readonly ToolFailureCause[] = ['sign_in', 'reconnect', 'not_started', 'down'];
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null);

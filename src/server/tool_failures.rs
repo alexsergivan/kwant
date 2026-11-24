@@ -66,11 +66,12 @@ impl Cause {
         matches!(self, Cause::SignIn | Cause::Reconnect)
     }
 
+    /// 34h: one name for the fix everywhere (frontend toolFailures.ts fixLabel, away.ts itemLabel).
     fn fix_label(self) -> &'static str {
-        if self.needs_you() {
-            "Reconnect"
-        } else {
-            "Check it"
+        match self {
+            Cause::SignIn => "Sign in again",
+            Cause::Reconnect => "Connect again",
+            Cause::NotStarted | Cause::Down => "Check it",
         }
     }
 }

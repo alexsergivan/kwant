@@ -18,6 +18,7 @@ pub mod keys;
 pub mod kits;
 pub mod limits;
 pub mod listener;
+pub mod quiz_kit;
 pub mod santa;
 pub mod schedule;
 pub mod tunnel;
@@ -783,7 +784,12 @@ pub async fn act(state: &AppState, code: &str, actor: &Viewer, name: &str, body:
     let mut kit_state = s.kit_state.clone();
     let mut ctx = KitCtx::new(&s.spec, &s.players, now);
     kit.act(&mut ctx, &mut kit_state, actor, name, body).map_err(kit_refusal)?;
-    save(state, code, &kit_state, ctx, now).await
+    save(state, code, &kit_state, ctx, now).await?;
+    // pa3b: a guest's quiz answer may be a near miss; the live judge looks at it off this request
+    if matches!(actor, Viewer::Guest(_)) && name == "answer" {
+        crate::server::quizmaster_live::after_answer(state, code, kit.id());
+    }
+    Ok(())
 }
 
 fn kit_refusal(e: KitError) -> PocketError {
@@ -791,6 +797,23 @@ fn kit_refusal(e: KitError) -> PocketError {
         KitError::BadInput(m) => PocketError::new(StatusCode::BAD_REQUEST, "bad_action", m),
         KitError::NotNow(m) => PocketError::new(StatusCode::CONFLICT, "not_now", m),
     }
+}
+
+/// pa3b: the bot's strict judge settles a near miss (`{q, player, verdict}`) under the pocket's
+/// lock, then saves and pushes views like a host action. Server side only: no route calls this.
+pub async fn judge(state: &AppState, code: &str, body: &Value) -> PResult<()> {
+    let lock = state.pocket.lock_for(code);
+    let _g = lock.lock().await;
+    let s = snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
+    let kit = s.kit().ok_or_else(PocketError::not_found)?;
+    if s.row.state == ENDED {
+        return Err(PocketError::new(StatusCode::GONE, "ended", "This pocket app has ended."));
+    }
+    let now = Utc::now();
+    let mut kit_state = s.kit_state.clone();
+    let mut ctx = KitCtx::new(&s.spec, &s.players, now);
+    kit.judge(&mut ctx, &mut kit_state, body).map_err(kit_refusal)?;
+    save(state, code, &kit_state, ctx, now).await
 }
 
 /// The host removes a player: their keys stop working and the kit forgets them.
