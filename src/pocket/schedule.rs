@@ -388,7 +388,9 @@ pub async fn run_once(state: &AppState, now: DateTime<Utc>) -> Ran {
     let mut to_end = state.db.pocket_past_closing(now).await.unwrap_or_default();
     for code in state.db.pocket_codes_open().await.unwrap_or_default() {
         if let Ok(Some(s)) = super::snapshot(state, &code).await {
-            if s.kit().is_some_and(|k| k.finished(&s.kit_state)) && !to_end.contains(&code) {
+            // A finished kit, or a pocket that keeps nothing and nobody ended (pa11 qa F1)
+            let done = s.kit().is_some_and(|k| k.finished(&s.kit_state)) || super::abandoned(&s, now);
+            if done && !to_end.contains(&code) {
                 to_end.push(code);
             }
         }
@@ -496,7 +498,9 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
         Some(o) => {
             let mut block = ended_block(&s, row.as_ref(), &zone);
             // Data that is deleted as the pocket ends (or already due) never reaches the chat with names
-            let expiring = s.row.expires_at.is_some_and(|e| e <= now);
+            // (or expires the moment it ended: `AtEnd`, even when this run ended it a moment
+            // after `now`, so the names never show for a tick; pa11 qa F3)
+            let expiring = s.row.expires_at.is_some_and(|e| e <= now || s.row.ended_at.is_some_and(|t| e <= t));
             if expiring {
                 blank_names(&mut block, now);
             }

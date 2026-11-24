@@ -831,3 +831,106 @@ export function draftCardFixture(d: ReturnType<typeof quizDraftFixture>) {
     next: null,
   };
 }
+
+// ---------------------------------------------------------------------------------------------------
+// pa14 Wall: the card in every state of pa14/design.md §1, and the host views the box answers with.
+// Names, counts, sizes and addresses are made up, after Mira's card-states-1440.html.
+const WALL_CODE = 'wl8m3q';
+const WALL_WIFI = `http://192.168.1.20:7480/p/${WALL_CODE}`;
+const WALL_ANYWHERE = `https://photos.example-box.net/p/${WALL_CODE}`;
+const wallBase = {
+  state: 'open',
+  closes_at: 'Sun 12 PM',
+  delete_on: 'Tue, Jan 5',
+  host_name: 'Oleks',
+  captions: true,
+  best_set: false,
+  best_by: null,
+  counts: { total: 0, waiting: 0, approved: 0, hidden: 0, guests: 0, senders: 0 },
+  used_mb: 0,
+  pocket_cap_mb: 1024,
+  best: [],
+  best_max: 30,
+  keep_days: 30,
+  photo_cap_mb: 15,
+  per_guest_max: 40,
+};
+const wallFixture = (reply: string, state: 'live' | 'ended', wall: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: `pocket:${WALL_CODE}` },
+    code: WALL_CODE,
+    kit: 'wall',
+    name: 'Mia & Jonas’s wedding',
+    when: 'Sat, Dec 5 · photos until Sun 12 PM',
+    state,
+    join: state === 'live' ? { mode: 'anywhere', wifi_url: WALL_WIFI, anywhere_url: WALL_ANYWHERE } : null,
+    budget: { calls: 2, usd: 0.01 },
+    wall: { ...wallBase, ...wall },
+  });
+/** Approved photo ids of a closed wall, newest first. */
+export const WALL_IDS = Array.from({ length: 212 }, (_, i) => `ph_w${String(212 - i).padStart(3, '0')}`);
+const best30 = WALL_IDS.filter((_, i) => i % 7 === 0).slice(0, 30);
+const live = (waiting: number, approved: number, hidden: number, used_mb: number) => ({
+  counts: { total: waiting + approved + hidden, waiting, approved, hidden, guests: 34, senders: 22 },
+  used_mb,
+});
+const closed = { state: 'closed', counts: { total: 214, waiting: 0, approved: 212, hidden: 2, guests: 41, senders: 41 }, used_mb: 905 };
+export const WALL_FIXTURES = {
+  ready: wallFixture("Your photo wall is ready. Share the link or put the QR on the tables; photos wait for you before anyone sees them.", 'live', {}),
+  waiting: wallFixture('9 new photos are waiting. Mia sent 4 in a row; you can approve all of hers at once.', 'live', live(9, 119, 1, 452)),
+  caughtUp: wallFixture("You're all caught up. 128 photos are on the wall.", 'live', live(0, 128, 1, 488)),
+  space: wallFixture('The photo space is almost full. About 20 more photos fit.', 'live', { ...live(3, 209, 0, 948) }),
+  picking: wallFixture("The wall closed at noon with 212 photos. I'm picking the best 30 for you to look over.", 'ended', { ...closed, picking: true }),
+  picked: wallFixture('I picked 30 photos. Swap any, then show them to guests.', 'ended', { ...closed, best: best30, best_by: 'snap' }),
+  shown: wallFixture('Good morning! The wall closed at noon with 212 photos. I picked the best 30 and showed them to guests after you said yes.', 'ended', {
+    ...closed,
+    best: best30,
+    best_set: true,
+    best_by: 'snap',
+  }),
+  shownByHost: wallFixture('Your best 30 are on the guests’ page now.', 'ended', { ...closed, best: best30, best_set: true, best_by: null }),
+};
+
+type HostPhotoFixture = { id: string; by: string; by_name: string; creature: number; caption: string | null; caption_removed: boolean; at: string; bytes: number; type: string; w: number; h: number; rotate: number; status: string; best: boolean };
+const GUESTS = [
+  { by: 'pl_mia', by_name: 'Mia Novak', creature: 4 },
+  { by: 'pl_leo', by_name: 'Leo Brandt', creature: 1 },
+  { by: 'pl_priya', by_name: 'Priya Shah', creature: 2 },
+  { by: 'pl_sam', by_name: 'Sam Okafor', creature: 3 },
+  { by: 'pl_ana', by_name: 'Ana Ruiz', creature: 7 },
+  { by: 'pl_jonas', by_name: 'Jonas Weber', creature: 6 },
+];
+const CAPTIONS = ['First dance!', 'Cake time', null, 'Grandma on the dance floor', 'The toast', null, 'Sparklers outside', 'Table 4 says hi'];
+const photo = (id: string, g: (typeof GUESTS)[number], i: number, status: string, best = false): HostPhotoFixture => ({
+  id,
+  ...g,
+  caption: CAPTIONS[i % CAPTIONS.length],
+  caption_removed: false,
+  at: new Date(Date.UTC(2026, 11, 5, 20, 41 - (i % 40))).toISOString(),
+  bytes: 2_400_000 + ((i * 337_000) % 3_100_000),
+  type: 'image/jpeg',
+  w: i % 5 === 3 ? 3024 : 4032,
+  h: i % 5 === 3 ? 4032 : 3024,
+  rotate: i % 9 === 4 ? 90 : 0,
+  status,
+  best,
+});
+/** Mia 4, Leo 1, Priya 2, Sam 1, Ana 1: oldest first, as the box sends the queue. */
+const QUEUE_ORDER = [0, 0, 1, 0, 2, 0, 3, 2, 4];
+const queueOf = (n: number) => QUEUE_ORDER.slice(0, n).map((g, i) => photo(`ph_q${i + 1}`, GUESTS[g], i, 'pending'));
+const wallOf = (n: number, best: string[] = []) => WALL_IDS.slice(0, n).map((id, i) => photo(id, GUESTS[i % GUESTS.length], i + 3, 'approved', best.includes(id)));
+const view = (fx: Fixture, queue: HostPhotoFixture[], wall: HostPhotoFixture[]) => {
+  const w = (fx.results.blocks[0] as unknown as { wall: Record<string, unknown> }).wall;
+  return { ...w, limits: { photo_cap_mb: 15, pocket_cap_mb: 1024, per_guest_max: 40, caption_max: 80 }, queue, wall };
+};
+/** `host_view` per fixture, as `GET /api/pockets/:code` and every action answer with it. */
+export const WALL_HOST_VIEWS: Record<keyof typeof WALL_FIXTURES, Record<string, unknown>> = {
+  ready: view(WALL_FIXTURES.ready, [], []),
+  waiting: view(WALL_FIXTURES.waiting, queueOf(9), wallOf(119)),
+  caughtUp: view(WALL_FIXTURES.caughtUp, [], wallOf(128)),
+  space: view(WALL_FIXTURES.space, queueOf(3), wallOf(209)),
+  picking: view(WALL_FIXTURES.picking, [], wallOf(212)),
+  picked: view(WALL_FIXTURES.picked, [], wallOf(212, best30)),
+  shown: view(WALL_FIXTURES.shown, [], wallOf(212, best30)),
+  shownByHost: view(WALL_FIXTURES.shownByHost, [], wallOf(212, best30)),
+};

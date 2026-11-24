@@ -108,6 +108,10 @@ export interface GuestView {
   team_count?: number;
   players?: { name: string; avatar: string }[];
   retention?: Retention;
+  /** pa11: the server's own line for the join screen (a class quiz). Shown as is, before the name box. */
+  notice?: string;
+  /** pa11: the name box asks for a first name or nickname. */
+  first_names_only?: boolean;
   question?: Question;
   reveal?: Reveal & { question: Question };
   between?: Between;

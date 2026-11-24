@@ -25,7 +25,10 @@ export default defineConfig({
     rollupOptions: {
       output: {
         entryFileNames: 'g-[hash].js',
-        chunkFileNames: (c) => (c.name === 'screen' ? 'g-screen-[hash].js' : c.name === 'remote' ? 'g-remote-[hash].js' : 'g-[hash].js'),
+        // The Wall's big screen (pa14) shares the quiz screen's CSS and QR maker: both go in one screen-kit chunk, so they
+        // stay out of the phone budget whichever screen loads first.
+        manualChunks: (id) => (/[\\/]src[\\/]screen[\\/](qr\.ts|screen\.css)$|[\\/]node_modules[\\/]uqr[\\/]/.test(id) ? 'screen-kit' : undefined),
+        chunkFileNames: (c) => (c.name.startsWith('screen') ? 'g-screen-[hash].js' : c.name === 'remote' ? 'g-remote-[hash].js' : 'g-[hash].js'),
         assetFileNames: (a) => {
           const n = a.names?.[0] ?? a.name ?? '';
           return n.endsWith('.woff2') ? 'inter-guest-[hash][extname]' : n.startsWith('screen') ? 'g-screen-[hash][extname]' : n.startsWith('remote') ? 'g-remote-[hash][extname]' : 'g-[hash][extname]';

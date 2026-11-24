@@ -6,8 +6,9 @@
 //! `pocket::judge` (server side, the live judge in `server::quizmaster_live`): no guest or host
 //! route reaches it, and the kit itself refuses a judge verdict on anything but a near miss.
 
-use super::kits::{Kit, KitCtx, KitError, KitRules, Player, Retention, Viewer, DEFAULT_MAX_PLAYERS};
+use super::kits::{Kit, KitCtx, KitError, KitRules, Player, Retention, Viewer};
 use crate::kits::quiz::engine::QuizGame;
+use crate::kits::quiz::validate::{CLASS_MAX_PLAYERS, MAX_PLAYERS};
 use crate::kits::quiz::{validate, QuizKit, ACTIONS, KIT_ID};
 use crate::kits::{self as qk, ActionError, Actor, Kit as _, Role};
 use chrono::Utc;
@@ -20,6 +21,14 @@ const GUEST_ACTIONS: &[&str] = &["answer", "team"];
 const HOST_ACTIONS: &[&str] = &["start", "next", "pause", "resume", "end", "judge", "adjust", "remove"];
 /// The chat's results card takes at most this many lines.
 const MAX_RESULT_LINES: usize = 12;
+/// What a class quiz says before anyone types (plan rules 9 and 11; Mira checks the copy).
+pub const CLASS_NOTICE: &str = "First names or nicknames only. Everything about players is deleted when the quiz ends. Nothing is shared.";
+
+/// pa11: `settings.class: true` makes a class quiz. Read straight from the JSON so a spec that
+/// doesn't validate (never saved) can't make it one by accident.
+pub fn is_class(spec: &Value) -> bool {
+    spec["settings"]["class"].as_bool() == Some(true)
+}
 
 fn kit_error(e: ActionError) -> KitError {
     match e {
@@ -69,19 +78,39 @@ impl Kit for QuizPocket {
         KIT_ID
     }
 
+    /// The normal quiz keeps guest data 7 days after the end; a class quiz (pa11) keeps nothing
+    /// once it ends.
     fn rules(&self, spec: &Value) -> KitRules {
         let days = match QuizKit::INFO.retention {
             qk::Retention::AfterEnd { days } => i64::from(days),
             _ => 7,
         };
+        let retention = if is_class(spec) { Retention::AtEnd } else { Retention::AfterEnd { days } };
         let max = spec["settings"]["max_players"].as_u64().map_or(QuizKit::INFO.max_players as usize, |n| n as usize);
         KitRules {
-            retention: Retention::AfterEnd { days },
+            retention,
             needs_pin: QuizKit::INFO.needs_pin,
-            max_players: max.clamp(1, DEFAULT_MAX_PLAYERS),
+            max_players: max.clamp(1, self.player_ceiling(spec)),
             guest_actions: GUEST_ACTIONS,
             host_actions: HOST_ACTIONS,
         }
+    }
+
+    /// 60, or 120 for a class quiz (which then gets no quick link: the core checks).
+    fn player_ceiling(&self, spec: &Value) -> usize {
+        if is_class(spec) {
+            CLASS_MAX_PLAYERS as usize
+        } else {
+            MAX_PLAYERS as usize
+        }
+    }
+
+    fn first_names_only(&self, spec: &Value) -> bool {
+        is_class(spec)
+    }
+
+    fn notice(&self, spec: &Value) -> Option<&'static str> {
+        is_class(spec).then_some(CLASS_NOTICE)
     }
 
     fn validate_spec(&self, spec: &Value) -> Result<(), String> {
@@ -206,6 +235,42 @@ mod tests {
 
     fn player(id: &str, name: &str) -> Player {
         Player { id: id.into(), name: name.into(), avatar: String::new(), team: None, joined_at: Utc::now() }
+    }
+
+    #[test]
+    fn a_class_quiz_keeps_nothing_and_takes_up_to_120_the_normal_one_is_unchanged() {
+        let normal = spec();
+        let r = QuizPocket.rules(&normal);
+        assert_eq!((r.retention, r.max_players), (Retention::AfterEnd { days: 7 }, 60));
+        assert!(!QuizPocket.first_names_only(&normal) && QuizPocket.notice(&normal).is_none());
+        let mut class = spec();
+        class["settings"]["class"] = json!(true);
+        assert_eq!(QuizPocket.validate_spec(&class), Ok(()));
+        let r = QuizPocket.rules(&class);
+        assert_eq!((r.retention, r.max_players), (Retention::AtEnd, 60), "no max_players asked: still 60");
+        assert!(QuizPocket.first_names_only(&class));
+        assert_eq!(QuizPocket.notice(&class), Some(CLASS_NOTICE));
+        class["settings"]["max_players"] = json!(120);
+        assert_eq!(QuizPocket.validate_spec(&class), Ok(()));
+        assert_eq!(QuizPocket.rules(&class).max_players, 120);
+        class["settings"]["max_players"] = json!(121);
+        assert!(QuizPocket.validate_spec(&class).unwrap_err().contains("use 1 to 120"));
+        let mut big = spec();
+        big["settings"]["max_players"] = json!(61);
+        assert!(QuizPocket.validate_spec(&big).unwrap_err().contains("class: true"), "says how to get more");
+        // Unvalidated JSON (never saved) still can't go past the ceiling
+        assert_eq!(QuizPocket.rules(&big).max_players, 60);
+        // The engine takes the 61st player of a big class quiz
+        let mut class = spec();
+        class["settings"]["class"] = json!(true);
+        class["settings"]["max_players"] = json!(70);
+        let mut state = QuizPocket.init(&class);
+        let players: Vec<Player> = (0..71).map(|i| player(&i.to_string(), &format!("Kid{i}"))).collect();
+        let mut ctx = KitCtx::new(&class, &players, Utc::now());
+        for p in &players {
+            QuizPocket.on_join(&mut ctx, &mut state, p);
+        }
+        assert_eq!(QuizPocket.host_summary(&ctx, &state)["players"], json!(70));
     }
 
     #[test]

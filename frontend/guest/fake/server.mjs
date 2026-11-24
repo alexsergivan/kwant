@@ -13,6 +13,7 @@ import { DeskBox } from './desk.mjs';
 import { GatherBox } from './gather.mjs';
 import { RemoteBox } from './remote.mjs';
 import { ScreenBox } from './screen.mjs';
+import { WallBox } from './wall.mjs';
 
 const DIST = fileURLToPath(new URL('../../dist/pocket/', import.meta.url));
 const TYPES = { '.js': 'text/javascript', '.css': 'text/css', '.woff2': 'font/woff2', '.html': 'text/html; charset=utf-8' };
@@ -22,10 +23,11 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
   const sockets = new Map(); // code -> Set<socket>
   const log = [];
   const box = (code) => {
-    // Codes starting with santa- are Secret Santa pockets (santa.mjs), gather- the pa10b gather kit (gather.mjs), screen- the big screen (screen.mjs), remote- the
-    // host remote (remote.mjs), desk- the front desk (desk.mjs); the rest are quiz scenarios.
+    // Codes starting with santa- are Secret Santa pockets (santa.mjs), gather- the pa10b gather kit (gather.mjs), screen- the
+    // big screen (screen.mjs), remote- the host remote (remote.mjs), wall- and screen-wall- the Wall and its big screen
+    // (wall.mjs), desk- the front desk (desk.mjs); the rest are quiz scenarios.
     if (!boxes.has(code))
-      boxes.set(code, code.startsWith('santa-') ? new SantaBox(code) : code.startsWith('desk-') ? new DeskBox(code) : code.startsWith('gather-') ? new GatherBox(code) : code.startsWith('screen-') ? new ScreenBox(code) : code.startsWith('remote-') ? new RemoteBox(code) : new FakeBox(code));
+      boxes.set(code, code.startsWith('wall-') || code.startsWith('screen-wall-') ? new WallBox(code) : code.startsWith('santa-') ? new SantaBox(code) : code.startsWith('desk-') ? new DeskBox(code) : code.startsWith('gather-') ? new GatherBox(code) : code.startsWith('screen-') ? new ScreenBox(code) : code.startsWith('remote-') ? new RemoteBox(code) : new FakeBox(code));
     return boxes.get(code);
   };
 
@@ -77,6 +79,32 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
           return res.end();
         }
         send(res, r.status, r.body);
+      });
+      return;
+    }
+    // The Wall (pa14): GET photo/<id> gives the photo's bytes (an SVG stand-in), POST photo takes one raw file.
+    m = p.match(/^\/api\/pocket\/([^/]+)\/photo(?:\/([\w-]+))?$/);
+    if (m && box(m[1]) instanceof WallBox) {
+      const b = box(m[1]);
+      if (req.method === 'GET' && m[2]) {
+        const svg = b.photo(m[2]);
+        return svg ? send(res, 200, svg, 'image/svg+xml', { 'Cache-Control': 'private, max-age=3600' }) : send(res, 404, { error: 'not_found' });
+      }
+      if (req.method !== 'POST' || m[2]) return send(res, 405, { error: 'method' });
+      let bytes = 0;
+      req.on('data', (c) => (bytes += c.length));
+      req.on('end', () => {
+        const seated = (req.headers.cookie ?? '').includes(`kp_${m[1]}=`);
+        let caption = '';
+        try {
+          caption = decodeURIComponent(String(req.headers['x-caption'] ?? ''));
+        } catch {
+          caption = '';
+        }
+        setTimeout(() => {
+          const r = b.upload({ type: req.headers['content-type'] ?? '', bytes, caption, seated });
+          send(res, r.status, r.body, 'application/json', r.headers ?? {});
+        }, b.s?.delayMs ?? 250);
       });
       return;
     }
@@ -133,7 +161,7 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
       if (typeof view === 'function') view(b);
       b.version++;
     } else b.set(view);
-    const data = Buffer.from(JSON.stringify({ type: 'state', ...(b instanceof ScreenBox || b instanceof RemoteBox ? b.env() : b.env(view)) }));
+    const data = Buffer.from(JSON.stringify({ type: 'state', ...(b instanceof ScreenBox || b instanceof RemoteBox || b instanceof WallBox ? b.env() : b.env(view)) }));
     const head = data.length < 126 ? Buffer.from([0x81, data.length]) : Buffer.from([0x81, 126, data.length >> 8, data.length & 255]);
     for (const s of sockets.get(code) ?? []) s.write(Buffer.concat([head, data]));
   };

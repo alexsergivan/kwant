@@ -1,0 +1,28 @@
+{
+  "version": "0.9.48",
+  "date": "2026-11-24",
+  "highlights": [
+    {
+      "id": "routine-row-opens-history",
+      "title": "Open a routine's History from the chat",
+      "text": "A routine's row in a chat has History next to Show. Tap it and Routines opens on that routine with its History open. On a phone it shows as an icon.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "routine-answered-later",
+      "title": "Routines show when you answered later",
+      "text": "If a routine stopped to ask you something and you answered afterwards, on the card, in the chat or in Telegram, its run in Routines now reads Answered later, in calm grey.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "routine-run-again",
+      "title": "Run a failed routine again in one tap",
+      "text": "When a routine fails, its card in Needs you and its row in the Inbox have Run again, which starts it right there. The \"Routine failed\" notice has Open routine, which takes you to it.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}

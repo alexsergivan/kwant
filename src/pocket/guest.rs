@@ -56,6 +56,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/pocket/:code/host/remove", post(host_remove))
         .route("/api/pocket/:code/host/reset-pin", post(host_reset_pin))
         .route("/api/pocket/:code/host/end", post(host_end))
+        // pa14: the Wall's photos. Only the upload takes a big body; every other route keeps 16 KB
+        .route("/api/pocket/:code/photo", post(photo_upload).layer(DefaultBodyLimit::max(super::wall::UPLOAD_LIMIT)))
+        .route("/api/pocket/:code/photo/:id", get(photo_get))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(BODY_LIMIT))
         .layer(axum::middleware::from_fn_with_state(state.clone(), gate))
@@ -511,6 +514,14 @@ fn host_viewer(q: &StateQuery) -> Viewer {
 /// session reads only `view=screen`.
 async fn host_state(State(state): State<AppState>, Path(code): Path<String>, headers: HeaderMap, Query(q): Query<StateQuery>) -> PResult<Response> {
     let (s, role) = host_as(&state, &code, &headers).await?;
+    // pa13a: one part of the host's view (a front desk guest's conversation), host only
+    if let Some(key) = q.view.as_deref().filter(|v| v.starts_with("guest:")) {
+        if role == super::HostRole::Screen {
+            return Err(screen_only());
+        }
+        state.pocket.touch(&code);
+        return Ok(Json(super::host_detail_json(&s, key, Utc::now())?).into_response());
+    }
     let viewer = host_viewer(&q);
     if role == super::HostRole::Screen && viewer != Viewer::BigScreen {
         return Err(screen_only());
@@ -524,6 +535,64 @@ async fn host_action(State(state): State<AppState>, Path(code): Path<String>, he
     super::act(&state, &code, &Viewer::Host, &req.name, &req.body).await?;
     let s = pocket(&state, &code).await?;
     Ok(Json(super::view_json(&s, &Viewer::Host, Utc::now())).into_response())
+}
+
+/// pa14: one photo from a guest, the raw file as the body (`Content-Type` is ignored: the type
+/// comes from the file's first bytes) and the caption in `X-Caption` (URI-encoded). 201 with the
+/// guest's view and `photo: {id}`. Refused before anything is stored when it's over the wall's
+/// per-photo size (413 `too_big`).
+async fn photo_upload(State(state): State<AppState>, Path(code): Path<String>, headers: HeaderMap, body: axum::body::Body) -> PResult<Response> {
+    use http_body_util::BodyExt;
+    let s = pocket(&state, &code).await?;
+    let caps = super::wall::wall_caps(&s)?;
+    let p = guest(&state, &code, &headers).await?.ok_or_else(signed_out)?;
+    if !state.pocket.limits.photo(&code, &p.id) {
+        // One photo every 3 s after a burst of 10: the page waits this long and sends again
+        let mut res = PocketError::new(StatusCode::TOO_MANY_REQUESTS, "slow_down", "Slow down a little: wait a few seconds before the next photo.").into_response();
+        res.headers_mut().insert(header::RETRY_AFTER, axum::http::HeaderValue::from_static("3"));
+        return Ok(res);
+    }
+    let caption = super::wall::header_caption(&s.spec, headers.get("x-caption").map(|v| v.as_bytes()))?;
+    let max = caps.photo_bytes.min(super::wall::UPLOAD_LIMIT as u64);
+    let declared = headers.get(header::CONTENT_LENGTH).and_then(|v| v.to_str().ok()).and_then(|v| v.trim().parse::<u64>().ok());
+    if declared.is_some_and(|n| n > max) {
+        return Err(super::wall::too_big(max));
+    }
+    // A slot first (pa14 QA F2): the body is read only once one is free, so 20 guests at once
+    // never hold 20 photos in memory. A busy minute ends in the same `slow_down` as the rate.
+    let slot = tokio::time::timeout(std::time::Duration::from_secs(super::wall::UPLOAD_WAIT_SECS), super::wall::UPLOADS.acquire()).await;
+    let Ok(Ok(_slot)) = slot else {
+        let mut res = PocketError::new(StatusCode::TOO_MANY_REQUESTS, "slow_down", "Lots of photos are going up right now: wait a few seconds and send it again.").into_response();
+        res.headers_mut().insert(header::RETRY_AFTER, axum::http::HeaderValue::from_static("3"));
+        return Ok(res);
+    };
+    let bytes = match http_body_util::Limited::new(body, max as usize).collect().await {
+        Ok(b) => b.to_bytes(),
+        Err(e) if e.downcast_ref::<http_body_util::LengthLimitError>().is_some() => return Err(super::wall::too_big(max)),
+        Err(_) => return Err(PocketError::new(StatusCode::BAD_REQUEST, "broken_photo", "That photo didn't arrive whole. Try sending it again.")),
+    };
+    let id = super::wall::add_photo(&state, &code, &p.id, bytes, caption).await?;
+    let s = pocket(&state, &code).await?;
+    let mut v = super::view_json(&s, &Viewer::Guest(p.id), Utc::now());
+    v["photo"] = json!({ "id": id });
+    Ok((StatusCode::CREATED, Json(v)).into_response())
+}
+
+/// pa14: one photo's bytes. The host key or a host or screen link (cookie or bearer) first, else
+/// the guest cookie; the Wall decides what each may see (404 for anything else).
+async fn photo_get(State(state): State<AppState>, Path((code, id)): Path<(String, String)>, headers: HeaderMap) -> PResult<Response> {
+    let s = pocket(&state, &code).await?;
+    super::wall::wall_caps(&s)?;
+    let host = match host_credential(&code, &headers) {
+        Some(key) => super::host_role(&state, &s, key).await?,
+        None => None,
+    };
+    let viewer = match host {
+        Some(super::HostRole::Host) => Viewer::Host,
+        Some(super::HostRole::Screen) => Viewer::BigScreen,
+        None => Viewer::Guest(guest(&state, &code, &headers).await?.ok_or_else(signed_out)?.id),
+    };
+    super::wall::photo_response(&state, &s, &id, &viewer, &headers).await
 }
 
 #[derive(Debug, Deserialize)]

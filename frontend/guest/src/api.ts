@@ -65,6 +65,8 @@ export function fromState(json: unknown): { view: GuestView; version?: number } 
     max_players: most ?? kv.max_players,
     player_count: kv.player_count ?? players,
     retention: retentionFrom(pocket.retention) ?? kv.retention,
+    notice: str(pocket.notice) ?? kv.notice,
+    first_names_only: pocket.first_names_only === true || kv.first_names_only === true,
     deletes_on: kv.deletes_on ?? (expires && /^\d{4}-\d{2}-\d{2}/.test(expires) ? expires.slice(0, 10) : undefined),
     me: me
       ? {
@@ -77,6 +79,8 @@ export function fromState(json: unknown): { view: GuestView; version?: number } 
       : undefined,
   };
   if (!me) delete view.me;
+  if (!view.notice) delete view.notice;
+  if (!view.first_names_only) delete view.first_names_only;
   return { view, version: num(j.version) };
 }
 

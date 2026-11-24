@@ -31,6 +31,7 @@
 //!   fits `mcp__<server>__<tool>`, with claude's payload (`tool_response` = `response`) on stdin,
 //!   and reply `HOOKS[<n run>] MODELSAW[<what the model reads: the hook's updatedMCPToolOutput, or
 //!   the response>]`; once per marker.
+//! - `COSTUSD:<dollars>`: the reply's result line reports usage and that `total_cost_usd`.
 //! - `STREAMLINES:<base64 text>`: print that text (claude `stream-json` lines: an init line, tool
 //!   calls and their results) before the reply; once per marker.
 //!
@@ -269,7 +270,13 @@ if m and "--mcp-config" in args:
         reply.append("TOOLFAILED " + type(e).__name__)
 t = re.findall(r"REPLYTAG:([A-Za-z0-9_]+)", prompt)
 reply.append("answer " + (t[-1] if t else "none"))
-print(json.dumps({"type": "result", "is_error": False, "num_turns": 1, "result": " ".join(reply)}))
+res = {"type": "result", "is_error": False, "num_turns": 1, "result": " ".join(reply)}
+# COSTUSD:<dollars>: the result line reports usage and that cost, as claude does
+cu = re.findall(r"COSTUSD:([0-9]+(?:\.[0-9]+)?)", prompt)
+if cu:
+    res["usage"] = {"input_tokens": 100, "output_tokens": 20}
+    res["total_cost_usd"] = float(cu[-1])
+print(json.dumps(res))
 "#;
 
 /// Dev mode's secrets and package checks never reach GitHub's releases or a real registry from a

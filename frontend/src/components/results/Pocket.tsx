@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   Globe,
   Hourglass,
+  Info,
   ListChecks,
   Loader2,
   Lock,
@@ -44,6 +45,7 @@ import { useFocusAfterRender } from '../../focusAfterRender';
 import type { DraftCard, PocketLinkRole } from '../../pocketApi';
 import { EditPanel } from './PocketEdit';
 import { SantaCard, findMatchLike, validSanta } from './PocketSanta';
+import { WallCard, validWall } from './PocketWall';
 import { GatherCard, findBallotPair, validGather } from './PocketGather';
 import type { RendererProps } from './registry';
 
@@ -101,7 +103,9 @@ function validJoin(v: unknown) {
   const wifi_url = url(v.wifi_url);
   const anywhere_url = url(v.anywhere_url);
   if (wifi_url === undefined || anywhere_url === undefined) return undefined;
-  return { mode: v.mode as PocketJoinMode, wifi_url, anywhere_url };
+  // pa11: `quick_tunnel: false` means the box won't offer a quick link for this pocket (a class quiz over 60).
+  if (v.quick_tunnel !== undefined && v.quick_tunnel !== null && typeof v.quick_tunnel !== 'boolean') return undefined;
+  return { mode: v.mode as PocketJoinMode, wifi_url, anywhere_url, ...(v.quick_tunnel === false ? { quick_tunnel: false } : {}) };
 }
 
 function validEnded(v: unknown) {
@@ -166,6 +170,7 @@ export function validPocket(raw: unknown): PocketBlock | null {
   const dry_run = opt(b.dry_run, validDryRun);
   const eta = optText(b.eta, 120);
   const opens_line = optText(b.opens_line, 200);
+  const notice = optText(b.notice, 300);
   const live = opt(b.live, validLive);
   const join = opt(b.join, validJoin);
   const ended = opt(b.ended, validEnded);
@@ -174,7 +179,7 @@ export function validPocket(raw: unknown): PocketBlock | null {
   // A bad draft id or yours count only drops that field (no Edit), never the whole card.
   const draft = typeof b.draft === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(b.draft) ? b.draft : null;
   const yours = isCount(b.yours) ? b.yours : null;
-  if ([when, progress, checks, dry_run, eta, opens_line, live, join, ended, budget, results].includes(undefined) || roundList.some((r) => !r)) return null;
+  if ([when, progress, checks, dry_run, eta, opens_line, notice, live, join, ended, budget, results].includes(undefined) || roundList.some((r) => !r)) return null;
   // A ready or live pocket passed its dry run; a stopped one didn't. Results only exist at the end.
   if (state === 'ready' && dry_run?.passed !== true) return null;
   if (state === 'dry_run_stopped' && dry_run?.passed === true) return null;
@@ -187,6 +192,12 @@ export function validPocket(raw: unknown): PocketBlock | null {
   if (santa && results) return null;
   // Santa joins live in `santa.join` (no quick tunnel); a quiz-style top-level join never rides along.
   if (santa && b.join !== undefined && b.join !== null) return null;
+  // Photo wall (pa14): the kit carries `wall`, nothing else does; it's live while open and ended once closed. Photo
+  // lists, guest ids and file sizes never ride in the block (validWall), and a wall has no quiz parts.
+  const wall = b.wall === undefined || b.wall === null ? null : validWall(b.wall);
+  if (wall === undefined || (b.kit === 'wall') !== !!wall) return null;
+  if (wall && state !== (wall.state === 'open' ? 'live' : 'ended')) return null;
+  if (wall && (results || santa || live || rounds.length > 0)) return null;
   // Gather (pa10b): the same rules for Sign-up, RSVP and Vote, plus no person may ever carry a ballot.
   // validGather scans `gather` for ballots itself; the rest of the block is scanned without it (the block's own
   // `name` would make every key below it person-shaped, and `gather.ballot` is the vote's options, not a vote).
@@ -223,6 +234,8 @@ export function validPocket(raw: unknown): PocketBlock | null {
     yours: yours ?? null,
     santa,
     gather,
+    ...(wall ? { wall } : {}),
+    ...(notice ? { notice } : {}),
   };
 }
 
@@ -265,7 +278,7 @@ export function withCard(b: PocketBlock, c: DraftCard): PocketBlock {
 const NUM = new Intl.NumberFormat('en');
 const num = (n: number) => NUM.format(n);
 const usd = (n: number) => `$${n < 0.01 && n > 0 ? '0.01' : n.toFixed(2)}`;
-const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa', gather: 'Sign-up' };
+const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa', wall: 'Photo wall', gather: 'Sign-up' };
 export const kitLabel = (kit: string) => KIT_LABEL[kit] ?? kit.charAt(0).toUpperCase() + kit.slice(1).replace(/_/g, ' ');
 
 export function budgetLine(b: PocketBlock): string {
@@ -373,6 +386,33 @@ const JOIN_TEXT: Record<PocketJoinMode, { label: string; body: string; limit: st
     limit: 'Uses a free Cloudflare quick link: a new address each time and no uptime promise. Fine for a quiz night of up to 60 players.',
   },
 };
+/** pa11: the box's own words for a 409 `needs_stable_address` (src/pocket/tunnel.rs `refusal`), shown where the quick link goes. */
+export const NEEDS_STABLE =
+  'A quick link takes up to 60 players, so this one needs an address that stays the same: your own https, Tailscale Funnel or Same Wi-Fi.';
+const noQuick = (join: PocketBlock['join'], mode: PocketJoinMode) => mode === 'anywhere' && join?.quick_tunnel === false;
+const StableOnly: React.FC = () => (
+  <p className="flex items-start gap-2 text-[13px] leading-5 text-zinc-300 sm:text-meta" data-needs-stable>
+    <Info size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
+    <span>{NEEDS_STABLE}</span>
+  </p>
+);
+/** The Photo wall's join copy (pa14 card-design-check 1). Quiz keeps JOIN_TEXT. */
+const WALL_JOIN_TEXT: Record<PocketJoinMode, { label: string; body: string; limit: string }> = {
+  wifi: {
+    label: 'Same Wi-Fi',
+    body: "Guests on your Wi-Fi scan the code and add photos in their phone's browser. No app, no account.",
+    limit: "Phones on mobile data can't reach your Wi-Fi. At a venue, pick From anywhere.",
+  },
+  anywhere: {
+    label: 'From anywhere',
+    body: "Guests on Wi-Fi or mobile data scan the code and add photos in their phone's browser. No app, no account.",
+    limit: 'Uses a free Cloudflare quick link: a new address each time and no uptime promise. Fine for a party of up to 60 guests.',
+  },
+};
+const joinCopy = (block: PocketBlock) =>
+  block.wall
+    ? { heading: 'How guests add photos', text: WALL_JOIN_TEXT, hint: 'Print the QR for the tables, or put it on the TV: the slideshow shows it in a corner.' }
+    : { heading: 'How friends join', text: JOIN_TEXT, hint: null };
 const urlFor = (join: NonNullable<PocketBlock['join']>, mode: PocketJoinMode) => (mode === 'wifi' ? join.wifi_url : join.anywhere_url);
 
 
@@ -382,6 +422,7 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
   const radios = useRef<Array<HTMLButtonElement | null>>([]);
   const labelId = useId();
   const modes: PocketJoinMode[] = ['wifi', 'anywhere'];
+  const copy = joinCopy(block);
   const onKey = (e: React.KeyboardEvent) => {
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
     e.preventDefault();
@@ -398,7 +439,7 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
       ) : null}
       <div className="flex min-w-0 flex-1 flex-col gap-2.5">
         <div id={labelId} className="text-[13px] font-semibold text-zinc-200 sm:text-meta">
-          How friends join
+          {copy.heading}
         </div>
         <div role="radiogroup" aria-labelledby={labelId} onKeyDown={onKey} className="inline-flex self-start rounded-xl border border-hairline-strong bg-surface-rail p-1">
           {modes.map((m, i) => {
@@ -418,14 +459,19 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
                 }`}
               >
                 <Icon size={14} aria-hidden="true" />
-                {JOIN_TEXT[m].label}
+                {copy.text[m].label}
               </button>
             );
           })}
         </div>
-        <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">{JOIN_TEXT[mode].body}</p>
-        <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">{JOIN_TEXT[mode].limit}</p>
-        {url ? <LinkField url={url} /> : <NoLinkYet mode={mode} />}
+        <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">{copy.text[mode].body}</p>
+        {noQuick(join, mode) ? <StableOnly /> : <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">{copy.text[mode].limit}</p>}
+        {copy.hint && (
+          <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-join-hint>
+            {copy.hint}
+          </p>
+        )}
+        {url ? <LinkField url={url} /> : noQuick(join, mode) ? null : <NoLinkYet mode={mode} />}
       </div>
     </div>
   );
@@ -446,7 +492,7 @@ const CompactJoin: React.FC<{ block: PocketBlock }> = ({ block }) => {
           <Icon size={14} className="shrink-0 text-sky-300" aria-hidden="true" />
           {JOIN_TEXT[shownMode].label} · late arrivals can still scan in
         </p>
-        {url ? <LinkField url={url} /> : <NoLinkYet mode={shownMode} />}
+        {url ? <LinkField url={url} /> : noQuick(join, shownMode) ? <StableOnly /> : <NoLinkYet mode={shownMode} />}
       </div>
     </div>
   );
@@ -1044,7 +1090,21 @@ const ResultsCard: React.FC<{ block: PocketBlock; results: PocketResults; ask: (
 
 /** The Pocket renderer: Secret Santa has its own card; every other kit uses the quiz-shaped one. */
 export const Pocket: React.FC<RendererProps<PocketBlock>> = (props) =>
-  props.block.santa ? <SantaCard block={props.block} ask={props.ask} /> : props.block.gather ? <GatherCard block={props.block} ask={props.ask} /> : <QuizPocket {...props} />;
+  props.block.santa ? (
+    <SantaCard block={props.block} ask={props.ask} />
+  ) : props.block.gather ? (
+    <GatherCard block={props.block} ask={props.ask} />
+  ) : props.block.wall ? (
+    <WallCard block={props.block} ask={props.ask} join={<WallJoin block={props.block} />} />
+  ) : (
+    <QuizPocket {...props} />
+  );
+
+/** The Wall's Ready state uses the quiz's join box (QR, Same Wi-Fi / From anywhere, Copy link) with the wall's own copy. */
+const WallJoin: React.FC<{ block: PocketBlock }> = ({ block }) => {
+  const [mode, setMode] = useState<PocketJoinMode>(block.join?.mode === 'anywhere' && block.join.anywhere_url ? 'anywhere' : 'wifi');
+  return <JoinBox block={block} mode={mode} setMode={setMode} />;
+};
 
 const sameBlock = (a: PocketBlock, b: PocketBlock) => a === b || JSON.stringify(a) === JSON.stringify(b);
 
@@ -1187,6 +1247,12 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, as
         </span>
       </header>
       <div className="relative flex flex-col gap-4">
+        {block.notice && block.state !== 'ended' ? (
+          <p className="flex items-start gap-2 rounded-xl border border-sky-800/70 bg-sky-500/[0.06] px-3 py-2.5 text-[15px] leading-[22px] text-zinc-100 sm:text-[13px] sm:leading-5" data-notice>
+            <Lock size={15} className={`${ICON} text-sky-300`} aria-hidden="true" />
+            <span className="min-w-0">{block.notice}</span>
+          </p>
+        ) : null}
         <Body block={block} mode={mode} setMode={setMode} closed={done?.kind === 'ok'} />
         {done ? (
           <p role="status" className={`flex items-start gap-2 text-[15px] sm:text-[13px] ${done.kind === 'ok' ? 'text-ok' : 'text-bad'}`} data-done={done.kind}>
