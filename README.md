@@ -268,9 +268,9 @@ One command starts everything kwant needs: kwnt, the **Laya** router (with its m
 
 ```bash
 git clone https://github.com/alexsergivan/kwant.git && cd kwant
-KWNT_CLIS=claude,codex docker compose up -d --build   # any of claude,codex,grok; leave out for none
+KWNT_CLIS=claude,codex docker compose up -d --build   # any of claude,codex,grok,vibe; leave out for none
 docker compose exec kwnt kwnt doctor                  # what works, and the fix for what doesn't
-docker compose exec kwnt claude auth login            # sign a CLI in (codex login --device-auth, grok login --device-auth)
+docker compose exec kwnt claude auth login            # sign a CLI in (codex login --device-auth, grok login --device-auth, vibe --setup)
 docker compose exec kwnt kwnt signin-link            # a one-time sign-in link and QR code (15 minutes)
 ```
 

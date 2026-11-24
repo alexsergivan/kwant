@@ -123,7 +123,7 @@ async fn turns_skip_engines_that_cannot_run() {
     let (s, v) = call(&app, "GET", "/api/engines", None).await;
     assert_eq!(s, StatusCode::OK);
     let engines = v["engines"].as_array().unwrap();
-    assert_eq!(engines.len(), 9, "8 engines + Custom API");
+    assert_eq!(engines.len(), 10, "9 engines + Custom API");
     assert!(engines.iter().all(|e| e["status"] == "checking" && e["checked_at"].is_null()));
 
     // 1. Re-check: only the fake claude is ready; the shape is the agreed contract
@@ -137,7 +137,7 @@ async fn turns_skip_engines_that_cannot_run() {
     assert_eq!(claude["version"], "7.0.1");
     assert!(claude["checked_at"].as_str().unwrap().contains('T'));
     assert!(claude["models"].as_array().unwrap().iter().any(|m| m["id"] == "opus" && m["default"] == true && m["label"].is_string()));
-    for (id, kind) in [("codex", "cli"), ("grok", "cli"), ("anthropic_api", "api"), ("openai_api", "api"), ("xai_api", "api"), ("mistral_api", "api"), ("ollama", "local")] {
+    for (id, kind) in [("codex", "cli"), ("grok", "cli"), ("anthropic_api", "api"), ("openai_api", "api"), ("xai_api", "api"), ("mistral_api", "api"), ("vibe", "cli"), ("ollama", "local")] {
         let e = by_id(&v, id);
         assert_eq!(e["status"], "not_installed", "{e}");
         assert_eq!(e["kind"], kind);

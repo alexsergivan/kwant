@@ -1,5 +1,5 @@
 # Kwant server: React UI embedded in a single Rust binary.
-# AI CLIs are optional: --build-arg KWNT_CLIS=claude,codex,grok (any subset; default none).
+# AI CLIs are optional: --build-arg KWNT_CLIS=claude,codex,grok,vibe (any subset; default none).
 # With Compose: KWNT_CLIS=claude,codex docker compose up -d --build
 # Needs BuildKit (the default in Docker 23+ and Compose v2). The last stage builds kwnt from source;
 # the `prebuilt` stage is the published ghcr.io image, made from the release's own binaries
@@ -27,7 +27,7 @@ ARG KWNT_CLIS=""
 RUN set -eu; mkdir -p /opt/clis/bin; \
     want() { case ",$(echo "$KWNT_CLIS" | tr -d ' ')," in *",$1,"*) return 0;; *) return 1;; esac; }; \
     for c in $(echo "$KWNT_CLIS" | tr ',' ' '); do \
-      case "$c" in claude|codex|grok) ;; *) echo "KWNT_CLIS: unknown CLI '$c' (use claude, codex, grok)" >&2; exit 1;; esac; \
+      case "$c" in claude|codex|grok|vibe) ;; *) echo "KWNT_CLIS: unknown CLI '$c' (use claude, codex, grok, vibe)" >&2; exit 1;; esac; \
     done; \
     pkgs=""; \
     if want claude; then pkgs="$pkgs @anthropic-ai/claude-code"; fi; \
@@ -41,6 +41,14 @@ RUN set -eu; mkdir -p /opt/clis/bin; \
       export HOME=/tmp/grok; mkdir -p "$HOME"; \
       curl -fsSL https://x.ai/cli/install.sh | bash \
       && cp -L "$HOME/.grok/bin/grok" /opt/clis/bin/grok; \
+    fi; \
+    if want vibe; then \
+      apt-get update && apt-get install -y --no-install-recommends curl ca-certificates; \
+      export HOME=/tmp/vibe; mkdir -p "$HOME"; \
+      curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/tmp/uv UV_NO_MODIFY_PATH=1 sh \
+      && UV_PYTHON_INSTALL_DIR=/opt/clis/python UV_TOOL_DIR=/opt/clis/uv-tools UV_TOOL_BIN_DIR=/opt/clis/bin \
+         /tmp/uv/uv tool install --managed-python --python 3.12 mistral-vibe==3.1.4 \
+      && rm -rf /tmp/uv "$HOME"; \
     fi; \
     ls /opt/clis/bin
 

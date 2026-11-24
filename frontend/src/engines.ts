@@ -2,7 +2,7 @@
 // GET /api/engines, and the shared Engine → Model choice stored in a kwant's preferred_model.
 import { hasUsageLimits, isMistralModel, usageSummary, type Profile } from './profiles';
 
-export type EngineId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'mistral_api' | 'ollama' | 'custom_api';
+export type EngineId = 'claude' | 'codex' | 'grok' | 'vibe' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'mistral_api' | 'ollama' | 'custom_api';
 export type EngineKind = 'cli' | 'api' | 'local';
 export type EngineStatus = 'ready' | 'signed_out' | 'not_installed' | 'error' | 'checking' | 'disabled';
 export type Tier = 'fast' | 'balanced' | 'deep';
@@ -43,6 +43,7 @@ export const FAMILY_OF: Record<EngineId, Family> = {
   grok: 'grok',
   xai_api: 'grok',
   mistral_api: 'mistral',
+  vibe: 'mistral',
   ollama: 'ollama',
   custom_api: 'custom',
 };
@@ -111,6 +112,7 @@ export const INSTALL_URL: Partial<Record<EngineId, string>> = {
   codex: 'https://github.com/openai/codex#quickstart',
   ollama: 'https://ollama.com/download',
   grok: 'https://x.ai/cli',
+  vibe: 'https://github.com/mistralai/mistral-vibe',
 };
 
 /** Whether only CLIs can run things right now (so "no API keys needed" is true). */

@@ -481,6 +481,7 @@ pub fn create_router(state: AppState) -> Router {
         )
         .route("/api/mcp/gateway", post(mcp_runtime::gateway_endpoint))
         .route("/api/mcp/gateway/grok", post(mcp_runtime::gateway_grok_endpoint))
+        .route("/api/mcp/gateway/vibe", post(mcp_runtime::gateway_vibe_endpoint))
         .route("/api/mcp/self", post(continuity::self_endpoint))
         // 0.7.4: connected coding agents (the endpoint checks its own `kag_` token)
         .route(agents_connect::ENDPOINT, post(agents_connect::endpoint))

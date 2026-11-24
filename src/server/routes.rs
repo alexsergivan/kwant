@@ -3597,7 +3597,7 @@ async fn run_kwant_turn_inner(
                     if cross {
                         crate::drivers::engines::choose_model_near(&models, pinned_model.as_deref(), tier)
                     } else {
-                        crate::drivers::engines::choose_model(&models, pinned_model.as_deref(), tier)
+                        crate::drivers::engines::choose_engine_model(e, &models, pinned_model.as_deref(), tier)
                     }
                 }),
             };

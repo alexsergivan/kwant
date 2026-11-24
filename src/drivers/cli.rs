@@ -495,7 +495,8 @@ pub fn grok_no_tools_args() -> Vec<String> {
 }
 
 /// Why this driver won't run a no-tools turn, or `None` when it runs it with no tools. Only
-/// claude, codex and grok have switches that were checked to take every tool away.
+/// claude, codex, grok and vibe have switches that were checked to take every tool away (Vibe's
+/// TypeScript sandbox stays, with every tool it could reach refused).
 pub fn no_tools_refusal(tool_kind: &str, input: &TurnInput) -> Option<String> {
     if !input.no_tools {
         return None;
@@ -504,7 +505,7 @@ pub fn no_tools_refusal(tool_kind: &str, input: &TurnInput) -> Option<String> {
         return Some("this turn must run with no tools, but it was given MCP servers, so kwnt didn't run it".into());
     }
     match tool_kind {
-        "claude" | "codex" | "grok" => None,
+        "claude" | "codex" | "grok" | "vibe" => None,
         other => Some(format!(
             "this turn must run with no tools, and kwnt can't switch off the {other} CLI's own tools, so it didn't run it"
         )),
@@ -670,7 +671,7 @@ pub fn build_cli_prompt(input: &TurnInput) -> String {
 #[derive(Clone, Debug, Default)]
 pub struct CliDriver {
     pub cli_binary: Option<String>,
-    pub tool_kind: String, // "claude", "codex", "grok"
+    pub tool_kind: String, // "claude", "codex", "grok", "vibe"
     /// The user's grok home to take model settings and login from; `None` means `$GROK_HOME`
     /// or `~/.grok`. Only read, never written.
     pub grok_home: Option<std::path::PathBuf>,
@@ -1144,6 +1145,243 @@ async fn empty_grok_reply(
     (msg, 0)
 }
 
+/// What one Vibe process left behind.
+#[derive(Default)]
+struct VibeRun {
+    /// The reply text from Vibe's assistant messages.
+    stdout: String,
+    stderr: String,
+    /// `None` if Vibe was killed by a signal.
+    exit_code: Option<i32>,
+    /// Vibe ran at least one tool (refused ones too).
+    tool_calls: bool,
+    /// The tool a no-tools run used anyway; kwnt stopped the run.
+    broke_no_tools: Option<String>,
+    /// Tools Vibe refused (`tool_denied`).
+    refused: Vec<String>,
+    /// Vibe's `export.json`.
+    export: Option<super::vibe::Export>,
+    /// Why Vibe was killed from outside (out of memory or another SIGKILL), in plain words.
+    killed: Option<String>,
+    /// Why the gateway's tools couldn't be allowed this turn.
+    gateway_problem: Option<String>,
+    /// What a quoted error must never show: the key, the gateway token, the servers' secrets.
+    secrets: Vec<String>,
+}
+
+impl CliDriver {
+    /// One Vibe run in the thread's private `VIBE_HOME` (see [`super::vibe`]): a cleared env,
+    /// kwnt's config, each tool's permission set for the turn, and kwnt's gateway as the only
+    /// MCP server. The turn's own files are removed when this returns or the turn is aborted.
+    async fn run_vibe(
+        bin_path: &str,
+        input: &TurnInput,
+        system_prompt: &str,
+        prompt: &str,
+        event_tx: &mpsc::Sender<RuntimeEvent>,
+    ) -> std::io::Result<VibeRun> {
+        use super::vibe;
+        let home = vibe::VibeHome::for_thread(&std::env::temp_dir(), &input.kwant.id, &input.thread_id)?;
+        let turn = home.turn()?;
+        turn.write_prompts(prompt, system_prompt)?;
+        let shell = if cfg!(unix) { Some(home.scrub_shell()?) } else { None };
+        let workspace = input.workspace_dir.as_ref().filter(|d| d.exists());
+        let mode = match (input.no_tools, workspace) {
+            (true, _) => vibe::ToolMode::None,
+            (false, Some(_)) => vibe::ToolMode::Folder,
+            (false, None) => vibe::ToolMode::NoFolder,
+        };
+        let mut run = VibeRun { secrets: input.mcp.as_ref().map(|c| c.secret_values()).unwrap_or_default(), ..Default::default() };
+        let gateway = input.mcp.as_ref().and_then(|c| c.gateway.as_ref().map(|g| (c, g))).filter(|_| !input.no_tools);
+        let mut servers = vibe::mcp_servers(None, 0);
+        let mut gateway_tools = Vec::new();
+        if let Some((ctx, gateway)) = gateway {
+            run.secrets.push(gateway.token.clone());
+            let slowest = ctx.servers.iter().map(|s| s.timeout_secs.max(0) as u64).max().unwrap_or(0);
+            servers = vibe::mcp_servers(Some(&gateway.vibe_url()), slowest);
+            let wait = std::time::Duration::from_secs((slowest + 15).max(30));
+            match vibe::gateway_tool_names(&gateway.vibe_url(), &gateway.token, wait).await {
+                Ok(names) => gateway_tools = names,
+                Err(why) => {
+                    tracing::warn!(%why, "could not list the gateway's tools for vibe");
+                    run.gateway_problem = Some(why);
+                }
+            }
+        }
+        let key = vibe::find_key(vibe::user_vibe_home().as_deref()).await;
+
+        let mut cmd = cli_command(bin_path);
+        if let Some(dir) = workspace {
+            cmd.current_dir(dir);
+        }
+        // Nothing of kwnt's env but the harmless part: no keys, tokens or kwnt settings
+        cmd.env_clear();
+        for (name, value) in std::env::vars_os() {
+            if name.to_str().is_some_and(vibe::kept_env) {
+                cmd.env(name, value);
+            }
+        }
+        let user_home = home.home_dir();
+        cmd.env("VIBE_HOME", &home.path)
+            .env("HOME", &user_home)
+            .env("USERPROFILE", &user_home)
+            .env("XDG_CONFIG_HOME", user_home.join(".config"))
+            .env("XDG_DATA_HOME", user_home.join(".local/share"))
+            .env("XDG_STATE_HOME", user_home.join(".local/state"))
+            .env("XDG_CACHE_HOME", user_home.join(".cache"))
+            .env("TMPDIR", turn.tmp())
+            .env("TEMP", turn.tmp())
+            .env("TMP", turn.tmp())
+            .env("BROWSER", "none")
+            .env("DISPLAY", "")
+            .env("VIBE_TOOLS", vibe::tool_permissions(mode, shell.as_deref(), &gateway_tools).to_string())
+            .env("VIBE_ENABLED_TOOLS", vibe::enabled_tools(if mode == vibe::ToolMode::None { &[] } else { &gateway_tools }).to_string())
+            .env("VIBE_MCP_SERVERS", servers.to_string());
+        if let Some(models) = vibe::models(input.model.as_deref()) {
+            cmd.env("VIBE_MODELS", models.to_string());
+        }
+        if let Some((key, _)) = key {
+            run.secrets.push(key.clone());
+            // The key goes in the env only; Vibe then doesn't look in the system keyring
+            cmd.env(vibe::KEY_ENV, key).env("VIBE_TEST_DISABLE_KEYRING", "1");
+        }
+        // Never written to disk: the gateway's entry names this variable
+        if let Some((_, gateway)) = gateway {
+            cmd.env(crate::mcp::GATEWAY_TOKEN_ENV, &gateway.token);
+        }
+        cmd.args(vibe::args(&turn, input.model.as_deref()));
+        cmd.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+        // A cancelled turn aborts this task; the CLI must not outlive it
+        cmd.kill_on_drop(true);
+        own_process_group(&mut cmd);
+
+        let oom_before = crate::tools::shell::oom_kills();
+        let mut child = cmd.spawn()?;
+        let mut group = ProcessGroup::of(&child);
+        // A no-tools run is stopped the moment a tool other than Vibe's sandbox runs
+        let stop_on_tools = input.no_tools.then(|| child.id()).flatten();
+        let stdout_pipe = child.stdout.take();
+        let stderr_pipe = child.stderr.take();
+        let read_stdout = async {
+            let mut names: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+            let mut parser = vibe::StreamParser::default();
+            let mut buffer = [0u8; 4096];
+            // Bytes of a UTF-8 character split across reads
+            let mut partial: Vec<u8> = Vec::new();
+            if let Some(mut stdout) = stdout_pipe {
+                loop {
+                    let n = match stdout.read(&mut buffer).await {
+                        Ok(0) | Err(_) => break,
+                        Ok(n) => n,
+                    };
+                    partial.extend_from_slice(&buffer[..n]);
+                    let valid = match std::str::from_utf8(&partial) {
+                        Ok(_) => partial.len(),
+                        Err(e) if e.error_len().is_none() => e.valid_up_to(),
+                        Err(_) => partial.len(),
+                    };
+                    let chunk = String::from_utf8_lossy(&partial[..valid]).into_owned();
+                    partial.drain(..valid);
+                    for event in parser.push(&chunk) {
+                        let ran = Self::apply_vibe_event(event, &mut run, &mut names, event_tx).await;
+                        if stop_on_tools.is_some() && run.broke_no_tools.is_none() {
+                            run.broke_no_tools = ran;
+                        }
+                    }
+                    if run.broke_no_tools.is_some() {
+                        kill_group(stop_on_tools);
+                        return;
+                    }
+                }
+            }
+            let rest = String::from_utf8_lossy(&partial).into_owned();
+            let mut events = parser.push(&rest);
+            events.extend(parser.finish());
+            for event in events {
+                let ran = Self::apply_vibe_event(event, &mut run, &mut names, event_tx).await;
+                if stop_on_tools.is_some() && run.broke_no_tools.is_none() {
+                    run.broke_no_tools = ran;
+                }
+            }
+        };
+        let read_stderr = async {
+            match stderr_pipe {
+                Some(stderr) => read_tail(stderr, GROK_STDERR_MAX).await,
+                None => String::new(),
+            }
+        };
+        let (_, stderr) = tokio::join!(read_stdout, read_stderr);
+        let status = child.wait().await.ok();
+        run.exit_code = status.and_then(|s| s.code());
+        run.killed = cli_killed("vibe", oom_before, status).filter(|_| run.broke_no_tools.is_none());
+        group.disarm();
+        run.export = turn.export();
+        run.stderr = stderr;
+        drop(turn);
+        Ok(run)
+    }
+
+    /// Passes one Vibe event on. Returns the tool's name when a tool other than Vibe's own
+    /// sandbox ran (which a no-tools run must never do).
+    async fn apply_vibe_event(
+        event: super::vibe::StreamEvent,
+        run: &mut VibeRun,
+        names: &mut std::collections::HashMap<String, String>,
+        event_tx: &mpsc::Sender<RuntimeEvent>,
+    ) -> Option<String> {
+        use super::vibe::StreamEvent;
+        match event {
+            StreamEvent::Text(text) => {
+                let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
+                run.stdout.push_str(&text);
+            }
+            StreamEvent::Thought(text) => {
+                let _ = event_tx.send(RuntimeEvent::ThinkingDelta(text)).await;
+            }
+            StreamEvent::Refused(name) => run.refused.push(name),
+            StreamEvent::ToolStart { id, name, args } => {
+                run.tool_calls = true;
+                names.insert(id.clone(), name.clone());
+                let _ = event_tx.send(RuntimeEvent::ToolCallPending { id, name, args }).await;
+            }
+            StreamEvent::ToolEnd { id, ok, error } => {
+                let result = match error {
+                    Some(why) if !ok => serde_json::json!({ "status": "error", "error": why }),
+                    _ => serde_json::json!({ "status": "ok" }),
+                };
+                let name = names.remove(&id);
+                let _ = event_tx.send(RuntimeEvent::ToolCallCompleted { id, result }).await;
+                let ran = name.filter(|n| ok && !super::vibe::SANDBOX_TOOLS.contains(&super::vibe::bare_tool_name(n)));
+                return ran;
+            }
+        }
+        None
+    }
+}
+
+/// Says why Vibe gave no reply, so the chat never shows an empty message.
+async fn empty_vibe_reply(input: &TurnInput, run: &VibeRun, event_tx: &mpsc::Sender<RuntimeEvent>) -> String {
+    let mut notice = match &run.killed {
+        Some(line) => line.clone(),
+        None => super::vibe::empty_reply_notice(
+            &super::vibe::EmptyRun {
+                stderr: &run.stderr,
+                export: run.export.as_ref(),
+                refused: &run.refused,
+                exit_code: run.exit_code,
+            },
+            &run.secrets,
+        ),
+    };
+    if let Some(why) = &run.gateway_problem {
+        notice.push_str(&format!(" The bot's tools weren't available to Vibe this turn: {}.", crate::mcp::redact(why, &run.secrets)));
+    }
+    tracing::warn!(exit_code = ?run.exit_code, outcome = ?run.export.as_ref().and_then(|e| e.outcome.clone()), "vibe gave no reply");
+    let msg = format!("⚠️ [{}] {notice}", input.kwant.name);
+    let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
+    msg
+}
+
 /// Longest single line of claude's `stream-json` output that is read; the rest of a longer line is
 /// skipped (it still counts as progress).
 const CLAUDE_LINE_MAX: usize = 16 * 1024 * 1024;
@@ -1563,10 +1801,11 @@ async fn record_cli_usage(input: &TurnInput, model: Option<String>, usage: &supe
 #[async_trait]
 impl Driver for CliDriver {
     /// claude prints `stream-json` as it works (see [`ClaudeStream`]). codex runs with `-o` and
-    /// prints nothing until it ends, and grok's stream has no event for a tool run ending, so a
-    /// silent grok can't be told apart from one running a long tool: neither is watched.
+    /// prints nothing until it ends, and grok's stream has no event for a tool run ending (Vibe
+    /// reports a tool only once it settled), so a silent grok or Vibe can't be told apart from
+    /// one running a long tool: none of them is watched.
     fn streams_progress(&self) -> bool {
-        self.cli_binary.is_some() && !matches!(self.tool_kind.as_str(), "codex" | "grok")
+        self.cli_binary.is_some() && !matches!(self.tool_kind.as_str(), "codex" | "grok" | "vibe")
     }
 
     async fn stream_turn(
@@ -1589,12 +1828,12 @@ impl Driver for CliDriver {
             },
             _ => None,
         };
-        // D4: a folder an isolated bot used may hold settings it left there. Codex and Grok don't
+        // D4: a folder an isolated bot used may hold settings it left there. Codex, Grok and Vibe don't
         // run in it; Claude on this computer runs without the folder's own settings and servers.
         let mut in_isolated_folder = false;
         if isolated.is_none() {
             if let Some(recorded) = isolated_folder_used(&input).await {
-                if matches!(self.tool_kind.as_str(), "codex" | "grok") {
+                if matches!(self.tool_kind.as_str(), "codex" | "grok" | "vibe") {
                     tracing::warn!(kwant = %input.kwant.id, cli = %self.tool_kind, folder = %recorded.display(), "not running in a folder an isolated bot used");
                     let dir = input.workspace_dir.clone().filter(|d| d.exists()).unwrap_or(recorded);
                     let n = crate::sandbox::agent_vm::notice::IsolationFailed::folder_used(&input.kwant.name, &self.tool_kind, folder_info(&input, &dir));
@@ -1824,6 +2063,79 @@ impl Driver for CliDriver {
                     text,
                     reasoning: Some(self.executed_via(effort)),
                     tokens_used: tokens,
+                    ..Default::default()
+                });
+            }
+            "vibe" => {
+                // A model Vibe can't take is refused, never swapped for Vibe's default
+                if let Some(notice) = input.model.as_deref().and_then(super::vibe::bad_model_notice) {
+                    tracing::warn!(cli = "vibe", "turn refused: its pinned model isn't a Mistral model id");
+                    let text = format!("⚠️ [{}] {notice}", input.kwant.name);
+                    let _ = event_tx.send(RuntimeEvent::TextDelta(text.clone())).await;
+                    let _ = event_tx
+                        .send(RuntimeEvent::TurnComplete {
+                            tokens: 0,
+                            duration_ms: start.elapsed().as_millis() as u64,
+                            kwant_id: None,
+                            profile_id: None,
+                        })
+                        .await;
+                    return Ok(TurnOutput { text, reasoning: Some(self.executed_via(effort)), ..Default::default() });
+                }
+                // Vibe adds the system prompt to its own instead of replacing it
+                let run = Self::run_vibe(&bin_path, &input, &system_prompt, &effective_prompt, &event_tx).await;
+                let usage = run.as_ref().ok().and_then(|r| r.export.as_ref()).and_then(|e| e.usage);
+                let model = run.as_ref().ok().and_then(|r| r.export.as_ref()).and_then(|e| e.model.clone());
+                if let Some(u) = &usage {
+                    record_cli_usage(&input, model.clone().or_else(|| input.model.clone()).or_else(|| Some("vibe".into())), u).await;
+                }
+                let text = match run {
+                    Ok(run) if run.broke_no_tools.is_some() => {
+                        let what = format!("ran a tool ({})", run.broke_no_tools.unwrap_or_default());
+                        tracing::warn!(cli = "vibe", %what, "no-tools vibe run stopped");
+                        return Err(no_tools_broken("vibe", &what));
+                    }
+                    Ok(run) if run.stdout.trim().is_empty() => {
+                        // Only a run that did nothing moves to another account
+                        let failure = (!run.tool_calls && run.killed.is_none())
+                            .then(|| super::vibe::failover(run.exit_code, run.export.as_ref(), &run.stderr))
+                            .flatten();
+                        match failure {
+                            Some(failure) => return Ok(TurnOutput { usage, ..TurnOutput::refused(failure) }),
+                            None => empty_vibe_reply(&input, &run, &event_tx).await,
+                        }
+                    }
+                    Ok(run) => match &run.killed {
+                        // Its partial reply was already streamed: the reason follows it
+                        Some(line) => {
+                            let notice = format!("\n\n⚠️ [{}] {line}", input.kwant.name);
+                            let _ = event_tx.send(RuntimeEvent::TextDelta(notice.clone())).await;
+                            format!("{}{notice}", run.stdout)
+                        }
+                        None => run.stdout,
+                    },
+                    Err(e) => {
+                        tracing::warn!(error = %e, binary = %bin_path, "vibe run failed");
+                        let msg = format!("⚠️ [{}] Execution error for {} CLI: {}", input.kwant.name, self.tool_kind, e);
+                        let _ = event_tx.send(RuntimeEvent::TextDelta(msg.clone())).await;
+                        msg
+                    }
+                };
+                let tokens = usage.map_or(text.len() / 4, |u| (u.fresh_input + u.cache_read + u.output) as usize);
+                let _ = event_tx
+                    .send(RuntimeEvent::TurnComplete {
+                        tokens,
+                        duration_ms: start.elapsed().as_millis() as u64,
+                        kwant_id: None,
+                        profile_id: None,
+                    })
+                    .await;
+                return Ok(TurnOutput {
+                    text,
+                    reasoning: Some(self.executed_via(effort)),
+                    tokens_used: tokens,
+                    usage,
+                    model,
                     ..Default::default()
                 });
             }
@@ -3394,6 +3706,195 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             let fake = Fake::new("grok", GROK_TEXT);
             let why = execution_error(fake.run(turn(true)).await);
             assert!(why.contains("didn't say which tools it offered"), "{why}");
+        }
+
+        /// 35b red proof: a Mistral Vibe turn reads vibe's streamed reply (`--output streaming`).
+        const VIBE_TEXT: &str = r#"echo '{"type":"message","role":"assistant","content":[{"type":"text","text":"The card."}],"outcome":{"type":"committed"}}'"#;
+
+        #[tokio::test]
+        async fn a_vibe_turn_answers_with_vibes_streamed_reply() {
+            let fake = Fake::new("vibe", &format!("{RECORD}\n{VIBE_TEXT}"));
+            let out = fake.run(turn(false)).await.expect("a vibe turn runs");
+            assert_eq!(out.text.trim(), "The card.");
+            let argv = fake.argv();
+            assert!(has_pair(&argv, "--output", "streaming"), "{argv:?}");
+        }
+
+        /// The `--output-dir` Vibe was given, as `$out`, for a fake that writes `export.json`.
+        const VIBE_OUT: &str = r#"out=""; prev=""; for a in "$@"; do [ "$prev" = "--output-dir" ] && out="$a"; prev="$a"; done"#;
+
+        #[tokio::test]
+        async fn a_vibe_turn_is_never_trusted_or_auto_approved_and_its_env_is_cleared() {
+            let fake = Fake::new(
+                "vibe",
+                &format!("{RECORD}\nenv > {{dir}}/env\ncp \"$VIBE_HOME/config.toml\" {{dir}}/config.toml\n{VIBE_TEXT}"),
+            );
+            let mut input = turn(false);
+            input.model = Some("mistral-medium-latest".into());
+            let out = fake.run(input).await.unwrap();
+            assert_eq!(out.text.trim(), "The card.");
+            let argv = fake.argv();
+            for bad in ["--trust", "--auto-approve", "--yolo", "--resume", "--continue"] {
+                assert!(!argv.iter().any(|a| a == bad), "{bad}: {argv:?}");
+            }
+            assert!(has_pair(&argv, "--time-limit", "3600"), "{argv:?}");
+            assert!(has_pair(&argv, "--approval-policy", "ask"), "{argv:?}");
+            assert!(has_pair(&argv, "--model", "mistral-medium-latest"), "{argv:?}");
+            let env = std::fs::read_to_string(fake.path("env")).unwrap();
+            let var = |name: &str| env.lines().find_map(|l| l.strip_prefix(&format!("{name}="))).map(str::to_string);
+            // kwnt's own env (cargo's, here) never reaches Vibe
+            if std::env::vars().any(|(k, _)| k.starts_with("CARGO_")) {
+                assert!(!env.lines().any(|l| l.starts_with("CARGO_")), "{env}");
+            }
+            let vibe_home = var("VIBE_HOME").unwrap();
+            assert!(vibe_home.contains("kwnt-vibe-"), "{vibe_home}");
+            assert!(var("HOME").unwrap().starts_with(&vibe_home));
+            assert!(var("TMPDIR").unwrap().starts_with(&vibe_home));
+            assert_eq!(var("VIBE_MCP_SERVERS").as_deref(), Some("[]"));
+            assert_eq!(var("VIBE_ENABLED_TOOLS").as_deref(), Some(r#"["kwnt-none"]"#));
+            let tools: serde_json::Value = serde_json::from_str(&var("VIBE_TOOLS").unwrap()).unwrap();
+            // No working folder: nothing is allowed
+            for tool in ["bash", "read_file", "write_file", "web_fetch", "web_search", "task"] {
+                assert_eq!(tools[tool]["permission"], "never", "{tool}");
+            }
+            assert!(var(crate::mcp::GATEWAY_TOKEN_ENV).is_none());
+            let config = std::fs::read_to_string(fake.path("config.toml")).unwrap();
+            assert!(config.contains("enable_telemetry = false"), "{config}");
+        }
+
+        #[tokio::test]
+        async fn a_vibe_turn_in_a_folder_may_use_only_the_file_tools_and_gets_the_prompts_as_files() {
+            let folder = tempfile::tempdir().unwrap();
+            let fake = Fake::new(
+                "vibe",
+                &format!(
+                    "{RECORD}\necho \"$VIBE_TOOLS\" > {{dir}}/tools\npwd > {{dir}}/pwd\n\
+                     prev=\"\"; for a in \"$@\"; do [ \"$prev\" = \"--prompt-file\" ] && cp \"$a\" {{dir}}/prompt; [ \"$prev\" = \"--system-prompt-file\" ] && cp \"$a\" {{dir}}/system; prev=\"$a\"; done\n{VIBE_TEXT}"
+                ),
+            );
+            let mut input = turn(false);
+            input.workspace_dir = Some(folder.path().to_path_buf());
+            input.prompt = "vibe-folder-marker please".into();
+            fake.run(input).await.unwrap();
+            let tools: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(fake.path("tools")).unwrap()).unwrap();
+            for tool in ["read_file", "grep", "write_file", "edit"] {
+                assert_eq!(tools[tool]["permission"], "always", "{tool}");
+                assert_eq!(tools[tool]["outside_workdir"], "deny", "{tool}");
+            }
+            for tool in ["bash", "web_fetch", "web_search", "task", "ask_user_question"] {
+                assert_eq!(tools[tool]["permission"], "never", "{tool}");
+            }
+            assert!(tools["bash"]["shell"].as_str().unwrap().ends_with("kwnt-shell.sh"));
+            let pwd = std::fs::read_to_string(fake.path("pwd")).unwrap();
+            assert_eq!(std::fs::canonicalize(pwd.trim()).unwrap(), std::fs::canonicalize(folder.path()).unwrap());
+            assert!(std::fs::read_to_string(fake.path("prompt")).unwrap().contains("vibe-folder-marker please"));
+            assert!(fake.path("system").is_file());
+        }
+
+        #[tokio::test]
+        async fn a_vibe_turn_records_usage_and_cost_from_its_export() {
+            let fake = Fake::new(
+                "vibe",
+                &format!(
+                    "{VIBE_OUT}\n{VIBE_TEXT}\necho '{{\"outcome\":\"finished\",\"usage\":{{\"input_tokens\":1200,\"output_tokens\":30,\"cached_input_tokens\":200}},\"cost_usd\":0.004,\"config\":{{\"active_model\":\"mistral-medium-3.5\"}}}}' > \"$out/export.json\""
+                ),
+            );
+            let out = fake.run(turn(false)).await.unwrap();
+            assert_eq!(out.text.trim(), "The card.");
+            assert_eq!(
+                out.usage,
+                Some(crate::drivers::TurnUsage { fresh_input: 1000, cache_read: 200, cache_write: 0, output: 30, cost_usd: Some(0.004) })
+            );
+            assert_eq!(out.model.as_deref(), Some("mistral-medium-3.5"));
+            assert_eq!(out.tokens_used, 1230);
+        }
+
+        /// Rigel's live check: a pin Vibe's list lacks must run as given, and a name Vibe can't
+        /// take must refuse the turn, never run Vibe's default model instead.
+        #[tokio::test]
+        async fn a_vibe_turn_runs_its_pin_or_refuses_it_never_another_model() {
+            let fake = Fake::new("vibe", &format!("{RECORD}\nenv > {{dir}}/env\n{VIBE_TEXT}"));
+            let mut input = turn(false);
+            input.model = Some("ministral-3b-latest".into());
+            let out = fake.run(input).await.unwrap();
+            assert_eq!(out.text.trim(), "The card.");
+            let argv = fake.argv();
+            assert!(has_pair(&argv, "--model", "ministral-3b-latest"), "{argv:?}");
+            let env = std::fs::read_to_string(fake.path("env")).unwrap();
+            let models = env.lines().find_map(|l| l.strip_prefix("VIBE_MODELS=")).expect("the pin is defined for Vibe");
+            let models: serde_json::Value = serde_json::from_str(models).unwrap();
+            assert_eq!(models, serde_json::json!([{"name": "ministral-3b-latest", "provider": "mistral", "alias": "ministral-3b-latest"}]));
+
+            let fake = Fake::new("vibe", &format!("touch {{dir}}/ran\n{VIBE_TEXT}"));
+            let mut input = turn(false);
+            input.model = Some("mistral/ministral 3b".into());
+            let out = fake.run(input).await.unwrap();
+            assert!(out.text.contains("Mistral Vibe can't run this bot's pinned model"), "{}", out.text);
+            assert!(out.failure.is_none(), "another account would refuse it too");
+            assert!(!fake.path("ran").exists(), "Vibe never started");
+        }
+
+        #[tokio::test]
+        async fn a_vibe_limit_or_bad_key_moves_the_turn_to_another_account() {
+            use crate::profiles::FailClass;
+            for (code, exit, class) in [
+                ("rate_limit", 2, FailClass::Quota),
+                ("model_billing_denied", 2, FailClass::Quota),
+                ("usage_limit", 2, FailClass::Quota),
+                ("invalid_api_key", 1, FailClass::Auth),
+            ] {
+                let fake = Fake::new(
+                    "vibe",
+                    &format!(
+                        "{VIBE_OUT}\necho '{{\"outcome\":\"x\",\"error\":{{\"message\":\"vibe-{code}\",\"code\":\"{code}\"}}}}' > \"$out/export.json\"\nexit {exit}"
+                    ),
+                );
+                let out = fake.run(turn(false)).await.unwrap();
+                assert_eq!(out.failure.as_ref().map(|f| f.class), Some(class), "{code}: {}", out.text);
+            }
+            // A server error is the turn's notice, not a failover
+            let fake = Fake::new(
+                "vibe",
+                &format!("{VIBE_OUT}\necho '{{\"error\":{{\"message\":\"Server error 500 for vibe\",\"code\":\"backend_error\"}}}}' > \"$out/export.json\"\nexit 2"),
+            );
+            let out = fake.run(turn(false)).await.unwrap();
+            assert!(out.failure.is_none());
+            assert!(out.text.contains("Vibe stopped with an error: Server error 500 for vibe"), "{}", out.text);
+        }
+
+        #[tokio::test]
+        async fn a_vibe_turn_that_wanted_a_refused_tool_says_so() {
+            let denied = r#"echo '{"type":"effect","title":"file_system.bash","toolCallId":"c1","detail":{"toolName":"file_system.bash","input":{"command":"cat ~/.ssh/id_rsa"}},"state":{"status":"failed","error":{"code":"tool_denied","message":"denied"}}}'"#;
+            let fake = Fake::new("vibe", denied);
+            let out = fake.run(turn(false)).await.unwrap();
+            assert!(out.failure.is_none(), "a run that tried a tool doesn't fail over");
+            assert!(out.text.contains("“file_system.bash”") && out.text.contains("doesn't allow"), "{}", out.text);
+        }
+
+        #[tokio::test]
+        async fn a_no_tools_vibe_turn_that_runs_a_tool_is_stopped() {
+            let ran = r#"echo '{"type":"effect","title":"file_system.read_file","toolCallId":"nt1","state":{"status":"completed"}}'"#;
+            let fake = Fake::new("vibe", &format!("{ran}\nsleep 5\n{VIBE_TEXT}"));
+            let started = std::time::Instant::now();
+            let why = execution_error(fake.run(turn(true)).await);
+            assert!(why.contains("the vibe CLI ran a tool (file_system.read_file)"), "{why}");
+            assert!(started.elapsed() < std::time::Duration::from_secs(4), "stopped at once");
+            // Vibe's own TypeScript sandbox reaches nothing else, so it may run
+            let sandbox = r#"echo '{"type":"effect","title":"run_typescript","toolCallId":"nt2","state":{"status":"completed"}}'"#;
+            let fake = Fake::new("vibe", &format!("{RECORD}\necho \"$VIBE_TOOLS\" > {{dir}}/tools\n{sandbox}\n{VIBE_TEXT}"));
+            let out = fake.run(turn(true)).await.unwrap();
+            assert_eq!(out.text.trim(), "The card.");
+            let tools: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(fake.path("tools")).unwrap()).unwrap();
+            assert!(tools.as_object().unwrap().values().all(|t| t["permission"] == "never"), "{tools}");
+        }
+
+        #[test]
+        fn vibe_runs_no_tools_turns_but_not_read_only_ones() {
+            let mut input = turn(true);
+            assert_eq!(no_tools_refusal("vibe", &input), None);
+            input.no_tools = false;
+            input.read_only = true;
+            assert!(read_only_refusal("vibe", &input).is_some());
         }
 
         // 29y: a CLI killed mid-turn says why. On a test machine nothing raises the OOM-kill

@@ -1675,6 +1675,16 @@ pub async fn gateway_grok_endpoint(
     gateway_rpc(&state, &headers, msg, GatewayNaming::Grok).await
 }
 
+/// `POST /api/mcp/gateway/vibe`: the same gateway, with tool names Vibe can use as config keys
+/// (`[A-Za-z0-9_]` only). Calls are mapped back to the real tool, like grok's.
+pub async fn gateway_vibe_endpoint(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(msg): Json<Value>,
+) -> Response {
+    gateway_rpc(&state, &headers, msg, GatewayNaming::Vibe).await
+}
+
 /// The engine's own id for a gateway `tools/call` (28q): Claude Code sends its tool-use id, which
 /// its activity step carries, as `_meta["claudecode/toolUseId"]`. `None` when the engine sends none.
 fn engine_call_id(msg: &Value) -> Option<&str> {
@@ -1721,12 +1731,12 @@ async fn gateway_rpc(
             let Some(tools) = session.tool_session().await else {
                 return StatusCode::UNAUTHORIZED.into_response();
             };
-            // An unknown grok name stays as given, and the call fails as an unknown tool
+            // An unknown grok or Vibe name stays as given, and the call fails as an unknown tool
             let tool_name = tools
                 .canonical_name(naming, name)
                 .unwrap_or_else(|| name.to_string());
             // 29g: grok sends no id; its step carries the grok name, which only this map can read
-            let called_as = (naming == GatewayNaming::Grok).then_some(name);
+            let called_as = (naming != GatewayNaming::Plain).then_some(name);
             // Dropping the call withdraws its card (or stops the forwarded call) when the turn ends
             let (caller, raw_arguments) = (session.caller(), arguments.to_string());
             let outcome = tokio::select! {

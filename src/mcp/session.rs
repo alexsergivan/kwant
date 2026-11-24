@@ -20,6 +20,8 @@ struct OfferedTool {
     tool: McpTool,
     /// The name grok sees (see [`grok_tool_names`]).
     grok_name: String,
+    /// The name Vibe sees (see [`vibe_tool_names`]).
+    vibe_name: String,
 }
 
 /// How kwnt's gateway names the tools it offers an agent CLI.
@@ -29,6 +31,8 @@ pub enum GatewayNaming {
     Plain,
     /// `<server>-<tool>` with no `__` (grok rejects `__` inside an MCP tool name).
     Grok,
+    /// `<server>__<tool>` with only `[A-Za-z0-9_]` (Vibe uses the name as a config key).
+    Vibe,
 }
 
 /// grok's name for `<server>`'s `<tool>`: `<server>-<tool>`, every character outside
@@ -66,6 +70,38 @@ pub fn grok_tool_names(tools: &[(&str, &str)]) -> Vec<String> {
             }
             let name = (2..)
                 .map(|n| format!("{base}-{n}"))
+                .find(|candidate| !taken.contains(candidate))
+                .unwrap();
+            taken.insert(name.clone());
+            name
+        })
+        .collect()
+}
+
+/// Vibe names for `(server, tool)` pairs, in order: `<server>__<tool>` with every character
+/// outside `[A-Za-z0-9_]` replaced by `_`, since Vibe publishes `kwnt_<name>` as the tool's name
+/// and its permission key. Distinct tools that map to the same name get `_2`, `_3`, … (first one
+/// keeps the plain name), never reusing a name another tool maps to plainly.
+pub fn vibe_tool_names(tools: &[(&str, &str)]) -> Vec<String> {
+    let bases: Vec<String> = tools
+        .iter()
+        .map(|(server, tool)| {
+            format!("{server}__{tool}")
+                .chars()
+                .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+                .collect()
+        })
+        .collect();
+    let mut taken: std::collections::HashSet<String> = bases.iter().cloned().collect();
+    let mut seen = std::collections::HashSet::new();
+    bases
+        .into_iter()
+        .map(|base| {
+            if seen.insert(base.clone()) {
+                return base;
+            }
+            let name = (2..)
+                .map(|n| format!("{base}_{n}"))
                 .find(|candidate| !taken.contains(candidate))
                 .unwrap();
             taken.insert(name.clone());
@@ -152,6 +188,7 @@ impl McpToolSession {
                                 server_index: index,
                                 tool,
                                 grok_name: String::new(),
+                                vibe_name: String::new(),
                             });
                         } else {
                             tracing::warn!(server = %server.name, tool = %tool.name, "MCP tool name not usable as a function name; skipped");
@@ -173,8 +210,10 @@ impl McpToolSession {
             })
             .collect();
         let grok_names = grok_tool_names(&pairs);
-        for (tool, grok_name) in session.tools.iter_mut().zip(grok_names) {
+        let vibe_names = vibe_tool_names(&pairs);
+        for ((tool, grok_name), vibe_name) in session.tools.iter_mut().zip(grok_names).zip(vibe_names) {
             tool.grok_name = grok_name;
+            tool.vibe_name = vibe_name;
         }
         (session, problems)
     }
@@ -201,7 +240,7 @@ impl McpToolSession {
     }
 
     /// The `tools/list` result for kwnt's MCP gateway. Tools are named `<server>__<tool>` (or
-    /// grok's `<server>-<tool>`), so an agent CLI that prefixes its own server name still shows
+    /// grok's `<server>-<tool>`, Vibe's `[A-Za-z0-9_]` form), so an agent CLI that prefixes its own server name still shows
     /// which server a tool belongs to.
     pub fn gateway_tools(&self, naming: GatewayNaming) -> Vec<Value> {
         self.tools
@@ -214,6 +253,7 @@ impl McpToolSession {
                 let name = match naming {
                     GatewayNaming::Plain => t.name.strip_prefix("mcp__").unwrap_or(&t.name),
                     GatewayNaming::Grok => &t.grok_name,
+                    GatewayNaming::Vibe => &t.vibe_name,
                 };
                 json!({
                     "name": name,
@@ -225,7 +265,7 @@ impl McpToolSession {
     }
 
     /// The `mcp__<server>__<tool>` name a gateway tool name stands for; the approval card and
-    /// the call record use it. `None` for a grok name the gateway never offered.
+    /// the call record use it. `None` for a grok or Vibe name the gateway never offered.
     pub fn canonical_name(&self, naming: GatewayNaming, gateway_name: &str) -> Option<String> {
         match naming {
             GatewayNaming::Plain => Some(format!("mcp__{gateway_name}")),
@@ -233,6 +273,11 @@ impl McpToolSession {
                 .tools
                 .iter()
                 .find(|t| t.grok_name == gateway_name)
+                .map(|t| t.name.clone()),
+            GatewayNaming::Vibe => self
+                .tools
+                .iter()
+                .find(|t| t.vibe_name == gateway_name)
                 .map(|t| t.name.clone()),
         }
     }
@@ -440,5 +485,17 @@ mod tests {
         let unique: std::collections::HashSet<_> = names.iter().collect();
         assert_eq!(unique.len(), names.len());
         assert!(names.iter().all(|n| !n.contains("__")));
+    }
+
+    #[test]
+    fn vibe_names_are_config_keys_and_unique() {
+        let names = vibe_tool_names(&[
+            ("gh", "create-issue"),
+            ("gh", "create_issue"), // same base as the first
+            ("gh", "create_issue_2"), // the suffix the previous one would naively get
+            ("my.server", "a b"),
+        ]);
+        assert_eq!(names, ["gh__create_issue", "gh__create_issue_3", "gh__create_issue_2", "my_server__a_b"]);
+        assert!(names.iter().all(|n| n.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')));
     }
 }

@@ -71,7 +71,7 @@ pub fn laya_fix(p: Platform, managed: bool) -> &'static str {
 /// How to install an engine's CLI here.
 pub fn cli_install_fix(engine: Engine, p: Platform) -> &'static str {
     match (engine, p) {
-        (_, Platform::Docker) => "Rebuild the image with the CLIs: KWNT_CLIS=claude,codex,grok docker compose up -d --build",
+        (_, Platform::Docker) => "Rebuild the image with the CLIs: KWNT_CLIS=claude,codex,grok,vibe docker compose up -d --build",
         (Engine::Claude, _) => "kwnt setup --clis claude   (or: curl -fsSL https://claude.ai/install.sh | bash)",
         (Engine::Codex, Platform::Mac) => "kwnt setup --clis codex   (or: brew install --cask codex, or npm install -g @openai/codex)",
         (Engine::Codex, _) => "kwnt setup --clis codex   (or: npm install -g @openai/codex; needs Node.js 18+)",

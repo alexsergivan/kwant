@@ -1802,7 +1802,7 @@ mod tests {
             assert!(kwnt_path_allowed(ok), "{ok}");
         }
         for bad in [
-            "/api/mcp/self/", "/api/mcp/selfx", "/api/mcp/gateway/grok", "/api/mcp/permission/", "/api/mcp/permission/a/b",
+            "/api/mcp/self/", "/api/mcp/selfx", "/api/mcp/gateway/grok", "/api/mcp/gateway/vibe", "/api/mcp/permission/", "/api/mcp/permission/a/b",
             "/api/mcp/permission/a.b", "/api/settings/computer", "/api/mcp/servers", "/api/kwants", "/",
         ] {
             assert!(!kwnt_path_allowed(bad), "{bad}");

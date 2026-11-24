@@ -340,7 +340,7 @@ pub fn engine_label(e: crate::drivers::engines::EngineId) -> &'static str {
         E::Grok | E::XaiApi => "Grok",
         E::Ollama => "Ollama",
         E::CustomApi => "Custom API",
-        E::MistralApi => "Mistral",
+        E::MistralApi | E::MistralVibe => "Mistral",
     }
 }
 

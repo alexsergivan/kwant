@@ -6,6 +6,7 @@ pub mod custom;
 pub mod engines;
 pub mod events;
 pub mod grok;
+pub mod vibe;
 pub mod mac_local;
 #[cfg(windows)]
 pub(crate) mod win_job;
@@ -878,7 +879,7 @@ pub async fn detect_available_models(
             "direct code generation, standard algorithms, regex, JSON transforms",
             "direct code generation, standard algorithms, regex, JSON transforms",
         ),
-        // API only (35b adds its CLI): both descriptions are the API's
+        // Vibe (35b) is a coding agent like the API's model: one description for both
         (
             Engine::Mistral,
             "everyday questions, writing in many languages, coding",
@@ -1086,8 +1087,9 @@ pub fn resolve_driver_isolated(
         SystemRoute::Ollama => (Box::new(ApiDriver::new(None, endpoint)), EngineId::Ollama),
         SystemRoute::Api { engine, key } => (Box::new(ApiDriver::new(Some(key), endpoint)), engine),
         SystemRoute::Cli { engine, bin } => {
-            let name = crate::profiles::Engine::from_model(target_model).map(|e| e.as_str().to_string());
-            let claude = name.as_deref() == Some("claude");
+            // The CLI's own name: Mistral's family runs on `vibe`
+            let name = Some(engine.as_str().to_string());
+            let claude = engine == EngineId::Claude;
             (Box::new(CliDriver::new(Some(bin), name).with_isolation(isolation.filter(|_| claude))), engine)
         }
     })

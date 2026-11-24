@@ -704,6 +704,11 @@ impl GatewayAccess {
     pub fn grok_url(&self) -> String {
         format!("{}/grok", self.url.trim_end_matches('/'))
     }
+
+    /// The gateway's Vibe naming mode (`POST /api/mcp/gateway/vibe`): tool names are config keys.
+    pub fn vibe_url(&self) -> String {
+        format!("{}/vibe", self.url.trim_end_matches('/'))
+    }
 }
 
 impl std::fmt::Debug for GatewayAccess {

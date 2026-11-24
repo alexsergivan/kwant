@@ -571,7 +571,7 @@ fn docker_detail(id: ItemId) -> &'static str {
         ItemId::Laya => "the compose laya service: docker compose up -d laya",
         ItemId::Browser => "the compose browser service: docker compose up -d browser",
         ItemId::Docker => "not used inside the container",
-        _ => "build the image with KWNT_CLIS=claude,codex,grok",
+        _ => "build the image with KWNT_CLIS=claude,codex,grok,vibe",
     }
 }
 

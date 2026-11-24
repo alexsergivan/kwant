@@ -70,8 +70,11 @@ pub enum EngineId {
     Ollama,
     /// The space's Custom API accounts (OpenAI-compatible or Anthropic-compatible servers).
     CustomApi,
-    /// 35a: Mistral's API (api.mistral.ai), the only engine of the `mistral` family until 35b.
+    /// 35a: Mistral's API (api.mistral.ai).
     MistralApi,
+    /// 35b: Mistral's Vibe CLI (`vibe`), the `mistral` family's CLI.
+    #[serde(rename = "vibe")]
+    MistralVibe,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -159,7 +162,7 @@ pub fn codex_tier(slug: &str, description: Option<&str>) -> Option<Tier> {
 
 impl EngineId {
     /// Every engine, in the order the API lists them.
-    pub const ALL: [EngineId; 9] = [
+    pub const ALL: [EngineId; 10] = [
         EngineId::Claude,
         EngineId::Codex,
         EngineId::Grok,
@@ -169,6 +172,7 @@ impl EngineId {
         EngineId::Ollama,
         EngineId::CustomApi,
         EngineId::MistralApi,
+        EngineId::MistralVibe,
     ];
 
     pub fn name(self) -> &'static str {
@@ -182,12 +186,13 @@ impl EngineId {
             EngineId::Ollama => "Ollama",
             EngineId::CustomApi => "Custom API",
             EngineId::MistralApi => "Mistral API",
+            EngineId::MistralVibe => "Mistral Vibe CLI",
         }
     }
 
     pub fn kind(self) -> EngineKind {
         match self {
-            EngineId::Claude | EngineId::Codex | EngineId::Grok => EngineKind::Cli,
+            EngineId::Claude | EngineId::Codex | EngineId::Grok | EngineId::MistralVibe => EngineKind::Cli,
             EngineId::AnthropicApi
             | EngineId::OpenaiApi
             | EngineId::XaiApi
@@ -209,11 +214,18 @@ impl EngineId {
             EngineId::Ollama => "ollama",
             EngineId::CustomApi => "custom_api",
             EngineId::MistralApi => "mistral_api",
+            EngineId::MistralVibe => "vibe",
         }
     }
 
     pub fn parse(id: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|e| e.as_str() == id)
+    }
+
+    /// Runs any model id its provider has, also one its list lacks: Vibe defines a pinned
+    /// model on the fly (`VIBE_MODELS`), so a pin is never swapped for another model.
+    pub fn runs_unlisted_pins(self) -> bool {
+        matches!(self, EngineId::MistralVibe)
     }
 
     /// The model family it runs (`None` for Ollama).
@@ -223,20 +235,19 @@ impl EngineId {
             EngineId::Codex | EngineId::OpenaiApi => Some(Engine::Codex),
             EngineId::Grok | EngineId::XaiApi => Some(Engine::Grok),
             EngineId::CustomApi => Some(Engine::Custom),
-            EngineId::MistralApi => Some(Engine::Mistral),
+            EngineId::MistralApi | EngineId::MistralVibe => Some(Engine::Mistral),
             EngineId::Ollama => None,
         }
     }
 
-    /// For Custom API both are [`EngineId::CustomApi`] and for Mistral both are
-    /// [`EngineId::MistralApi`]: neither has a CLI (35b adds Mistral's).
+    /// For Custom API both are [`EngineId::CustomApi`]: it has no CLI.
     pub fn of_family(engine: Engine) -> (EngineId, EngineId) {
         match engine {
             Engine::Claude => (EngineId::Claude, EngineId::AnthropicApi),
             Engine::Codex => (EngineId::Codex, EngineId::OpenaiApi),
             Engine::Grok => (EngineId::Grok, EngineId::XaiApi),
             Engine::Custom => (EngineId::CustomApi, EngineId::CustomApi),
-            Engine::Mistral => (EngineId::MistralApi, EngineId::MistralApi),
+            Engine::Mistral => (EngineId::MistralVibe, EngineId::MistralApi),
         }
     }
 }
@@ -349,6 +360,7 @@ pub struct ProbeEnv {
     pub claude_config_dir: Option<std::path::PathBuf>,
     pub codex_bin: Option<String>,
     pub grok_bin: Option<String>,
+    pub vibe_bin: Option<String>,
     pub anthropic_key: Option<String>,
     pub openai_key: Option<String>,
     pub xai_key: Option<String>,
@@ -385,6 +397,7 @@ impl ProbeEnv {
             claude_config_dir: None,
             codex_bin: super::find_cli_binary("codex"),
             grok_bin: super::find_cli_binary("grok"),
+            vibe_bin: super::find_cli_binary("vibe"),
             anthropic_key: key(db, "anthropic_api_key", "ANTHROPIC_API_KEY").await,
             openai_key: key(db, "openai_api_key", "OPENAI_API_KEY").await,
             xai_key: key(db, "xai_api_key", "XAI_API_KEY").await,
@@ -411,6 +424,7 @@ pub async fn probe_within(id: EngineId, env: &ProbeEnv, limit: Duration) -> Prob
             EngineId::Claude => probe_claude(env.claude_bin.as_deref(), env.claude_config_dir.as_deref()).await,
             EngineId::Codex => probe_codex(env.codex_bin.as_deref()).await,
             EngineId::Grok => probe_grok(env.grok_bin.as_deref()).await,
+            EngineId::MistralVibe => probe_vibe(env.vibe_bin.as_deref()).await,
             EngineId::AnthropicApi | EngineId::OpenaiApi | EngineId::XaiApi | EngineId::MistralApi => {
                 probe_api(id, env).await
             }
@@ -627,6 +641,38 @@ async fn probe_grok(bin: Option<&str>) -> Probe {
         Probe::ready("Signed in", models)
     };
     probe.with_version(version)
+}
+
+/// Vibe has no sign-in status command: it's ready when it runs and a Mistral key is where
+/// `vibe --setup` puts it (or in kwnt's env). The key isn't tried, so a check costs nothing.
+async fn probe_vibe(bin: Option<&str>) -> Probe {
+    let Some(bin) = bin else {
+        return Probe::not_installed("Mistral Vibe CLI isn't installed");
+    };
+    let out = match run(bin, &["--version"]).await {
+        Ok(o) => o,
+        Err(e) => return Probe::error(e),
+    };
+    if !out.success {
+        return Probe::error(format!("Couldn't check: {}", failure_line(&out)));
+    }
+    let version = parse_vibe_version(&out.stdout);
+    let home = super::vibe::user_vibe_home();
+    let probe = match super::vibe::find_key(home.as_deref()).await {
+        Some((_, source)) => Probe::ready(format!("Signed in ({})", source.label()), mistral_fallback_models()),
+        None => Probe::signed_out("No Mistral API key: run `vibe --setup`"),
+    };
+    match version {
+        Some(v) => probe.with_version(Some(v)),
+        None => probe,
+    }
+}
+
+/// `vibe --version` prints `vibe 3.1.4`.
+fn parse_vibe_version(stdout: &str) -> Option<String> {
+    let v = stdout.trim().strip_prefix("vibe")?.trim();
+    (!v.is_empty() && v.len() <= 32 && v.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '+')))
+        .then(|| v.to_string())
 }
 
 /// Chat models in a provider's `GET /v1/models` reply, newest first, default marked.
@@ -1173,6 +1219,26 @@ pub fn choose_model(models: &[EngineModel], pinned: Option<&str>, tier: Tier) ->
     of_tier(tier).or(default).map(ModelChoice::of)
 }
 
+/// Pins that name a tier or a size, not a model: they still go through [`choose_model`].
+const TIER_PINS: [&str; 8] = ["fast", "balanced", "deep", "small", "medium", "large", "tiny", "default"];
+
+/// The model a turn on `engine` runs. A pin the list lacks runs as given on an engine that can
+/// run it ([`EngineId::runs_unlisted_pins`]): never another model in its place, and a name the
+/// engine can't take is refused by its driver. Otherwise [`choose_model`].
+pub fn choose_engine_model(engine: EngineId, models: &[EngineModel], pinned: Option<&str>, tier: Tier) -> Option<ModelChoice> {
+    let unlisted = pinned.map(str::trim).filter(|p| {
+        engine.runs_unlisted_pins()
+            && !p.is_empty()
+            && !TIER_PINS.contains(&p.to_lowercase().as_str())
+            && !models.iter().any(|m| m.id.eq_ignore_ascii_case(p))
+    });
+    if let Some(pin) = unlisted {
+        let tier = if engine.family() == Some(Engine::Mistral) { mistral_tier(pin) } else { tier_from_name(pin) };
+        return Some(ModelChoice { id: pin.to_string(), label: pin.to_string(), tier });
+    }
+    choose_model(models, pinned, tier)
+}
+
 /// [`choose_model`] for a turn that moved here from another engine: the model of the same
 /// tier, else of the nearest tier (Deep → Balanced → Fast), else the engine's default.
 pub fn choose_model_near(models: &[EngineModel], pinned: Option<&str>, tier: Tier) -> Option<ModelChoice> {
@@ -1255,8 +1321,8 @@ pub fn system_route(
             return Ok(SystemRoute::Api { engine: api, key });
         }
     }
-    // An API-only family (Mistral until 35b) has no CLI to fall back on
-    if let Some(bin) = (cli != api).then(|| find_bin(family.as_str())).flatten() {
+    // An API-only family (Custom) has no CLI to fall back on
+    if let Some(bin) = (cli != api).then(|| find_bin(cli.as_str())).flatten() {
         if engines.usable(cli, true) {
             return Ok(SystemRoute::Cli { engine: cli, bin });
         }
@@ -1286,6 +1352,16 @@ fn unavailable(target_model: &str, reports: &[EngineReport]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 35b red proof: Mistral's family runs on the Mistral Vibe CLI (`vibe`) and the Mistral API.
+    #[test]
+    fn mistral_runs_on_the_vibe_cli_and_the_api() {
+        let (cli, api) = EngineId::of_family(Engine::Mistral);
+        assert_eq!(cli.as_str(), "vibe");
+        assert_eq!(cli.kind(), EngineKind::Cli);
+        assert_eq!(api, EngineId::MistralApi);
+        assert_eq!(EngineId::parse("vibe"), Some(cli));
+    }
 
     #[test]
     fn no_engine_notice_flags_the_setup_card() {
@@ -1605,6 +1681,33 @@ mod tests {
         assert_eq!(pick(&api, Some("mystery"), Tier::Fast).as_deref(), Some("claude-opus-5-5"));
     }
 
+    /// Rigel's live check: a Vibe turn pinned to a model Vibe's list lacks (ministral-3b) ran
+    /// another model. Vibe can run any Mistral model id, so the pin now runs as given.
+    #[test]
+    fn vibe_runs_an_unlisted_pin_as_given_and_other_engines_still_pick_from_their_list() {
+        let mistral = mistral_fallback_models();
+        let vibe = |pin: Option<&str>, tier| choose_engine_model(EngineId::MistralVibe, &mistral, pin, tier);
+        let c = vibe(Some("ministral-3b-latest"), Tier::Deep).unwrap();
+        assert_eq!((c.id.as_str(), c.run_id(), c.tier), ("ministral-3b-latest", Some("ministral-3b-latest"), Some(Tier::Fast)));
+        assert_eq!(vibe(Some(" codestral-latest "), Tier::Balanced).unwrap().id, "codestral-latest");
+        // A name Vibe can't take still reaches the driver, which refuses the turn
+        assert_eq!(vibe(Some("a b"), Tier::Fast).unwrap().id, "a b");
+        // A listed pin, a tier word and no pin pick from the list as before
+        assert_eq!(vibe(Some("MISTRAL-SMALL-LATEST"), Tier::Deep).unwrap().id, "mistral-small-latest");
+        assert_eq!(vibe(Some("large"), Tier::Fast).unwrap().id, choose_model(&mistral, Some("large"), Tier::Fast).unwrap().id);
+        assert_eq!(vibe(Some("default"), Tier::Fast).unwrap().id, choose_model(&mistral, Some("default"), Tier::Fast).unwrap().id);
+        assert_eq!(vibe(None, Tier::Fast).unwrap().id, "mistral-small-latest");
+        assert_eq!(vibe(Some(""), Tier::Deep).unwrap().id, "mistral-large-latest");
+        // Every other engine keeps its own list: an unknown pin gets the default there
+        let api = vec![EngineModel::new("claude-opus-5-5", "Opus", true, Some(Tier::Deep))];
+        assert_eq!(choose_engine_model(EngineId::AnthropicApi, &api, Some("mystery"), Tier::Fast).unwrap().id, "claude-opus-5-5");
+        assert_eq!(
+            choose_engine_model(EngineId::MistralApi, &mistral, Some("ministral-3b-latest"), Tier::Fast).unwrap().id,
+            choose_model(&mistral, Some("ministral-3b-latest"), Tier::Fast).unwrap().id
+        );
+        assert!(EngineId::ALL.iter().filter(|e| e.runs_unlisted_pins()).eq([&EngineId::MistralVibe]));
+    }
+
     #[test]
     fn disabled_setting_parses_leniently() {
         assert_eq!(parse_disabled(Some(r#"["claude","grok","nope"]"#)), HashSet::from([EngineId::Claude, EngineId::Grok]));
@@ -1682,14 +1785,26 @@ mod tests {
         assert!(fallback[1].default);
     }
 
-    /// 35a: Mistral is its own family, API only.
+    /// 35a: Mistral is its own family; 35b gives it the Vibe CLI.
     #[test]
-    fn mistral_is_an_api_only_family() {
+    fn mistral_is_its_own_family() {
         assert_eq!(EngineId::MistralApi.as_str(), "mistral_api");
         assert_eq!(EngineId::MistralApi.name(), "Mistral API");
         assert_eq!(EngineId::MistralApi.kind(), EngineKind::Api);
         assert_eq!(EngineId::MistralApi.family(), Some(Engine::Mistral));
-        assert_eq!(EngineId::of_family(Engine::Mistral), (EngineId::MistralApi, EngineId::MistralApi));
+        assert_eq!(EngineId::of_family(Engine::Mistral), (EngineId::MistralVibe, EngineId::MistralApi));
         assert!(EngineId::ALL.contains(&EngineId::MistralApi));
+        assert_eq!(EngineId::MistralVibe.name(), "Mistral Vibe CLI");
+        assert_eq!(EngineId::MistralVibe.family(), Some(Engine::Mistral));
+        assert_eq!(serde_json::to_value(EngineId::MistralVibe).unwrap(), "vibe");
+        assert_eq!(EngineId::ALL.len(), 10);
+    }
+
+    #[test]
+    fn vibe_version_is_read_from_its_banner() {
+        assert_eq!(parse_vibe_version("vibe 3.1.4\n").as_deref(), Some("3.1.4"));
+        assert_eq!(parse_vibe_version("something else"), None);
+        assert_eq!(parse_vibe_version("vibe "), None);
+        assert_eq!(parse_vibe_version("vibe 1 2; rm"), None);
     }
 }
