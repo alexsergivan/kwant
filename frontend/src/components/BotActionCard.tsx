@@ -1,7 +1,9 @@
 import React, { useState } from 'react';
-import { AlertTriangle, CalendarClock, CheckCircle2, Loader2, MinusCircle, Pause, Pencil, ShieldQuestion, Undo2, Wrench } from 'lucide-react';
+import { AlertTriangle, CalendarClock, CheckCircle2, Loader2, MinusCircle, Pause, Pencil, Play, ShieldQuestion, Undo2, Wrench } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { BotActionMeta, actionStateText, botGone, actionVerb, botActionView, routineButtons, routineFacts, sentence, summaryText } from '../botActions';
+import { BotActionMeta, actionStateText, botGone, actionVerb, botActionView, followsRoutine, routineButtons, routineFacts, routineGone, sentence, summaryText } from '../botActions';
+import type { Routine } from '../continuity';
+import { routineStore, useRoutineNow } from '../routineNow';
 
 export type BotActionDecision = 'undo' | 'confirm' | 'decline';
 
@@ -19,10 +21,16 @@ export interface BotActionCardProps {
   flash?: boolean;
   /** Ids of the bots that exist now; null until loaded. A card whose bot is gone settles. */
   botIds?: ReadonlySet<string> | null;
+  /** The routine as it is now (null: deleted). Read from the shared routines list unless given (tests). */
+  routine?: Routine | null;
+  /** Pause / Resume in place; resolves to an error message on failure. Defaults to PATCH { enabled }. */
+  onSetRoutineEnabled?: (routineId: string, enabled: boolean) => Promise<string | void>;
 }
 
+type Busy = BotActionDecision | 'pause' | 'resume';
+
 const btn =
-  'inline-flex items-center justify-center gap-1.5 min-h-[40px] sm:min-h-[32px] px-3 rounded-xl text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2';
+  'inline-flex items-center justify-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 rounded-xl text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2';
 const quiet = `${btn} text-zinc-200 border border-zinc-700 hover:bg-zinc-800 focus-visible:outline-zinc-500`;
 
 /**
@@ -30,12 +38,17 @@ const quiet = `${btn} text-zinc-200 border border-zinc-700 hover:bg-zinc-800 foc
  * the routine's facts when it's a routine, and the person's buttons (Undo, or Confirm/Decline).
  * Once resolved it says so plainly, so an undone change never still reads "Done".
  */
-export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, kwantName, kwantId, live, onDecide, onOpenRoutine, flash, botIds = null }) => {
+export const BotActionCard: React.FC<BotActionCardProps> = (props) => {
+  const { meta, messageId, kwantName, kwantId, live, onDecide, onOpenRoutine, flash, botIds = null, onSetRoutineEnabled } = props;
   const shown = botActionView(meta, live);
-  const gone = botGone(shown, botIds);
-  // Nothing to undo once the bot it made or changed is deleted.
+  // routine-card-stays-current: the routine as it is now, from the one shared list (no request per card).
+  const fromStore = useRoutineNow('routine' in props ? null : followsRoutine(shown) ? shown.target_id : null);
+  const routine = 'routine' in props ? props.routine : fromStore;
+  const routineDeleted = routineGone(shown, routine);
+  const gone = botGone(shown, botIds) || routineDeleted;
+  // Nothing to undo once the bot or routine it made or changed is deleted.
   const view = gone ? { ...shown, can_undo: false } : shown;
-  const [busy, setBusy] = useState<BotActionDecision | null>(null);
+  const [busy, setBusy] = useState<Busy | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const decide = async (d: BotActionDecision) => {
@@ -47,10 +60,19 @@ export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, k
     if (err) setError(err);
   };
 
+  const setEnabled = async (enabled: boolean) => {
+    if (busy || !view.target_id) return;
+    setBusy(enabled ? 'resume' : 'pause');
+    setError(null);
+    const err = await (onSetRoutineEnabled ?? routineStore.setEnabled)(view.target_id, enabled);
+    setBusy(null);
+    if (err) setError(err);
+  };
+
   const headingId = `bot-action-${messageId}`;
-  const state = actionStateText(view, gone);
-  const facts = routineFacts(view);
-  const { edit, pause } = routineButtons(view);
+  const state = routineDeleted ? { label: 'It’s since been deleted, so it won’t run again.', tone: 'off' as const } : actionStateText(view, gone);
+  const facts = routineFacts(view, routine);
+  const { edit, pause, resume } = routineButtons(view, routine);
   const reason = view.status === 'pending' && typeof view.details.reason === 'string' ? view.details.reason : '';
   const isRoutine = view.target_kind === 'routine';
   const resolved = view.status === 'undone' || view.status === 'declined';
@@ -70,7 +92,7 @@ export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, k
             </span>
           </span>
           <p className={`text-sm break-words leading-relaxed ${resolved ? 'text-zinc-400 line-through decoration-zinc-600' : 'text-zinc-100'}`}>
-            {sentence(summaryText(view)) || 'A change in the app.'}
+            {sentence(summaryText(view, { dropSchedule: facts.some((f) => f.label === 'When') || routineDeleted })) || 'A change in the app.'}
           </p>
           {reason && (
             <p className="text-sm text-zinc-300 break-words leading-relaxed">
@@ -107,7 +129,7 @@ export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, k
             </span>
           </p>
 
-          {(view.can_undo || view.needs_confirmation || edit || pause) && (
+          {(view.can_undo || view.needs_confirmation || edit || pause || resume) && (
             <div className="flex flex-wrap items-center gap-2">
               {view.needs_confirmation && (
                 <>
@@ -140,9 +162,16 @@ export const BotActionCard: React.FC<BotActionCardProps> = ({ meta, messageId, k
                   <Pencil size={12} aria-hidden="true" /> Edit
                 </button>
               )}
-              {pause && onOpenRoutine && view.target_id && (
-                <button type="button" onClick={() => onOpenRoutine(view.target_id!, 'pause')} disabled={busy !== null} className={quiet}>
-                  <Pause size={12} aria-hidden="true" /> Pause
+              {(pause || resume) && view.target_id && (
+                <button type="button" onClick={() => setEnabled(resume)} aria-disabled={busy !== null} className={`${quiet} aria-disabled:opacity-50`}>
+                  {busy === 'pause' || busy === 'resume' ? (
+                    <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />
+                  ) : resume ? (
+                    <Play size={12} aria-hidden="true" />
+                  ) : (
+                    <Pause size={12} aria-hidden="true" />
+                  )}
+                  {busy === 'pause' ? 'Pausing…' : busy === 'resume' ? 'Resuming…' : resume ? 'Resume' : 'Pause'}
                 </button>
               )}
             </div>

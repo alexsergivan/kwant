@@ -116,12 +116,12 @@ test('run now cannot be undone and shows the run, not the next run', () => {
 
 test('Edit and Pause only while the routine exists; Pause hides when it is paused', () => {
   const r = (over) => b.routineButtons(b.parseBotActionMeta(routineMeta(over)));
-  assert.deepEqual(r({}), { edit: true, pause: true });
-  assert.deepEqual(r({ details: { ...routineMeta().details, enabled: false } }), { edit: true, pause: false });
-  assert.deepEqual(r({ action: 'routine_pause' }), { edit: true, pause: false });
-  assert.deepEqual(r({ action: 'routine_delete' }), { edit: false, pause: false });
-  assert.deepEqual(r({ status: 'undone' }), { edit: false, pause: false });
-  assert.deepEqual(r({ target_kind: 'bot' }), { edit: false, pause: false });
+  assert.deepEqual(r({}), { edit: true, pause: true, resume: false });
+  assert.deepEqual(r({ details: { ...routineMeta().details, enabled: false } }), { edit: true, pause: false, resume: false });
+  assert.deepEqual(r({ action: 'routine_pause' }), { edit: true, pause: false, resume: false });
+  assert.deepEqual(r({ action: 'routine_delete' }), { edit: false, pause: false, resume: false });
+  assert.deepEqual(r({ status: 'undone' }), { edit: false, pause: false, resume: false });
+  assert.deepEqual(r({ target_kind: 'bot' }), { edit: false, pause: false, resume: false });
   const paused = text(ui.action(actionProps(routineMeta({ action: 'routine_pause', details: { ...routineMeta().details, enabled: false } }))));
   assert.match(paused, /Next run Paused/);
 });

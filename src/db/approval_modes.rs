@@ -350,7 +350,8 @@ impl Database {
                     a.parameters AS body, a.created_at AS at,
                     json_extract(a.resume, '$.thread_id') AS thread_id,
                     json_extract(a.resume, '$.channel_id') AS channel_id,
-                    json_extract(a.resume, '$.direct_kwant_id') AS direct_kwant_id, NULL AS choices
+                    json_extract(a.resume, '$.direct_kwant_id') AS direct_kwant_id, NULL AS choices,
+                    NULL AS routine_id
              FROM approvals a LEFT JOIN kwants k ON k.id = a.kwant_id
              WHERE a.status = 'waiting' AND a.created_at > datetime('now', ?)
              ORDER BY a.created_at DESC, a.rowid DESC",

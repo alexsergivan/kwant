@@ -1,0 +1,36 @@
+{
+  "version": "0.9.47",
+  "date": "2026-11-24",
+  "highlights": [
+    {
+      "id": "signin-opens-the-row",
+      "title": "Sign in again opens the right row",
+      "text": "When a connection needs you to sign in, \"Sign in again\" in a chat or the Inbox opens Settings on that connection, lit up, with its own Sign in again button ready.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "suggestion-card-real-state",
+      "title": "A suggested connection shows its real state",
+      "text": "The card for a connection a bot suggested says whether it's ready, needs you to sign in, or was removed in Settings, even after a reload or on another device.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "routine-card-stays-current",
+      "title": "A routine's chat card shows it as it is now",
+      "text": "Move a routine to another time or pause it in Routines, and the chat card that made it follows: the new time, \"Paused\" with Resume, or a note once the routine is deleted.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Connecting an app a bot suggested opens a sheet named for the app, like \"Google Search Console\", not its internal code name.",
+    "A routine kwant retries on its own reads \"Retried automatically\" in History, and its failure is told once, not once per try.",
+    "A routine run whose question nobody answered reads \"Needed your answer, didn’t finish\" in History, not OK.",
+    "Routine runs in the Inbox now carry routine_id, the routine to run again; other items send it as null.",
+    "A failed routine run's Inbox row now shows what the bot said about the failure, not the raw tool error.",
+    "A paused routine now says Paused, not OK, and on a phone the routine switch and Open result are easy to tap.",
+    "Inbox summaries drop stray ** marks, and a routine that posts in a thread opens that thread from the Inbox and its notice."
+  ]
+}

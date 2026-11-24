@@ -60,20 +60,46 @@ fn looks_secret(word: &str) -> bool {
 
 /// One line for a card: the first non-empty line without markdown markers, at most
 /// [`SUMMARY_CHARS`], with free-text credentials (`password=…`) and any word that has a key-like
-/// part (`"sk-…"`) masked.
+/// part (`"sk-…"`) masked. Bold markers go anywhere in the line, not only at its start
+/// (routine-inbox-tidy): "8:00:** 14 orders" read with half its markup.
 pub fn summarize(text: &str) -> String {
     let line = text
         .lines()
-        .map(|l| l.trim().trim_start_matches(['#', '>', '*', '-', ' ']).trim())
-        .find(|l| !l.is_empty())
+        .map(|l| strip_bold(l.trim().trim_start_matches(['#', '>', '*', '-', ' '])))
+        .find(|l| !l.trim().is_empty())
         .unwrap_or_default();
-    let joined = mask_words(line);
+    let joined = mask_words(&line);
     if joined.chars().count() > SUMMARY_CHARS {
         let cut: String = joined.chars().take(SUMMARY_CHARS - 1).collect();
         format!("{}…", cut.trim_end())
     } else {
         joined
     }
+}
+
+/// `line` without markdown bold markers: every run of two or three `*` or `_` goes, paired or left
+/// alone by the start trim (`**Done:** sent`, `__x__`, `***x***`), unless it sits between two
+/// letters or digits (`2**10`, `snake__case`). Single ones (`file_name`, `2*3`, `*x*`) and longer
+/// runs (a `____` blank) stay.
+fn strip_bold(line: &str) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = String::with_capacity(line.len());
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c != '*' && c != '_' {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        let end = chars[i..].iter().position(|&x| x != c).map_or(chars.len(), |n| i + n);
+        let inside_word = i > 0 && chars[i - 1].is_alphanumeric() && chars.get(end).is_some_and(|n| n.is_alphanumeric());
+        if !(2..=3).contains(&(end - i)) || inside_word {
+            out.extend(&chars[i..end]);
+        }
+        i = end;
+    }
+    out
 }
 
 /// `text` with free-text credentials and any word that has a key-like part masked.
@@ -235,6 +261,8 @@ pub(super) fn item(row: AwayRow) -> Value {
             "channel_id": row.channel_id,
             "direct_kwant_id": row.direct_kwant_id,
         },
+        // routine-run-again-id: a routine run's routine (Run again posts to it), else null
+        "routine_id": row.routine_id,
     });
     if row.kind == "approval" {
         // The live `approval_required` event's fields, so an approval opened from here renders
@@ -729,6 +757,7 @@ mod tests {
             channel_id: None,
             direct_kwant_id: None,
             choices: None,
+            routine_id: None,
             fallback: None,
         };
         let limit = item(row("You've hit your session limit · resets 3am (Europe/Berlin)"));

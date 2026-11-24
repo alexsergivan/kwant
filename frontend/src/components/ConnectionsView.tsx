@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { AlertTriangle, Bot, ChevronLeft, ChevronRight, ExternalLink, Github, KeyRound, Loader2, Lock, Mail, Plug, Plus, RefreshCw, Search, Server, StickyNote, UserRound } from 'lucide-react';
+import { keepCentred } from '../scrollInScroller';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { relativeTime } from '../away';
 import { quotaLine } from '../clock';
@@ -26,6 +27,8 @@ import {
   usedByText,
 } from '../connections';
 import { inDesktopApp } from '../externalLinks';
+import type { SignInToServerResult } from '../mcp';
+import { signInDeadEnd } from '../mcpSignInDeadEnd';
 import { editorProps } from '../escape';
 import { TelegramConnection } from './TelegramCard';
 import { ToolNotesSection, ToolNotesSectionProps } from './ToolNotesSection';
@@ -51,6 +54,13 @@ const KIND_ICON: Record<string, React.ReactNode> = {
 const actionBtn =
   'inline-flex items-center gap-1.5 min-h-[36px] sm:min-h-[30px] px-3 py-1 rounded-lg text-xs font-medium transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500';
 const quietBtn = `${actionBtn} border border-zinc-700 bg-zinc-800/80 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600`;
+/** 34h: the row's one way back in, the same amber as a bot's suggestion card's "Sign in". */
+const signInBtn =
+  'inline-flex items-center gap-1.5 min-h-[44px] sm:min-h-[32px] px-3 py-1 rounded-lg text-xs font-semibold bg-amber-500 text-zinc-950 hover:bg-amber-400 transition-colors disabled:opacity-60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-500';
+
+/** 34h: a URL tool server kwnt can sign in to from its row (not Composio, which keeps its own sign-ins). */
+export const canSignInAgain = (c: Pick<Connection, 'id' | 'kind' | 'status' | 'logins_stored'>): boolean =>
+  c.kind === 'mcp' && c.status === 'needs_sign_in' && c.logins_stored !== 'composio' && !!mcpServerId(c);
 const field =
   'w-full min-h-[36px] px-2.5 py-1.5 bg-zinc-950 border border-zinc-800 rounded-lg text-xs text-zinc-100 placeholder:text-zinc-500 focus:outline-none focus:border-sky-500';
 
@@ -81,18 +91,35 @@ export interface ConnectionRowProps {
   markingProduction?: boolean;
   /** 0.9.0 P5: the "2 notes" chip filters Notes from bots to this connection. */
   onNotes?: (name: string) => void;
+  /** 34h: "Sign in again" on a tool server whose sign-in ran out. */
+  onSignIn?: (c: Connection) => void;
+  signingIn?: boolean;
+  /** 34h: opened from a chat line or the Inbox: this row is lit for a moment. */
+  flash?: boolean;
 }
 
-export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(), checking = false, links = {}, onCheck, onProduction, markingProduction = false, onNotes }) => {
+export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(), checking = false, links = {}, onCheck, onProduction, markingProduction = false, onNotes, onSignIn, signingIn = false, flash = false }) => {
   const id = useId();
   const badge = statusBadge(c.status);
   const manage = manageFor(c.kind, links);
   const canCheck = onCheck && mcpServerId(c) && c.status !== 'off';
   const composio = c.logins_stored === 'composio';
   const status = quotaLine(c.status_detail, c.limited_until, now);
+  const signIn = onSignIn && canSignInAgain(c);
   return (
-    <li className="px-3 py-3 sm:px-4" aria-labelledby={`${id}-n`} data-connection={c.id}>
-      <div className="flex flex-wrap items-start gap-x-3 gap-y-2">
+    <li
+      className="relative px-3 py-3 sm:px-4 scroll-mt-4 first:rounded-t-xl last:rounded-b-xl"
+      aria-labelledby={`${id}-n`}
+      data-connection={c.id}
+      data-flash={flash || undefined}
+    >
+      {/* 34h: the "this one" light is its own layer, so only its opacity fades (200 ms, none under reduced motion). */}
+      <span
+        aria-hidden="true"
+        data-row-light
+        className={`pointer-events-none absolute inset-0 rounded-[inherit] bg-sky-500/10 ring-1 ring-inset ring-sky-500 transition-opacity duration-200 motion-reduce:transition-none ${flash ? 'opacity-100' : 'opacity-0'}`}
+      />
+      <div className="relative flex flex-wrap items-start gap-x-3 gap-y-2">
         <span className="mt-0.5 shrink-0 text-zinc-400">{KIND_ICON[c.kind] ?? <Plug size={14} aria-hidden="true" />}</span>
         <div className="min-w-0 flex-1 basis-48">
           <div className="flex flex-wrap items-center gap-2">
@@ -156,8 +183,15 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
             </div>
           </dl>
         </div>
-        {(canCheck || manage || (onProduction && canMarkProduction(c))) && (
-          <div className="flex flex-wrap gap-2 shrink-0">
+        {(signIn || canCheck || manage || (onProduction && canMarkProduction(c))) && (
+          <div className={`flex flex-wrap gap-2 shrink-0 max-w-full ${signIn ? 'basis-full' : ''}`} data-row-actions>
+            {signIn && (
+              <button type="button" className={signInBtn} disabled={signingIn} onClick={() => onSignIn!(c)} data-sign-in-again={c.id}>
+                {signingIn && <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" />}
+                {signingIn ? (inDesktopApp() ? 'Finish signing in in your browser…' : 'Waiting for sign-in…') : 'Sign in again'}
+                <span className="sr-only">: {c.name}</span>
+              </button>
+            )}
             {onProduction && canMarkProduction(c) && (
               <label className={`${quietBtn} cursor-pointer has-[:focus-visible]:outline has-[:focus-visible]:outline-2 has-[:focus-visible]:outline-sky-500`} title="Steps that use a production connection always ask you while Dev mode is on.">
                 <input
@@ -189,6 +223,43 @@ export const ConnectionRow: React.FC<ConnectionRowProps> = ({ c, now = Date.now(
     </li>
   );
 };
+
+/** The last open (its seq) that lit a row: kept outside the component so a remount doesn't replay it. */
+let openedSeq: number | null = null;
+
+/** How long an opened row stays lit (34h; Mira's report section 2). */
+export const ROW_FLASH_MS = 1200;
+
+/**
+ * 34h: once the list is loaded, scrolls the focused connection's row into view, lights it for
+ * ROW_FLASH_MS and moves keyboard focus to its "Sign in again" when it has one. Returns the lit
+ * row's id. Under reduced motion the scroll jumps and the light doesn't fade.
+ */
+export function useConnectionFocus(focus: { id: string; seq: number } | null, ready: boolean, onConsumed?: () => void): string | null {
+  const [lit, setLit] = useState<string | null>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const stopCentring = useRef<() => void>(() => {});
+  useEffect(() => () => { window.clearTimeout(timer.current); stopCentring.current(); }, []);
+  useEffect(() => {
+    if (!focus || !ready || openedSeq === focus.seq) return;
+    const row = document.querySelector<HTMLElement>(`[data-connection="${CSS.escape(focus.id)}"]`);
+    if (!row) return;
+    // One open lights the row once: a later mount of Advanced (Settings reopened from the gear, or
+    // Advanced collapsed and expanded) with the same remembered focus doesn't replay it (Rigel's D1).
+    openedSeq = focus.seq;
+    const still = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    // Sections above the list can still be loading: keep the row centred while it is lit.
+    stopCentring.current();
+    stopCentring.current = keepCentred(row, ROW_FLASH_MS, still ? 'auto' : 'smooth');
+    row.querySelector<HTMLElement>('[data-sign-in-again]')?.focus({ preventScroll: true });
+    setLit(focus.id);
+    window.clearTimeout(timer.current);
+    timer.current = window.setTimeout(() => setLit(null), ROW_FLASH_MS);
+    onConsumed?.();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onConsumed is a fresh closure each render
+  }, [focus, ready]);
+  return lit;
+}
 
 export interface ComposioSearchApi {
   search: (q: string) => Promise<{ apps: ComposioApp[]; can_connect: boolean; hint?: string }>;
@@ -615,6 +686,14 @@ export interface ConnectionsViewProps extends ManageLinks {
   onChooseComposioBots?: () => void;
   /** Tests and screenshots: the Composio tile's api. */
   composioTileApi?: ComposioTileApi;
+  /** 34h: open on this connection's row (scrolled to, lit for 1.2 s); seq repeats it. */
+  focusConnection?: { id: string; seq: number } | null;
+  /** 34h: the open has been shown; the owner forgets it so nothing replays it. */
+  onFocusConnectionDone?: () => void;
+  /** 34h: a row's "Sign in again". */
+  onSignIn?: (c: Connection) => void;
+  /** The row signing in now. */
+  signingIn?: string | null;
 }
 
 export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
@@ -644,9 +723,14 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
   hideAccounts = false,
   onChooseComposioBots,
   composioTileApi,
+  focusConnection = null,
+  onFocusConnectionDone,
+  onSignIn,
+  signingIn = null,
   ...links
 }) => {
   const phoneLayout = usePhoneLayout();
+  const flashing = useConnectionFocus(focusConnection, !!data, onFocusConnectionDone);
   const [noteConnection, setNoteConnection] = useState<string | null>(notesProps.connection ?? null);
   const [noteScroll, setNoteScroll] = useState(0);
   const filterNotes = (name: string | null) => {
@@ -778,7 +862,20 @@ export const ConnectionsView: React.FC<ConnectionsViewProps> = ({
                   {g.items.length > 0 ? (
                     <ul className="rounded-xl border border-zinc-800 bg-zinc-900/60 divide-y divide-zinc-800">
                       {g.items.map((c) => (
-                        <ConnectionRow key={c.id} c={c} now={now} checking={checking === c.id} links={links} onCheck={onCheck} onProduction={onProduction} markingProduction={marking === c.id} onNotes={filterNotes} />
+                        <ConnectionRow
+                          key={c.id}
+                          c={c}
+                          now={now}
+                          checking={checking === c.id}
+                          links={links}
+                          onCheck={onCheck}
+                          onProduction={onProduction}
+                          markingProduction={marking === c.id}
+                          onNotes={filterNotes}
+                          onSignIn={onSignIn}
+                          signingIn={signingIn === c.id}
+                          flash={flashing === c.id}
+                        />
                       ))}
                     </ul>
                   ) : (
@@ -847,9 +944,15 @@ export interface ConnectionsPageProps extends ManageLinks {
   onOpenNoteWhere?: ToolNotesSectionProps['onOpenWhere'];
   hideAccounts?: boolean;
   onChooseComposioBots?: () => void;
+  /** 34h: open on one connection's row (a chat line's or the Inbox's "Sign in again"). */
+  focusConnection?: { id: string; seq: number } | null;
+  /** 34h: the open has been shown; the owner forgets it so nothing replays it. */
+  onFocusConnectionDone?: () => void;
+  /** 34h: the shared sign-in (mcp.ts signInToServer); without it rows have no "Sign in again". */
+  onSignIn?: (serverId: string) => Promise<SignInToServerResult>;
 }
 
-export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedded, focusNote, onClearFocusNote, onOpenNoteWhere, hideAccounts, onChooseComposioBots, ...links }) => {
+export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedded, focusNote, onClearFocusNote, onOpenNoteWhere, hideAccounts, onChooseComposioBots, focusConnection, onFocusConnectionDone, onSignIn, ...links }) => {
   const [data, setData] = useState<ConnectionsList | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -906,6 +1009,25 @@ export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedd
       if (alive.current) setChecking(null);
       load();
     }
+  };
+
+  // 34h: "Sign in again" on a row. The sign-in window opens inside the click (signInToServer).
+  const [signingIn, setSigningIn] = useState<string | null>(null);
+  const signIn = async (c: Connection) => {
+    const sid = mcpServerId(c);
+    if (!sid || !onSignIn || signingIn) return;
+    setSigningIn(c.id);
+    setNotice(null);
+    const r = await onSignIn(sid);
+    if (!alive.current) return;
+    setSigningIn(null);
+    if (r === undefined) setNotice({ text: `${c.name} is connected again.`, error: false });
+    else if (typeof r === 'string') setNotice({ text: `${c.name}: ${r}`, error: true });
+    else {
+      const d = signInDeadEnd(r.code, c.name, 'servers');
+      setNotice({ text: d ? `${d.error} ${d.next}` : `Couldn’t sign in to ${c.name}.`, error: true });
+    }
+    load();
   };
 
   // Dev mode D10: the open space's production marks. Shown only while Dev mode is on there.
@@ -967,6 +1089,10 @@ export const ConnectionsPage: React.FC<ConnectionsPageProps> = ({ onBack, embedd
         onNotesChanged={quietLoad}
         hideAccounts={hideAccounts}
         onChooseComposioBots={onChooseComposioBots}
+        focusConnection={focusConnection}
+        onFocusConnectionDone={onFocusConnectionDone}
+        onSignIn={onSignIn ? signIn : undefined}
+        signingIn={signingIn}
         {...links}
       />
       {unlocking && (

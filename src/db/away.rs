@@ -44,6 +44,9 @@ pub struct AwayRow {
     pub direct_kwant_id: Option<String>,
     /// Questions only: the JSON array of choices.
     pub choices: Option<String>,
+    /// Routine runs only: the run's routine, so a failed one can offer Run again
+    /// (`POST /api/routines/:id/run`). `NULL` on every other kind.
+    pub routine_id: Option<String>,
     /// Failed routine runs whose summary is the bot's reply: the run's raw error, the summary
     /// when the reply is no summary (a usage-limit line). Other queries don't select it.
     #[sqlx(default)]
@@ -52,7 +55,8 @@ pub struct AwayRow {
 
 const OPEN_QUESTIONS: &str = "
     SELECT 'question' AS kind, q.id, q.kwant_id, k.name AS kwant_name, q.question AS title, q.status,
-           NULL AS body, q.created_at AS at, q.thread_id, q.channel_id, q.direct_kwant_id, q.choices
+           NULL AS body, q.created_at AS at, q.thread_id, q.channel_id, q.direct_kwant_id, q.choices,
+           NULL AS routine_id
     FROM questions q LEFT JOIN kwants k ON k.id = q.kwant_id
     WHERE q.status = 'open'
       AND COALESCE(k.space_id, 'spc_default') = ?3";
@@ -61,7 +65,8 @@ const OPEN_QUESTIONS: &str = "
 const DELEGATIONS_ENDED: &str = "
     SELECT 'delegation' AS kind, d.id, d.specialist_kwant_id AS kwant_id, k.name AS kwant_name, d.title, d.status,
            CASE WHEN d.status = 'completed' THEN COALESCE(m.text, d.error) ELSE COALESCE(d.error, m.text) END AS body,
-           d.ended_at AS at, d.thread_id, NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices
+           d.ended_at AS at, d.thread_id, NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices,
+           NULL AS routine_id
     FROM delegations d
     LEFT JOIN kwants k ON k.id = d.specialist_kwant_id
     LEFT JOIN messages m ON m.id = d.result_message_id
@@ -72,7 +77,7 @@ const DELEGATIONS_ENDED: &str = "
 const DELEGATIONS_STUCK: &str = "
     SELECT 'delegation' AS kind, d.id, d.specialist_kwant_id AS kwant_id, k.name AS kwant_name, d.title,
            'stuck' AS status, NULL AS body, d.started_at AS at, d.thread_id,
-           NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices
+           NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices, NULL AS routine_id
     FROM delegations d LEFT JOIN kwants k ON k.id = d.specialist_kwant_id
     WHERE d.status = 'running' AND d.started_at < ?1
       AND COALESCE(k.space_id, 'spc_default') = ?3
@@ -80,7 +85,9 @@ const DELEGATIONS_STUCK: &str = "
       AND EXISTS (SELECT 1 FROM threads t WHERE t.id = d.thread_id)
       AND NOT EXISTS (SELECT 1 FROM attention_closed x WHERE x.kind = 'delegation' AND x.ref_id = d.id)";
 
-/// `?1` = since. A routine posts in its channel, or the kwant's direct chat when it has none.
+/// `?1` = since. A routine posts in its channel, or the kwant's direct chat when it has none, or
+/// one of its kwant's threads (routine-inbox-tidy: the item opens that thread while it exists;
+/// once it is gone, the direct chat as before).
 /// routine-failed-row-bot-words: a run that failed (`error`, `incomplete`) reads the bot's own
 /// reply when it left one, with the raw step error as `fallback`; no reply, the error. A
 /// `needs_you` run keeps its own wording (26b, unanswered-question-not-ok).
@@ -89,8 +96,10 @@ const ROUTINE_RUNS_ENDED: &str = "
            CASE WHEN r.status = 'ok' THEN m.text
                 WHEN r.status IN ('error', 'incomplete') THEN COALESCE(m.text, r.error)
                 ELSE r.error END AS body, r.ended_at AS at,
-           NULL AS thread_id, rt.channel_id,
+           CASE WHEN EXISTS (SELECT 1 FROM threads t WHERE t.id = rt.thread_id) THEN rt.thread_id END AS thread_id,
+           rt.channel_id,
            CASE WHEN rt.channel_id IS NULL THEN rt.kwant_id END AS direct_kwant_id, NULL AS choices,
+           r.routine_id,
            CASE WHEN r.status IN ('error', 'incomplete') AND m.text IS NOT NULL THEN r.error END AS fallback
     FROM routine_runs r
     JOIN routines rt ON rt.id = r.routine_id
@@ -114,7 +123,11 @@ const FINISHED_RUNS: &str = "r.status = 'ok'";
 /// 22i close rules for a failed routine run: its bot or channel is gone, a later run of the same
 /// routine started (Run now or the next schedule), or it is in `attention_closed`. 26b: a run whose
 /// step waits on the person (`needs_you`) or failed (`incomplete`) didn't finish either.
+/// unanswered-question-not-ok: a `needs_you` run that waits on a question
+/// ([`crate::server::scheduler::QUESTION_ERROR`]) isn't listed: its open question is the one
+/// Needs-you item, and answering or dismissing it leaves nothing behind.
 const FAILED_RUNS: &str = "r.status IN ('error', 'incomplete', 'needs_you')
+      AND NOT (r.status = 'needs_you' AND COALESCE(r.error, '') = 'A step is waiting for your answer, so it didn''t finish')
       AND k.id IS NOT NULL
       AND (rt.channel_id IS NULL OR EXISTS (SELECT 1 FROM channels c WHERE c.id = rt.channel_id))
       AND NOT EXISTS (SELECT 1 FROM routine_runs r2 WHERE r2.routine_id = r.routine_id
@@ -203,7 +216,7 @@ impl Database {
         let sql = format!(
             "SELECT 'approval' AS kind, a.id, a.kwant_id, k.name AS kwant_name, a.tool_name AS title, a.status,
                     a.parameters AS body, a.created_at AS at, NULL AS thread_id, NULL AS channel_id,
-                    NULL AS direct_kwant_id, NULL AS choices
+                    NULL AS direct_kwant_id, NULL AS choices, NULL AS routine_id
              FROM approvals a LEFT JOIN kwants k ON k.id = a.kwant_id
              WHERE a.status = 'pending' AND a.id IN ({marks})
              ORDER BY a.created_at DESC, a.rowid DESC"
@@ -593,6 +606,15 @@ fn newest(mut rows: Vec<AwayRow>, limit: i64) -> Vec<AwayRow> {
 mod tests {
     use super::*;
 
+    /// unanswered-question-not-ok: the SQL leaves out exactly the scheduler's question error,
+    /// quoted for SQL, and only for `needs_you`.
+    #[test]
+    fn failed_runs_leave_out_the_question_error() {
+        let quoted = crate::server::scheduler::QUESTION_ERROR.replace('\'', "''");
+        assert!(FAILED_RUNS.contains(&format!("r.status = 'needs_you' AND COALESCE(r.error, '') = '{quoted}'")), "{FAILED_RUNS}");
+        assert!(!FAILED_RUNS.contains(&crate::server::scheduler::NEEDS_YOU_ERROR.replace('\'', "''")));
+    }
+
     async fn plan(db: &Database, sql: &str) -> Vec<String> {
         let rows: Vec<(i64, i64, i64, String)> = sqlx::query_as(&format!("EXPLAIN QUERY PLAN {sql}"))
             .bind(Utc::now())
@@ -802,6 +824,48 @@ mod tests {
         sqlx::query("DELETE FROM kwants WHERE id = 'k2'").execute(&db.pool).await.unwrap();
         assert!(failed_ids(&db).await.is_empty());
         assert_eq!(db.attention_item_owner("routine_run", "r2b").await.unwrap(), None, "only a failed run is dismissable");
+    }
+
+    /// routine-inbox-tidy (Minor g): a routine that posts in one of its bot's threads links its
+    /// runs to that thread; once the thread is gone the run still opens the bot's chat, as before.
+    #[tokio::test]
+    async fn a_thread_routines_run_links_its_thread_while_the_thread_exists() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        bot(&db, "k1").await;
+        let t = db.create_thread("k1", "Shop digest", "chat", None, "user").await.unwrap().id;
+        for (id, thread) in [("rt1", Some(t.as_str())), ("rt2", None)] {
+            sqlx::query("INSERT INTO routines (id, kwant_id, name, instructions, schedule, space_id, thread_id) VALUES (?, 'k1', ?, 'do it', '0 9 * * *', 'spc_default', ?)")
+                .bind(id)
+                .bind(format!("routine {id}"))
+                .bind(thread)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        run(&db, "r1", "rt1", "error", 60).await;
+        run(&db, "r2", "rt2", "error", 60).await;
+        run(&db, "r3", "rt1", "ok", 30).await;
+        let space = SpaceId::default_space();
+        let since = Utc::now() - chrono::Duration::days(7);
+        let stuck_before = Utc::now() - chrono::Duration::minutes(30);
+        let link = |rows: &[AwayRow], id: &str| {
+            let r = rows.iter().find(|r| r.id == id).unwrap_or_else(|| panic!("no row {id}: {rows:?}"));
+            (r.thread_id.clone(), r.channel_id.clone(), r.direct_kwant_id.clone())
+        };
+        let finished = db.away_finished(&space, since, 50).await.unwrap();
+        assert_eq!(link(&finished, "r3"), (Some(t.clone()), None, Some("k1".into())));
+        // r3 ran later, so r1 (same routine) left Needs attention; without it, r1 is back
+        sqlx::query("DELETE FROM routine_runs WHERE id = 'r3'").execute(&db.pool).await.unwrap();
+        let failed = db.away_failed(&space, since, stuck_before, 50).await.unwrap();
+        assert_eq!(link(&failed, "r1"), (Some(t.clone()), None, Some("k1".into())));
+        assert_eq!(link(&failed, "r2"), (None, None, Some("k1".into())));
+        // The thread is deleted: the run still opens somewhere, the bot's chat
+        sqlx::query("DELETE FROM threads WHERE id = ?").bind(&t).execute(&db.pool).await.unwrap();
+        let failed = db.away_failed(&space, since, stuck_before, 50).await.unwrap();
+        assert_eq!(link(&failed, "r1"), (None, None, Some("k1".into())));
+        let (_, counted) = db.away_counts(&space, since, stuck_before).await.unwrap();
+        assert_eq!(counted, 2, "both failed runs are still listed and counted");
     }
 
     /// 22i: a hand-off still running past the stuck threshold closes when it ends (as before) or
