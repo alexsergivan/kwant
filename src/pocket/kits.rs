@@ -260,6 +260,16 @@ pub trait Kit: Send + Sync + 'static {
     fn idle_players(&self, _ctx: &KitCtx, _state: &Value) -> Vec<String> {
         Vec::new()
     }
+    /// pa10c: a host action that still works after the pocket ended (its data stays until the
+    /// deletion date), such as Gather's "Delete answers now".
+    fn acts_after_end(&self, _name: &str) -> bool {
+        false
+    }
+    /// pa10c: `true` once the host deleted everyone's answers: the core then deletes every
+    /// player (removed ones too), their guest keys and their events, keeping the pocket.
+    fn forgets_everyone(&self, _state: &Value) -> bool {
+        false
+    }
     /// pa13a: one part of the host's view by key (`guest:<id>`: a front desk conversation),
     /// for `host/state?view=<key>` and the card. `None`: no such part.
     fn host_detail(&self, _ctx: &KitCtx, _state: &Value, _key: &str) -> Option<Value> {

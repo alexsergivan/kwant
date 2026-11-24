@@ -877,7 +877,9 @@ pub async fn act(state: &AppState, code: &str, actor: &Viewer, name: &str, body:
     if !allowed.contains(&name) {
         return Err(PocketError::new(StatusCode::BAD_REQUEST, "unknown_action", "That action isn't one this pocket knows.").with(json!({ "actions": allowed })));
     }
-    if s.row.state == ENDED {
+    // pa10c: an ended pocket keeps its data until the deletion date, and the host may still
+    // delete the answers sooner
+    if s.row.state == ENDED && !(matches!(actor, Viewer::Host) && kit.acts_after_end(name)) {
         return Err(PocketError::new(StatusCode::GONE, "ended", "This pocket app has ended."));
     }
     let now = Utc::now();
@@ -885,6 +887,18 @@ pub async fn act(state: &AppState, code: &str, actor: &Viewer, name: &str, body:
     let mut ctx = KitCtx::new(&s.spec, &s.players, now);
     kit.act(&mut ctx, &mut kit_state, actor, name, body).map_err(kit_refusal)?;
     save(state, code, &kit_state, ctx, now).await?;
+    // pa10c: answers deleted: every player goes (removed ones too, names and all), with their
+    // guest keys and events. After the save, so a failure here is repaired by the host's retry.
+    if matches!(actor, Viewer::Host) && kit.forgets_everyone(&kit_state) {
+        let ids = state.db.pocket_forget_all_players(code).await?;
+        if !ids.is_empty() {
+            for id in ids {
+                state.pocket.signal(code, Signal::Revoked(id));
+            }
+            state.db.pocket_bump(code).await?;
+            changed(state, code).await?;
+        }
+    }
     // pa3b: a guest's quiz answer may be a near miss; the live judge looks at it off this request
     if matches!(actor, Viewer::Guest(_)) && name == "answer" {
         crate::server::quizmaster_live::after_answer(state, code, kit.id());
