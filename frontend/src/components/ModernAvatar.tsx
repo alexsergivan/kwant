@@ -145,7 +145,7 @@ type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
   | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
   | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
-  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'host' | 'knithat' | 'none';
+  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'host' | 'knithat' | 'camera' | 'none';
 
 export interface Creature {
   body: string;
@@ -213,6 +213,7 @@ export const AVATAR_STYLES: Array<{ id: string; label: string }> = [
   { id: 'home', label: 'Home' },
   { id: 'quizmaster', label: 'Quizmaster' },
   { id: 'santa', label: 'Santa' },
+  { id: 'snap', label: 'Photo wall' },
   { id: 'default', label: 'Droid' },
 ];
 
@@ -249,6 +250,8 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
    * only: no name rule, so agents already named with "santa" keep the creature they have.
    */
   santa: ['green', 'knithat'],
+  /** Pocket apps (pa14): a pink creature holding a white instant-style camera low on its left. Picked style only. */
+  snap: ['pink', 'camera'],
 };
 
 /** Style ids (picked or saved), as opposed to a title or name passed as a hint. */
@@ -326,6 +329,14 @@ const KNIT_RED = '#e5484d';
 const KNIT_SHADE = '#a8323a';
 const KNIT_SHINE = '#ff8f8f';
 const KNIT_CUFF_SHADE = '#d2cbec';
+
+// Snap's camera: sprite art from pa14/src/snap-sprite.ts (`// @overlay camera`), held at x4-11 / y14-19 so it
+// overlaps the body edge and never covers an eye or the smile.
+const CAM_BODY = '#f5f2ff';
+const CAM_SIDE = '#d2cbec';
+const CAM_SHUTTER = '#e5484d';
+const CAM_LENS_RIM = '#8f86b8';
+const CAM_GLINT = '#5ce1ff';
 
 function renderAccessory(c: Creature) {
   switch (c.accessory) {
@@ -428,6 +439,11 @@ function renderOverlay(c: Creature) {
       return [
         px(7, 8, 12, 1, INK), px(9, 7, 3, 2, c.accent), px(14, 7, 3, 2, c.accent),
         px(9, 7, 1, 1, '#ffffff'), px(14, 7, 1, 1, '#ffffff'),
+      ];
+    case 'camera':
+      return [
+        px(5, 14, 1, 1, CAM_SHUTTER), px(7, 14, 2, 1, CAM_SIDE), px(4, 15, 8, 5, CAM_BODY), px(11, 15, 1, 5, CAM_SIDE), px(4, 19, 8, 1, CAM_SIDE),
+        px(6, 16, 3, 3, INK), px(7, 17, 1, 1, CAM_GLINT), px(6, 16, 1, 1, CAM_LENS_RIM), px(10, 16, 1, 1, INK),
       ];
     case 'knithat':
       // Santa's red-and-white striped scarf.

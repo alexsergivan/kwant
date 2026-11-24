@@ -352,6 +352,37 @@ export interface SantaInfo {
 }
 
 /**
+ * The wall kit's host facts on a Pocket card (pa14/card-impl.md "Shape I read"): Juno's host summary (#1139,
+ * server-impl.md "Host view" without `limits`, `queue` and `wall`) plus display text the bot writes. Counts,
+ * sizes in MB and photo ids only: the photo lists come from the box when the card opens, never in the block.
+ */
+export interface WallInfo {
+  state: 'open' | 'closed';
+  /** "Sun 12 PM": when uploads close (display text). */
+  closes_at: string | null;
+  /** "Tue, Jan 5": when the photos leave the box (display text). */
+  delete_on: string | null;
+  /** The host's first name for guest-facing lines ('Oleks can make room'); null when unset. */
+  host_name: string | null;
+  captions: boolean;
+  best_set: boolean;
+  /** pa14b: "snap" when Snap's check picked the best set; anything else (or null) is the host's own pick. */
+  best_by: string | null;
+  counts: { total: number; waiting: number; approved: number; hidden: number; guests: number; senders: number };
+  used_mb: number;
+  pocket_cap_mb: number;
+  /** Photo ids in the best set (≤ best_max), or proposed while `best_set` is false. */
+  best: string[];
+  best_max: number;
+  keep_days: number;
+  /** Spec limits for the meter line; null when the bot didn't send them. */
+  photo_cap_mb: number | null;
+  per_guest_max: number | null;
+  /** pa14b: Snap is picking the best 30 now (closed, nothing proposed yet). */
+  picking: boolean;
+}
+
+/**
  * A pocket app's card in chat (pa4, pa0a/design.md §1 and §6); source is always slot. Every time and
  * date is display text the server wrote for the person's time zone ("Fri, Nov 27 · 8:00 PM").
  * Emitted by the bot's pocket tools (pa3); impl.md documents the shape.
@@ -392,6 +423,8 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   results: PocketResults | null;
   /** kit "santa" only: the Secret Santa card (pa10a). `state` is "live" until the phase is "ended". */
   santa: SantaInfo | null;
+  /** kit "wall" only: the photo wall card (pa14). `state` is "live" while open, "ended" once closed. */
+  wall?: WallInfo | null;
   /** pa4c: the quiz_drafts id (the bot card's `id`) that Edit questions opens. Null or absent: no editor. */
   draft?: string | null;
   /** pa4c: questions the person wrote or changed themselves (not source-checked). */

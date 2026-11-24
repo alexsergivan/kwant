@@ -44,6 +44,7 @@ import { useFocusAfterRender } from '../../focusAfterRender';
 import type { DraftCard, PocketLinkRole } from '../../pocketApi';
 import { EditPanel } from './PocketEdit';
 import { SantaCard, findMatchLike, validSanta } from './PocketSanta';
+import { WallCard, validWall } from './PocketWall';
 import type { RendererProps } from './registry';
 
 // ---------------------------------------------------------------------------------------------------
@@ -186,6 +187,12 @@ export function validPocket(raw: unknown): PocketBlock | null {
   if (santa && results) return null;
   // Santa joins live in `santa.join` (no quick tunnel); a quiz-style top-level join never rides along.
   if (santa && b.join !== undefined && b.join !== null) return null;
+  // Photo wall (pa14): the kit carries `wall`, nothing else does; it's live while open and ended once closed. Photo
+  // lists, guest ids and file sizes never ride in the block (validWall), and a wall has no quiz parts.
+  const wall = b.wall === undefined || b.wall === null ? null : validWall(b.wall);
+  if (wall === undefined || (b.kit === 'wall') !== !!wall) return null;
+  if (wall && state !== (wall.state === 'open' ? 'live' : 'ended')) return null;
+  if (wall && (results || santa || live || rounds.length > 0)) return null;
   return {
     id: b.id,
     type: 'pocket',
@@ -212,6 +219,7 @@ export function validPocket(raw: unknown): PocketBlock | null {
     draft: draft ?? null,
     yours: yours ?? null,
     santa,
+    ...(wall ? { wall } : {}),
   };
 }
 
@@ -254,7 +262,7 @@ export function withCard(b: PocketBlock, c: DraftCard): PocketBlock {
 const NUM = new Intl.NumberFormat('en');
 const num = (n: number) => NUM.format(n);
 const usd = (n: number) => `$${n < 0.01 && n > 0 ? '0.01' : n.toFixed(2)}`;
-const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa' };
+const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa', wall: 'Photo wall' };
 export const kitLabel = (kit: string) => KIT_LABEL[kit] ?? kit.charAt(0).toUpperCase() + kit.slice(1).replace(/_/g, ' ');
 
 export function budgetLine(b: PocketBlock): string {
@@ -1032,7 +1040,20 @@ const ResultsCard: React.FC<{ block: PocketBlock; results: PocketResults; ask: (
 // The card
 
 /** The Pocket renderer: Secret Santa has its own card; every other kit uses the quiz-shaped one. */
-export const Pocket: React.FC<RendererProps<PocketBlock>> = (props) => (props.block.santa ? <SantaCard block={props.block} ask={props.ask} /> : <QuizPocket {...props} />);
+export const Pocket: React.FC<RendererProps<PocketBlock>> = (props) =>
+  props.block.santa ? (
+    <SantaCard block={props.block} ask={props.ask} />
+  ) : props.block.wall ? (
+    <WallCard block={props.block} ask={props.ask} join={<WallJoin block={props.block} />} />
+  ) : (
+    <QuizPocket {...props} />
+  );
+
+/** The Wall's Ready state uses the quiz's join box (QR, Same Wi-Fi / From anywhere, Copy link). */
+const WallJoin: React.FC<{ block: PocketBlock }> = ({ block }) => {
+  const [mode, setMode] = useState<PocketJoinMode>(block.join?.mode === 'anywhere' && block.join.anywhere_url ? 'anywhere' : 'wifi');
+  return <JoinBox block={block} mode={mode} setMode={setMode} />;
+};
 
 const sameBlock = (a: PocketBlock, b: PocketBlock) => a === b || JSON.stringify(a) === JSON.stringify(b);
 

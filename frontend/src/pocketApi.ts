@@ -46,6 +46,8 @@ export interface PocketRead {
   summary: unknown;
   removed: number;
   join?: PocketJoin | null;
+  /** pa14: the kit's host view (wall: counts plus `queue` and `wall` photo lists); validate before use. */
+  host_view?: unknown;
 }
 
 export type PocketLinkRole = 'host' | 'screen';
@@ -229,6 +231,15 @@ export const pocketApi = {
  * The page a minted link opens: the join address (`…/p/<code>`) with the token in the fragment, which browsers never
  * send to a server or put in a Referer. `#remote=` opens the host remote, `#screen=` the big screen.
  */
+/**
+ * pa14: one Wall photo for the person, on the main port like `wall.zip`. Juno's #1139 serves photos on the guest
+ * port only (host cookie or bearer); card-impl.md asks for this main-port twin.
+ */
+export const wallPhotoUrl = (code: string, id: string) => `${one(code)}/photo/${encodeURIComponent(id)}`;
+/** pa14: the Wall's zip, `wall-<code>.zip`: approved photos, `all` adds the waiting ones, `best` the best set only. */
+export const wallZipUrl = (code: string, pick: 'approved' | 'all' | 'best' = 'approved') =>
+  `${one(code)}/wall.zip${pick === 'all' ? '?all=1' : pick === 'best' ? '?best=1' : ''}`;
+
 export function linkUrl(joinUrl: string, role: PocketLinkRole, token: string): string {
   const base = joinUrl.split('#')[0].split('?')[0];
   return `${base}#${role === 'host' ? 'remote' : 'screen'}=${encodeURIComponent(token)}`;
