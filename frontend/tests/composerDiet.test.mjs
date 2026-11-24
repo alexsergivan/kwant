@@ -94,6 +94,14 @@ test('a: the chip keeps a 2 px sky-400 focus ring with a 2 px offset, 44 px to t
   assert.doesNotMatch(cls, /#[0-9a-fA-F]{3,6}/, 'no hard-coded hex');
 });
 
+// Poll, not a fixed wait (Rigel F1): the list opens a frame after the click; under load that frame can be late.
+const until = async (ok, ms = 1000) => {
+  for (const end = Date.now() + ms; Date.now() < end; await new Promise((r) => setTimeout(r, 10))) if (ok()) return true;
+  return ok();
+};
+const listOpen = async (host) => assert.ok(await until(() => !!host.querySelector('#kw-mention-list')), 'the member list opens');
+const listClosed = async (host) => assert.ok(await until(() => !host.querySelector('#kw-mention-list')), 'the member list closes');
+
 test('a: clicking the chip opens the member list (the same one @ opens), keyboard-reachable from the field', async () => {
   localStorage.clear();
   const host = document.createElement('div');
@@ -103,7 +111,7 @@ test('a: clicking the chip opens the member list (the same one @ opens), keyboar
   const chip = host.querySelector('[data-answers-chip]');
   assert.ok(chip, 'chip mounted');
   chip.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-  await new Promise((r) => setTimeout(r, 60));
+  await listOpen(host);
   const field = host.querySelector('textarea[data-composer]');
   assert.equal(field.value, '@', 'the field gets the @ the list filters on');
   assert.equal(document.activeElement, field, 'focus goes to the field, where arrows and Enter pick a member');
@@ -195,4 +203,42 @@ test('d: desktop placeholder is "Message {title}" when it fits, "Message" when n
   assert.equal(m.phonePlaceholder('@a-very-long-team-name-that-will-not-fit', 200, measure), 'Message');
   // Desktop measures the field too (it used to measure on phones only).
   assert.match(chat, /useEffect\(\(\) => \{\n    const el = textareaRef\.current;\n    if \(!el\) return;\n    const measure = \(\) => setFieldWidth\(el\.clientWidth\);/);
+});
+
+test('a: closing the chip\'s list with no pick takes its "@" back; a second tap closes the list (Mira F1, Rigel F2)', async () => {
+  localStorage.clear();
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = m.createRoot(host);
+  m.flushSync(() => root.render(h(m.ChatView, propsOf())));
+  const field = () => host.querySelector('textarea[data-composer]');
+  const chip = () => host.querySelector('[data-answers-chip]');
+  // Escape with nothing picked: the field is empty again, not "@".
+  chip().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await listOpen(host);
+  assert.equal(field().value, '@');
+  field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await listClosed(host);
+  assert.ok(await until(() => field().value === ''), `the stray @ goes (got ${JSON.stringify(field().value)})`);
+  // A second tap on the chip closes the list instead of adding "@ @", and the "@" goes too.
+  chip().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await listOpen(host);
+  chip().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await listClosed(host);
+  assert.ok(await until(() => field().value === ''), `no "@ @" (got ${JSON.stringify(field().value)})`);
+  assert.equal(chip().getAttribute('aria-expanded'), 'false');
+  // A pick keeps the name.
+  chip().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await listOpen(host);
+  field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await listClosed(host);
+  assert.ok(await until(() => /^@Quant $/.test(field().value)), `the pick stays (got ${JSON.stringify(field().value)})`);
+  root.unmount();
+  host.remove();
+});
+
+test('a: the chip\'s 14 px lead face rests (no working ring running into "leads")', () => {
+  const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const lead = src.slice(src.indexOf('data-answer-lead'), src.indexOf('data-answer-lead') + 400);
+  assert.match(lead, /size=\{14\} kwantId=\{lead\.id\} mood="idle"/);
 });

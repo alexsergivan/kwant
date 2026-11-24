@@ -2693,7 +2693,33 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setInputVal(next);
     el?.focus();
     requestAnimationFrame(() => checkMention(next, next.length));
+    return next;
   };
+  // composer-diet a (Mira F1): the Answers chip opens the list by typing "@"; closed with no pick and nothing typed,
+  // that "@" goes again, so the next message never starts with a stray "@". A second tap closes the list (Rigel F2).
+  const chipUndo = useRef<{ before: string; after: string } | null>(null);
+  const answersChipTap = () => {
+    markNewSeen('mention');
+    if (isMentionOpen && chipUndo.current) {
+      setMentionQuery(null);
+      setMentionStartIndex(-1);
+      return;
+    }
+    const before = inputVal;
+    chipUndo.current = { before, after: insertAt() };
+  };
+  const mentionWasOpen = useRef(false);
+  useEffect(() => {
+    if (isMentionOpen) {
+      mentionWasOpen.current = true;
+      return;
+    }
+    if (!mentionWasOpen.current) return;
+    mentionWasOpen.current = false;
+    const undo = chipUndo.current;
+    chipUndo.current = null;
+    if (undo && inputVal === undo.after) setInputVal(undo.before);
+  }, [isMentionOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 18f: once the reply has words the steps fold (desktop: the saved reply's row; phone: the compact row as is) and
   // move below the bubble, into the landed action row's place, so landing moves nothing above the words.
@@ -3441,10 +3467,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             // Phone: drawn 32 px tall, 44 px to the touch (kws-hit).
             <button
               type="button"
-              onClick={() => {
-                markNewSeen('mention');
-                insertAt();
-              }}
+              onClick={answersChipTap}
               aria-haspopup="listbox"
               aria-expanded={isMentionOpen}
               aria-label={chip.name}
@@ -3459,7 +3482,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               <span className="min-w-0 truncate" data-answer-name="">{target.kind === 'laya' ? target.label : target.label.replace(/^@/, '')}</span>
               {lead && (
                 <span className="flex items-center gap-1 min-w-0 pl-2 ml-0.5 border-l border-hairline text-zinc-300 font-normal" data-answer-lead="">
-                  <ModernAvatar role={lead.avatar_sprite} name={lead.name} size={14} kwantId={lead.id} />
+                  {/* Resting face: at 14 px the working ring ran into "leads" (Mira F2); the reply header shows the mood. */}
+                  <ModernAvatar role={lead.avatar_sprite} name={lead.name} size={14} kwantId={lead.id} mood="idle" />
                   <span className="truncate">{chip.lead} leads</span>
                 </span>
               )}
