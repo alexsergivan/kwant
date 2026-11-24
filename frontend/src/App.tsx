@@ -59,7 +59,7 @@ import { HireCard, type HireDecision } from './components/HireCard';
 import { RouteChoiceCard } from './components/RouteChoiceCard';
 import { RouteChoiceMeta, applyRouteChoice, correctRoute, isAskingReply, rerouteTargetsFor, resolveRouteChoice } from './routeChoice';
 import type { RoutineFocus } from './components/RoutinesPanel';
-import { failedRoutineToastAction, openFailedRoutine, runAgain } from './routineRunAgain';
+import { failedRoutineToastAction, openFailedRoutine, openRoutineHistory, runAgain } from './routineRunAgain';
 import { InboxNew } from './components/InboxNew';
 import { isReview, type InboxItem } from './api/inbox';
 import { inboxCount as foldedInboxCount } from './doneAway';
@@ -2928,6 +2928,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       openRoutines: () => openSpaceSettings('routines'),
       focusRoutine: (id) => setRoutineFocus({ id, mode: 'run', nonce: Date.now() }),
     });
+  // routine-row-opens-history: a chat routine row's History. A bot's chat (or its thread) matches by that bot plus the
+  // name; a channel by the name among its routines. No match: Routines opens unfocused.
+  const handleOpenRoutineHistory = (name: string) =>
+    void openRoutineHistory(isChannel ? { channelId: currentChannel?.id ?? null } : { kwantId: currentKwant?.id ?? null }, name, {
+      routines: continuityApi.routines,
+      openRoutines: () => openSpaceSettings('routines'),
+      focusRoutine: (id) => setRoutineFocus({ id, mode: 'history', nonce: Date.now() }),
+    });
   const handleBotActionDecision = async (actionId: string, d: BotActionDecision): Promise<string | void> => {
     try {
       const a = d === 'undo' ? await botActionsApi.undo(actionId) : d === 'confirm' ? await botActionsApi.confirm(actionId) : await botActionsApi.decline(actionId);
@@ -4655,6 +4663,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         <ChatView
           spaceId={space.id}
           onToast={pushToast}
+          onOpenRoutineHistory={handleOpenRoutineHistory}
           heldNotes={heldNotes}
           dropOff={!!spaceSettingsTab}
           title={chatTitle}

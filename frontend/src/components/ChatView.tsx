@@ -427,6 +427,8 @@ export interface ChatViewProps {
   spaceId?: string;
   /** A short notice at the corner of the window (dictation stopped because you left the chat). */
   onToast?: (title: string, detail?: string) => void;
+  /** routine-row-opens-history: a routine row's History opens Routines on the routine with that name. */
+  onOpenRoutineHistory?: (name: string) => void;
   /** Opens Settings › All spaces › Usage at the daily spending stop. */
   onOpenUsage?: () => void;
   /** Opens App settings at the Computer card, "Run Claude inside the VM" focused (isolation notices). */
@@ -715,6 +717,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   onOpenAccounts,
   spaceId,
   onToast,
+  onOpenRoutineHistory,
   onOpenUsage,
   onOpenComputerSettings,
   budgetBotId = null,
@@ -2116,6 +2119,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           body={renderFormattedText(msg.text)}
           at={msg.created_at}
           flash={flashId === msg.id}
+          onOpenHistory={onOpenRoutineHistory && routine ? () => onOpenRoutineHistory(routine) : undefined}
         />
       );
     const isUser = msg.sender_role === 'user';
