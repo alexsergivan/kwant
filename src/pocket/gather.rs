@@ -1425,8 +1425,25 @@ mod tests {
         let t = count_ranked(&ballots, &[0, 1, 2, 3]);
         assert_eq!(t.rounds[1].counts, vec![(0, 5), (1, 3), (2, 3)]);
         assert_eq!(t.rounds[1].dropped, vec![2]);
-        // R3: A 5, B 6 (C's 3 went to B) → B wins
-        assert_eq!(t.outcome, Outcome::Winner { option: 1 });
+        // R3: C's two ballots go to B; D's ballot ranked only D and C, so it is exhausted.
+        // A 5, B 5 is a tie for last again, and B had fewer 1st choices (3 < 5): B drops, A wins.
+        assert_eq!(t.rounds[2].counts, vec![(0, 5), (1, 5)]);
+        assert_eq!(t.rounds[2].exhausted, 1);
+        assert_eq!(t.rounds[2].dropped, vec![1]);
+        assert_eq!(t.outcome, Outcome::Winner { option: 0 });
+        // The mirror: now the lower-numbered option has fewer 1st choices, so option order
+        // alone can't pass both cases. R1: A 5, B 2, C 3, D 1 (D → B). R2: A 5, B 3, C 3 →
+        // B drops (2 < 3 first choices). R3: B's ballots go to C: A 5, C 6 → C wins.
+        let mut ballots = b(&[0], 5);
+        ballots.extend(b(&[1, 2], 2));
+        ballots.extend(b(&[2], 3));
+        ballots.extend(b(&[3, 1, 2], 1));
+        let t = count_ranked(&ballots, &[0, 1, 2, 3]);
+        assert_eq!(t.rounds[0].dropped, vec![3]);
+        assert_eq!(t.rounds[1].counts, vec![(0, 5), (1, 3), (2, 3)]);
+        assert_eq!(t.rounds[1].dropped, vec![1]);
+        assert_eq!(t.rounds[2].counts, vec![(2, 6), (0, 5)]);
+        assert_eq!(t.outcome, Outcome::Winner { option: 2 });
     }
 
     #[test]
