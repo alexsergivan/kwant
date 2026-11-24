@@ -47,6 +47,12 @@
   --sticker-edge: #fff;
   --sticker-ink: #e9e4ff;
   --sticker-text: #1b1033;
+  /* The holo "Picked" sticker (pa10b): modern.css .kw-sticker-holo::before foil stops, checked by test. */
+  --holo-1: #ff6ec7;
+  --holo-2: #ffd36e;
+  --holo-3: #7dffb0;
+  --holo-4: #5ee0ff;
+  --holo-5: #9b7bff;
   color-scheme: dark;
 }
 
@@ -301,6 +307,125 @@ button.ans:active:not(:disabled) { animation: tap 120ms var(--kw-ease); }
   button.ans:active:not(:disabled) { animation: none; }
   /* The timer still moves (it carries information), in 1 s steps with no smoothing. */
   .timer i { transition: none; }
+}
+
+/* ===================== pa10b gather: Sign-up + RSVP + Vote (guest/src/gather). From pa10b/pocket.css "guest page". ===================== */
+.ga .fine { margin-top: 8px; font-size: 14px; line-height: 20px; }
+.ga .small.fine { font-size: 13px; line-height: 19px; }
+.ga .input.bad { border-color: color-mix(in srgb, var(--kw-warn) 70%, transparent); }
+.ga .input.code { text-transform: uppercase; letter-spacing: 0.2em; font-weight: 700; }
+.ga button:focus-visible { outline: 3px solid var(--sky-300); outline-offset: 2px; }
+.ga label:has(input:focus-visible) { outline: 3px solid var(--sky-300); outline-offset: 2px; }
+.ga label { cursor: pointer; }
+.ga .sum { font-size: 15px; line-height: 22px; overflow-wrap: anywhere; }
+.ga ul, .ga ol { margin: 0; padding: 0; list-style: none; }
+.opts { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.opt { position: relative; min-height: 64px; border-radius: 16px; background: var(--kw-surface-raised); border: 2px solid var(--zinc-700); display: flex; flex-direction: column; align-items: center; justify-content: center; font-size: 18px; font-weight: 700; color: var(--zinc-50); text-align: center; padding: 4px; }
+.opt small { font-size: 12px; font-weight: 500; color: var(--zinc-400); }
+.opt.on { border-color: var(--sky-300); background: color-mix(in srgb, var(--sky-500) 28%, var(--kw-surface-raised)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sky-400) 30%, transparent); }
+.opt.on small { color: var(--zinc-200); }
+.stepper { display: grid; grid-template-columns: 56px 1fr 56px; gap: 8px; align-items: center; }
+.stepper .sb { height: 56px; border-radius: 14px; border: 2px solid var(--zinc-700); background: var(--kw-surface-main); display: grid; place-items: center; color: var(--zinc-100); padding: 0; }
+.stepper .sb[aria-disabled="true"] { opacity: 0.4; }
+.stepper .sb svg.pi { width: 16px; height: 16px; }
+.stepper .v { text-align: center; font-size: 26px; line-height: 30px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.stepper .v small { display: block; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--zinc-400); }
+.tchips label { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--kw-hairline-strong); background: var(--kw-surface-main); font-size: 15px; font-weight: 600; color: var(--zinc-100); }
+.tchips label svg.pi { width: 12px; height: 12px; color: var(--sky-300); }
+.tchips label.on { border-color: var(--sky-300); background: color-mix(in srgb, var(--sky-500) 24%, var(--kw-surface-main)); }
+.ga .other { margin-top: 8px; }
+.whosees { display: flex; gap: 8px; align-items: flex-start; font-size: 13.5px; line-height: 20px; color: var(--zinc-300); padding: 10px 12px; border-radius: 12px; border: 1px dashed var(--zinc-700); }
+.whosees b { color: var(--zinc-100); }
+.whosees svg.pi { width: 14px; height: 14px; margin-top: 3px; color: var(--sky-300); flex-shrink: 0; }
+.gslots { display: grid; gap: 8px; }
+.gslot { position: relative; min-height: 64px; border-radius: 16px; background: var(--kw-surface-raised); border: 2px solid var(--zinc-700); padding: 10px 14px; display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 10px; align-items: center; }
+.gslot b { font-size: 18px; line-height: 24px; overflow-wrap: anywhere; }
+.gslot small { grid-column: 1; font-size: 13px; line-height: 18px; color: var(--zinc-400); overflow-wrap: anywhere; }
+.gslot .cap { grid-row: 1 / 3; grid-column: 2; text-align: right; font-size: 14px; font-weight: 600; color: var(--zinc-200); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.gslot .cap .pips { display: flex; justify-content: flex-end; margin-top: 4px; }
+.gslot.full { border-style: dashed; background: var(--kw-surface-main); }
+.gslot.on { border-style: solid; border-color: var(--sky-300); background: color-mix(in srgb, var(--sky-500) 24%, var(--kw-surface-raised)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sky-400) 30%, transparent); }
+.gslot:has(input:disabled) { opacity: 0.55; cursor: default; }
+.pips { display: inline-flex; gap: 3px; flex-wrap: wrap; }
+.pips i { width: 8px; height: 8px; border-radius: 2px; background: var(--zinc-700); }
+.pips i.on { background: var(--sky-300); }
+.ranks { display: grid; gap: 8px; }
+.ranks.more { margin-top: 8px; }
+.rk { min-height: 60px; border-radius: 16px; background: var(--kw-surface-raised); border: 2px solid var(--zinc-700); display: grid; grid-template-columns: 38px minmax(0, 1fr) 44px 44px; gap: 8px; align-items: center; padding: 6px 8px 6px 10px; font-size: 17px; line-height: 22px; font-weight: 600; color: var(--zinc-50); }
+.rk .nm { min-width: 0; overflow-wrap: anywhere; }
+.rk small { display: block; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--zinc-400); }
+.rk .no { width: 36px; height: 36px; border-radius: 10px; background: var(--sky-300); color: var(--kw-surface-rail); display: grid; place-items: center; font-weight: 800; font-size: 17px; }
+.rk.un { width: 100%; text-align: left; font: inherit; font-size: 17px; font-weight: 600; background: var(--kw-surface-main); border-style: dashed; grid-template-columns: 38px minmax(0, 1fr); }
+.rk.un .no { background: transparent; border: 2px dashed var(--zinc-600); color: var(--zinc-500); }
+.rk .mv { width: 44px; height: 44px; border-radius: 12px; border: 1px solid var(--kw-hairline-strong); background: var(--kw-surface-main); display: grid; place-items: center; color: var(--zinc-200); padding: 0; }
+.rk .mv svg.pi { width: 14px; height: 14px; }
+.rk .mv.off { opacity: 0.35; }
+.ga label.ans { position: relative; display: flex; align-items: center; gap: 12px; }
+.radio { width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--zinc-500); flex-shrink: 0; display: grid; place-items: center; }
+.ans.pick .radio { border-color: var(--sky-200); }
+.ans.pick .radio::after { content: ''; width: 10px; height: 10px; border-radius: 50%; background: var(--sky-200); }
+.bigpos { font-size: 56px; line-height: 60px; font-weight: 800; letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+.glist { display: grid; gap: 6px; }
+.glist .gi { display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; gap: 10px; align-items: center; min-height: 48px; padding: 4px 12px; border-radius: 12px; background: var(--kw-surface-main); border: 1px solid var(--kw-hairline); font-size: 15px; overflow-wrap: anywhere; }
+.glist .gi .xs { width: 22px; height: 28px; }
+.glist .gi small { color: var(--zinc-400); font-size: 13px; }
+.glist .gi.me { border: 2px solid var(--sky-300); background: color-mix(in srgb, var(--sky-500) 16%, var(--kw-surface-main)); }
+.glist .gi.wt { border-style: dashed; }
+.ga .who-grid > li { text-align: center; font-size: 13px; color: var(--zinc-300); min-width: 0; }
+.ga .who-grid .sm { width: 36px; height: 45px; }
+.vbars { display: grid; gap: 7px; }
+.vb { display: grid; grid-template-columns: 128px minmax(0, 1fr) 30px; gap: 10px; align-items: center; font-size: 15px; color: var(--zinc-200); }
+.vb .on { min-width: 0; overflow-wrap: anywhere; }
+.vb .tr { height: 10px; border-radius: 3px; background: var(--kw-surface-main); border: 1px solid var(--kw-hairline); overflow: hidden; }
+.vb .tr i { display: block; height: 100%; background: var(--zinc-600); transform-origin: left; transition: transform 160ms var(--kw-ease); }
+.vb.lead { color: var(--zinc-50); font-weight: 600; }
+.vb.lead .tr i { background: var(--sky-400); }
+.vb .n { text-align: right; font-variant-numeric: tabular-nums; color: var(--zinc-300); }
+.vb.out { opacity: 0.55; }
+.ga .vb .tr i.w0 { transform: scaleX(0); }
+.ga .vb .tr i.w1 { transform: scaleX(0.05); }
+.ga .vb .tr i.w2 { transform: scaleX(0.1); }
+.ga .vb .tr i.w3 { transform: scaleX(0.15); }
+.ga .vb .tr i.w4 { transform: scaleX(0.2); }
+.ga .vb .tr i.w5 { transform: scaleX(0.25); }
+.ga .vb .tr i.w6 { transform: scaleX(0.3); }
+.ga .vb .tr i.w7 { transform: scaleX(0.35); }
+.ga .vb .tr i.w8 { transform: scaleX(0.4); }
+.ga .vb .tr i.w9 { transform: scaleX(0.45); }
+.ga .vb .tr i.w10 { transform: scaleX(0.5); }
+.ga .vb .tr i.w11 { transform: scaleX(0.55); }
+.ga .vb .tr i.w12 { transform: scaleX(0.6); }
+.ga .vb .tr i.w13 { transform: scaleX(0.65); }
+.ga .vb .tr i.w14 { transform: scaleX(0.7); }
+.ga .vb .tr i.w15 { transform: scaleX(0.75); }
+.ga .vb .tr i.w16 { transform: scaleX(0.8); }
+.ga .vb .tr i.w17 { transform: scaleX(0.85); }
+.ga .vb .tr i.w18 { transform: scaleX(0.9); }
+.ga .vb .tr i.w19 { transform: scaleX(0.95); }
+.ga .vb .tr i.w20 { transform: scaleX(1); }
+.ga .rounds2 { font-size: 13px; line-height: 20px; color: var(--zinc-300); margin: 0; padding-left: 18px; list-style: decimal; display: grid; gap: 4px; }
+.ga .notice.paid svg.pi { color: var(--kw-ok); }
+.ga .notice.confirm { flex-direction: column; align-items: stretch; gap: 8px; text-align: center; }
+.ga .stk { margin-top: 8px; }
+.ga .closes .lbl { margin-bottom: 0; }
+/* Motion (pa10b design "Motion"): picks settle .98 to 1 in 120 ms, a moved rank row slides 160 ms. */
+.opt.on, .gslot.on, .ans.pick { animation: ga-pick 120ms var(--kw-ease) both; }
+@keyframes ga-pick { from { transform: scale(0.98); } }
+.rk.slide-up { animation: ga-up 160ms var(--kw-ease) both; }
+.rk.slide-down { animation: ga-down 160ms var(--kw-ease) both; }
+@keyframes ga-up { from { transform: translateY(64px); } }
+@keyframes ga-down { from { transform: translateY(-64px); } }
+/* The one holo on this page, the "Picked" winner (modern.css .kw-sticker-holo, colours from :root). */
+.kw-sticker-holo { overflow: hidden; isolation: isolate; --mx: 30%; }
+.kw-sticker-holo > * { position: relative; z-index: 2; }
+.kw-sticker-holo svg.pi { width: 12px; height: 12px; }
+.kw-sticker-holo::before, .kw-sticker-holo::after { content: ''; position: absolute; pointer-events: none; }
+.kw-sticker-holo::before { inset: 0 -50%; z-index: 0; background: linear-gradient(105deg, var(--holo-1) 0%, var(--holo-2) 10%, var(--holo-3) 20%, var(--holo-4) 30%, var(--holo-5) 40%, var(--holo-1) 50%, var(--holo-2) 60%, var(--holo-3) 70%, var(--holo-4) 80%, var(--holo-5) 90%, var(--holo-1) 100%); mix-blend-mode: multiply; opacity: 0.8; transform: translateX(calc((50% - var(--mx)) / 4)); animation: ga-drift 160ms var(--kw-ease) 1 both; }
+.kw-sticker-holo::after { inset: 0; z-index: 1; background: linear-gradient(105deg, transparent calc(var(--mx) - 14%), rgb(255 255 255 / 0.7) var(--mx), transparent calc(var(--mx) + 14%)), repeating-linear-gradient(115deg, transparent 0 3px, rgb(255 255 255 / 0.22) 3px 4px); mix-blend-mode: soft-light; }
+@keyframes ga-drift { from { transform: translateX(calc((50% - var(--mx)) / 4 - 8%)); } }
+@media (prefers-reduced-motion: reduce) {
+  .vb .tr i { transition: none; }
+  .opt.on, .gslot.on, .ans.pick, .rk.slide-up, .rk.slide-down, .kw-sticker-holo::before { animation: none; }
 }
 
 /* ===================== pa10a Secret Santa (guest/src/santa). From pa10a/pocket.css, kit variables only. ===================== */
