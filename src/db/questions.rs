@@ -165,6 +165,23 @@ impl Database {
         for col in ["why_you", "checked"] {
             let _ = sqlx::query(&format!("ALTER TABLE questions ADD COLUMN {col} TEXT")).execute(&self.pool).await;
         }
+        // routine-answered-later: the routine run a question was left open on (see
+        // [`Self::link_questions_to_run`]). Here, not on `routine_runs`: that table is rebuilt
+        // when its CHECKs widen, and a rebuild keeps only the columns it names
+        let _ = sqlx::query("ALTER TABLE questions ADD COLUMN routine_run_id TEXT").execute(&self.pool).await;
+        sqlx::query("CREATE INDEX IF NOT EXISTS questions_by_routine_run ON questions (routine_run_id) WHERE routine_run_id IS NOT NULL")
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// routine-answered-later: questions `ids` were still open when routine run `run_id` ended
+    /// waiting on them (`needs_you`, the question error). Answering one of them later is what
+    /// `answered_later` on the run reads; dismissing it changes nothing.
+    pub async fn link_questions_to_run(&self, ids: &[String], run_id: &str) -> Result<(), DbError> {
+        for id in ids {
+            sqlx::query("UPDATE questions SET routine_run_id = ? WHERE id = ?").bind(run_id).bind(id).execute(&self.pool).await?;
+        }
         Ok(())
     }
 
