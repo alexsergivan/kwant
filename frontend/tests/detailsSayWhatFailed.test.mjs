@@ -290,3 +290,27 @@ test('28a: ChatView after a Deny: no rose toggle, no check line; a real failure 
   assert.match(open, /You said no; nothing ran/);
   assert.doesNotMatch(open, /The user denied|aria-label="Failed"|text-rose/);
 });
+
+// unanswered-question-not-ok (Mira's copy check, fix 1): a routine turn's unanswered question step (server kind
+// "question", tool ask_user) parses as its own kind, not a note, so its row and chip say "Not answered in time";
+// an approval nobody answered keeps "Not approved in time".
+test('unanswered question: the Details row says "Not answered in time", an approval keeps "Not approved in time"', () => {
+  const question = {
+    id: 's2', kind: 'question', tool: 'ask_user', ref_id: 'q1', status: 'unanswered', started_at: T0,
+    title: 'Asked you: Which region should this week’s digest cover first, EU or US?',
+    detail: "Nobody answered before the bot had to stop, so it didn't finish",
+  };
+  const a = o.parseActivityMeta({ activity: { steps: [step('s1', 'ok', 'web_search'), question], dropped: 0 } });
+  assert.equal(a.steps[1].kind, 'question', 'a known kind, not folded into a note');
+  assert.equal(o.statusLabel(a.steps[1]), 'Not answered in time');
+  assert.equal(o.statusLabel(a.steps[0]), 'Done');
+  const approval = o.parseActivityMeta({ activity: { steps: UNANSWERED_PLUS_OK, dropped: 0 } });
+  assert.equal(o.statusLabel(approval.steps[0]), 'Not approved in time');
+  assert.equal(o.statusLabel({ ...question, kind: 'approval' }), 'Not approved in time', 'only the question kind');
+
+  const html = ui.steps({ activity: a, idBase: 'q', defaultOpen: true });
+  assert.match(html, /Asked you: Which region/);
+  assert.match(html, /Nobody answered before the bot had to stop, so it didn(&#x27;|')t finish/);
+  assert.match(html, /aria-label="Not answered in time"/);
+  assert.doesNotMatch(html, /Not approved in time/);
+});

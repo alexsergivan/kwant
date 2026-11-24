@@ -680,6 +680,11 @@ fn send_run_event(state: &AppState, run: &RoutineRun) {
 /// `needs_you`, 26b).
 pub const NEEDS_YOU_ERROR: &str = "A step is waiting for your approval, so it didn't run";
 
+/// unanswered-question-not-ok: a routine run's error when it waits on a question (`ask_user`)
+/// nobody answered (status `needs_you`). The open question is its one Inbox item
+/// (`db::away::FAILED_RUNS` leaves the run out), and History reads "Needed your answer, didn’t finish".
+pub const QUESTION_ERROR: &str = "A step is waiting for your answer, so it didn't finish";
+
 /// What a routine's turn did, once it replied.
 struct Ran {
     reply_id: Option<String>,
@@ -697,18 +702,24 @@ pub struct StepSeen {
     /// A "failed" step the person said no to on its card (28b): its reason is the `said_no` sentence, and
     /// a real failure's reason wins over it.
     pub said_no: bool,
+    /// An `unanswered` question of the turn (unanswered-question-not-ok), not an approval card.
+    pub question: bool,
 }
 
 /// The run's status from what its turn's steps did, in order (26b; P1: never "ok" when nothing
 /// ran):
-/// - any call `unanswered` (its card is still open) → `needs_you`, [`NEEDS_YOU_ERROR`];
+/// - any call `unanswered` (its card is still open) → `needs_you`, [`NEEDS_YOU_ERROR`]; when
+///   only questions went unanswered, [`QUESTION_ERROR`] (an open card wins: it names a call
+///   that didn't run);
 /// - a call that failed (error, denied, cancelled) with no later "ok" call of the same tool →
 ///   `incomplete`, with the first such call's reason on one line. A real failure's reason wins
 ///   over a "You said no" one (28b round 2), so a no never hides what broke after it;
 /// - otherwise `ok`.
 pub fn run_outcome(steps: &[StepSeen]) -> (&'static str, Option<String>) {
-    if steps.iter().any(|s| s.status == "unanswered") {
-        return ("needs_you", Some(NEEDS_YOU_ERROR.to_string()));
+    let mut unanswered = steps.iter().filter(|s| s.status == "unanswered").peekable();
+    if unanswered.peek().is_some() {
+        let error = if unanswered.all(|s| s.question) { QUESTION_ERROR } else { NEEDS_YOU_ERROR };
+        return ("needs_you", Some(error.to_string()));
     }
     let unfixed: Vec<&StepSeen> = steps
         .iter()
@@ -797,6 +808,7 @@ pub fn steps_seen(
             status,
             reason,
             said_no: said,
+            question: false,
         });
     }
     for step in activity {
@@ -817,6 +829,8 @@ pub fn steps_seen(
             status,
             reason,
             said_no: said,
+            // unanswered-question-not-ok: `activity.rs` `question_unanswered`
+            question: step["kind"] == "question",
         });
     }
     seen
@@ -1280,7 +1294,43 @@ mod run_outcome_tests {
             status,
             reason: reason.map(str::to_string),
             said_no: false,
+            question: false,
         }
+    }
+
+    /// An unanswered question of the turn (unanswered-question-not-ok).
+    fn asked() -> StepSeen {
+        StepSeen {
+            question: true,
+            ..step("ask_user", "unanswered", Some(crate::mcp::QUESTION_STEP_DETAIL))
+        }
+    }
+
+    /// unanswered-question-not-ok: a question nobody answered isn't "ok", and says it waits on an
+    /// answer; an open approval card keeps 26b's words, also next to a question.
+    #[test]
+    fn an_unanswered_question_needs_you_in_its_own_words() {
+        assert_eq!(run_outcome(&[asked()]), ("needs_you", Some(QUESTION_ERROR.into())));
+        assert_eq!(run_outcome(&[step("web", "ok", None), asked()]), ("needs_you", Some(QUESTION_ERROR.into())));
+        assert_eq!(run_outcome(&[asked(), step("ha", "unanswered", None)]), ("needs_you", Some(NEEDS_YOU_ERROR.into())));
+        assert_eq!(run_outcome(&[step("ha", "unanswered", None), asked()]), ("needs_you", Some(NEEDS_YOU_ERROR.into())));
+        // An answered question leaves no step: the run is what its calls did
+        assert_eq!(run_outcome(&[step("ask_user", "ok", None)]), ("ok", None));
+        assert_ne!(QUESTION_ERROR, NEEDS_YOU_ERROR);
+    }
+
+    /// The question step `activity.rs` saves is read as a question; an approval step is not.
+    #[test]
+    fn a_saved_question_step_reads_as_a_question() {
+        let meta = json!({"activity": {"steps": [
+            {"kind": "tool", "tool": "mcp__kwnt__ask_user", "status": "ok"},
+            {"kind": "question", "tool": "ask_user", "status": "unanswered", "detail": crate::mcp::QUESTION_STEP_DETAIL},
+        ]}});
+        let seen = steps_seen(None, Some(&meta));
+        assert_eq!(seen, vec![step("mcp__kwnt__ask_user", "ok", None), asked()]);
+        assert_eq!(run_outcome(&seen), ("needs_you", Some(QUESTION_ERROR.into())));
+        let card = json!({"activity": {"steps": [{"kind": "approval", "tool": "ask_user", "status": "unanswered"}]}});
+        assert_eq!(run_outcome(&steps_seen(None, Some(&card))), ("needs_you", Some(NEEDS_YOU_ERROR.into())));
     }
 
     /// A step the person said no to on its card (28b).
