@@ -83,3 +83,136 @@ async fn a_stream_that_lost_turn_ended_closes_so_the_app_reads_the_running_turns
         "the stream skipped turn_ended and stayed open: the app keeps showing the turn as running and never re-reads /api/turns"
     );
 }
+
+// ---- The server's safety net (src/server/lost_turns.rs) and Stop ----
+
+use kwnt::db::continuity::RunningTurn;
+use kwnt::db::models::NewChannel;
+use kwnt::db::spaces::SpaceId;
+use kwnt::server::lost_turns::{self, Lost};
+use kwnt::server::turns::ActiveTurn;
+use std::collections::HashSet;
+
+fn listed(turn_id: &str, context_id: &str, minutes_ago: i64) -> ActiveTurn {
+    ActiveTurn {
+        turn_id: turn_id.into(),
+        kwant_id: "quant".into(),
+        context_id: context_id.into(),
+        thread_id: None,
+        state: "running".into(),
+        since: chrono::Utc::now() - chrono::Duration::minutes(minutes_ago),
+        purpose: Some("work_ahead".into()),
+        audit: None,
+    }
+}
+
+async fn team_chat(state: &AppState) -> String {
+    let input: NewChannel = serde_json::from_value(serde_json::json!({ "name": "Binance Trading Lab" })).unwrap();
+    state.db.create_channel(&SpaceId::default_space(), &input).await.unwrap().id
+}
+
+/// The `turn_ended` events of `turn_id` waiting in `rx`.
+fn ends_of(rx: &mut tokio::sync::broadcast::Receiver<RuntimeEvent>, turn_id: &str) -> usize {
+    let mut n = 0;
+    while let Ok(e) = rx.try_recv() {
+        if let RuntimeEvent::TurnEnded { turn_id: Some(t), .. } = &e {
+            n += usize::from(t == turn_id);
+        }
+    }
+    n
+}
+
+const SIX_MIN: Duration = Duration::from_secs(360);
+
+#[tokio::test]
+async fn the_sweep_ends_a_listed_turn_no_job_holds() {
+    let tmp = tempdir().unwrap();
+    let state = setup(tmp.path()).await;
+    let mut rx = state.event_sender.subscribe();
+    // Quant's work-ahead turn, listed 85 minutes after its work went away
+    state.turns.set_turn(listed("wa-1", "team-chat", 85));
+    // A fresh one no job holds yet is left alone
+    state.turns.set_turn(listed("wa-2", "team-chat", 0));
+
+    let ended = lost_turns::sweep(&state, &mut HashSet::new(), chrono::Utc::now(), SIX_MIN).await;
+    assert_eq!(ended, vec![("wa-1".to_string(), Lost::Orphan)]);
+    assert!(!state.turns.has_turn("wa-1"));
+    assert!(state.turns.has_turn("wa-2"));
+    assert_eq!(ends_of(&mut rx, "wa-1"), 1, "every app hears it ended");
+}
+
+#[tokio::test]
+async fn the_sweep_stops_a_silent_turn_with_a_line_in_its_chat_then_unlists_it() {
+    let tmp = tempdir().unwrap();
+    let state = setup(tmp.path()).await;
+    let chat = team_chat(&state).await;
+    let mut rx = state.event_sender.subscribe();
+    let job = state.turns.start_job([chat.clone(), "t-silent".to_string()]);
+    state.turns.set_turn(listed("t-silent", &chat, 90));
+    state
+        .db
+        .add_running_turn(&RunningTurn {
+            turn_id: "t-silent".into(),
+            kwant_id: "quant".into(),
+            kwant_name: "Quant".into(),
+            channel_id: Some(chat.clone()),
+            started_at: chrono::Utc::now() - chrono::Duration::minutes(90),
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+
+    let mut cancelled = HashSet::new();
+    let ended = lost_turns::sweep(&state, &mut cancelled, chrono::Utc::now(), SIX_MIN).await;
+    assert_eq!(ended, vec![("t-silent".to_string(), Lost::Silent)]);
+    assert!(job.token.is_cancelled(), "its work is told to stop");
+    let line = state.db.list_messages(&chat, 10).await.unwrap().into_iter().find(|m| m.sender_role == "system").expect("a line in the chat");
+    assert_eq!(line.text, "Quant stopped: nothing happened in this reply for 6 minutes. Send your message again to retry.");
+    assert!(line.meta.as_deref().unwrap_or_default().contains("\"turn_lost\""), "{:?}", line.meta);
+
+    // Its work never winds down (a hung engine): the next sweep unlists it, without a second line
+    let ended = lost_turns::sweep(&state, &mut cancelled, chrono::Utc::now(), SIX_MIN).await;
+    assert_eq!(ended, vec![("t-silent".to_string(), Lost::Silent)]);
+    assert!(!state.turns.has_turn("t-silent"));
+    assert_eq!(ends_of(&mut rx, "t-silent"), 1);
+    let lines = state.db.list_messages(&chat, 10).await.unwrap().into_iter().filter(|m| m.sender_role == "system").count();
+    assert_eq!(lines, 1);
+    drop(job);
+}
+
+#[tokio::test]
+async fn the_sweep_leaves_a_quiet_turn_that_waits_for_its_slot_or_is_recent() {
+    let tmp = tempdir().unwrap();
+    let state = setup(tmp.path()).await;
+    let _job = state.turns.start_job(["t-recent".to_string(), "t-queued".to_string()]);
+    state.turns.set_turn(listed("t-recent", "team-chat", 2));
+    state.turns.set_turn(ActiveTurn { state: "queued".into(), ..listed("t-queued", "team-chat", 90) });
+    let ended = lost_turns::sweep(&state, &mut HashSet::new(), chrono::Utc::now(), SIX_MIN).await;
+    assert!(ended.is_empty(), "{ended:?}");
+    assert!(state.turns.has_turn("t-recent") && state.turns.has_turn("t-queued"));
+}
+
+#[tokio::test]
+async fn stop_clears_a_chat_whose_turn_nothing_runs() {
+    let tmp = tempdir().unwrap();
+    let state = setup(tmp.path()).await;
+    let mut rx = state.event_sender.subscribe();
+    state.turns.set_turn(listed("wa-1", "team-chat", 85));
+    state.turns.set_turn(listed("other", "another-chat", 85));
+    let app = create_router(state.clone());
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri("/api/chat/cancel")
+                .header("content-type", "application/json")
+                .body(Body::from(r#"{"channel_id":"team-chat"}"#))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::OK);
+    assert!(!state.turns.has_turn("wa-1"), "Stop leaves the chat 'getting started'");
+    assert!(state.turns.has_turn("other"), "another chat's Stop is its own");
+    assert_eq!(ends_of(&mut rx, "wa-1"), 1);
+}
