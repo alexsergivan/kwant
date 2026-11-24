@@ -45,9 +45,13 @@ card_art: team
       <p class="kicker">New in 0.9.47</p>
       <h2>"Sign in again" opens the row that needs it, and a suggested connection's card shows its real state</h2>
     </div>
-    <ul class="flist">
-      <li id="fixes-0947" class="span3"><h3>Smaller changes in 0.9.47</h3><p>"Sign in again" in a chat or the Inbox opens that connection's row in Settings, lit and ready to sign in. A connection card a bot suggested shows its real state after a reload or on another device: ready, needs sign-in, or removed in Settings. The Connect sheet a suggested app opens uses the app's own name, such as "Google Search Console", not its code name. Automatic retries of a failed routine read "Retried automatically" in History, and you get one notice that says how often it was retried. A routine whose question went unanswered no longer shows as OK: History says it needed your answer, and the question waits in Needs you. Routine runs in the Inbox now carry their routine's id (routine_id), groundwork for a Run again button. A failed routine's Inbox row now reads in the bot's words, not as a raw tool error. A routine's chat card now follows the routine: its current time, Paused with Resume, or a note once it's deleted. In Routines, a paused routine reads Paused, and on a phone its switch and Open result are bigger to tap. Routine rows in the Inbox drop stray bold marks, and a thread routine's row opens its thread.</p></li>
-    </ul>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0947">Smaller changes in 0.9.47</h3>
+        <p>"Sign in again" in a chat or the Inbox opens that connection's row in Settings, lit and ready to sign in. A connection card a bot suggested shows its real state after a reload or on another device: ready, needs sign-in, or removed in Settings. The Connect sheet a suggested app opens uses the app's own name, such as "Google Search Console", not its code name. Automatic retries of a failed routine read "Retried automatically" in History, and you get one notice that says how often it was retried. A routine whose question went unanswered no longer shows as OK: History says it needed your answer, and the question waits in Needs you. Routine runs in the Inbox now carry their routine's id (routine_id), groundwork for a Run again button. A failed routine's Inbox row now reads in the bot's words, not as a raw tool error. A routine's chat card now follows the routine: its current time, Paused with Resume, or a note once it's deleted. In Routines, a paused routine reads Paused, and on a phone its switch and Open result are bigger to tap. Routine rows in the Inbox drop stray bold marks, and a thread routine's row opens its thread.</p>
+      </div>
+      <div class="frame">{{shot:v0947-signin-opens-the-row|Settings › Apps & accounts in Trailhead Outfitters on desktop, opened at the Advanced section. Under "Tool servers (MCP) 2", the Stripe row is lit with a violet border: "Needs sign-in" chip, mcp.example.com, "Sign-in required", and a focused amber "Sign in again" button beside "Check now" and "Manage tools". The wallet row below reads "Not checked".}}</div>
+    </div>
   </div>
 </section>
 
