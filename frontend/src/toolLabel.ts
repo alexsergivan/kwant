@@ -371,3 +371,20 @@ export function shellCommandText(step: { title: string; detail?: string }): stri
   const head = cmd.endsWith('…') ? cmd.slice(0, -1) : cmd;
   return step.detail && step.detail.startsWith(head) ? step.detail : cmd;
 }
+
+/**
+ * 36a (Mira's design check, fix 1): who a live step's words name. Never the chat: in a discussion, the current
+ * speaker; else the replying bot; the chat title only in a direct chat, where it is the bot's own name. Undefined
+ * means plainShellTitle says "the bot".
+ */
+export function stepsWho(o: {
+  discussing?: boolean;
+  currentSpeaker?: string | null;
+  streamingSpeakerName?: string | null;
+  title?: string | null;
+  direct: boolean;
+}): string | undefined {
+  if (o.discussing && o.currentSpeaker) return o.currentSpeaker;
+  if (o.streamingSpeakerName) return o.streamingSpeakerName;
+  return o.direct ? o.title || undefined : undefined;
+}

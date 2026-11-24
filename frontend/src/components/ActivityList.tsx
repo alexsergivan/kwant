@@ -171,7 +171,7 @@ const ShowCommand: React.FC<{ cmd: string; id: string }> = ({ cmd, id }) => {
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls={open ? id : undefined}
-        className="inline-flex items-center gap-1 rounded text-[11px] leading-4 text-zinc-400 hover:text-zinc-200 underline decoration-zinc-600 underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 [@media(max-width:767px)_and_(pointer:coarse)]:min-h-[44px] [@media(max-width:767px)_and_(pointer:coarse)]:text-xs"
+        className="inline-flex items-center gap-1 rounded px-1 -ml-1 text-[11px] leading-4 text-zinc-400 hover:text-zinc-200 underline decoration-zinc-600 underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 focus-visible:outline-offset-2 [@media(max-width:767px)_and_(pointer:coarse)]:min-h-[44px] [@media(max-width:767px)_and_(pointer:coarse)]:text-xs"
       >
         {open ? 'Hide command' : 'Show command'}
       </button>

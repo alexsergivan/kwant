@@ -3,6 +3,7 @@ import { parseWatchMeta, type WatchMeta } from '../missionWatch';
 import { flushSync } from 'react-dom';
 import { createStreamText, useStreamPart, useStreamThinking, useStreamWriting, type StreamText, type StreamView } from '../streamText';
 import { queuedText } from '../claudeVm';
+import { stepsWho } from '../toolLabel';
 import { QueuedBeside } from './QueuedBeside';
 import { WaitingBanner } from './WaitingBanner';
 import { answerPlaceholder, isTeamTurn, onlyAskOpen, turnRail, waitingStopLabel } from '../waitingState';
@@ -933,6 +934,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const liveSpeaker = streamingSpeakerName || title;
   // Who the live row shows: the current speaker in a discussion, else the replying bot.
   const liveName = discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : liveSpeaker;
+  // 36a: who the live steps' words name; never the team or room chat's title (stepsWho).
+  const stepsName = stepsWho({
+    discussing: discussionState?.inProgress,
+    currentSpeaker: discussionState?.currentSpeaker,
+    streamingSpeakerName,
+    title,
+    direct: home?.kind === 'bot',
+  });
   const livePages = useMemo(() => pagesOfReply(liveActivity?.steps), [liveActivity?.steps]);
   const savedTrail = useMemo((): { id: string; bot: string; pages: ReplyPage[] } | null => {
     const from = (m: ChatMessage) => {
@@ -2726,7 +2735,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       idBase={`live-${liveActivity.turnId}`}
       compact={phone}
       folded={stepsBelow}
-      who={liveSpeaker}
+      who={stepsName}
       lead={
         livePages.length > 0 ? (
           <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />

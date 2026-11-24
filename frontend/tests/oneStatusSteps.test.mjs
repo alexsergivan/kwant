@@ -4,6 +4,7 @@
 // "Show command" button. A screen reader hears the same words the eye sees.
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 import { loadBundled } from './bundle.mjs';
 
@@ -25,7 +26,7 @@ const m = await loadBundled(`
   import { LiveActivityList, SavedActivityList } from './src/components/ActivityList';
   export { LiveActivityList, SavedActivityList };
   export * from './src/activity';
-  export { plainShellTitle, shellCommandText, sshHost, shellCommandOf } from './src/toolLabel';
+  export { plainShellTitle, shellCommandText, sshHost, shellCommandOf, stepsWho } from './src/toolLabel';
   export const live = (props) => renderToStaticMarkup(React.createElement(LiveActivityList, props));
   export const saved = (props) => renderToStaticMarkup(React.createElement(SavedActivityList, props));
 `);
@@ -152,4 +153,30 @@ test('(c) Show command opens and closes the command as text, and a failed step k
   assert.match(document.getElementById('d-steps-e-cmd').textContent, /<img src=x/);
   m.flushSync(() => root.unmount());
   host.remove();
+});
+
+test('fix 1: a team or room chat never names the chat as the bot; a discussion names the current speaker', () => {
+  // team chat, nobody streaming yet: "the bot", never "trading-lab"
+  const who = m.stepsWho({ discussing: false, currentSpeaker: null, streamingSpeakerName: undefined, title: 'trading-lab', direct: false });
+  assert.equal(who, undefined);
+  const html = m.live({ live: { turnId: 't1', steps: [sshFailed, sshRunning], thinking: {} }, idBase: 'live-t1', who });
+  assert.match(text(html), /didn’t connect, so the bot tried again/);
+  assert.doesNotMatch(html, /trading-lab/, 'the chat title is never the bot');
+  // discussion in progress: the current speaker
+  const lead = m.stepsWho({ discussing: true, currentSpeaker: 'Quant', streamingSpeakerName: 'Lead', title: 'trading-lab', direct: false });
+  assert.equal(lead, 'Quant');
+  assert.match(text(m.live({ live: { turnId: 't2', steps: [sshFailed, sshRunning], thinking: {} }, idBase: 'live-t2', who: lead })), /so Quant tried again/);
+  // the replying bot when one streams; the title only in a direct chat (it is the bot's own name)
+  assert.equal(m.stepsWho({ streamingSpeakerName: 'Lead', title: 'trading-lab', direct: false }), 'Lead');
+  assert.equal(m.stepsWho({ title: 'Quant', direct: true }), 'Quant');
+  // ChatView hands the steps stepsWho's answer, not liveSpeaker (BrowsedChip stays for 36d)
+  const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  assert.match(src, /who=\{stepsName\}/);
+  assert.match(src, /direct: home\?\.kind === 'bot'/);
+});
+
+test('fix 2: the Show command ring has room (px-1 -ml-1 outline-offset-2) and keeps 44 px on a touch phone', () => {
+  const html = m.live({ live: { turnId: 't3', steps: [sshOk], thinking: {} }, idBase: 'live-t3', who: 'Quant' });
+  const btn = html.match(/<button[^>]*>Show command<\/button>/)?.[0] ?? '';
+  for (const c of ['px-1', '-ml-1', 'focus-visible:outline-offset-2', 'min-h-[44px]']) assert.ok(btn.includes(c), c);
 });
