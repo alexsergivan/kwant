@@ -81,9 +81,13 @@ pub struct Settings {
     /// seconds (3 to 120). Unset: the host taps Next.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub auto_advance_s: Option<u32>,
-    /// Lower the kit's player cap (1 to 60).
+    /// Lower the kit's player cap (1 to 60; a class quiz 1 to 120).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_players: Option<u32>,
+    /// pa11: a class quiz (a teacher's lesson). First names or nicknames only, nothing about the
+    /// players kept once it ends, and up to 120 players on an address that stays the same.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub class: Option<bool>,
 }
 
 impl Settings {
@@ -95,6 +99,17 @@ impl Settings {
     }
     pub fn lock_when_all_answered(&self) -> bool {
         self.lock_when_all_answered.unwrap_or(true)
+    }
+    pub fn class(&self) -> bool {
+        self.class.unwrap_or(false)
+    }
+    /// The most players this quiz may ask for: 60, or 120 for a class quiz (pa11).
+    pub fn player_ceiling(&self) -> u32 {
+        if self.class() {
+            super::validate::CLASS_MAX_PLAYERS
+        } else {
+            super::validate::MAX_PLAYERS
+        }
     }
 }
 

@@ -573,6 +573,31 @@ pub fn connection_item(at: DateTime<Utc>, v: &Value, last_seen: Option<DateTime<
     })
 }
 
+/// pa13a: a front desk guest the bot handed to the person (`desk_turns::needs_you`, as listed on
+/// /api/waiting) as a Waiting-on-you row, "Emma needs you" / "Sea-view flat · Guest Guide". Every
+/// field of the /api/waiting item stays (the card's Allow row reads them); the Inbox fields are
+/// added. Its id is `desk:<code>:<guest>`, the same as the card's, so answering in either place
+/// closes both.
+pub fn desk_item(at: DateTime<Utc>, mut v: Value, last_seen: Option<DateTime<Utc>>) -> Value {
+    let unread = last_seen.is_none_or(|s| at > s);
+    let name = v["kwant_name"].as_str().unwrap_or("").to_string();
+    let id = v["id"].as_str().unwrap_or("").to_string();
+    let title = format!("{} needs you", v["guest_name"].as_str().unwrap_or("A guest"));
+    let summary = match v["pocket_title"].as_str().unwrap_or("") {
+        "" => "Guest Guide".to_string(),
+        place => format!("{place} · Guest Guide"),
+    };
+    v["title"] = json!(title);
+    v["summary"] = json!(summary);
+    v["status"] = json!("open");
+    v["timestamp"] = json!(rfc3339(at));
+    v["link"] = json!({"thread_id": v["thread_id"], "channel_id": v["channel_id"], "direct_kwant_id": v["direct_kwant_id"]});
+    v["group"] = json!(Group::WaitingOnYou.key());
+    v["sort_key"] = sort_key(Group::WaitingOnYou, None, at.timestamp_millis(), unread, &name, &id);
+    v["unread"] = json!(unread);
+    v
+}
+
 /// A review item, and the facts its group and buttons came from; `None` when it isn't listed.
 pub fn review_item(r: &ReviewInput, last_seen: Option<DateTime<Utc>>) -> Option<(Value, ReviewFacts)> {
     let t = &r.task;
@@ -848,12 +873,13 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     // Work that stopped and waits for the person to resume it (0.9.5), as on /api/away, but
     // titled with the person's request it was working on (33m)
     let stopped = away::stopped_items(&state, &space, true).await;
-    // A connection only the person can fix (0.9.5), as listed on /api/waiting
-    let connections = match state.db.list_kwants(&space).await {
-        Ok(kwants) => super::tool_failures::needs_you(&state, &kwants).await,
-        Err(_) => Vec::new(),
+    // A connection only the person can fix (0.9.5), and (pa13a) a front desk guest waiting for
+    // the person, both as listed on /api/waiting
+    let (connections, desks) = match state.db.list_kwants(&space).await {
+        Ok(kwants) => (super::tool_failures::needs_you(&state, &kwants).await, super::desk_turns::needs_you(&state, &kwants).await),
+        Err(_) => (Vec::new(), Vec::new()),
     };
-    let unseen_total = unseen_total + watch.len() as i64 + stopped.len() as i64 + connections.len() as i64;
+    let unseen_total = unseen_total + watch.len() as i64 + stopped.len() as i64 + connections.len() as i64 + desks.len() as i64;
 
     let mut items: Vec<Value> = Vec::new();
     items.extend(waiting.into_iter().map(|r| away_item(r, Group::WaitingOnYou, seen)));
@@ -863,6 +889,7 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     // puts on these items, so an away item comes through here unchanged
     away::annotate(&state, &mut items).await;
     items.extend(connections.into_iter().map(|(at, v)| connection_item(at, &v, seen)));
+    items.extend(desks.into_iter().map(|(at, v)| desk_item(at, v, seen)));
     // An approval's title is its own question when the call names what it is about (Iris's #539).
     // `question` is sent only then, so the Inbox can tell it from today's tool title, which stays
     // in `title` when there is none (every screen prints `title`).

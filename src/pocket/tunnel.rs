@@ -538,13 +538,25 @@ impl Tunnels {
 
 /// Why a pocket can't have a quick tunnel, as `(error code, line)`, or `None` when it can.
 pub fn refusal(s: &super::Snapshot) -> Option<(&'static str, &'static str)> {
-    if s.kit().is_none_or(|k| k.stable_address_only()) {
-        return Some(("no_quick_tunnel", "This pocket runs for weeks, so it needs an address that stays the same. A quick link isn't offered for it."));
+    if let Some(r) = spec_refusal(s.kit(), &s.spec) {
+        return Some(r);
     }
     if s.row.state != crate::db::pocket::OPEN {
         return Some(("pocket_ended", "This pocket has ended."));
     }
     None
+}
+
+/// The part of [`refusal`] that the kit and spec alone decide (no pocket needed), so the chat card
+/// can say it before the pocket opens (pa11 qa F6).
+pub fn spec_refusal(kit: Option<&'static dyn super::kits::Kit>, spec: &Value) -> Option<(&'static str, &'static str)> {
+    let Some(kit) = kit.filter(|k| !k.stable_address_only()) else {
+        return Some(("no_quick_tunnel", "This pocket runs for weeks, so it needs an address that stays the same. A quick link isn't offered for it."));
+    };
+    (super::effective_rules(kit, spec).max_players > super::kits::DEFAULT_MAX_PLAYERS).then_some((
+        "needs_stable_address",
+        "A quick link takes up to 60 players, so this one needs an address that stays the same: your own https, Tailscale Funnel or Same Wi-Fi.",
+    ))
 }
 
 /// Turns the quick tunnel on for this pocket: joins the running one, or starts it in the

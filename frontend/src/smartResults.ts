@@ -482,6 +482,89 @@ export interface GatherInfo {
   join: SantaInfo['join'];
 }
 
+/** pa13 front desk: one guest on the host's list (Lin's `host/state` guests, newest activity first). */
+export interface DeskGuest {
+  id: string;
+  /** First name or nickname the guest typed. */
+  name: string;
+  creature: string | null;
+  waiting: boolean;
+  /** "Late check-out: 2 PM, Sun Dec 8" or a short label ("Bell couldn't answer this message"); null when not waiting. */
+  handoff_reason: string | null;
+  /** The newest message, cut to 90 characters by the server; null before the guest writes. */
+  last: { from: DeskFrom; text: string; at: string } | null;
+  unread: number;
+  msgs: number;
+  /** "2026-12-14": when this guest's chat is deleted; null before they write. */
+  delete_on: string | null;
+}
+export type DeskFrom = 'guest' | 'bot' | 'host' | 'note';
+/** One message in a guest's conversation (`?view=guest:<id>` → `conversation.messages`). */
+export interface DeskMessage {
+  id: string;
+  from: DeskFrom;
+  text: string;
+  at: string;
+  note: 'handoff' | 'host_away' | 'daily_cap' | null;
+}
+
+/**
+ * The front desk card's view (pa13). On the wire, block.desk is Lin's host summary (`GET /api/pockets/:code` →
+ * `summary`) plus the face (`title`, `place`, `host_name`) and the desk's own `join`; validDesk turns it into this.
+ * The answering bot's id is never kept: only its name and model.
+ */
+export interface DeskInfo {
+  title: string;
+  place: string | null;
+  host_name: string | null;
+  bot: { name: string; model: string | null };
+  counts: { guests: number; waiting: number; replies_today: number; daily_cap: number; messages_today: number };
+  /** RFC 3339 or display text; null: "midnight". */
+  cap_resets_at: string | null;
+  cost_per_reply_usd: number | null;
+  guide_chars: number | null;
+  guide_facts: number | null;
+  /** Set-up only: the start of the house guide as the host pasted it. */
+  guide_preview: string | null;
+  guests: DeskGuest[];
+  join: SantaInfo['join'];
+  /** Set-up: the start was refused for want of an address that stays the same (409 no_quick_tunnel / needs_stable_address). */
+  needs_address: boolean;
+  /** Stopped: the day it stopped, and when the last chat goes. Totals fall back to counts. */
+  ended: { at: string | null; deletes_on: string | null; days: number | null; bot_replies: number | null; host_replies: number | null; messages: number | null } | null;
+}
+
+/**
+ * The wall kit's host facts on a Pocket card (pa14/card-impl.md "Shape I read"): Juno's host summary (#1139,
+ * server-impl.md "Host view" without `limits`, `queue` and `wall`) plus display text the bot writes. Counts,
+ * sizes in MB and photo ids only: the photo lists come from the box when the card opens, never in the block.
+ */
+export interface WallInfo {
+  state: 'open' | 'closed';
+  /** "Sun 12 PM": when uploads close (display text). */
+  closes_at: string | null;
+  /** "Tue, Jan 5": when the photos leave the box (display text). */
+  delete_on: string | null;
+  /** The host's first name for guest-facing lines ('Oleks can make room'); null when unset. */
+  host_name: string | null;
+  captions: boolean;
+  best_set: boolean;
+  /** pa14b: "snap" when Snap's check picked the best set; anything else (or null) is the host's own pick. */
+  best_by: string | null;
+  counts: { total: number; waiting: number; approved: number; hidden: number; guests: number; senders: number };
+  used_mb: number;
+  pocket_cap_mb: number;
+  /** Photo ids in the best set (≤ best_max), or proposed while `best_set` is false. */
+  best: string[];
+  best_max: number;
+  keep_days: number;
+  /** Spec limits for the meter line; null when the bot didn't send them. */
+  photo_cap_mb: number | null;
+  per_guest_max: number | null;
+  /** pa14b: Snap is picking the best 30 now (closed, nothing proposed yet). */
+  picking: boolean;
+}
+
 /**
  * A pocket app's card in chat (pa4, pa0a/design.md §1 and §6); source is always slot. Every time and
  * date is display text the server wrote for the person's time zone ("Fri, Nov 27 · 8:00 PM").
@@ -514,7 +597,9 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   /** Live: the game so far. */
   live: { players: number; teams: number; leader: { name: string; points: number } | null; now: string | null; palettes: string[] } | null;
   /** Ready and live: how friends join. A URL that isn't known yet is null. */
-  join: { mode: PocketJoinMode; wifi_url: string | null; anywhere_url: string | null } | null;
+  join: { mode: PocketJoinMode; wifi_url: string | null; anywhere_url: string | null; quick_tunnel?: boolean } | null;
+  /** pa11: the class quiz's own line (`pocket.notice`), shown as is. Absent on a normal quiz. */
+  notice?: string;
   /** Ended: "10:12 PM", the winner, the stats line, the deletion date ("Fri, Dec 4"). */
   ended: { at: string; winner: { name: string; points: number } | null; stats: string | null; deletes_on: string | null } | null;
   /** Bot calls and spend so far on the person's account. */
@@ -523,8 +608,12 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   results: PocketResults | null;
   /** kit "santa" only: the Secret Santa card (pa10a). `state` is "live" until the phase is "ended". */
   santa: SantaInfo | null;
+  /** kit "wall" only: the photo wall card (pa14). `state` is "live" while open, "ended" once closed. */
+  wall?: WallInfo | null;
   /** kit "gather" only (pa10b): Sign-up, RSVP or Vote. `state` is "live" until the phase is "closed". */
   gather?: GatherInfo | null;
+  /** kit "desk" only (pa13): the front desk (Guest Guide). `state` is "writing" in set-up, "live", then "ended". */
+  desk?: DeskInfo | null;
   /** pa4c: the quiz_drafts id (the bot card's `id`) that Edit questions opens. Null or absent: no editor. */
   draft?: string | null;
   /** pa4c: questions the person wrote or changed themselves (not source-checked). */

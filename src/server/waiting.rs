@@ -340,6 +340,8 @@ pub async fn list(State(state): State<AppState>, super::spaces::Scope(space): su
     // Fix-it items past their PR's daily turn cap (dev::fix_it)
     items.extend(super::dev::fix_it::needs_you(&state, space.as_str(), &kwants).await);
     items.extend(super::telegram::customers::needs_you(&state, space.as_str(), &kwants).await);
+    // pa13a: front desk guests the bot handed to the person
+    items.extend(super::desk_turns::needs_you(&state, &kwants).await);
     // Connections only the person can fix (0.9.5): a sign-in that expired, an app to connect again
     items.extend(super::tool_failures::needs_you(&state, &kwants).await);
     items.sort_by_key(|(at, _)| *at);
