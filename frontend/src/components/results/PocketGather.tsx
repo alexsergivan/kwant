@@ -887,7 +887,7 @@ export const PeoplePaidPanel: React.FC<{ block: PocketBlock; g: GatherInfo; setP
                     aria-busy={busy === p.id || undefined}
                     onClick={() => tick(p)}
                     className={`inline-flex min-h-[44px] min-w-[96px] shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border px-2.5 text-[13px] font-semibold kw-focus sm:min-h-[32px] sm:text-[12.5px] ${
-                      on ? 'border-emerald-300/35 text-ok' : 'border-hairline-strong text-zinc-300 hover:bg-white/[0.04]'
+                      on ? 'border-teal-300/35 text-ok' : 'border-hairline-strong text-zinc-300 hover:bg-white/[0.04]'
                     }`}
                     data-paid={on}
                   >
