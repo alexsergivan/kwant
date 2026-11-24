@@ -1,0 +1,21 @@
+{
+  "version": "0.9.49",
+  "date": "2026-11-24",
+  "highlights": [
+    {
+      "id": "chat-no-gap-after-accept",
+      "title": "No blank space after you accept",
+      "text": "After you accept a request in a chat, the message box moves back up under the last message. Before, a blank strip could stay above it.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "chat-new-message-in-view",
+      "title": "New messages land in view",
+      "text": "When you're at the bottom of a chat and a long message arrives, the chat now scrolls to show it. Before, the newest message could end up just below the view.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}
