@@ -14,6 +14,7 @@ import {
   ConciergeBell,
   Eye,
   FileText,
+  Gauge,
   Globe,
   Lock,
   MessageSquare,
@@ -484,7 +485,7 @@ const DeskChip: React.FC<{ stage: DeskStage; d: DeskInfo }> = ({ stage, d }) => 
     case 'cap':
       return (
         <span className="kw-chip kw-chip-warn" data-chip="cap">
-          <BellRing size={12} aria-hidden="true" />
+          <Gauge size={12} aria-hidden="true" />
           Daily limit reached
         </span>
       );
@@ -544,7 +545,7 @@ const CapBar: React.FC<{ d: DeskInfo; full: boolean }> = ({ d, full }) => {
   return (
     <div className="flex flex-col gap-1.5" data-cap-bar={full ? 'full' : 'ok'}>
       <p className={`flex items-center gap-1.5 text-[13px] leading-5 sm:text-2xs ${full ? 'text-warn' : 'text-zinc-300'}`}>
-        <Zap size={13} className="shrink-0" aria-hidden="true" />
+        <Gauge size={13} className="shrink-0" aria-hidden="true" />
         {label}
       </p>
       <Bar value={c.replies_today / c.daily_cap} label={`Replies today: ${num(c.replies_today)} of ${num(c.daily_cap)}`} tone={full ? 'warn' : 'accent'} />
@@ -698,9 +699,9 @@ const GuestRow: React.FC<{ g: DeskGuest; bot: string; onOpen: (id: string) => vo
             </small>
           </span>
           {g.waiting ? (
-            <span className="flex min-w-0 items-center gap-1 text-[13px] text-zinc-200 sm:text-2xs" data-reason>
-              <BellRing size={12} className="shrink-0 text-sky-300" aria-hidden="true" />
-              <span className="truncate">
+            <span className="flex min-w-0 items-start gap-1 text-[13px] text-zinc-200 sm:text-2xs" data-reason>
+              <BellRing size={12} className="mt-[3px] shrink-0 text-sky-300 sm:mt-0.5" aria-hidden="true" />
+              <span className="line-clamp-2 [overflow-wrap:anywhere] sm:line-clamp-1">
                 <b className="font-semibold text-zinc-50">Needs you:</b> {g.handoff_reason ?? `${bot} asked you to reply`}
               </span>
             </span>
@@ -1246,7 +1247,7 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
                   </button>
                 )}
                 <button type="button" onClick={() => setRaising(!raising)} aria-expanded={raising} className={HALF_BTN} data-action="raise">
-                  <BellRing size={14} aria-hidden="true" />
+                  <Gauge size={14} aria-hidden="true" />
                   Raise the limit
                 </button>
               </div>
