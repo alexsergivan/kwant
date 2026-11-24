@@ -48,6 +48,7 @@ jobs:
           export CHROMIUM="$(command -v google-chrome || command -v chromium)"
           node guest/e2e/csp.mjs "$RUNNER_TEMP/guest-shots"
           node guest/e2e/remote.mjs "$RUNNER_TEMP/guest-shots"
+          node guest/e2e/queue.mjs "$RUNNER_TEMP/guest-shots"
       - name: Guest page shots
         if: always()
         uses: actions/upload-artifact@v4
