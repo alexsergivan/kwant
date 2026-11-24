@@ -370,6 +370,10 @@ pub async fn create(state: &AppState, mut req: CreateRequest) -> PResult<(Arc<Sn
     if spec_text.len() > MAX_SPEC_BYTES {
         return Err(PocketError::new(StatusCode::PAYLOAD_TOO_LARGE, "spec_too_big", "The spec is bigger than 256 KB."));
     }
+    // pa13b: a booking desk's slots have their own error, with the first bad slot's index
+    if kit.id() == desk::ID {
+        desk::check_spec_slots(&req.spec).map_err(kit_refusal)?;
+    }
     kit.validate_spec(&req.spec).map_err(|m| PocketError::new(StatusCode::BAD_REQUEST, "bad_spec", m))?;
     if let (Some(o), Some(c)) = (req.opens_at, req.closes_at) {
         if c <= o {
