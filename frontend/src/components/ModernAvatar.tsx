@@ -145,7 +145,7 @@ type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
   | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
   | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
-  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'host' | 'knithat' | 'clipboard' | 'none';
+  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'host' | 'knithat' | 'clipboard' | 'bell' | 'none';
 
 export interface Creature {
   body: string;
@@ -214,6 +214,7 @@ export const AVATAR_STYLES: Array<{ id: string; label: string }> = [
   { id: 'quizmaster', label: 'Quizmaster' },
   { id: 'santa', label: 'Santa' },
   { id: 'tally', label: 'Sign-up' },
+  { id: 'desk', label: 'Front desk' },
   { id: 'default', label: 'Droid' },
 ];
 
@@ -255,6 +256,11 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
    * Picked style only, like santa.
    */
   tally: ['orange', 'clipboard'],
+  /**
+   * Pocket apps (pa13): Bell, a teal creature holding a gold service bell low on its right. Picked style only, like
+   * santa and tally.
+   */
+  desk: ['teal', 'bell'],
 };
 
 /** Style ids (picked or saved), as opposed to a title or name passed as a hint. */
@@ -343,6 +349,14 @@ const BOARD_SHADE = '#6e3d1c';
 const CLIP_SILVER = '#d2cbec';
 const CLIP_SHADE = '#8f86b8';
 const TICK_GREEN = '#3ccf6e';
+
+// Bell's service bell: sprite art from pa13/src/bell-sprite.ts (knob, gold dome with a pale highlight left and a darker
+// shade right, dark base).
+const BELL_DARK = '#5a3d0c';
+const BELL_GOLD = '#f7c948';
+const BELL_SHINE = '#fff1b8';
+const BELL_SHADE = '#c28a14';
+const BELL_BASE = '#2a1d4a';
 
 function renderAccessory(c: Creature) {
   switch (c.accessory) {
@@ -439,6 +453,14 @@ function renderAccessory(c: Creature) {
 // Accessories worn in front of the body (on the face or chest)
 function renderOverlay(c: Creature) {
   switch (c.accessory) {
+    case 'bell':
+      // Bell's service bell, held low on the right (x13-21, y12-19): never over the eyes or the smile.
+      return [
+        px(17, 12, 1, 1, BELL_DARK), px(16, 13, 3, 1, BELL_GOLD), px(15, 14, 5, 1, BELL_GOLD), px(14, 15, 7, 2, BELL_GOLD),
+        px(16, 13, 1, 1, BELL_SHINE), px(15, 14, 1, 2, BELL_SHINE), px(16, 14, 1, 1, BELL_SHINE),
+        px(18, 13, 1, 1, BELL_SHADE), px(19, 14, 1, 1, BELL_SHADE), px(20, 15, 1, 2, BELL_SHADE), px(14, 17, 7, 1, BELL_SHADE),
+        px(13, 18, 9, 1, BELL_DARK), px(13, 19, 9, 1, BELL_BASE),
+      ];
     case 'clipboard':
       // Tally's clipboard at the lower right: a white sheet, a silver clip and two green ticks.
       return [

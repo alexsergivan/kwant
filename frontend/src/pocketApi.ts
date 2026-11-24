@@ -48,6 +48,8 @@ export interface PocketRead {
   join?: PocketJoin | null;
   /** pa10b gather: the host's view (names, drafts with `next_copy_at`). */
   host_view?: unknown;
+  /** pa13 desk, `?view=guest:<id>` only: one guest's conversation (host only). */
+  conversation?: unknown;
 }
 
 export type PocketLinkRole = 'host' | 'screen';
@@ -236,6 +238,15 @@ export const pocketApi = {
   /** pa4c: only the fields sent change; `accepted: []` clears the also-accept list. */
   editQuestion: async (id: string, n: number, body: QuestionFields & { base: number }) => call<DraftReply>('PATCH', qPath(id, n), body),
   deleteQuestion: async (id: string, n: number, base: number) => call<DraftReply>('DELETE', `${qPath(id, n)}?base=${encodeURIComponent(String(base))}`),
+  // pa13 front desk (Lin's src/pocket/desk.rs, #1150): the host's two actions; both answer with the same read as GET.
+  /** The host's own answer to one guest, marked "host". Clears `waiting`. */
+  deskReply: async (code: string, guest: string, text: string) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'reply', body: { guest, text } }),
+  /** "No reply needed": clears `waiting`, sends nothing to the guest. */
+  deskResolve: async (code: string, guest: string) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'resolve', body: { guest } }),
+  /** One guest's conversation, host only: the read plus `conversation`. */
+  deskGuest: async (code: string, guest: string) => call<PocketRead>('GET', `${one(code)}?view=${encodeURIComponent(`guest:${guest}`)}`),
+  /** The Needs-you list (`GET /api/waiting`); the desk keeps only its own `pocket_desk` items (validDeskItems). */
+  waiting: async () => call<unknown>('GET', '/api/waiting'),
 };
 
 /**

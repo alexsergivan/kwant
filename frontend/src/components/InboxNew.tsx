@@ -59,6 +59,7 @@ import {
 import { localClock } from '../clock';
 import { runAgain, runAgainId } from '../routineRunAgain';
 import { fixLabel } from '../toolFailures';
+import { type DeskItem, DeskNeedsRow, openDeskItems, useDeskAnswers, useDeskItems } from './results/PocketDesk';
 
 export const WIDE_QUERY = '(min-width: 1024px)';
 
@@ -804,6 +805,8 @@ export interface InboxNewProps {
   doneApi?: DoneApi;
   /** Tests and screenshots: a done item's details by item id, instead of loading them. */
   doneDetails?: Record<string, DoneDetailData>;
+  /** Tests and screenshots: front desk guests waiting (pa13), instead of reading them. */
+  deskItems?: DeskItem[];
 }
 
 /** Writes `?item=` for the open item; the Shell sets the path first, so this waits a tick. */
@@ -835,11 +838,15 @@ export const InboxNew: React.FC<InboxNewProps> = ({
   placeName,
   doneApi,
   doneDetails,
+  deskItems,
 }) => {
   const st = useInbox();
   const mqWide = useWide();
   const wide = forceWide ?? mqWide;
   const { data, loading, error, notice, busy, selectedId, crumb } = st;
+  // pa13: a front desk guest waiting for the host is a Needs-you row of its own, with the Allow card inline.
+  useDeskAnswers();
+  const desk = openDeskItems(useDeskItems(data, noLoad, deskItems));
   const listRef = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLDivElement>(null);
   const onCountsRef = useRef(onCounts);
@@ -981,7 +988,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
 
   const firstRow = sections ? [...sections.needs, ...sections.done][0]?.id : undefined;
   const firstFocusable = selectable.includes(selectedId ?? '') ? selectedId : (firstRow ?? (showBatch ? 'batch' : null));
-  const empty = !!data && data.items.length === 0 && !showBatch;
+  const empty = !!data && data.items.length === 0 && !showBatch && desk.length === 0;
   const header = (
     <div className={`h-14 shrink-0 border-b border-zinc-800/80 ${onBack && !wide ? 'px-2' : 'px-4'} flex items-center justify-between gap-3 select-none`}>
       {onBack && !wide && (
@@ -1047,7 +1054,8 @@ export const InboxNew: React.FC<InboxNewProps> = ({
               const rows = sections[key];
               const reviewsEnd = key === 'done' ? rows.filter((i) => i.group === 'to_review').length : 0;
               const withBatch = key === 'done' && showBatch;
-              const count = rows.length;
+              const deskRows = key === 'needs' ? desk : [];
+              const count = rows.length + deskRows.length;
               const sec = SECTION[key];
               const row = (i: InboxItem) => (
                 <QueueRow
@@ -1078,6 +1086,9 @@ export const InboxNew: React.FC<InboxNewProps> = ({
                   </h3>
                   {count > 0 || withBatch ? (
                     <ul role="presentation" className="space-y-2">
+                      {deskRows.map((it) => (
+                        <DeskNeedsRow key={it.id} item={it} />
+                      ))}
                       {rows.slice(0, key === 'done' ? reviewsEnd : rows.length).map(row)}
                       {withBatch && (
                         <BatchCard
