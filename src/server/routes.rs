@@ -1108,6 +1108,27 @@ pub(super) async fn run_routine_turn(
     run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, true, Vec::new()).await
 }
 
+/// pa14b: a wall's one best-30 pick (see [`crate::pocket::wall_pick`]). Nobody asked for the
+/// turn, so every call that could change something asks the person; the pick's own two tools
+/// don't (one reads small previews, the other only stores a proposal the host still has to show).
+pub(crate) async fn run_pocket_pick_turn(
+    state: &AppState,
+    kwant: &Kwant,
+    channel_id: Option<String>,
+    thread_id: Option<String>,
+    prompt: String,
+    label: &str,
+) -> Result<Option<String>, String> {
+    let opts = || TurnOpts {
+        always_ask: true,
+        started_by: Some(label.to_string()),
+        source: Some(super::bot_status::TurnSource::routine(label)),
+        purpose: Some(label.to_string()),
+        ..TurnOpts::default()
+    };
+    run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, true, Vec::new()).await
+}
+
 /// [`run_routine_turn`] with the routing card for the reply (`meta.routing`) and extra stop keys
 /// (the person's message): a channel message the person routed by choosing a bot, or one a bot
 /// handed back (see [`super::rerouting`]).
