@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { join, extname } from 'node:path';
 import { FakeBox, CSP, KIWI_SVG } from './views.mjs';
 import { SantaBox } from './santa.mjs';
+import { DeskBox } from './desk.mjs';
 import { GatherBox } from './gather.mjs';
 import { RemoteBox } from './remote.mjs';
 import { ScreenBox } from './screen.mjs';
@@ -22,9 +23,9 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
   const log = [];
   const box = (code) => {
     // Codes starting with santa- are Secret Santa pockets (santa.mjs), gather- the pa10b gather kit (gather.mjs), screen- the big screen (screen.mjs), remote- the
-    // host remote (remote.mjs); the rest are quiz scenarios.
+    // host remote (remote.mjs), desk- the front desk (desk.mjs); the rest are quiz scenarios.
     if (!boxes.has(code))
-      boxes.set(code, code.startsWith('santa-') ? new SantaBox(code) : code.startsWith('gather-') ? new GatherBox(code) : code.startsWith('screen-') ? new ScreenBox(code) : code.startsWith('remote-') ? new RemoteBox(code) : new FakeBox(code));
+      boxes.set(code, code.startsWith('santa-') ? new SantaBox(code) : code.startsWith('desk-') ? new DeskBox(code) : code.startsWith('gather-') ? new GatherBox(code) : code.startsWith('screen-') ? new ScreenBox(code) : code.startsWith('remote-') ? new RemoteBox(code) : new FakeBox(code));
     return boxes.get(code);
   };
 

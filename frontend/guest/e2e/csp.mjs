@@ -1,7 +1,7 @@
 // pa5 guest page in a real Chrome under exactly pa1's pocket CSP (guest/fake/views.mjs CSP), from the fake guest port.
 // Fails on: any securitypolicyviolation or CSP console error, a page error, any request that is not same-origin,
 // a missing or different CSP header, sideways scrolling at 390 px, or a visible tap target under 44 px.
-// Also walks Secret Santa's G1-G11 (pa10a) from the fake santa box, and gather's G1-G11 (pa10b) from the fake gather box. Writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
+// Also walks Secret Santa's G1-G11 (pa10a) from the fake santa box, and gather's G1-G11 (pa10b) from the fake gather box, and the front desk's G1-G12 (pa13) from the fake desk box. Writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
 // Usage: PW_CORE=<playwright-core/index.mjs> CHROMIUM=<chrome> node guest/e2e/csp.mjs <out dir>
 // Needs the built page in frontend/dist/pocket (npm run build:guest).
 import fs from 'node:fs';
@@ -9,6 +9,7 @@ import path from 'node:path';
 import { startFake } from '../fake/server.mjs';
 import { CSP, order } from '../fake/views.mjs';
 import { santaScenarios } from '../fake/santa.mjs';
+import { deskScenarios } from '../fake/desk.mjs';
 import { gatherScenarios } from '../fake/gather.mjs';
 
 const pw = await import(process.env.PW_CORE || 'playwright-core');
@@ -632,6 +633,151 @@ const presets = {
   'devtools-slow-4g': { latency: 562.5, downloadThroughput: 180000, uploadThroughput: 84375 },
   'lighthouse-slow-4g': { latency: 150, downloadThroughput: 204800, uploadThroughput: 84375 },
 };
+// pa13 front desk guest chat, G1-G12 (pa13/guest-brief.md), from the fake desk box (fake/desk.mjs) in Lin's impl.md
+// shapes. Same checks as the quiz screens; shots named desk-g<N>-<what>. The kit comes from the public facts, so the
+// desk chunk loads lazily, and the walk fails if the quiz screens show instead.
+{
+  const deskShot = async (page, log, file) => {
+    await shot(page, file);
+    await check(file, page, log);
+    results.states[file] = { screen: await page.getAttribute('[data-screen]', 'data-screen') };
+  };
+  const go = async (code, screen, { reduced = false } = {}) => {
+    const p = await newPage();
+    if (reduced) await p.page.emulateMedia({ reducedMotion: 'reduce' });
+    if (typeof deskScenarios[code]?.state === 'object') {
+      await p.ctx.addCookies([{ name: `kp_${code}`, value: 'fake', domain: '127.0.0.1', path: `/api/pocket/${code}`, httpOnly: true, sameSite: 'Strict' }]);
+    }
+    const res = await p.page.goto(`${origin}/p/${code}`);
+    if (res.headers()['content-security-policy'] !== CSP) problems.push(`${code}: wrong CSP header`);
+    await p.page.waitForSelector(`main.dk[data-screen="${screen}"]`, { timeout: 20000 });
+    return p;
+  };
+  const want = async (page, sel, what) => {
+    try {
+      await page.waitForSelector(sel, { timeout: 8000 });
+    } catch {
+      problems.push(`desk: ${what} (${sel}) not shown`);
+    }
+  };
+  const noText = async (page, re, what) => {
+    const t = await page.evaluate(() => document.body.innerText);
+    if (re.test(t)) problems.push(`desk: ${what}`);
+  };
+
+  // G1 join, then G2 first time with starters; a starter sends and Bell types (G3)
+  {
+    const { ctx, page, log } = await go('desk-join', 'join');
+    await deskShot(page, log, 'desk-g1-join');
+    await page.fill('#d-name', 'Ana');
+    await page.fill('#d-pin', '1234');
+    await page.click('button[data-join]');
+    await page.waitForSelector('main.dk[data-screen="chat"]', { timeout: 10000 });
+    await want(page, '[data-starter]', 'G2 starter chips');
+    await deskShot(page, log, 'desk-g2-first');
+    await page.click('[data-starter]');
+    await want(page, '[data-typing]', 'G3 typing after a starter');
+    const mine = await page.locator('.gm.me').count();
+    if (mine !== 1) problems.push(`desk G3: ${mine} own bubbles after one send (want 1: the outbox bubble swaps for the kept one)`);
+    // The fake's reply arrives over the socket: typing stops, Bell answers.
+    fake.push('desk-join', (v) => {
+      v.bot_typing = false;
+      v.messages.push({ id: 'm900', from: 'bot', text: 'The Wi-Fi is "SeaView-5G", password piran2026.', at: new Date().toISOString() });
+    });
+    await want(page, '.gm[data-id="m900"]', 'G3 the pushed bot reply');
+    await ctx.close();
+  }
+  // G2 first time from a saved seat, G3 typing, G4 hand-off, G5 host, G7 daily cap, G10 host away
+  for (const [code, file, sel] of [
+    ['desk-first', 'desk-g2-first-seat', '[data-starter]'],
+    ['desk-chat', 'desk-g3-typing', '[data-typing]'],
+    ['desk-handoff', 'desk-g4-handoff', '[data-note="handoff"]'],
+    ['desk-host', 'desk-g5-host', '.hosttag'],
+    ['desk-cap', 'desk-g7-cap', '[data-note="daily_cap"]'],
+    ['desk-away', 'desk-g10-away', '[data-note="host_away"]'],
+  ]) {
+    const { ctx, page, log } = await go(code, 'chat');
+    await want(page, sel, file);
+    if (code === 'desk-handoff' || code === 'desk-cap' || code === 'desk-away') await want(page, '[data-waiting]', `${file} waiting pill`);
+    // Never shown to a guest: the hand-off reason, another guest, answer_bot's id.
+    await noText(page, /handoff_reason|answer_bot|undefined|null/, `${file}: internal words on screen`);
+    await deskShot(page, log, file);
+    await ctx.close();
+  }
+  // G6 slow down: the send is refused with retry_at; the text stays in the composer
+  {
+    const { ctx, page, log } = await go('desk-slow', 'chat');
+    await page.fill('#d-say', 'Is there a hair dryer?');
+    await page.click('button[data-send]');
+    await want(page, '[data-slow]', 'G6 slow note');
+    const kept = await page.inputValue('#d-say');
+    if (kept !== 'Is there a hair dryer?') problems.push(`desk G6: composer lost the text on 429 ("${kept}")`);
+    if (!(await page.isDisabled('button[data-send]'))) problems.push('desk G6: send stays on while slowed down');
+    await deskShot(page, log, 'desk-g6-slow');
+    await ctx.close();
+  }
+  // G8 too long: over the limit, send turns off and the field says so
+  {
+    const { ctx, page, log } = await go('desk-long', 'chat');
+    await page.fill('#d-say', 'The sea view is lovely. '.repeat(44));
+    await page.waitForTimeout(100);
+    if (!(await page.isDisabled('button[data-send]'))) problems.push('desk G8: send stays on over 1,000 characters');
+    if ((await page.getAttribute('#d-say', 'aria-invalid')) !== 'true') problems.push('desk G8: field not marked invalid');
+    await deskShot(page, log, 'desk-g8-long');
+    await ctx.close();
+  }
+  // G9 offline: the action fails, the bubble says Not sent, the bar offers Retry
+  {
+    const { ctx, page, log } = await go('desk-offline', 'chat');
+    await page.fill('#d-say', 'Where is the nearest bakery?');
+    await page.click('button[data-send]');
+    await want(page, '[data-try-one]', 'G9 Not sent bubble');
+    await want(page, '[data-offline]', 'G9 offline bar');
+    await deskShot(page, log, 'desk-g9-offline');
+    await ctx.close();
+  }
+  // G1 full: guest_max says the guide is full, no seat
+  {
+    const { ctx, page, log } = await go('desk-full', 'join');
+    await page.fill('#d-name', 'Ana');
+    await page.fill('#d-pin', '1234');
+    await page.click('button[data-join]');
+    await want(page, 'text=This guide is full right now.', 'G1 guest_max copy');
+    await deskShot(page, log, 'desk-g1-full');
+    await ctx.close();
+  }
+  // G11 rejoin: a wrong name first, then the right one opens the chat
+  {
+    const { ctx, page, log } = await go('desk-rejoin', 'join');
+    await page.click('[data-to-rejoin]');
+    await page.waitForSelector('main.dk[data-screen="rejoin"]', { timeout: 5000 });
+    await deskShot(page, log, 'desk-g11-rejoin');
+    await page.fill('#d-bname', 'Anna');
+    await page.fill('#d-bpin', '1234');
+    await page.click('button[data-rejoin]');
+    await want(page, 'text=No chat with that name here.', 'G11 unknown name');
+    await page.fill('#d-bname', 'Ana');
+    await page.fill('#d-bpin', '1234');
+    await page.click('button[data-rejoin]');
+    await page.waitForSelector('main.dk[data-screen="chat"]', { timeout: 10000 });
+    await ctx.close();
+  }
+  // G12 ended
+  {
+    const { ctx, page, log } = await go('desk-ended', 'ended');
+    await want(page, '[data-ended]', 'G12 ended card');
+    await deskShot(page, log, 'desk-g12-ended');
+    await ctx.close();
+  }
+  // Reduced motion: no bubble entrance, no typing dots moving
+  {
+    const { ctx, page, log } = await go('desk-chat', 'chat', { reduced: true });
+    const anims = await page.evaluate(() => [...document.querySelectorAll('main.dk *')].map((e) => getComputedStyle(e).animationName).filter((a) => a && a !== 'none'));
+    if (anims.length) problems.push(`desk reduced motion: ${anims.length} element(s) animate (${[...new Set(anims)].join(', ')})`);
+    await check('desk-reduced-motion', page, log);
+    await ctx.close();
+  }
+}
 for (const [label, throttle] of Object.entries(presets)) {
   for (const [how, base] of [['fetch-state', origin], ['boot-json', `http://127.0.0.1:${boot.port}`]]) {
     const runs = [];

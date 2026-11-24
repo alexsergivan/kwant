@@ -842,7 +842,18 @@ test('built: phone files at most 80 KB gzipped (JS + CSS + HTML + font); the big
     else phone += gz;
     rows.push(`${f} ${buf.length} B raw, ${gz} B gz`);
   }
-  console.log(`guest bundle: phone ${phone} B gzipped, big screen ${screen} B gzipped, host remote ${remote} B gzipped, total ${phone + screen + remote}\n  ${rows.join('\n  ')}`);
+  // A phone loads one kit: the entry lazily imports each kit's own chunk (Secret Santa, gather, the Wall, the front desk), and only the
+  // pocket's kit is fetched. So the budget counts every phone file except the other kits' JS chunks: all of them minus
+  // the lazy kit chunks, plus the largest one. CSS and shared chunks still count in full, which keeps it on the safe side.
+  const entry = readFileSync(new URL('index.html', dist), 'utf8').match(/g-[\w-]+\.js/)?.[0];
+  const lazy = [...readFileSync(new URL(entry, dist), 'utf8').matchAll(/import\("\.\/(g-[\w-]+\.js)"\)/g)]
+    .map((m) => m[1])
+    .filter((f) => !f.startsWith('g-screen-') && !f.startsWith('g-remote-'));
+  const kitGz = lazy.map((f) => gzipSync(readFileSync(new URL(f, dist)), { level: 9 }).length);
+  const all = phone;
+  phone = all - kitGz.reduce((a, b) => a + b, 0) + Math.max(0, ...kitGz);
+  console.log(`guest bundle: phone ${phone} B gzipped (all phone files ${all}; kit chunks ${lazy.map((f, i) => `${f} ${kitGz[i]}`).join(', ')}), big screen ${screen} B gzipped, host remote ${remote} B gzipped, total ${all + screen + remote}\n  ${rows.join('\n  ')}`);
+  assert.ok(lazy.length >= 1, 'the entry lazily imports the kit chunks');
   assert.ok(phone <= 80 * 1024, `guest page is ${phone} B gzipped, budget 81920`);
   assert.ok(screen > 0 && screen <= 40 * 1024, `big screen chunk is ${screen} B gzipped, budget 40960`);
   assert.ok(remote > 0 && remote <= 40 * 1024, `host remote chunk is ${remote} B gzipped, budget 40960`);
