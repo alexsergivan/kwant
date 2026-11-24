@@ -379,7 +379,9 @@ export class GuestApp {
       'form',
       { class: 'body', novalidate: true, 'aria-labelledby': 'title' },
       h('div', { class: 'hero' }, quizmaster(64), h('div', null, h('h1', { id: 'title' }, v.title), h('div', { class: 'soft sub' }, this.subtitle(v)))),
-      h('div', null, h('label', { class: 'lbl', for: 'name' }, 'Your name ', h('small', { id: 'name-hint' }, '1-20 letters')), name),
+      // pa11: a class quiz says its line before anyone types, in place of the privacy line below (never twice).
+      v.notice ? h('div', { class: 'notice plain', 'data-notice': '' }, icon('lock', 'pi'), h('span', null, v.notice)) : null,
+      h('div', null, h('label', { class: 'lbl', for: 'name' }, 'Your name ', h('small', { id: 'name-hint' }, v.first_names_only ? 'First name or nickname' : '1-20 letters')), name),
       h('div', null, h('div', { class: 'lbl', id: 'lbl-creature' }, 'Pick your creature'), creatures),
       teams,
       h(
@@ -389,7 +391,7 @@ export class GuestApp {
         h('p', { class: 'err', id: 'join-err', role: 'alert', 'data-err': '' }, d.error),
         this.mineButton(),
       ),
-      h('p', { class: 'small center', 'data-privacy': '' }, privacyLine(v)),
+      v.notice ? null : h('p', { class: 'small center', 'data-privacy': '' }, privacyLine(v)),
     );
     form.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -542,6 +544,7 @@ export class GuestApp {
     else if (err === 'name_taken') this.setError('Someone here already has that name. Add a letter, or tap "That\'s me" if it\'s you on a new phone.', name, 'name');
     else if (err === 'not_open_yet') this.setError(`This ${noun(v)} isn't open yet. Try again in a minute.`);
     else if (err === 'name_too_long') this.setError('Names are 1-20 letters.', '', 'name');
+    else if (err === 'name_first_only') this.setError(r.message || 'First name or nickname only, please: no surname, email or phone number.', '', 'name');
     else if (err === 'name_empty') this.setError('Type your name first.', '', 'name');
     else if (err === 'name_not_allowed') this.setError("That name can't be used here. Try another one.", '', 'name');
     else if (err === 'bad_team') this.setError(d.making ? "That team name can't be used here. Try another one." : 'Pick a team, or start a new one.', '', 'team');
@@ -1097,5 +1100,7 @@ export class GuestApp {
     }
     const priv = this.root.querySelector('[data-privacy]');
     if (priv) priv.textContent = privacyLine(v);
+    const note = this.root.querySelector('[data-notice] span');
+    if (note && v.notice) note.textContent = v.notice;
   }
 }

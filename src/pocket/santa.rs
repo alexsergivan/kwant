@@ -652,7 +652,7 @@ impl Kit for Santa {
             for pair in pairs {
                 let arr = pair.as_array().filter(|a| a.len() == 2).ok_or("Each keep_apart entry is a pair of two names.")?;
                 pair_names(&json!({ "a": arr[0], "b": arr[1] })).map_err(|e| match e {
-                    KitError::BadInput(m) | KitError::NotNow(m) => format!("keep_apart: {m}"),
+                    KitError::BadInput(m) | KitError::NotNow(m) | KitError::Coded { message: m, .. } => format!("keep_apart: {m}"),
                 })?;
             }
         }

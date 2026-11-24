@@ -158,6 +158,7 @@ fn block(row: &QuizDraftRow, card: &Card, tz: Option<&str>) -> Pocket {
         State::Writing | State::Checking => None,
     };
     let reference = format!("pocket:{}", card.id);
+    let (notice, join) = class_parts(row, state);
     Pocket {
         id: "b0".into(),
         title: None,
@@ -176,14 +177,32 @@ fn block(row: &QuizDraftRow, card: &Card, tz: Option<&str>) -> Pocket {
         eta: None,
         opens_line: None,
         live: None,
-        join: None,
+        join,
         ended: None,
         budget: None,
         results: None,
         draft: Some(card.id.clone()),
         yours: Some(card.yours as u64),
+        notice,
     }
 }
+
+/// pa11 qa F6: from the draft's spec, the kit's notice (a class quiz's line; not once it ended,
+/// where the deletion line says it) and, on a ready or live card, a `join` saying there is no
+/// quick link when the pocket core would refuse one for this spec (`pocket::tunnel::spec_refusal`,
+/// the 409's own rule). The join URLs stay null: the card doesn't carry them today.
+fn class_parts(row: &QuizDraftRow, state: &str) -> (Option<String>, Option<Value>) {
+    let Ok(spec) = serde_json::from_str::<Value>(&row.spec) else { return (None, None) };
+    let kit = crate::pocket::kits::kit(crate::kits::quiz::KIT_ID);
+    let notice = (state != "ended").then(|| kit.and_then(|k| k.notice(&spec))).flatten().map(|n| fit(n, NOTICE_MAX));
+    let no_quick = matches!(crate::pocket::tunnel::spec_refusal(kit, &spec), Some(("needs_stable_address", _)));
+    let join = (no_quick && matches!(state, "ready" | "live"))
+        .then(|| serde_json::json!({ "mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false }));
+    (notice, join)
+}
+
+/// The frontend's limit on `notice` (`validPocket`'s `optText(b.notice, 300)`).
+pub(crate) const NOTICE_MAX: usize = 300;
 
 /// "Fri, Nov 27 · 8:00 PM · 4 rounds · 40 questions", in the person's time zone (the pocket
 /// scheduler's own wording); `None` without a time the spec states as RFC 3339.
@@ -241,6 +260,7 @@ mod tests {
             results: None,
             draft: Some("qd_0123456789ab".into()),
             yours: Some(1),
+            notice: None,
         }
     }
 
@@ -370,6 +390,79 @@ mod tests {
         assert_eq!(named(vec![call("pocket_create", serde_json::json!({}), "ok", "Template: ...")]), None);
         assert_eq!(named(vec![call("pocket_update", serde_json::json!({"id": "qd/../x"}), "ok", "")]), None);
         assert_eq!(named(vec![]), None);
+    }
+
+    fn draft_with(spec: serde_json::Value) -> QuizDraftRow {
+        QuizDraftRow {
+            id: "qd_0123456789ab".into(),
+            space_id: "s1".into(),
+            kwant_id: "k1".into(),
+            title: "Year 8 Science".into(),
+            spec: spec.to_string(),
+            state: "ready".into(),
+            problems: "[]".into(),
+            sources: "[]".into(),
+            dry_run: None,
+            budget: "{}".into(),
+            pocket_code: None,
+            created_at: 1,
+            updated_at: 1,
+            own_keys: "[]".into(),
+        }
+    }
+
+    /// pa11 qa F6: the card gets the class line, and "no quick link" over 60, from the draft's spec.
+    #[test]
+    fn a_class_quiz_card_carries_its_notice_and_no_quick_link_over_60() {
+        let line = crate::pocket::quiz_kit::CLASS_NOTICE;
+        let no_quick = serde_json::json!({ "mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false });
+        let big = draft_with(serde_json::json!({ "settings": { "class": true, "max_players": 70 } }));
+        for state in ["ready", "live"] {
+            let (notice, join) = class_parts(&big, state);
+            assert_eq!((notice.as_deref(), join.as_ref()), (Some(line), Some(&no_quick)), "{state}");
+            let mut p = sample();
+            (p.state, p.notice, p.join) = (state.into(), notice, join);
+            assert_eq!(check(p.clone()), Ok(()), "{state}");
+            let v = serde_json::to_value(Block::Pocket(Box::new(p))).unwrap();
+            assert_eq!((v["notice"].as_str(), &v["join"]), (Some(line), &no_quick));
+        }
+        // Before the dry run the card has no join box: the notice only
+        assert_eq!(class_parts(&big, "writing"), (Some(line.to_string()), None));
+        // Ended: the deletion line says it; nothing more
+        assert_eq!(class_parts(&big, "ended"), (None, None));
+        // A class quiz of 60 or fewer keeps the quick link
+        let small = draft_with(serde_json::json!({ "settings": { "class": true, "max_players": 60 } }));
+        assert_eq!(class_parts(&small, "ready"), (Some(line.to_string()), None));
+        // A normal quiz: nothing, and no `notice` key on the wire
+        for spec in [serde_json::json!({}), serde_json::json!({ "settings": { "max_players": 70 } }), serde_json::json!("not a spec")] {
+            assert_eq!(class_parts(&draft_with(spec.clone()), "ready"), (None, None), "{spec}");
+        }
+        assert_eq!(class_parts(&QuizDraftRow { spec: "{".into(), ..big.clone() }, "ready"), (None, None), "a spec that doesn't parse");
+        let v = serde_json::to_value(Block::Pocket(Box::new(sample()))).unwrap();
+        assert!(v.get("notice").is_none(), "{v}");
+    }
+
+    #[test]
+    fn the_validator_takes_only_kwants_own_join_and_a_bounded_notice() {
+        let no_quick = serde_json::json!({ "mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false });
+        let with = |state: &str, join: Option<serde_json::Value>, notice: Option<String>| {
+            let mut p = sample();
+            (p.state, p.join, p.notice) = (state.into(), join, notice);
+            if state == "live" || state == "ready" {
+                p.dry_run = Some(PocketDryRun { players: 30, passed: true, stopped_at: None, what_happened: None, what_im_doing: None });
+            }
+            check(p)
+        };
+        assert_eq!(with("live", Some(no_quick.clone()), None), Ok(()));
+        let url = serde_json::json!({ "mode": "wifi", "wifi_url": "http://x", "anywhere_url": null, "quick_tunnel": false });
+        let quick = serde_json::json!({ "mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": true });
+        for bad in [url, quick] {
+            assert!(with("ready", Some(bad), None).is_err());
+        }
+        assert!(with("writing", Some(no_quick), None).is_err(), "no join box before the dry run");
+        assert_eq!(with("ready", None, Some("a".repeat(NOTICE_MAX))), Ok(()));
+        assert!(with("ready", None, Some("a".repeat(NOTICE_MAX + 1))).is_err());
+        assert!(with("ready", None, Some("  ".into())).is_err());
     }
 
     #[test]

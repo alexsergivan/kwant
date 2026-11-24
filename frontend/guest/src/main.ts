@@ -1,5 +1,5 @@
 // Entry for /p/<code>. Reads the optional v1 state the server put in the page, picks the screens by the pocket's kit
-// (Secret Santa and gather load their own chunks; everything else is the quiz, exactly as before), then joins the live pocket.
+// (Secret Santa, gather, the Wall and the front desk load their own chunks; everything else is the quiz, exactly as before), then joins the live pocket.
 import './guest.css';
 import { codeFrom, Env } from './api';
 import { GuestApp } from './app';
@@ -63,9 +63,13 @@ async function main(): Promise<void> {
   const b = boot();
   let app: { start(boot: unknown): Promise<void>; wake(): void };
   if (screen !== undefined) {
-    const { ScreenApp } = await import('./screen/screen');
     const still = w.matchMedia?.('(prefers-reduced-motion: reduce)');
-    const tv = new ScreenApp(root, { ...env, origin: w.location.origin, still: () => !!still?.matches }, code, screen || undefined);
+    const tvEnv = { ...env, origin: w.location.origin, still: () => !!still?.matches };
+    // pa14: a Wall's big screen is the photo slideshow, its own chunk; every other kit keeps the quiz screen.
+    const tv =
+      (await kit(b)) === 'wall'
+        ? new (await import('./wall/screen-wall')).WallTV(root, tvEnv, code, screen || undefined)
+        : new (await import('./screen/screen')).ScreenApp(root, tvEnv, code, screen || undefined);
     const fit = () => tv.fit(w.innerWidth, w.innerHeight);
     fit();
     w.addEventListener('resize', fit);
@@ -78,9 +82,16 @@ async function main(): Promise<void> {
     if (k === 'santa') {
       const { SantaApp } = await import('./santa/app');
       app = new SantaApp(root, { ...env, store: store() }, code);
+    } else if (k === 'wall') {
+      const { WallApp } = await import('./wall/wall');
+      const blobs = { create: (f: Blob) => URL.createObjectURL(f), revoke: (u: string) => URL.revokeObjectURL(u) };
+      app = new WallApp(root, { ...env, XHR: w.XMLHttpRequest, blobs }, code);
     } else if (k === 'gather') {
       const { GatherApp } = await import('./gather/app');
       app = new GatherApp(root, env, code);
+    } else if (k === 'desk') {
+      const { DeskApp } = await import('./desk/desk');
+      app = new DeskApp(root, { ...env, store: store() }, code);
     } else app = new GuestApp(root, env, code);
   }
   void app.start(b);
