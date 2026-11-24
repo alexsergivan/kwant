@@ -852,7 +852,7 @@ export const OddAllow: React.FC<{
   if (picking) return <BookFor code={code} guest={guest} name={name} host={host} slots={slots ?? null} askStart={askStart ?? null} onBack={() => setPicking(false)} />;
 
   const head = askStart ? `${name} asks for a time you haven’t listed: ${slotWhen(askStart)}` : reason || `${name} needs you`;
-  const canBook = bookingFeatures.canBook();
+  const canBook = bookingFeatures.canBook() && !missing;
   const submit = () => {
     const t = text.trim();
     if (!t) return;

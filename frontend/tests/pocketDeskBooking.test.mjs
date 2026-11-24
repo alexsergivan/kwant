@@ -365,6 +365,20 @@ test('Book a time hides when the server doesn’t know the book action', async (
   assert.ok(!v2.host.querySelector('[data-action="book-for"]'));
 });
 
+test('after a refused book (unknown_action) the same card drops Book a time at once, so it can’t be sent twice', async () => {
+  stub({ action: { error: 'unknown_action', message: 'unknown action book' }, status: 400 });
+  const v = await deskCard('odd');
+  await click(act(v, 'book-for'));
+  await click(v.host.querySelector('[data-pick]'));
+  await click(act(v, 'book'));
+  await settle();
+  assert.equal(posts().filter((p) => p[2].name === 'book').length, 1);
+  assert.ok(!v.host.querySelector('[data-action="book-for"]'), 'Book a time is gone on the same card');
+  assert.match(v.host.textContent, /Booking for a guest isn’t on this Mac yet\. Write Ben a reply instead\./);
+  assert.doesNotMatch(v.host.textContent, /“Book a time” lets you pick/);
+  assert.match(v.host.textContent, /Write Ben a reply asking them to pick a time/);
+});
+
 test('edit times: a lock tap shows the refusal and keeps the editor open; 409 slot_in_use does too', async () => {
   // Vega's 409 body: {error, message, slot, start, name} at the top level.
   stub({ action: { error: 'slot_in_use', message: 'Emma holds it', slot: 's-1202-10', start: '2026-12-02T10:00', name: 'Emma' }, status: 409 });
