@@ -197,7 +197,7 @@ fn class_parts(row: &QuizDraftRow, state: &str) -> (Option<String>, Option<Value
     let notice = (state != "ended").then(|| kit.and_then(|k| k.notice(&spec))).flatten().map(|n| fit(n, NOTICE_MAX));
     let no_quick = matches!(crate::pocket::tunnel::spec_refusal(kit, &spec), Some(("needs_stable_address", _)));
     let join = (no_quick && matches!(state, "ready" | "live"))
-        .then(|| serde_json::json!({ "mode": "wifi", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false }));
+        .then(|| serde_json::json!({ "mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false }));
     (notice, join)
 }
 
@@ -415,7 +415,7 @@ mod tests {
     #[test]
     fn a_class_quiz_card_carries_its_notice_and_no_quick_link_over_60() {
         let line = crate::pocket::quiz_kit::CLASS_NOTICE;
-        let no_quick = serde_json::json!({ "mode": "wifi", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false });
+        let no_quick = serde_json::json!({ "mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false });
         let big = draft_with(serde_json::json!({ "settings": { "class": true, "max_players": 70 } }));
         for state in ["ready", "live"] {
             let (notice, join) = class_parts(&big, state);
@@ -444,7 +444,7 @@ mod tests {
 
     #[test]
     fn the_validator_takes_only_kwants_own_join_and_a_bounded_notice() {
-        let no_quick = serde_json::json!({ "mode": "wifi", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false });
+        let no_quick = serde_json::json!({ "mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false });
         let with = |state: &str, join: Option<serde_json::Value>, notice: Option<String>| {
             let mut p = sample();
             (p.state, p.join, p.notice) = (state.into(), join, notice);
@@ -455,7 +455,7 @@ mod tests {
         };
         assert_eq!(with("live", Some(no_quick.clone()), None), Ok(()));
         let url = serde_json::json!({ "mode": "wifi", "wifi_url": "http://x", "anywhere_url": null, "quick_tunnel": false });
-        let quick = serde_json::json!({ "mode": "wifi", "wifi_url": null, "anywhere_url": null, "quick_tunnel": true });
+        let quick = serde_json::json!({ "mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": true });
         for bad in [url, quick] {
             assert!(with("ready", Some(bad), None).is_err());
         }

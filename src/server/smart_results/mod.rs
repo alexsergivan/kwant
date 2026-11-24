@@ -240,7 +240,7 @@ impl Provenance {
 /// `budget` and `results` are always null on this block today (the frontend's optional parts);
 /// [`validate`] refuses anything else. `join` is null too, except on a ready or live pocket that
 /// is never offered a quick link (a class quiz over 60, pa11): then it is
-/// `{mode: "wifi", wifi_url: null, anywhere_url: null, quick_tunnel: false}`. `notice` is the
+/// `{mode: "anywhere", wifi_url: null, anywhere_url: null, quick_tunnel: false}`. `notice` is the
 /// kit's own line (a class quiz's), absent otherwise.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Pocket {

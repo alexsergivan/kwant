@@ -524,7 +524,7 @@ fn check_pocket(p: &super::Pocket) -> Result<(), String> {
     }
     // pa11: the only join kwant fills says "no quick link" on a ready or live card
     if let Some(j) = &p.join {
-        let no_quick = serde_json::json!({ "mode": "wifi", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false });
+        let no_quick = serde_json::json!({ "mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false });
         if *j != no_quick || !matches!(p.state.as_str(), "ready" | "live") {
             return Err("a pocket part kwant doesn't fill".into());
         }
