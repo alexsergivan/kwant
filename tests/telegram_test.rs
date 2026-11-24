@@ -1655,3 +1655,103 @@ async fn an_approval_says_what_the_tool_does_and_never_its_arguments() {
         }
     }
 }
+
+// --- telegram-lag-catches-up (0.9.51) ---------------------------------------------------------
+
+/// More events than the bus holds (128 on main, 1024 after #1181), sent while every listener is
+/// parked: `#[tokio::test]` runs on one thread and nothing here awaits, so the bridge's receiver
+/// falls behind and gets `Lagged` for everything before the last bus-full of these.
+fn flood(env: &Env) {
+    for _ in 0..3000 {
+        let _ = env.state.event_sender.send(RuntimeEvent::TelegramExpired { space_id: "spc_lag_filler".into() });
+    }
+}
+
+/// How many messages that went out to Telegram match `pick`.
+fn sends(tg: &MockTelegram, bot: &Bot, pick: impl Fn(&mock_telegram::Call) -> bool) -> usize {
+    tg.sent(bot).into_iter().filter(|c| pick(c)).count()
+}
+
+// The bridge fell behind the event bus while a bot asked a question and asked for an approval:
+// both events were dropped, and the catch-up from the database still sends each one, once. A live
+// event for an item the catch-up already sent (late, or still in the bus) sends nothing more
+#[tokio::test]
+async fn a_lagged_bridge_still_sends_questions_and_approvals_once() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 90).await;
+
+    let place = QuestionPlace { kwant_id: env.a.clone(), channel_id: Some(general(&env).await), direct_kwant_id: None, thread_id: None, turn_id: None };
+    let q = env.state.db.create_question(&place, "Lagged question: which cover?", &["Teal".into(), "Amber".into()]).await.unwrap();
+    let details = json!({"source": "mcp", "tool": "lagged_lookup", "server": "files"});
+    let a = env
+        .state
+        .db
+        .save_approval(&NewApproval { turn_id: "turn-tg-lag".into(), kwant_id: env.a.clone(), tool_name: "mcp__files__lagged_lookup".into(), parameters: details.clone() })
+        .await
+        .unwrap();
+    let _rx = env.state.broker.request_approval(ApprovalRequest { id: a.id.clone(), kwant_id: env.a.clone(), tool_name: a.tool_name.clone(), details: details.clone() }).await;
+
+    // Announced, then buried under a flood before the bridge reads either: both are lost
+    let question_event = RuntimeEvent::QuestionUpdated { question: serde_json::to_value(&q).unwrap() };
+    let _ = env.state.event_sender.send(question_event.clone());
+    let _ = env.state.event_sender.send(RuntimeEvent::ApprovalRequired { id: a.id.clone(), tool_name: a.tool_name.clone(), details: details.clone() });
+    flood(&env);
+
+    let asked = tg.wait_send(&bot, |c| c.text().contains("Lagged question: which cover?")).await;
+    assert_eq!(asked.callbacks().len(), 2, "the question keeps its choices: {:?}", asked.callbacks());
+    tg.wait_send(&bot, |c| c.text().contains("<code>lagged_lookup</code>")).await;
+
+    // The same question announced again (a late copy of its event): already asked, not sent again
+    let _ = env.state.event_sender.send(question_event);
+    let _ = env.state.event_sender.send(RuntimeEvent::ApprovalRequired { id: a.id.clone(), tool_name: a.tool_name.clone(), details });
+    tokio::time::sleep(Duration::from_millis(1500)).await;
+    assert_eq!(sends(tg, &bot, |c| c.text().contains("Lagged question: which cover?")), 1, "{:?}", tg.sent(&bot));
+    assert_eq!(sends(tg, &bot, |c| c.text().contains("<code>lagged_lookup</code>")), 1, "{:?}", tg.sent(&bot));
+    assert_eq!(asks_of(&env, "question", &q.id).await.len(), 1);
+    assert_eq!(asks_of(&env, "approval", &a.id).await.len(), 1);
+}
+
+// Cards closed in kwant while the bridge was behind: their close events were dropped, and the
+// catch-up still takes the buttons off their Telegram copies with the usual line. A card still
+// waiting keeps its buttons
+#[tokio::test]
+async fn cards_closed_during_a_lag_lose_their_buttons() {
+    let env = setup().await;
+    let tg = mock_telegram::shared();
+    let bot = paired(&env, tg, 91).await;
+
+    let q = ask(&env, "Lag-answered: ship it?", &["Yes", "No"]).await;
+    let q_msg = tg.wait_send(&bot, |c| c.text().contains("Lag-answered: ship it?")).await;
+    let (gone, _gone_rx) = approval(&env, json!({"source": "mcp", "tool": "lag_withdrawn", "server": "files"})).await;
+    let gone_msg = tg.wait_send(&bot, |c| c.text().contains("<code>lag_withdrawn</code>")).await;
+    let (kept, _kept_rx) = approval(&env, json!({"source": "mcp", "tool": "lag_still_waits", "server": "files"})).await;
+    let kept_msg = tg.wait_send(&bot, |c| c.text().contains("<code>lag_still_waits</code>")).await;
+    for (kind, id) in [("question", &q.id), ("approval", &gone), ("approval", &kept)] {
+        wait_for("its Telegram id stored", || async { asks_of(&env, kind, id).await.iter().all(|a| a.message_id.is_some()) }).await;
+    }
+
+    // Answered in kwant, and a card whose turn ended: closed in the database, then their events
+    // are buried under a flood before the bridge reads them
+    assert!(env.state.db.close_question(&q.id, "answered", Some("Yes")).await.unwrap());
+    let answered = env.state.db.get_question(&q.id).await.unwrap().unwrap();
+    assert!(env.state.broker.cancel(&gone).await);
+    env.state.db.update_approval_status(&gone, "cancelled").await.unwrap();
+    let _ = env.state.event_sender.send(RuntimeEvent::QuestionUpdated { question: serde_json::to_value(&answered).unwrap() });
+    let _ = env.state.event_sender.send(RuntimeEvent::approval_withdrawn(gone.clone(), "cancelled", None));
+    flood(&env);
+
+    let q_edit = tg.wait_edit(&bot, |c| c.message_id() == q_msg.message_id()).await;
+    assert!(q_edit.text().contains("✓ Answered in kwant · "), "{}", q_edit.text());
+    assert!(q_edit.buttons().is_empty(), "buttons gone: {:?}", q_edit.body);
+    let gone_edit = tg.wait_edit(&bot, |c| c.message_id() == gone_msg.message_id()).await;
+    assert!(gone_edit.text().contains("No longer waiting"), "{}", gone_edit.text());
+    assert!(gone_edit.buttons().is_empty(), "buttons gone: {:?}", gone_edit.body);
+    assert!(asks_of(&env, "question", &q.id).await.iter().all(|a| a.state == "closed"));
+    assert!(asks_of(&env, "approval", &gone).await.iter().all(|a| a.state == "closed"));
+
+    // Each edited once; the card still waiting is left alone and stays open
+    edited_once(tg, &bot, &[q_msg.message_id(), gone_msg.message_id()]).await;
+    assert!(tg.calls_of(&bot, "editMessageText").iter().all(|c| c.message_id() != kept_msg.message_id()));
+    assert!(asks_of(&env, "approval", &kept).await.iter().all(|a| a.state == "open"));
+}
