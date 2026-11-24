@@ -4065,8 +4065,9 @@ async fn run_kwant_turn_inner(
             // A Stop the person pressed leaves one line under their question, with the steps the
             // turn took (stop-leaves-a-line, 0.9.51). They chose it: no Needs-you ask, no
             // notification and no Retry, unlike [`super::stopped`]. A turn that saves no reply
-            // (quiet or unsaved) saves no line either.
-            if stop_leaves_a_line(&opts) {
+            // (quiet or unsaved) saves no line either, nor does a silent turn the sweep stopped:
+            // it already has its `turn_lost` line ([`super::lost_turns`]) and nobody pressed Stop.
+            if stop_leaves_a_line(&opts) && !state.turns.cancelled_as_lost(&scope.job_id) {
                 let msg = NewMessage {
                     reasoning_content: with_notices(opts.label.clone()),
                     ..scope.message("kwant", &target_kwant.name, STOPPED_BY_PERSON.into())

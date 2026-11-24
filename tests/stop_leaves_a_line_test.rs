@@ -208,3 +208,74 @@ async fn a_queued_follow_up_is_answered_after_the_stopped_line() {
     assert!(at(&saved.id) < at(&reply.id), "the follow-up's reply comes after the Stopped line: {chat:#?}");
     assert_eq!(chat.iter().filter(|m| m.sender_role == "kwant").count(), 2, "the Stopped line and the follow-up's reply: {chat:#?}");
 }
+
+/// After #1181 (stuck-getting-started): the silent-turn sweep cancels the same job token a Stop
+/// does. Its turn must leave only the sweep's `turn_lost` line, not a "You stopped this reply."
+/// the person never pressed.
+#[tokio::test]
+async fn a_silent_turn_the_sweep_stops_leaves_only_its_turn_lost_line() {
+    let env = setup().await;
+    let a = env.a.clone();
+    let mut rx = env.state.event_sender.subscribe();
+    // One finished step, then the engine goes quiet (no tool running, nothing waits on the person)
+    let tag = "slsweep";
+    let step = format!("toolu_{tag}a");
+    let lines = [
+        json!({"type": "assistant", "message": {"id": format!("msg_{tag}a"), "content": [
+            {"type": "tool_use", "id": step, "name": "Bash", "input": {"command": "curl -s https://flexidesk.example", "description": "Opening flexidesk.example"}}]}}),
+        json!({"type": "user", "message": {"content": [
+            {"type": "tool_result", "tool_use_id": step, "is_error": false, "content": "FlexiDesk Pro ships to the EU"}]}}),
+    ];
+    let question = format!("Which deliver to Slovenia? {} HANGONCE:{tag}:30000", stream_lines_marker(&lines));
+    send_direct(&env, &a, &question, json!({})).await;
+    let turn = tokio::time::timeout(Duration::from_secs(30), async {
+        loop {
+            match rx.recv().await {
+                Ok(RuntimeEvent::Scoped { tag: t, event }) => {
+                    if matches!(event.unscoped(), RuntimeEvent::ToolCallCompleted { id, .. } if *id == step) {
+                        return t.turn_id.clone();
+                    }
+                }
+                Ok(_) | Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => panic!("stream closed"),
+            }
+        }
+    })
+    .await
+    .expect("the turn finished its first step");
+
+    // The sweep, looking two hours on: the turn has been silent far past the limit
+    let silence = Duration::from_secs(360);
+    let mut stopped = None;
+    for _ in 0..50 {
+        let ended = kwnt::server::lost_turns::sweep(&env.state, &mut std::collections::HashSet::new(), chrono::Utc::now() + chrono::Duration::hours(2), silence).await;
+        if ended.iter().any(|(t, _)| *t == turn) {
+            stopped = Some(ended);
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(stopped, Some(vec![(turn.clone(), kwnt::server::lost_turns::Lost::Silent)]), "the sweep stopped the silent turn");
+
+    // Its turn winds down on the cancel; give it the time a Stop's line takes to be saved
+    for _ in 0..50 {
+        if !env.state.turns.has_turn(&turn) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let chat = messages(&env, &a).await;
+    let all: Vec<String> = chat.iter().map(|m| format!("{}: {}", m.sender_role, m.text)).collect();
+    assert!(!chat.iter().any(|m| m.text == STOPPED), "nobody pressed Stop: no \"{STOPPED}\" line; the chat holds {all:#?}");
+    let lost: Vec<&Message> = chat.iter().filter(|m| meta(m)["kind"] == "turn_lost").collect();
+    assert_eq!(lost.len(), 1, "exactly the sweep's line; the chat holds {all:#?}");
+    assert!(lost[0].text.ends_with("got stuck for 6 minutes, so the work was stopped. Ask again if you still need it."), "{:?}", lost[0].text);
+    assert_eq!(chat.last().map(|m| m.id.as_str()), Some(lost[0].id.as_str()), "the turn_lost line stays the chat's last line: {all:#?}");
+
+    // A person's Stop on the next reply still leaves exactly one Stopped line
+    send_direct(&env, &a, &format!("Chairs then? {}", mid_step("slsweepb")), json!({})).await;
+    mid_steps(&mut rx, &["slsweepb"]).await;
+    stop(&env, Some(json!({"kwant_id": a}))).await;
+    stopped_line(&env, &a, &a).await;
+}
