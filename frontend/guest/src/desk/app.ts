@@ -6,10 +6,13 @@ import { Api, Env, Fail, Live } from '../api';
 import { AVATARS, fmt, h, Kid } from '../dom';
 import { clock, day } from '../app';
 import { PinInput, Problem } from '../santa/pin';
-import { joinCopy, Line, longCopy, names, Names, noteCopy, offCopy, sayCopy, slowCopy } from './copy';
+import { book, joinCopy, Line, longCopy, names, Names, noteCopy, offCopy, sayCopy, slowCopy } from './copy';
 import { bell, dIcon, Mood } from './look';
 import { clientId, Out, Outbox, Store } from './outbox';
-import { deskFrom, DeskView, Msg, Screen, screenOf } from './view';
+import { closedPick, Pick, picker } from './picker';
+import { chipLabel, openSlots, timeLabel, whenLabel } from './slots';
+import { bookingFrom, deskFrom, DeskView, Msg, Screen, screenOf, slotsFrom } from './view';
+import { bookingWhen, strip } from './strip';
 
 /** design.md "For Iris" 4: without a socket the page asks `state` every 15 s. */
 export const POLL_DESK_MS = 15_000;
@@ -76,6 +79,17 @@ export class DeskApp {
   private painted = false;
   private stick = true;
   private sending = false;
+  /** pa13b: the Pick a time sheet. */
+  pick: Pick = closedPick();
+  /** pa13b K7: the strip is asking "Cancel {when}?". */
+  private asking = false;
+  private cancelBusy = false;
+  /** pa13b: a refused cancel, in the page's words, under the strip. */
+  private stripSay = '';
+  /** pa13b K1: "See open times" opens the sheet once the seat is there. */
+  private pickAfterJoin = false;
+  /** The strip's last drawn state: it crossfades only when that changes, not on every redraw. */
+  private stripKey = '';
 
   constructor(root: HTMLElement, private env: DeskEnv, readonly code: string) {
     this.root = root;
@@ -144,7 +158,11 @@ export class DeskApp {
       // The box's own "no more this hour" (a reload during G6) switches the composer off the same way.
       if (v.limits.left_this_hour === 0 && v.limits.next_at && !this.slowUntil) this.slow(v.limits.next_at);
     }
-    if (v.ended) this.endLive();
+    if (v.my_booking?.state !== 'requested') this.asking = false;
+    if (v.ended) {
+      this.endLive();
+      this.pick = closedPick();
+    }
     this.paint();
   }
 
@@ -339,7 +357,7 @@ export class DeskApp {
   /** Draws the screen when something it shows changed. Typing never redraws; focus, caret and the thread's place survive. */
   paint(force = false): void {
     const scr = this.screenNow();
-    const sig = JSON.stringify([scr, this.view, this.problem, this.busy, this.bd.reset, this.outbox.items, this.isSlow(), this.slowUntil, this.sayErr, this.away?.tries]);
+    const sig = JSON.stringify([scr, this.view, this.problem, this.busy, this.bd.reset, this.outbox.items, this.isSlow(), this.slowUntil, this.sayErr, this.away?.tries, { ...this.pick, note: 0 }, this.asking, this.cancelBusy, this.stripSay]);
     if (!force && sig === this.sig) return;
     this.sig = sig;
     const active = document.activeElement as HTMLInputElement | null;
@@ -350,7 +368,11 @@ export class DeskApp {
     const top = old?.scrollTop ?? 0;
     const before = new Set(this.drawn);
     const chat = scr === 'chat';
-    const page = h('main', { class: `g dk${chat ? ' gc' : ''} s-${scr}`, 'data-screen': scr }, this.bar(scr), this.body(scr), chat ? null : this.madeWith());
+    const sheet = chat && this.view ? this.sheet(this.view) : [];
+    const page = h('main', { class: `g dk${chat ? ' gc' : ''} s-${scr}${sheet.length ? ' picking' : ''}`, 'data-screen': scr }, this.bar(scr), this.body(scr), chat ? null : this.madeWith(), sheet);
+    // The chat behind the sheet can't be reached while it is open (aria-modal plus inert).
+    if (sheet.length) for (const el of page.children) if (!sheet.includes(el as HTMLElement)) el.setAttribute('inert', '');
+    this.pick.fresh = false;
     this.root.replaceChildren(page);
     if (k) {
       const el = this.root.querySelector<HTMLInputElement>(`[data-k="${k}"]`);
@@ -478,7 +500,8 @@ export class DeskApp {
     const n = this.n();
     const pinOn = v.needs_pin;
     const busy = this.busy === 'join';
-    const btn = h('button', { class: 'gbtn', type: 'submit', 'data-join': '', 'aria-busy': busy ? 'true' : null }, dIcon('chat'), busy ? 'Opening…' : 'Start chatting') as HTMLButtonElement;
+    const bk = v.booking;
+    const btn = h('button', { class: 'gbtn', type: 'submit', 'data-join': '', 'aria-busy': busy ? 'true' : null }, dIcon(bk ? 'cal' : 'chat'), busy ? 'Opening…' : bk ? book.join_button : 'Start chatting') as HTMLButtonElement;
     const ready = () => (btn.disabled = busy || !d.name.trim() || (pinOn && d.pin.length !== 4));
     const name = this.nameInput('d-name', d.name, (s) => {
       d.name = s;
@@ -494,9 +517,9 @@ export class DeskApp {
     const form = h(
       'form',
       { class: 'body', novalidate: true, 'aria-labelledby': 'title' },
-      this.keep(`${n.Host} and ${n.hosts} bot, ${n.bot}, read this chat. ${n.bot} answers first. ${this.keepTail(v)}`),
+      this.keep(bk ? book.keep_booking(n, v.keep_days) : `${n.Host} and ${n.hosts} bot, ${n.bot}, read this chat. ${n.bot} answers first. ${this.keepTail(v)}`),
       this.hero(v),
-      h('div', { class: 'say' }, h('div', { class: 'b' }, `Ask me anything about your stay: Wi-Fi, check-out, parking. I answer from ${n.hosts} house guide and ask ${n.host} when I can't.`)),
+      h('div', { class: 'say' }, h('div', { class: 'b' }, bk ? book.join_say(n, v.what) : `Ask me anything about your stay: Wi-Fi, check-out, parking. I answer from ${n.hosts} house guide and ask ${n.host} when I can't.`)),
       h('div', null, h('label', { class: 'lbl', for: 'd-name' }, 'Your first name ', h('small', { id: 'name-why' }, `${n.host} sees it`)), name),
       pin ? h('div', null, h('label', { class: 'lbl', for: 'd-pin' }, 'Pick a 4-digit PIN ', h('small', { id: 'pin-why' }, 'to come back on another phone')), pin.el) : null,
       this.problemBox(),
@@ -505,7 +528,7 @@ export class DeskApp {
         'div',
         { class: 'ginfos' },
         h('p', { class: 'ginfo' }, dIcon('bot'), h('span', null, `${n.bot} is a bot. To write a reply it sends your message to ${n.hosts} AI service. Nothing else about you leaves ${n.hosts} computer.`)),
-        h('p', { class: 'ginfo' }, dIcon('person'), h('span', null, `${n.bot} can't say yes to anything: a late check-out or an extra night is ${n.hosts} call.`)),
+        h('p', { class: 'ginfo' }, dIcon('person'), h('span', null, bk ? book.join_nobook(n) : `${n.bot} can't say yes to anything: a late check-out or an extra night is ${n.hosts} call.`)),
       ),
       h('p', { class: 'center' }, this.linkButton("I've joined before", () => this.goRejoin(), 'to-rejoin')),
     );
@@ -540,6 +563,7 @@ export class DeskApp {
     if (v.needs_pin && d.pin.length !== 4) return this.fail({ title: 'Pick a 4-digit PIN.', field: 'pin' });
     this.busy = 'join';
     this.problem = null;
+    this.pickAfterJoin = v.booking;
     this.paint();
     const r = await this.api.join(v.needs_pin ? { name, avatar: AVATARS[0], pin: d.pin } : { name, avatar: AVATARS[0] });
     this.busy = '';
@@ -548,8 +572,12 @@ export class DeskApp {
       this.jd = { name: '', pin: '' };
       this.stick = true;
       if (r.view) this.show(r.view);
-      return this.seated();
+      this.seated();
+      if (this.pickAfterJoin && this.view?.me) this.openPick('', '');
+      this.pickAfterJoin = false;
+      return;
     }
+    this.pickAfterJoin = false;
     if (r.status === 410 || r.error === 'ended') return this.ended();
     if (r.status === 404) return void this.onGone(404, 'not_found');
     if (r.error === 'pin_required') d.pin = '';
@@ -682,7 +710,8 @@ export class DeskApp {
   private chat(v: DeskView): HTMLElement {
     const n = this.n();
     const me = v.me!;
-    const items: Kid[] = [this.keep(`${n.Host} and ${n.bot} read this chat. ${this.keepTail(v)}`)];
+    const bk = v.booking;
+    const items: Kid[] = [this.keep(bk ? book.keep_booking(n, v.keep_days) : `${n.Host} and ${n.bot} read this chat. ${this.keepTail(v)}`)];
     const now = this.env.now();
     let lastDay = '';
     const divider = (at: string) => {
@@ -694,10 +723,17 @@ export class DeskApp {
     // Bell's hello is the page's own (the box keeps no greeting): first in the thread, under today's divider when empty.
     const first = v.messages[0]?.at;
     items.push(divider(first ?? new Date(now).toISOString()));
-    items.push(this.botBubble(`Hi ${me.name}! I'm ${n.bot}, ${n.hosts} bot. Ask me about the stay. If I don't know, I'll ask ${n.host}.`, 'hello'));
+    items.push(this.botBubble(bk ? book.hello(me.name, n) : `Hi ${me.name}! I'm ${n.bot}, ${n.hosts} bot. Ask me about the stay. If I don't know, I'll ask ${n.host}.`, 'hello'));
     for (const m of v.messages) {
       items.push(divider(m.at));
       items.push(this.msg(m, n));
+    }
+    // K6: after "can't do", with no booking now, the next step is right there.
+    const lastBook = [...v.messages].reverse().find((m) => m.note?.startsWith('book'));
+    if (bk && !v.my_booking && lastBook?.note === 'booking_declined') {
+      const again = h('button', { type: 'button', class: 'gsmall pri again', 'data-k': 'pk-open-again', 'data-pick-again': '' }, dIcon('cal'), book.pick_again);
+      again.addEventListener('click', () => this.openPick('', 'pk-open-again'));
+      items.push(again);
     }
     for (const o of this.outbox.items) items.push(this.mine(o));
     if (v.typing) items.push(this.typing(n));
@@ -717,19 +753,25 @@ export class DeskApp {
       pill.setAttribute('hidden', '');
     });
     const empty = !v.messages.some((m) => m.from === 'guest') && !this.outbox.items.length;
-    const starters =
-      empty && v.starters.length && !slow
-        ? h(
-            'div',
-            { class: 'gstart', role: 'group', 'aria-label': 'Quick questions' },
-            v.starters.map((s) => {
-              const b = h('button', { type: 'button', 'data-starter': '' }, s);
-              b.addEventListener('click', () => void this.send(s));
-              return b;
-            }),
-          )
-        : null;
-    return h('div', { class: 'chat' }, this.offbar(), h('div', { class: 'tw' }, thread, pill), starters, this.composer(v, n, slow));
+    // pa13b K4/K5: while a time is held the mockup shows no starters at all; the strip is the next step.
+    const quick = empty && !slow && !(bk && v.my_booking) ? v.starters : [];
+    // pa13b K2: "Pick a time" comes first, and stays while the guest has no booking (with nothing open it opens K8).
+    const pickChip = bk && !v.my_booking;
+    let starters: HTMLElement | null = null;
+    if (quick.length || pickChip) {
+      const chips = quick.map((s) => {
+        const b = h('button', { type: 'button', 'data-starter': '' }, s);
+        b.addEventListener('click', () => void this.send(s));
+        return b;
+      });
+      if (pickChip) {
+        const b = h('button', { type: 'button', class: 'pick', 'data-k': 'pk-open-start', 'data-pick-open': '' }, dIcon('cal'), book.starter_pick);
+        b.addEventListener('click', () => this.openPick('', 'pk-open-start'));
+        chips.unshift(b);
+      }
+      starters = h('div', { class: 'gstart', role: 'group', 'aria-label': 'Quick questions' }, chips);
+    }
+    return h('div', { class: 'chat' }, this.bookingStrip(v, n), this.offbar(), h('div', { class: 'tw' }, thread, pill), starters, this.composer(v, n, slow));
   }
 
   private offbar(): HTMLElement | null {
@@ -754,17 +796,43 @@ export class DeskApp {
 
   private msg(m: Msg, n: Names): HTMLElement {
     if (m.from === 'note') {
-      const c = noteCopy(m.note!, n);
+      const c = noteCopy(m.note!, n, this.noteWhen(m));
       const isNew = this.painted && !this.drawn.has(m.id);
       this.drawn.add(m.id);
-      return h('div', { class: `gnote${isNew ? ' new' : ''}`, role: 'status', 'data-note': m.note!, 'data-id': m.id }, dIcon(c.icon), h('span', null, this.bold(c.line)));
+      return h('div', { class: `gnote${c.ok ? ' ok' : ''}${isNew ? ' new' : ''}`, role: 'status', 'data-note': m.note!, 'data-id': m.id }, dIcon(c.icon), h('span', null, this.bold(c.line)));
     }
     if (m.from === 'guest') return this.mine({ client_id: m.client_id ?? m.id, text: m.text, at: m.at, state: 'sending' }, m);
     if (m.from === 'host') {
       const tile = h('span', { class: 'hostav', 'aria-hidden': 'true' }, n.anon ? dIcon('bell') : [...n.host][0].toUpperCase());
       return this.bubble('host', m.id, tile, [h('b', null, n.Host), h('span', { class: 'hosttag' }, 'host'), ` · ${clock(m.at)}`], m.text);
     }
-    return this.botBubble(m.text, m.id, m.at);
+    return this.botBubble(m.offers ? [m.text, this.offers(m)] : m.text, m.id, m.at);
+  }
+
+  /** A booking note's time: its own start, else its slot's. Without either the note says it without a time. */
+  private noteWhen(m: Msg): string {
+    if (!m.start && !m.slot) return '';
+    const s = this.view?.slots.find((x) => x.id === m.slot);
+    return whenLabel({ id: m.slot ?? '', start: m.start ?? s?.start ?? '', label: s?.label });
+  }
+
+  /** pa13b K9: Bell's offered times as chips; a chip whose time isn't open any more is left out. */
+  private offers(m: Msg): HTMLElement | null {
+    const v = this.view;
+    if (!v?.booking || v.my_booking) return null;
+    const open = openSlots(v.slots, this.env.now());
+    const list = (m.offers ?? []).map((id) => open.find((s) => s.id === id)).filter((s) => !!s);
+    if (!list.length) return null;
+    return h(
+      'div',
+      { class: 'offer', role: 'group', 'aria-label': book.offers_label(this.n()) },
+      list.map((s) => {
+        const k = `offer-${m.id}-${s!.id}`;
+        const b = h('button', { type: 'button', 'data-k': k, 'data-offer': s!.id }, chipLabel(s!));
+        b.addEventListener('click', () => this.openPick(s!.id, k));
+        return b;
+      }),
+    );
   }
 
   /** The guest's own bubble: the box's (`sent`), or one in the outbox (sending, or failed with Try again). */
@@ -845,10 +913,22 @@ export class DeskApp {
     return form;
   }
 
-  // G12 Ended
+  // G12 Ended (pa13b K11 with a booking)
   private closed(v: DeskView): HTMLElement {
     const n = this.n();
     const del = v.me?.delete_on;
+    if (v.booking) {
+      const b = v.my_booking?.state === 'confirmed' ? v.my_booking : null;
+      return h(
+        'div',
+        { class: 'body mid', 'data-ended': '' },
+        h('div', { class: 'qmwrap' }, bell(96, 'finished')),
+        h('h2', null, book.ended_title(n)),
+        b ? strip(b, bookingWhen(b, v.slots), n, { asking: false, busy: false, ended: true }, { cancel: () => {}, keep: () => {}, confirm: () => {} }) : null,
+        h('p', { class: 'lead' }, b ? book.ended_change(n) : book.ended_none(n)),
+        this.keep(b && del ? book.ended_keep(day(del)) : del ? `${this.keepTail(v, true).slice(0, -1)}, on ${day(del)}.` : this.keepTail(v, true)),
+      );
+    }
     const keep = del ? `${this.keepTail(v, true).slice(0, -1)}, on ${day(del)}.` : this.keepTail(v, true);
     return h(
       'div',
@@ -858,6 +938,162 @@ export class DeskApp {
       h('p', { class: 'lead' }, `Thanks for staying at ${theTitle(v.title)}! For anything else, contact ${n.host} the way you booked.`),
       this.keep(keep),
     );
+  }
+
+  // ---------- pa13b booking ----------
+
+  private bookingStrip(v: DeskView, n: Names): Kid {
+    const b = v.my_booking;
+    if (!v.booking || !b) return null;
+    const el = strip(b, bookingWhen(b, v.slots), n, { asking: this.asking, busy: this.cancelBusy }, {
+      cancel: () => {
+        this.asking = true;
+        this.stripSay = '';
+        this.paint();
+        this.root.querySelector<HTMLElement>('[data-cancel-keep]')?.focus();
+      },
+      keep: () => {
+        this.asking = false;
+        this.paint();
+        this.root.querySelector<HTMLElement>('[data-cancel]')?.focus();
+      },
+      confirm: () => void this.cancelRequest(),
+    });
+    const key = `${b.slot}|${b.state}|${this.asking}`;
+    if (this.painted && key !== this.stripKey) el.classList.add('new');
+    this.stripKey = key;
+    return [el, this.stripSay ? h('p', { class: 'bksay', role: 'alert', 'data-strip-say': '' }, this.stripSay) : null];
+  }
+
+  private sheet(v: DeskView): HTMLElement[] {
+    const p = this.pick;
+    return picker(v, p, this.n(), this.env.now(), {
+      close: () => this.closePick(),
+      day: (key) => {
+        p.day = key;
+        p.notice = null;
+        this.paint();
+        this.root.querySelector<HTMLElement>(`[data-day="${key}"]`)?.focus();
+      },
+      pick: (id) => {
+        p.slot = id;
+        p.notice = null;
+        this.paint();
+        this.root.querySelector<HTMLElement>(`[data-slot="${id}"]`)?.focus();
+      },
+      note: (text) => (p.note = text),
+      ask: () => void this.request(),
+      write: () => {
+        this.closePick();
+        this.root.querySelector<HTMLElement>('#d-say')?.focus();
+      },
+    });
+  }
+
+  /** Opens the sheet, with `slot` picked (an offer chip). `from`: the opener's data-k, for focus on close. */
+  openPick(slot: string, from: string): void {
+    const v = this.view;
+    if (!v?.booking || !v.me || v.ended) return;
+    const s = v.slots.find((x) => x.id === slot);
+    this.pick = { ...closedPick(), open: true, fresh: true, slot: s ? slot : '', day: s ? s.start.slice(0, 10) : '', from };
+    this.paint(true);
+    this.root.querySelector<HTMLElement>('#pk-title')?.focus();
+  }
+
+  closePick(): void {
+    if (!this.pick.open) return;
+    const from = this.pick.from;
+    this.pick = closedPick();
+    this.paint(true);
+    const back = (from && this.root.querySelector<HTMLElement>(`[data-k="${from}"]`)) || this.root.querySelector<HTMLElement>('[data-cancel]') || this.root.querySelector<HTMLElement>('#d-say');
+    back?.focus();
+  }
+
+  private async refresh(): Promise<void> {
+    const r = await this.api.state();
+    if (r.ok && r.view) this.show(r.view);
+  }
+
+  /** K3 "Ask for {when}": one request. Refusals stay in the sheet, in the page's words (K10 and the copy table). */
+  async request(): Promise<void> {
+    const v = this.view;
+    const p = this.pick;
+    const slot = v?.slots.find((s) => s.id === p.slot && s.open);
+    if (!v || !slot || p.busy || [...p.note].length > v.limits.note_max_chars) return;
+    p.busy = true;
+    p.notice = null;
+    this.paint();
+    const note = p.note.trim();
+    const r = await this.api.act('request', note ? { slot: slot.id, note } : { slot: slot.id });
+    p.busy = false;
+    if (r.ok) {
+      const from = p.from;
+      this.pick = closedPick();
+      this.stick = true;
+      if (r.view) this.show(r.view);
+      else await this.refresh();
+      this.paint(true);
+      // The opener (a starter or an offer) goes once there is a request: focus the strip's Cancel instead.
+      ((from && this.root.querySelector<HTMLElement>(`[data-k="${from}"]`)) || this.root.querySelector<HTMLElement>('[data-cancel]') || this.root.querySelector<HTMLElement>('#d-say'))?.focus();
+      return;
+    }
+    const e = r.error;
+    const say = (text: string) => (p.notice = { kind: 'say', text });
+    if (e === 'slot_taken') {
+      // K10: the fresh list from the body (design), else ask the box; nothing stays picked.
+      p.slot = '';
+      p.notice = { kind: 'taken', time: timeLabel(slot) };
+      if (Array.isArray(r.body?.slots) && this.view) this.view = { ...this.view, slots: slotsFrom(r.body!.slots) };
+      else await this.refresh();
+    } else if (e === 'has_request') {
+      const b = bookingFrom(r.body?.my_booking);
+      say(book.has_request(b ? bookingWhen(b, v.slots) : ''));
+      if (b && this.view) this.view = { ...this.view, my_booking: b };
+      await this.refresh();
+    } else if (e === 'slot_past') {
+      p.slot = '';
+      say(book.slot_past);
+      await this.refresh();
+    } else if (e === 'no_such_slot' || r.status === 404) {
+      p.slot = '';
+      say(book.no_slot(this.n()));
+      await this.refresh();
+    } else if (e === 'too_long' || r.status === 413) say(book.note_long(v.limits.note_max_chars));
+    else if (e === 'slow_down' || r.status === 429) say(book.slow(r.retry_at ? clock(r.retry_at) : ''));
+    else if (e === 'ended' || r.status === 410) {
+      const b = bookingFrom(r.body?.my_booking);
+      if (this.view) this.view = { ...this.view, my_booking: b ?? this.view.my_booking };
+      return this.ended();
+    } else if (r.status === 401 || e === 'signed_out') return this.onGone(401, 'signed_out');
+    else if (r.status === 403) return this.onGone(403, e);
+    else say(book.failed);
+    this.paint(true);
+    this.root.querySelector<HTMLElement>('[data-taken], [data-pick-say]')?.focus?.();
+  }
+
+  /** K7 "Cancel my request": frees a requested time. A booked one is never offered (409 is_confirmed refreshes). */
+  async cancelRequest(): Promise<void> {
+    const b = this.view?.my_booking;
+    if (!b || b.state !== 'requested' || this.cancelBusy) return;
+    this.cancelBusy = true;
+    this.stripSay = '';
+    this.paint();
+    const r = await this.api.act('cancel', { slot: b.slot });
+    this.cancelBusy = false;
+    this.asking = false;
+    if (r.ok) {
+      this.stick = true;
+      if (r.view) this.show(r.view);
+      else await this.refresh();
+      this.paint(true);
+      (this.root.querySelector<HTMLElement>('[data-pick-open]') || this.root.querySelector<HTMLElement>('#d-say'))?.focus();
+      return;
+    }
+    if (r.error === 'ended' || r.status === 410) return this.ended();
+    if (r.status === 401 || r.error === 'signed_out') return this.onGone(401, 'signed_out');
+    if (r.error === 'is_confirmed' || r.error === 'no_request') await this.refresh();
+    else this.stripSay = book.failed;
+    this.paint(true);
   }
 
   private awayLine(): string {

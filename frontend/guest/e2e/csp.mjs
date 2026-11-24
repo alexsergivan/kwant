@@ -24,8 +24,10 @@ const browser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM 
 const problems = [];
 const results = { csp: CSP, states: {}, timing: {} };
 
-async function newPage({ throttle } = {}) {
-  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'en-US', timezoneId: 'Europe/Ljubljana' });
+async function newPage({ throttle, wide = false } = {}) {
+  const phone = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true };
+  const desk = { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false };
+  const ctx = await browser.newContext({ ...(wide ? desk : phone), locale: 'en-US', timezoneId: 'Europe/Ljubljana' });
   await ctx.addInitScript(() => {
     window.__violations = [];
     document.addEventListener('securitypolicyviolation', (e) => window.__violations.push(`${e.violatedDirective} ${e.blockedURI || ''} ${e.sourceFile || ''}:${e.lineNumber || ''}`.trim()));
@@ -72,9 +74,9 @@ async function check(name, page, log) {
       const f = r.getAttribute('fill');
       return f !== 'currentColor' && !/^#[0-9a-f]{6}$/i.test(f ?? '');
     }).length;
-    return { scrollWidth: document.documentElement.scrollWidth, small, unfilled };
+    return { scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, small, unfilled };
   });
-  if (layout.scrollWidth > 390) problems.push(`${name}: scrolls sideways at 390 (${layout.scrollWidth} px)`);
+  if (layout.scrollWidth > layout.width) problems.push(`${name}: scrolls sideways at ${layout.width} (${layout.scrollWidth} px)`);
   if (layout.unfilled) problems.push(`${name}: ${layout.unfilled} svg rect(s) whose fill isn't currentColor or #rrggbb (would draw black)`);
   for (const s of layout.small) problems.push(`${name}: tap target under 44 px: ${s}`);
 }
@@ -642,8 +644,8 @@ const presets = {
     await check(file, page, log);
     results.states[file] = { screen: await page.getAttribute('[data-screen]', 'data-screen') };
   };
-  const go = async (code, screen, { reduced = false } = {}) => {
-    const p = await newPage();
+  const go = async (code, screen, { reduced = false, wide = false } = {}) => {
+    const p = await newPage({ wide });
     if (reduced) await p.page.emulateMedia({ reducedMotion: 'reduce' });
     if (typeof deskScenarios[code]?.state === 'object') {
       await p.ctx.addCookies([{ name: `kp_${code}`, value: 'fake', domain: '127.0.0.1', path: `/api/pocket/${code}`, httpOnly: true, sameSite: 'Strict' }]);
@@ -776,6 +778,139 @@ const presets = {
     if (anims.length) problems.push(`desk reduced motion: ${anims.length} element(s) animate (${[...new Set(anims)].join(', ')})`);
     await check('desk-reduced-motion', page, log);
     await ctx.close();
+  }
+
+  // pa13b Booking Desk K1-K11 (pa13/pa13b-guest-brief.md), shots desk-b-k<N>-<what> at 390 and a few at 1440.
+  // The sheet gets the same 44 px and no-sideways-scroll checks while open; focus lands on its title, Esc closes it
+  // and focus goes back to the opener. Times are the box's wall clock: the phone is in Ljubljana, the labels must not move.
+  {
+    const focusId = (page) => page.evaluate(() => document.activeElement?.id || document.activeElement?.getAttribute('data-k') || '');
+    const sheetOpen = async (page, what) => {
+      await want(page, '[data-sheet][role=dialog]', `${what} sheet`);
+      await page.waitForTimeout(450);
+      if ((await focusId(page)) !== 'pk-title') problems.push(`desk ${what}: focus is on "${await focusId(page)}", not the sheet title`);
+    };
+    // K1 join, then the sheet opens by itself (K3); Esc closes it back to the chat (K2) with the pick starter first.
+    for (const wide of [false, true]) {
+      const tag = wide ? '-1440' : '';
+      const { ctx, page, log } = await go('desk-book-pick', 'join', { wide });
+      await want(page, 'button[data-join]', 'K1 join');
+      await deskShot(page, log, `desk-b-k1-join${tag}`);
+      await page.fill('#d-name', 'Emma');
+      await page.fill('#d-pin', '1234');
+      await page.click('button[data-join]');
+      await page.waitForSelector('main.dk[data-screen="chat"]', { timeout: 10000 });
+      await sheetOpen(page, 'K3 after join');
+      await page.click('[data-slot="d1-9"]');
+      await page.fill('#pk-note', 'Short trim, please.');
+      await deskShot(page, log, `desk-b-k3-pick${tag}`);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[data-sheet]', { state: 'detached', timeout: 5000 }).catch(() => problems.push('desk K3: Esc did not close the sheet'));
+      const first = await page.evaluate(() => document.querySelector('.gstart button')?.hasAttribute('data-pick-open'));
+      if (!first) problems.push('desk K2: Pick a time is not the first starter');
+      await deskShot(page, log, `desk-b-k2-chat${tag}`);
+      // Open from the starter: focus to the title, close with the button, focus back to the starter.
+      await page.click('[data-pick-open]');
+      await sheetOpen(page, 'K3 from the starter');
+      // Arrow keys move inside the radiogroup.
+      await page.focus('[role=radio][tabindex="0"]');
+      await page.keyboard.press('ArrowRight');
+      const picked = await page.getAttribute('[role=radio][aria-checked=true]', 'data-slot').catch(() => null);
+      if (picked !== 'd1-10') problems.push(`desk K3: ArrowRight picked ${picked}, want d1-10`);
+      const label = await page.textContent('[role=radio][aria-checked=true]');
+      if (label?.trim() !== '10 AM') problems.push(`desk K3: the 10:00 slot reads "${label}" in Ljubljana (want the box's 10 AM)`);
+      await page.click('[data-pick-close]');
+      await page.waitForTimeout(150);
+      if ((await focusId(page)) !== 'pk-open-start') problems.push(`desk K3: focus went to "${await focusId(page)}" after closing, not the starter`);
+      await page.click('[data-pick-open]');
+      await sheetOpen(page, 'K3 again');
+      await page.click('[data-slot="d1-9"]');
+      await page.click('button[data-ask]');
+      await want(page, '[data-strip=requested]', 'K4 requested strip');
+      await deskShot(page, log, `desk-b-k4-requested${tag}`);
+      await ctx.close();
+    }
+    for (const [code, file, sel] of [
+      ['desk-book-requested', 'desk-b-k4-requested-seat', '[data-strip=requested]'],
+      ['desk-book-confirmed', 'desk-b-k5-confirmed', '[data-strip=booked] .gchip.ok'],
+      ['desk-book-declined', 'desk-b-k6-declined', '[data-pick-again]'],
+      ['desk-book-offers', 'desk-b-k9-offers', '[data-offer]'],
+    ]) {
+      const { ctx, page, log } = await go(code, 'chat');
+      await want(page, sel, file);
+      await noText(page, /undefined|null|NaN/, `${file}: internal words on screen`);
+      await deskShot(page, log, file);
+      if (code === 'desk-book-confirmed' && (await page.locator('.holo, [data-holo]').count())) problems.push('desk K5: holo on Booked');
+      if (code === 'desk-book-offers') {
+        const n = await page.locator('[data-offer]').count();
+        if (n !== 2) problems.push(`desk K9: ${n} offer chips (want 2, the taken one dropped)`);
+        await page.click('[data-offer="d2-11"]');
+        await sheetOpen(page, 'K9 offer');
+        const p2 = await page.getAttribute('[role=radio][aria-checked=true]', 'data-slot').catch(() => null);
+        if (p2 !== 'd2-11') problems.push(`desk K9: the chip opened with ${p2} picked`);
+        await deskShot(page, log, 'desk-b-k9-offer-sheet');
+      }
+      await ctx.close();
+    }
+    {
+      const { ctx, page, log } = await go('desk-book-confirmed', 'chat', { wide: true });
+      await want(page, '[data-strip=booked]', 'K5 at 1440');
+      await deskShot(page, log, 'desk-b-k5-confirmed-1440');
+      await ctx.close();
+    }
+    // K7 cancel: inline confirm, then cancelled.
+    {
+      const { ctx, page, log } = await go('desk-book-cancel', 'chat');
+      await page.click('[data-cancel]');
+      await want(page, '[data-strip=cancel][role=alertdialog]', 'K7 confirm');
+      await deskShot(page, log, 'desk-b-k7-cancel');
+      await page.click('[data-cancel-yes]');
+      await page.waitForSelector('[data-strip]', { state: 'detached', timeout: 5000 }).catch(() => problems.push('desk K7: strip stayed after cancel'));
+      await want(page, '[data-pick-open]', 'K7 starter back');
+      await deskShot(page, log, 'desk-b-k7-cancelled');
+      await ctx.close();
+    }
+    // K8 nothing open.
+    {
+      const { ctx, page, log } = await go('desk-book-none', 'chat');
+      await page.click('[data-pick-open]');
+      await sheetOpen(page, 'K8');
+      await want(page, '[data-pick-none]', 'K8 empty state');
+      await deskShot(page, log, 'desk-b-k8-none');
+      await page.click('[data-pick-write]');
+      await page.waitForTimeout(150);
+      if ((await focusId(page)) !== 'd-say') problems.push('desk K8: Write to did not put the cursor in the composer');
+      await ctx.close();
+    }
+    // K10 just taken.
+    {
+      const { ctx, page, log } = await go('desk-book-taken', 'chat');
+      await page.click('[data-pick-open]');
+      await sheetOpen(page, 'K10');
+      await page.click('[data-slot="d1-9"]');
+      await page.click('button[data-ask]');
+      await want(page, '[data-taken][role=alert]', 'K10 taken notice');
+      if (await page.locator('[data-slot="d1-9"]').count()) problems.push('desk K10: the taken time is still offered');
+      await deskShot(page, log, 'desk-b-k10-taken');
+      await ctx.close();
+    }
+    // K11 closed, still booked.
+    {
+      const { ctx, page, log } = await go('desk-book-ended-booked', 'ended');
+      await want(page, '[data-strip=booked]', 'K11 booked strip');
+      await deskShot(page, log, 'desk-b-k11-ended-booked');
+      await ctx.close();
+    }
+    // Reduced motion with the sheet open: nothing slides or pops.
+    {
+      const r = await go('desk-book-none', 'chat', { reduced: true });
+      await r.page.click('[data-pick-open]');
+      await r.page.waitForSelector('[data-sheet]');
+      const anims = await r.page.evaluate(() => [...document.querySelectorAll('main.dk *')].map((e) => getComputedStyle(e).animationName).filter((a) => a && a !== 'none'));
+      if (anims.length) problems.push(`desk K reduced motion: ${anims.length} element(s) animate (${[...new Set(anims)].join(', ')})`);
+      await check('desk-b-reduced-motion', r.page, r.log);
+      await r.ctx.close();
+    }
   }
 }
 for (const [label, throttle] of Object.entries(presets)) {

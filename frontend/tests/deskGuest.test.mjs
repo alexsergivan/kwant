@@ -327,3 +327,195 @@ test('dayLabel: today, then a date', () => {
   assert.equal(m.dayLabel('2026-11-23T08:00:00', now), 'Mon, Nov 23');
   assert.match(m.dayLabel('2026-11-20T08:00:00', now), /Nov/);
 });
+
+// ---------- pa13b Booking Desk (pa13/pa13b-guest-brief.md, pa13b-design.md K1-K11) ----------
+
+const b = await loadBundled(`
+  export { wall, timeLabel, whenLabel, chipLabel, lengthLabel, groupDays, openSlots, notPast, dayMinutes } from './guest/src/desk/slots';
+  export { deskFrom } from './guest/src/desk/view';
+`);
+const sl = (id, start, open = true, extra = {}) => ({ id, start, minutes: 60, open, ...extra });
+const NOW = Date.UTC(2026, 11, 1, 12, 0); // Tue Dec 1 2026, 12:00 UTC
+
+test('slots: wall-clock starts show as the box wrote them, never in the phone zone; :00 drops on 12-hour clocks', () => {
+  const s = sl('a', '2026-12-02T10:00');
+  assert.equal(b.timeLabel(s, 'en-US'), '10 AM');
+  assert.equal(b.timeLabel(sl('b', '2026-12-02T14:30'), 'en-US'), '2:30 PM');
+  assert.equal(b.whenLabel(s, 'en-US'), 'Wed Dec 2, 10 AM');
+  assert.equal(b.chipLabel(s, 'en-US'), 'Wed 10 AM');
+  // A 24-hour locale keeps the minutes.
+  assert.equal(b.timeLabel(sl('c', '2026-12-02T14:00'), 'en-GB'), '14:00');
+  // The page's zone never moves the time (formatting is pinned to the box's wall clock).
+  assert.equal(b.wall('2026-12-02T10:00'), Date.UTC(2026, 11, 2, 10, 0));
+});
+
+test('slots: the label is the fallback when start is not a time, then the id', () => {
+  assert.equal(b.timeLabel(sl('x', 'soon', true, { label: 'Morning slot' }), 'en-US'), 'Morning slot');
+  assert.equal(b.whenLabel(sl('x', '2026-02-31T10:00', true, { label: '' }), 'en-US'), 'x');
+  assert.equal(b.wall('2026-12-02T25:00'), undefined);
+  assert.equal(b.wall(undefined), undefined);
+});
+
+test('slots: grouped by day in time order; past and broken times dropped; open counted per day', () => {
+  const days = b.groupDays(
+    [
+      sl('d3', '2026-12-03T09:00', false),
+      sl('d2b', '2026-12-02T11:00'),
+      sl('d2a', '2026-12-02T09:00'),
+      sl('old', '2026-11-30T09:00'), // more than 12 h past everywhere
+      sl('bad', 'whenever'),
+      sl('today', '2026-12-01T09:00'), // past in UTC, still ahead somewhere west: kept, the box decides
+    ],
+    NOW,
+    'en-US',
+  );
+  assert.deepEqual(days.map((d) => d.key), ['2026-12-01', '2026-12-02', '2026-12-03']);
+  assert.deepEqual(days[1].slots.map((s) => s.id), ['d2a', 'd2b']);
+  assert.equal(days[1].long, 'Wed Dec 2');
+  assert.equal(days[2].open.length, 0);
+  assert.equal(b.notPast(sl('old', '2026-11-30T09:00'), NOW), false);
+  assert.deepEqual(b.openSlots([sl('o', '2026-12-02T09:00'), sl('t', '2026-12-02T10:00', false)], NOW).map((s) => s.id), ['o']);
+  assert.equal(b.dayMinutes(days[1]), 60);
+  assert.equal(b.dayMinutes({ slots: [sl('a', 'x'), { ...sl('b', 'x'), minutes: 30 }], open: [] }), undefined);
+  assert.equal(b.lengthLabel(60), '1 hour');
+  assert.equal(b.lengthLabel(30), '30 min');
+  assert.equal(b.lengthLabel(90), '1 h 30 min');
+});
+
+test('booking view: mode booking, slots and my_booking mapped; declined is no booking; junk slots dropped', () => {
+  const v = b.deskFrom(
+    env1(view({ mode: 'booking', what: 'your cut', slots: [sl('a', '2026-12-02T10:00'), { id: 3 }, null], my_booking: { slot: 'a', state: 'declined' }, limits: { per_hour: 20, left_this_hour: 20, max_chars: 1000, note_max_chars: 300 } })),
+  ).view;
+  assert.equal(v.booking, true);
+  assert.deepEqual(v.slots.map((s) => s.id), ['a']);
+  assert.equal(v.my_booking, null);
+  assert.equal(v.limits.note_max_chars, 300);
+  const g = b.deskFrom(env1(view())).view;
+  assert.equal(g.booking, false);
+});
+
+test('K2 to K4: the pick starter opens the sheet on its title; a time and Ask give the requested strip', async () => {
+  const t = await open('desk-book-pick');
+  // K1: join in booking mode names the open times.
+  await type(t.$('#d-name'), 'Emma');
+  const pin = t.$('#d-pin');
+  if (pin) await type(pin, '1234');
+  await submit(t.$('form'));
+  assert.equal(t.screen(), 'chat');
+  // After joining, the sheet opens by itself.
+  assert.ok(t.$('[data-sheet]'), 'sheet open after join');
+  assert.equal(document.activeElement?.id, 'pk-title');
+  // Esc closes and focus goes back.
+  t.$('[data-sheet]').dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await flush();
+  assert.equal(t.$('[data-sheet]'), null);
+  const starter = t.$('[data-pick-open]');
+  assert.ok(starter, 'Pick a time comes first');
+  assert.equal(t.$('.gstart button')?.hasAttribute('data-pick-open'), true);
+  starter.click();
+  await flush();
+  assert.equal(document.activeElement?.id, 'pk-title');
+  assert.ok(t.$('[role=tablist] [role=tab][aria-selected=true]'));
+  const ask = t.$('[data-ask]');
+  assert.equal(ask.disabled, true, 'nothing picked yet');
+  t.$('[role=radio][data-slot]').click();
+  await flush();
+  assert.equal(t.$('[role=radio][aria-checked=true]')?.getAttribute('data-slot'), 'd1-9');
+  await type(t.$('#pk-note'), 'Short trim please');
+  t.$('[data-ask]').click();
+  await flush();
+  const req = t.says().at(-1);
+  assert.deepEqual(req.body, { name: 'request', body: { slot: 'd1-9', note: 'Short trim please' } });
+  assert.equal(t.$('[data-sheet]'), null);
+  assert.ok(t.$('[data-strip=requested]'));
+  assert.ok(t.$('[data-cancel]'));
+  assert.equal(t.$('[data-pick-open]'), null, 'no pick starter once a time is asked for');
+});
+
+test('K5 confirmed: an ok strip with a plain Booked chip, no Cancel and no holo', async () => {
+  const t = await open('desk-book-confirmed');
+  assert.ok(t.$('[data-strip=booked] .gchip.ok'));
+  assert.equal(t.$('[data-cancel]'), null);
+  assert.equal(t.root.querySelector('.holo, [class*=sticker]'), null);
+});
+
+test('K6 declined: Pick another time opens the sheet', async () => {
+  const t = await open('desk-book-declined');
+  const again = t.$('[data-pick-again]');
+  assert.ok(again);
+  again.click();
+  await flush();
+  assert.ok(t.$('[data-sheet]'));
+});
+
+test('K7 cancel: Cancel asks inline, Keep goes back, Yes cancels', async () => {
+  const t = await open('desk-book-cancel');
+  t.$('[data-cancel]').click();
+  await flush();
+  assert.ok(t.$('[data-strip=cancel][role=alertdialog]'));
+  t.$('[data-cancel-keep]').click();
+  await flush();
+  assert.ok(t.$('[data-strip=requested]'));
+  t.$('[data-cancel]').click();
+  await flush();
+  t.$('[data-cancel-yes]').click();
+  await flush();
+  assert.deepEqual(t.says().at(-1).body, { name: 'cancel', body: { slot: 'd1-10' } });
+  assert.equal(t.$('[data-strip]'), null);
+  assert.ok(t.$('[data-pick-open]'), 'the starter is back');
+});
+
+test('K8 nothing open: the sheet says so and Write to the host goes to the composer', async () => {
+  const t = await open('desk-book-none');
+  t.$('[data-pick-open]').click();
+  await flush();
+  assert.ok(t.$('[data-pick-none]'));
+  assert.equal(t.$('[role=radio]'), null);
+  t.$('[data-pick-write]').click();
+  await flush();
+  assert.equal(t.$('[data-sheet]'), null);
+  assert.equal(document.activeElement?.id, 'd-say');
+});
+
+test('K9 offers: chips for open times only; a chip opens the sheet with that time picked', async () => {
+  const t = await open('desk-book-offers');
+  const chips = [...t.root.querySelectorAll('[data-offer]')];
+  assert.deepEqual(chips.map((c) => c.getAttribute('data-offer')), ['d2-10', 'd2-11'], 'd3-9 is taken, so no chip');
+  chips[1].click();
+  await flush();
+  assert.equal(t.$('[role=radio][aria-checked=true]')?.getAttribute('data-slot'), 'd2-11');
+});
+
+test('K10 taken: the refusal keeps the sheet open, drops that time and says why', async () => {
+  const t = await open('desk-book-taken');
+  t.$('[data-pick-open]').click();
+  await flush();
+  t.$('[role=radio][data-slot="d1-9"]').click();
+  await flush();
+  t.$('[data-ask]').click();
+  await flush();
+  assert.ok(t.$('[data-sheet]'));
+  assert.ok(t.$('[data-taken][role=alert]'));
+  assert.equal(t.$('[data-slot="d1-9"]'), null);
+  assert.equal(t.$('[role=radio][aria-checked=true]'), null, 'nothing picked after the refusal');
+});
+
+test('K11 closed with a booking: the booked strip stays and nothing else can be asked', async () => {
+  const t = await open('desk-book-ended-booked');
+  assert.ok(t.$('[data-strip=booked]'));
+  assert.equal(t.$('[data-pick-open]'), null);
+  assert.equal(t.$('[data-sheet]'), null);
+});
+
+test('410 slot_past (Vega) keeps the sheet open with its own words; it is not the 410 that ends the page', async () => {
+  const t = await open('desk-book-past');
+  t.$('[data-pick-open]').click();
+  await flush();
+  t.$('[role=radio][data-slot="d1-9"]').click();
+  await flush();
+  t.$('[data-ask]').click();
+  await flush();
+  assert.equal(t.screen(), 'chat');
+  assert.ok(t.$('[data-sheet]'));
+  assert.match(t.$('[data-pick-say]')?.textContent ?? '', /passed/);
+});

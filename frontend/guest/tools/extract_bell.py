@@ -5,7 +5,8 @@
   pa13/src/parts.json. Frame and the thinking/finished badges are the Quizmaster's (art.ts QM_FRAME, MOOD_*), checked
   below, so only the body is new: the 64 px body, the 1.2x zoomed body ModernAvatar uses under 48 px, and the
   `failed` badge (G10: Bell can't answer).
-- The pixel icons the desk screens use, from the patterns in pa13/src/gen.py (PXI).
+- The pixel icons the desk screens use, from the patterns in pa13/src/gen.py (PXI), plus cal and tick from the pa13b
+  booking export (pa13/pa13b-shots/src/gen_b.py, design READY, Mockup lint: PASS).
 
 Usage: python3 -I frontend/guest/tools/extract_bell.py <pa13 folder> [mockup-kit/avatars.py] > frontend/guest/src/desk/bell-art.ts
 """
@@ -53,6 +54,10 @@ block = block[:block.index('})') + 1]
 pats = ast.literal_eval(block)
 # The moon (G7, G10 notes) is a mockup-kit icon that gen.py takes from avatars.IC rather than PXI.
 kit = open(sys.argv[2] if len(sys.argv) > 2 else '/home/maus/shared/ship-software-safely/mockup-kit/avatars.py').read()
+# pa13b booking desk: cal and tick are set in gen_b.py as G.PXI['cal'] = [...].
+gen_b = open(f'{src}/pa13b-shots/src/gen_b.py').read()
+for k in ('cal', 'tick'):
+    pats[k] = ast.literal_eval(re.search(r"G\.PXI\['" + k + r"'\] = (\[[^\]]*\])", gen_b).group(1))
 pats.setdefault('moon', ast.literal_eval(re.search(r'"moon": (\[[^\]]*\])', kit).group(1)))
 
 
@@ -82,7 +87,7 @@ print(f'export const BL_BODY_SMALL: Rects = {json.dumps(s, **compact)};')
 print(f'export const BL_SMALL_TRANSFORM = {json.dumps(transform)};')
 print(f'export const MOOD_FAILED: Rects = {json.dumps(f, **compact)};')
 print('export const DESK_ICONS: Record<string, [string, Rects]> = {')
-for k in ('lock', 'clock', 'retry', 'warn', 'send', 'bell', 'chat', 'nowifi', 'door', 'bot', 'person', 'moon'):
+for k in ('lock', 'clock', 'retry', 'warn', 'send', 'bell', 'chat', 'nowifi', 'door', 'bot', 'person', 'moon', 'x', 'cal', 'tick'):
     vb, rs = icon(pats[k])
     print(f'  {k}: [{json.dumps(vb)}, {json.dumps(rs, **compact)}],')
 print('};')
