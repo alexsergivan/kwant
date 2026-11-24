@@ -500,6 +500,9 @@ test('K10 taken: the refusal keeps the sheet open, drops that time and says why'
   assert.ok(t.$('[data-taken][role=alert]'));
   assert.equal(t.$('[data-slot="d1-9"]'), null);
   assert.equal(t.$('[role=radio][aria-checked=true]'), null, 'nothing picked after the refusal');
+  // Rigel F1: focus lands on the notice inside the sheet, so Esc still works without a Tab first.
+  assert.equal(t.$('[data-taken]').getAttribute('tabindex'), '-1');
+  assert.ok(t.$('[data-sheet]').contains(document.activeElement), 'focus is inside the sheet after K10');
 });
 
 test('K11 closed with a booking: the booked strip stays and nothing else can be asked', async () => {
@@ -520,4 +523,6 @@ test('410 slot_past (Vega) keeps the sheet open with its own words; it is not th
   assert.equal(t.screen(), 'chat');
   assert.ok(t.$('[data-sheet]'));
   assert.match(t.$('[data-pick-say]')?.textContent ?? '', /passed/);
+  assert.equal(t.$('[data-pick-say]').getAttribute('tabindex'), '-1');
+  assert.ok(t.$('[data-sheet]').contains(document.activeElement), 'focus is inside the sheet after slot_past');
 });

@@ -144,8 +144,8 @@ export function picker(v: DeskView, p: Pick, n: Names, now: number, act: PickerD
     if (!d.open.length) times.append(h('p', { class: 'soft dayfull' }, book.day_full));
     const notice = p.notice
       ? p.notice.kind === 'taken'
-        ? h('div', { class: 'gnote warn', role: 'alert', 'data-taken': '' }, dIcon('warn'), h('span', null, bold(book.taken(p.notice.time))))
-        : h('div', { class: 'gnote warn', role: 'alert', 'data-pick-say': '' }, dIcon('warn'), h('span', null, p.notice.text))
+        ? h('div', { class: 'gnote warn', role: 'alert', tabindex: -1, 'data-taken': '' }, dIcon('warn'), h('span', null, bold(book.taken(p.notice.time))))
+        : h('div', { class: 'gnote warn', role: 'alert', tabindex: -1, 'data-pick-say': '' }, dIcon('warn'), h('span', null, p.notice.text))
       : null;
     const max = v.limits.note_max_chars;
     const over = chars(p.note) > max;

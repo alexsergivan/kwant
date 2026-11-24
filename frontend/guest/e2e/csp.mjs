@@ -891,7 +891,11 @@ const presets = {
       await page.click('button[data-ask]');
       await want(page, '[data-taken][role=alert]', 'K10 taken notice');
       if (await page.locator('[data-slot="d1-9"]').count()) problems.push('desk K10: the taken time is still offered');
+      if (!(await page.evaluate(() => !!document.querySelector('[data-sheet]')?.contains(document.activeElement)))) problems.push('desk K10: focus left the sheet after the refusal');
       await deskShot(page, log, 'desk-b-k10-taken');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(150);
+      if (await page.locator('[data-sheet]').count()) problems.push('desk K10: Esc did not close the sheet after the refusal');
       await ctx.close();
     }
     // K11 closed, still booked.
