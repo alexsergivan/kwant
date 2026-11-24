@@ -20,6 +20,7 @@ import { FlightSchoolPanel } from './FlightSchoolPanel';
 import { useEscapeLayer } from '../escape';
 import { BrowserSites, FieldErrorKey, SITE_LIMITS, changedSites, fieldError, sitesOf, sitesSummary } from '../browserSites';
 import { useFocusAfterRender } from '../focusAfterRender';
+import { avatarForJob, hasCustomMoreOptions } from '../newBotForm';
 
 export type EditTab = 'profile' | 'memory' | 'skills' | 'routines' | 'usage';
 const EDIT_TABS: Array<{ id: EditTab; label: string; Icon: typeof Brain }> = [
@@ -127,7 +128,11 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   const [tab, setTab] = useState<EditTab>('profile');
   const [name, setName] = useState('');
   const [title, setTitle] = useState('');
-  const [roleStyle, setRoleStyle] = useState('architect');
+  const [roleStyle, setRoleStyle] = useState('default');
+  // A new bot's avatar follows its job until the person (or a persona) picks one.
+  const [avatarPinned, setAvatarPinned] = useState(false);
+  // Everything past the name and the job waits under one closed "More options".
+  const [moreOpen, setMoreOpen] = useState(false);
   const [model, setModel] = useState('auto');
   const [prompt, setPrompt] = useState('');
   const [soul, setSoul] = useState('');
@@ -158,10 +163,11 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
   }, [isOpen, enginesRefreshKey, reloadEngines]);
   const engine = engineOfModel(model);
   const engineProfiles = profilesForEngine(profiles, engine);
+  const avatar = avatarPinned ? roleStyle : avatarForJob(prompt, name);
 
   // The profile as it opened (or as a preset filled it in): Escape keeps the editor open while it differs.
   const [base, setBase] = useState<ProfileFields | null>(null);
-  const current: ProfileFields = { name, title, roleStyle, model, prompt, soul, profileId, failover, covers: covers.join('\n'), avoids: avoids.join('\n'), sites: JSON.stringify(sites) };
+  const current: ProfileFields = { name, title, roleStyle: avatar, model, prompt, soul, profileId, failover, covers: covers.join('\n'), avoids: avoids.join('\n'), sites: JSON.stringify(sites) };
   const unsaved = !!base && (Object.keys(base) as (keyof ProfileFields)[]).some((k) => base[k] !== current[k]);
   const rootRef = useRef<HTMLDivElement>(null);
   useEscapeLayer(rootRef, isOpen, onClose, {
@@ -179,7 +185,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setBase({
       name: initial?.name ?? '',
       title: initial?.title ?? '',
-      roleStyle: initial?.avatar_sprite || 'architect',
+      roleStyle: initial ? initial.avatar_sprite || 'architect' : 'default',
       model: initial?.preferred_model || 'auto',
       prompt: initial?.persona_prompt ?? '',
       soul: initial?.soul ?? '',
@@ -191,7 +197,9 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     });
     setName(initial?.name ?? '');
     setTitle(initial?.title ?? '');
-    setRoleStyle(initial?.avatar_sprite || 'architect');
+    setRoleStyle(initial ? initial.avatar_sprite || 'architect' : 'default');
+    setAvatarPinned(!!initial);
+    setMoreOpen(hasCustomMoreOptions(initial));
     setModel(initial?.preferred_model || 'auto');
     setPrompt(initial?.persona_prompt ?? '');
     setSoul(initial?.soul ?? '');
@@ -235,7 +243,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     const filled = {
       name: preset ? uniqueAgentName(preset.name, takenNames) : '',
       title: preset?.title ?? '',
-      roleStyle: preset?.avatar_sprite ?? 'architect',
+      roleStyle: preset?.avatar_sprite ?? 'default',
       model: preset?.preferred_model ?? 'auto',
       prompt: preset?.persona_prompt ?? '',
       soul: preset?.soul ?? '',
@@ -243,6 +251,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     setName(filled.name);
     setTitle(filled.title);
     setRoleStyle(filled.roleStyle);
+    // A persona brings its own avatar; no persona hands the avatar back to the job.
+    setAvatarPinned(!!preset);
     setModel(filled.model);
     setPrompt(filled.prompt);
     setSoul(filled.soul);
@@ -260,6 +270,9 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
       if (fieldErrors[field]) setFieldErrors(({ [field]: _gone, ...rest }) => rest);
     },
   });
+
+  // The profile form (and its sticky footer) shows unless an edit tab other than Profile is open.
+  const showForm = !(isEdit && !!kwantId && tab !== 'profile');
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -279,7 +292,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
       title: title.trim() || 'AI Specialist',
       persona_prompt: prompt.trim() || 'You are an intelligent AI specialist ready to collaborate.',
       soul: soul.trim(),
-      avatar_sprite: roleStyle,
+      avatar_sprite: avatar,
       preferred_model: model,
       mcp_server_ids: mcpIds,
       // A pin only makes sense for one engine; auto and Ollama run on the defaults. Until the
@@ -301,6 +314,8 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
       }
       // Nothing was saved: show why next to the list, and take focus there.
       setFieldErrors({ [named.field]: named.text });
+      // Every list a 400 can name lives under More options.
+      setMoreOpen(true);
       setError('Nothing was saved. Fix the entry marked above, then save again.');
       if (named.field.startsWith('browser_')) setSitesOpen(true);
       focusAfterRender(() => document.getElementById(fieldInputId(named.field)));
@@ -317,7 +332,9 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
         role="dialog"
         aria-modal="true"
         aria-labelledby="agent-modal-title"
-        className="kw-dialog-panel outline-none bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5"
+        className={`kw-dialog-panel outline-none bg-zinc-900 border border-zinc-800 rounded-2xl max-w-lg w-full max-h-[92vh] overflow-y-auto p-4 sm:p-6 text-zinc-100 shadow-2xl space-y-5 ${
+          showForm ? '!pb-0' : ''
+        }`}
       >
         <div className="flex items-center justify-between border-b border-zinc-800 pb-3">
           <div className="flex items-center gap-2">
@@ -391,281 +408,339 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
           </div>
         )}
 
-        <form onSubmit={handleSubmit} className="space-y-4" hidden={isEdit && !!kwantId && tab !== 'profile'} role={isEdit && kwantId ? 'tabpanel' : undefined} id="agent-panel-profile">
-          {!isEdit && (
-            <div>
-              <div className="flex items-center justify-between mb-1.5">
-                <label className="text-xs font-medium text-zinc-400">Start from a persona</label>
-                <div className="flex p-0.5 rounded-lg bg-zinc-950 border border-zinc-800" role="tablist">
-                  {PRESET_GROUPS.map((g) => (
-                    <button
-                      key={g.id}
-                      type="button"
-                      role="tab"
-                      aria-selected={presetGroup === g.id}
-                      onClick={() => {
-                        playSfx('click');
-                        setPresetGroup(g.id);
-                      }}
-                      className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium transition-colors ${
-                        presetGroup === g.id ? 'bg-sky-500/15 text-sky-200' : 'text-zinc-500 hover:text-zinc-300'
-                      }`}
-                    >
-                      {g.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div className="grid grid-cols-3 gap-1.5">
-                {[null, ...AGENT_PRESETS.filter((p) => p.group === presetGroup)].map((preset) => {
-                  const active = (preset?.id ?? null) === presetId;
-                  return (
-                    <button
-                      key={preset?.id ?? 'blank'}
-                      type="button"
-                      onClick={() => applyPreset(preset)}
-                      title={preset ? `${preset.title}: ${preset.persona_prompt}\n\nSoul: ${preset.soul}` : 'Start with empty fields'}
-                      className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-left text-[11px] transition-all ${
-                        active
-                          ? 'border-sky-500/60 bg-sky-500/10 text-sky-200'
-                          : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
-                      }`}
-                    >
-                      {preset ? (
-                        <ModernAvatar role={preset.avatar_sprite} size={18} />
-                      ) : (
-                        <Sparkles size={13} className="mx-0.5 text-zinc-500" />
-                      )}
-                      <span className="truncate font-medium">{preset ? preset.label : 'Blank'}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
+        <form onSubmit={handleSubmit} className="space-y-4" hidden={!showForm} role={isEdit && kwantId ? 'tabpanel' : undefined} id="agent-panel-profile">
           <div>
             <label htmlFor="agent-name" className="block text-xs font-medium text-zinc-400 mb-1">Name</label>
-            <input
-              id="agent-name"
-              type="text"
-              required
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="e.g. DataAnalyst, SecurityAuditor"
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Role & Title</label>
-            <input
-              type="text"
-              value={title}
-              onChange={(e) => setTitle(e.target.value)}
-              placeholder="e.g. Senior Security Auditor"
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Avatar & Role Specialty</label>
-            <div className="grid grid-cols-6 gap-1.5">
-              {AVATAR_STYLES.map((item) => {
-                const active = roleStyle === item.id;
-                return (
-                  <button
-                    key={item.id}
-                    type="button"
-                    onClick={() => setRoleStyle(item.id)}
-                    title={item.label}
-                    className={`flex flex-col items-center gap-1 py-1.5 px-0.5 min-w-0 rounded-xl border text-[10px] transition-all ${
-                      active
-                        ? 'border-sky-500/60 bg-sky-500/10 text-sky-200 shadow-sm'
-                        : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
-                    }`}
-                  >
-                    <ModernAvatar role={item.id} size={32} />
-                    <span className="w-full truncate text-center font-medium">{item.label}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          <ModelPicker
-            value={model}
-            onChange={setModel}
-            engines={engines.engines}
-            onOpenSettings={onOpenSettings}
-            onSignInClaude={onSignInClaude}
-            profiles={profiles}
-            profileId={profileId}
-            onPickAccount={setProfileId}
-          />
-
-          {engine && (
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label htmlFor="agent-profile" className="text-xs font-medium text-zinc-400">
-                  Account
-                </label>
-                {onManageProfiles && (
-                  <button
-                    type="button"
-                    onClick={onManageProfiles}
-                    className="flex items-center gap-0.5 text-[11px] text-zinc-500 hover:text-sky-300 transition-colors"
-                  >
-                    Manage accounts <ChevronRight size={11} />
-                  </button>
-                )}
-              </div>
-              <select
-                id="agent-profile"
-                value={profileId ?? ''}
-                onChange={(e) => setProfileId(e.target.value || null)}
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors"
+            <div className="flex items-center gap-2">
+              <span className="flex-shrink-0" data-name-avatar>
+                <ModernAvatar role={avatar} name={name} size={32} modelBadge={false} />
+              </span>
+              <input
+                id="agent-name"
+                type="text"
+                required
+                autoFocus={!isEdit}
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                onKeyDown={(e) => {
+                  // Enter before the job is written moves on to the job instead of creating a bot without one.
+                  if (e.key === 'Enter' && !prompt.trim()) {
+                    e.preventDefault();
+                    document.getElementById('agent-job')?.focus();
+                  }
+                }}
+                placeholder="e.g. SupportBot"
+                className="min-w-0 flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
+              />
+              <button
+                type="button"
+                aria-label="Change avatar"
+                aria-controls="agent-more-options"
+                onClick={() => {
+                  playSfx('click');
+                  setMoreOpen(true);
+                  focusAfterRender(() => document.querySelector<HTMLElement>('[data-avatar-grid] [aria-pressed="true"]'));
+                }}
+                className="flex-shrink-0 px-2 min-h-[44px] sm:min-h-[36px] rounded-lg text-[11px] font-medium text-sky-300 hover:text-sky-200 hover:bg-zinc-800 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
               >
-                <option value="">
-                  {`${ENGINES.find((e) => e.id === engine)?.label} default${
-                    engineProfiles[0]?.is_default ? ` (${engineProfiles[0].name})` : ''
-                  }`}
-                </option>
-                {engineProfiles.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {`${p.name} · ${profileStatus(p).text}`}
-                  </option>
-                ))}
-                {profileId && !engineProfiles.some((p) => p.id === profileId) && (
-                  <option value={profileId}>Another engine's account (cleared on save)</option>
-                )}
-              </select>
-              <label className="mt-1.5 flex items-start gap-2 text-[11px] text-zinc-400">
-                <input type="checkbox" checked={failover} onChange={(e) => setFailover(e.target.checked)} className="mt-0.5 accent-sky-500" />
-                <span>Switch to the engine's next account when this one runs out of usage or is signed out</span>
-              </label>
+                Change
+              </button>
             </div>
-          )}
-
-          {isEdit && kwantId && (
-            <BotApprovalsSetting
-              kwantId={kwantId}
-              kwantName={initial?.name ?? name}
-              onChanged={(s) => {
-                setToolsRunFree(s.approvals_effective === 'off');
-                onApprovalsChanged?.();
-              }}
-            />
-          )}
-
-          {isEdit && kwantId && <FlightSchoolPanel kwantId={kwantId} kwantName={initial?.name ?? name} />}
-
-          {mcpIds !== undefined && (
-            <KwantToolsPicker model={model} selected={mcpIds} onChange={setMcpIds} onManageServers={onManageServers} approvalsOff={toolsRunFree} />
-          )}
-
-          {isEdit && sites && (
-            <details
-              className="group rounded-lg border border-zinc-800 bg-zinc-950/40"
-              open={sitesOpen}
-              onToggle={(e) => setSitesOpen((e.currentTarget as HTMLDetailsElement).open)}
-              data-browser-sites
-            >
-              <summary className="flex items-center gap-2 px-3 py-2 min-h-[40px] cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500">
-                <Globe size={13} className="flex-shrink-0 text-zinc-500" aria-hidden="true" />
-                <span className="text-xs font-medium text-zinc-400">Browser sites</span>
-                <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500" data-sites-summary>
-                  · {sitesSummary(sites)}
-                </span>
-                <ChevronRight size={13} className="flex-shrink-0 text-zinc-500 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
-              </summary>
-              <div className="space-y-3 px-3 pb-3 pt-1">
-                <p className="text-[11px] text-zinc-500 leading-snug">
-                  Which sites this bot's own browser may open. <span className="font-mono text-zinc-400">example.com</span> includes
-                  its subdomains; <span className="font-mono text-zinc-400">*.example.com</span> only the subdomains. Your own
-                  browsing isn't limited.
-                </p>
-                <TagListInput
-                  label="Allowed sites"
-                  hint={sites.browser_allowed_sites.length ? 'only these' : 'empty: any site'}
-                  placeholder="e.g. wikipedia.org — Enter to add"
-                  value={sites.browser_allowed_sites}
-                  limits={SITE_LIMITS}
-                  {...listProps('browser_allowed_sites', (next) => setSites({ ...sites, browser_allowed_sites: next }))}
-                />
-                <TagListInput
-                  label="Blocked sites"
-                  hint="never these, even if allowed"
-                  placeholder="e.g. facebook.com — Enter to add"
-                  value={sites.browser_blocked_sites}
-                  limits={SITE_LIMITS}
-                  tone="bad"
-                  {...listProps('browser_blocked_sites', (next) => setSites({ ...sites, browser_blocked_sites: next }))}
-                />
-                <label className="flex items-start gap-2 text-[11px] text-zinc-400">
-                  <input
-                    type="checkbox"
-                    checked={sites.browser_block_private_network}
-                    onChange={(e) => setSites({ ...sites, browser_block_private_network: e.target.checked })}
-                    className="mt-0.5 accent-sky-500"
-                  />
-                  <span>
-                    Block local and private network addresses
-                    <span className="block text-zinc-500">localhost, 192.168.x.x, 10.x.x.x and names that point to them, such as your router</span>
-                  </span>
-                </label>
-              </div>
-            </details>
-          )}
+          </div>
 
           <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">Persona & Instructions</label>
+            <label htmlFor="agent-job" className="block text-xs font-medium text-zinc-400 mb-1">What should it do?</label>
             <textarea
+              id="agent-job"
               rows={isEdit || presetId ? 6 : 3}
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
-              placeholder="What this bot does: expertise, responsibilities, and how it should work..."
+              placeholder="e.g. Answer our support emails kindly, and pass anything about refunds to me."
               className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none"
             />
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-zinc-400 mb-1">
-              Soul <span className="text-zinc-600 font-normal">· personality, voice, values, quirks</span>
-            </label>
-            <textarea
-              rows={isEdit || presetId ? 4 : 2}
-              value={soul}
-              onChange={(e) => setSoul(e.target.value)}
-              placeholder="e.g. Warm and witty, a little impatient with jargon, celebrates small wins..."
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none"
-            />
-          </div>
-
-          {(!isEdit || initial?.covers) && (
-            <div className="space-y-3">
-              <TagListInput
-                label="Good for"
-                hint="what to send this bot"
-                placeholder="e.g. taxes, invoices — Enter to add"
-                value={covers}
-                {...listProps('covers', setCovers)}
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950/40">
+            <button
+              type="button"
+              aria-expanded={moreOpen}
+              aria-controls="agent-more-options"
+              onClick={() => {
+                playSfx('click');
+                setMoreOpen((o) => !o);
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 min-h-[44px] sm:min-h-[40px] rounded-lg text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500"
+              data-more-options
+            >
+              <span className="text-xs font-medium text-zinc-300">More options</span>
+              <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500">
+                · {isEdit ? 'title, avatar, engine, personality and more' : 'persona, avatar, engine, personality and more'}
+              </span>
+              <ChevronRight
+                size={13}
+                className={`flex-shrink-0 text-zinc-500 transition-transform motion-reduce:transition-none ${moreOpen ? 'rotate-90' : ''}`}
+                aria-hidden="true"
               />
-              <TagListInput
-                label="Not for"
-                hint="what never to send it"
-                placeholder="e.g. legal advice — Enter to add"
-                value={avoids}
-                {...listProps('avoids', setAvoids)}
-                tone="bad"
-              />
+            </button>
+            <div id="agent-more-options" hidden={!moreOpen} className="space-y-4 px-3 pb-3 pt-1">
               {!isEdit && (
-                <p className="text-[11px] text-zinc-500 leading-snug">
-                  Channels use these to pick who answers. Optional; you can change them later in the bot's settings.
-                </p>
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <span id="agent-persona-label" className="text-xs font-medium text-zinc-400">
+                      Start from a persona <span className="text-zinc-600 font-normal">· optional</span>
+                    </span>
+                    <div className="flex p-0.5 rounded-lg bg-zinc-950 border border-zinc-800" role="tablist">
+                      {PRESET_GROUPS.map((g) => (
+                        <button
+                          key={g.id}
+                          type="button"
+                          role="tab"
+                          aria-selected={presetGroup === g.id}
+                          onClick={() => {
+                            playSfx('click');
+                            setPresetGroup(g.id);
+                          }}
+                          className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium transition-colors ${
+                            presetGroup === g.id ? 'bg-sky-500/15 text-sky-200' : 'text-zinc-500 hover:text-zinc-300'
+                          }`}
+                        >
+                          {g.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1.5" role="group" aria-labelledby="agent-persona-label">
+                    {AGENT_PRESETS.filter((p) => p.group === presetGroup).map((preset) => {
+                      // No persona picked means a blank start; pressing the picked one again goes back to it.
+                      const active = preset.id === presetId;
+                      return (
+                        <button
+                          key={preset.id}
+                          type="button"
+                          aria-pressed={active}
+                          onClick={() => applyPreset(active ? null : preset)}
+                          title={`${preset.title}: ${preset.persona_prompt}\n\nPersonality: ${preset.soul}`}
+                          className={`flex items-center gap-1.5 px-2 py-1.5 rounded-lg border text-left text-[11px] transition-all ${
+                            active
+                              ? 'border-sky-500/60 bg-sky-500/10 text-sky-200'
+                              : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                          }`}
+                        >
+                          <ModernAvatar role={preset.avatar_sprite} size={18} />
+                          <span className="truncate font-medium">{preset.label}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="agent-title" className="block text-xs font-medium text-zinc-400 mb-1">Role & Title</label>
+                <input
+                  id="agent-title"
+                  type="text"
+                  value={title}
+                  onChange={(e) => setTitle(e.target.value)}
+                  placeholder="e.g. Senior Security Auditor"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
+                />
+              </div>
+
+              <div>
+                <span id="agent-avatar-label" className="block text-xs font-medium text-zinc-400 mb-1">Avatar</span>
+                <div className="grid grid-cols-6 gap-1.5" role="group" aria-labelledby="agent-avatar-label" data-avatar-grid>
+                  {AVATAR_STYLES.map((item) => {
+                    const active = avatar === item.id;
+                    return (
+                      <button
+                        key={item.id}
+                        type="button"
+                        aria-pressed={active}
+                        onClick={() => {
+                          setRoleStyle(item.id);
+                          setAvatarPinned(true);
+                        }}
+                        title={item.label}
+                        className={`flex flex-col items-center gap-1 py-1.5 px-0.5 min-w-0 rounded-xl border text-[10px] transition-all ${
+                          active
+                            ? 'border-sky-500/60 bg-sky-500/10 text-sky-200 shadow-sm'
+                            : 'border-zinc-800 bg-zinc-950/60 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                        }`}
+                      >
+                        <ModernAvatar role={item.id} size={32} />
+                        <span className="w-full truncate text-center font-medium">{item.label}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <ModelPicker
+                value={model}
+                onChange={setModel}
+                engines={engines.engines}
+                onOpenSettings={onOpenSettings}
+                onSignInClaude={onSignInClaude}
+                profiles={profiles}
+                profileId={profileId}
+                onPickAccount={setProfileId}
+              />
+
+              {engine && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label htmlFor="agent-profile" className="text-xs font-medium text-zinc-400">
+                      Account
+                    </label>
+                    {onManageProfiles && (
+                      <button
+                        type="button"
+                        onClick={onManageProfiles}
+                        className="flex items-center gap-0.5 text-[11px] text-zinc-500 hover:text-sky-300 transition-colors"
+                      >
+                        Manage accounts <ChevronRight size={11} />
+                      </button>
+                    )}
+                  </div>
+                  <select
+                    id="agent-profile"
+                    value={profileId ?? ''}
+                    onChange={(e) => setProfileId(e.target.value || null)}
+                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors"
+                  >
+                    <option value="">
+                      {`${ENGINES.find((e) => e.id === engine)?.label} default${
+                        engineProfiles[0]?.is_default ? ` (${engineProfiles[0].name})` : ''
+                      }`}
+                    </option>
+                    {engineProfiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {`${p.name} · ${profileStatus(p).text}`}
+                      </option>
+                    ))}
+                    {profileId && !engineProfiles.some((p) => p.id === profileId) && (
+                      <option value={profileId}>Another engine's account (cleared on save)</option>
+                    )}
+                  </select>
+                  <label className="mt-1.5 flex items-start gap-2 text-[11px] text-zinc-400">
+                    <input type="checkbox" checked={failover} onChange={(e) => setFailover(e.target.checked)} className="mt-0.5 accent-sky-500" />
+                    <span>Switch to the engine's next account when this one runs out of usage or is signed out</span>
+                  </label>
+                </div>
+              )}
+
+              {isEdit && kwantId && (
+                <BotApprovalsSetting
+                  kwantId={kwantId}
+                  kwantName={initial?.name ?? name}
+                  onChanged={(s) => {
+                    setToolsRunFree(s.approvals_effective === 'off');
+                    onApprovalsChanged?.();
+                  }}
+                />
+              )}
+
+              {isEdit && kwantId && <FlightSchoolPanel kwantId={kwantId} kwantName={initial?.name ?? name} />}
+
+              {mcpIds !== undefined && (
+                <KwantToolsPicker model={model} selected={mcpIds} onChange={setMcpIds} onManageServers={onManageServers} approvalsOff={toolsRunFree} />
+              )}
+
+              {isEdit && sites && (
+                <details
+                  className="group rounded-lg border border-zinc-800 bg-zinc-950/40"
+                  open={sitesOpen}
+                  onToggle={(e) => setSitesOpen((e.currentTarget as HTMLDetailsElement).open)}
+                  data-browser-sites
+                >
+                  <summary className="flex items-center gap-2 px-3 py-2 min-h-[40px] cursor-pointer select-none list-none [&::-webkit-details-marker]:hidden rounded-lg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500">
+                    <Globe size={13} className="flex-shrink-0 text-zinc-500" aria-hidden="true" />
+                    <span className="text-xs font-medium text-zinc-400">Browser sites</span>
+                    <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500" data-sites-summary>
+                      · {sitesSummary(sites)}
+                    </span>
+                    <ChevronRight size={13} className="flex-shrink-0 text-zinc-500 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
+                  </summary>
+                  <div className="space-y-3 px-3 pb-3 pt-1">
+                    <p className="text-[11px] text-zinc-500 leading-snug">
+                      Which sites this bot's own browser may open. <span className="font-mono text-zinc-400">example.com</span> includes
+                      its subdomains; <span className="font-mono text-zinc-400">*.example.com</span> only the subdomains. Your own
+                      browsing isn't limited.
+                    </p>
+                    <TagListInput
+                      label="Allowed sites"
+                      hint={sites.browser_allowed_sites.length ? 'only these' : 'empty: any site'}
+                      placeholder="e.g. wikipedia.org — Enter to add"
+                      value={sites.browser_allowed_sites}
+                      limits={SITE_LIMITS}
+                      {...listProps('browser_allowed_sites', (next) => setSites({ ...sites, browser_allowed_sites: next }))}
+                    />
+                    <TagListInput
+                      label="Blocked sites"
+                      hint="never these, even if allowed"
+                      placeholder="e.g. facebook.com — Enter to add"
+                      value={sites.browser_blocked_sites}
+                      limits={SITE_LIMITS}
+                      tone="bad"
+                      {...listProps('browser_blocked_sites', (next) => setSites({ ...sites, browser_blocked_sites: next }))}
+                    />
+                    <label className="flex items-start gap-2 text-[11px] text-zinc-400">
+                      <input
+                        type="checkbox"
+                        checked={sites.browser_block_private_network}
+                        onChange={(e) => setSites({ ...sites, browser_block_private_network: e.target.checked })}
+                        className="mt-0.5 accent-sky-500"
+                      />
+                      <span>
+                        Block local and private network addresses
+                        <span className="block text-zinc-500">localhost, 192.168.x.x, 10.x.x.x and names that point to them, such as your router</span>
+                      </span>
+                    </label>
+                  </div>
+                </details>
+              )}
+
+              <div>
+                <label htmlFor="agent-soul" className="block text-xs font-medium text-zinc-400 mb-1">
+                  Personality <span className="text-zinc-600 font-normal">· voice, values, quirks</span>
+                </label>
+                <textarea
+                  id="agent-soul"
+                  rows={isEdit || presetId ? 4 : 2}
+                  value={soul}
+                  onChange={(e) => setSoul(e.target.value)}
+                  placeholder="e.g. Warm and witty, a little impatient with jargon, celebrates small wins..."
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none"
+                />
+              </div>
+
+              {(!isEdit || initial?.covers) && (
+                <div className="space-y-3">
+                  <TagListInput
+                    label="Good for"
+                    hint="what to send this bot"
+                    placeholder="e.g. taxes, invoices — Enter to add"
+                    value={covers}
+                    {...listProps('covers', setCovers)}
+                  />
+                  <TagListInput
+                    label="Not for"
+                    hint="what never to send it"
+                    placeholder="e.g. legal advice — Enter to add"
+                    value={avoids}
+                    {...listProps('avoids', setAvoids)}
+                    tone="bad"
+                  />
+                  {!isEdit && (
+                    <p className="text-[11px] text-zinc-500 leading-snug">
+                      Channels use these to pick who answers. Optional; you can change them later in the bot's settings.
+                    </p>
+                  )}
+                </div>
               )}
             </div>
-          )}
+          </div>
 
           {isEdit && initial && name.trim() !== initial.name && (
             <p className="text-[11px] text-zinc-500">
@@ -675,7 +750,12 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
 
           {error && <p className="text-[11px] text-rose-400">{error}</p>}
 
-          <div className="flex flex-wrap items-center justify-end gap-2.5 pt-2 border-t border-zinc-800">
+          <div
+            // Sticks to the panel's bottom edge. The panel drops its own bottom padding while this form shows, so the
+            // footer carries it (on a phone with the safe area) and nothing scrolls out beneath Create.
+            className="sticky bottom-0 z-10 -mx-4 sm:-mx-6 px-4 sm:px-6 pt-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:pb-6 bg-zinc-900 border-t border-zinc-800 flex flex-wrap items-center justify-end gap-2.5"
+            data-form-footer
+          >
             {isEdit && onRequestDelete && (
               <button
                 type="button"
