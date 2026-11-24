@@ -784,6 +784,15 @@ fn stop_asks(scope: &TurnScope, opts: &TurnOpts) -> bool {
     )
 }
 
+/// The line a Stop the person pressed leaves in the chat (meta kind `stopped_by_person`).
+pub const STOPPED_BY_PERSON: &str = "Stopped. You stopped this reply.";
+
+/// A Stop the person pressed saves [`STOPPED_BY_PERSON`] only in a turn that would save a reply:
+/// not a quiet or unsaved one (kwnt's own checks, drafts, audits and decide-first views).
+fn stop_leaves_a_line(opts: &TurnOpts) -> bool {
+    !opts.quiet_failure && !opts.unsaved
+}
+
 /// Longest driver error kept in a saved `turn_failed` message, in bytes.
 const MAX_SAVED_ERROR_BYTES: usize = 600;
 
@@ -4037,6 +4046,20 @@ async fn run_kwant_turn_inner(
                 event_broadcast.send(e);
             }
             event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
+            // A Stop the person pressed leaves one line under their question, with the steps the
+            // turn took (stop-leaves-a-line, 0.9.51). They chose it: no Needs-you ask, no
+            // notification and no Retry, unlike [`super::stopped`]. A turn that saves no reply
+            // (quiet or unsaved) saves no line either.
+            if stop_leaves_a_line(&opts) {
+                let msg = NewMessage {
+                    reasoning_content: with_notices(opts.label.clone()),
+                    ..scope.message("kwant", &target_kwant.name, STOPPED_BY_PERSON.into())
+                };
+                let meta = with_failure_meta(Some(json!({"kind": "stopped_by_person"})), &opts.failure_meta);
+                if let Some(saved) = scope.save(&msg, super::activity::with_activity(meta, activity)).await {
+                    let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or_default() });
+                }
+            }
             return Err("stopped by the user".into());
         } else if let Some(text) = gave_up {
             if !opts.quiet_failure {
@@ -7729,6 +7752,20 @@ mod tests {
     /// A person-started turn's plan, as the turn makes it (see [`turn_plan`]).
     fn person_turn() -> TurnOpts {
         TurnOpts { nav_prompt: Some("(the person's message)".into()), ..Default::default() }
+    }
+
+    /// stop-leaves-a-line: a person's chat, a hand-off, a routine run or a discussion round gets the
+    /// Stopped line; a quiet or unsaved turn (kwnt's own checks and drafts) saves nothing.
+    #[test]
+    fn a_stop_leaves_a_line_only_where_a_reply_would_be_saved() {
+        assert!(stop_leaves_a_line(&person_turn()));
+        assert!(stop_leaves_a_line(&TurnOpts { delegation_id: Some("d1".into()), ..Default::default() }));
+        assert!(stop_leaves_a_line(&TurnOpts { label: Some("Routine".into()), ..Default::default() }));
+        assert!(!stop_leaves_a_line(&TurnOpts { quiet_failure: true, ..person_turn() }));
+        assert!(!stop_leaves_a_line(&TurnOpts { unsaved: true, ..person_turn() }));
+        // As kwnt's own checks set them (work_ahead, missions, decide-first)
+        assert!(!stop_leaves_a_line(&TurnOpts { unsaved: true, quiet_failure: true, purpose: Some("check".into()), ..Default::default() }));
+        assert_eq!(STOPPED_BY_PERSON, "Stopped. You stopped this reply.");
     }
 
     fn plan_of(opts: &TurnOpts, m: &Message, git_repo: bool) -> Option<DeliveryPlan> {
