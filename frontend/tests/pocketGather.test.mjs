@@ -345,6 +345,61 @@ test('People and paid: a tick on Yes rows only, host view, calls set_paid and re
   assert.equal(panel.querySelectorAll('[data-person]').length, 20);
 });
 
+test('a paid tick moves the summary, the bar and the not-paid nudges, and a failed save moves them all back', async () => {
+  const calls = [];
+  g.fetch = respond(calls);
+  const v = await card('rsvpPeople');
+  const summary = () => [...v.host.querySelectorAll('li')].find((li) => /^Paid \d+ of 14/.test(li.textContent.trim())).textContent;
+  const bar = () => v.host.querySelector('[role="progressbar"][aria-label$="paid"]');
+  assert.match(summary(), /Paid 10 of 14 · not yet: Ana, Kai, Ravi, Tom/);
+  await click(button(v, 'People and paid'));
+  const kai = v.host.querySelector('[aria-label="Kai paid"]');
+  await click(kai);
+  assert.equal(kai.getAttribute('aria-checked'), 'true');
+  assert.ok(kai.querySelector('[data-tick-box] svg'), 'the on box carries a check glyph');
+  assert.match(summary(), /Paid 11 of 14 · not yet: Ana, Ravi, Tom/);
+  assert.equal(bar().getAttribute('aria-label'), '11 of 14 paid');
+  assert.match(v.host.textContent, /7 nudges drafted: 4 said maybe, 3 not paid yet\./);
+  assert.ok(button(v, 'Nudges · 7'));
+  await click(button(v, 'Nudges · 7'));
+  const nudges = v.host.querySelector('[data-nudges]');
+  assert.equal(nudges.querySelector('[data-nudge="Kai"]'), null, 'Kai drops out of Not paid yet');
+  assert.ok(nudges.querySelector('[aria-label="Not paid yet · 3"]'));
+  // Untick fails: everything goes back to the block.
+  await click(button(v, 'People and paid'));
+  g.fetch = respond(calls, { error: 'nope', message: 'Your box is busy.' }, 500);
+  await click(v.host.querySelector('[aria-label="Kai paid"]'));
+  assert.match(summary(), /Paid 11 of 14/, 'a failed untick keeps the tick');
+  g.fetch = respond(calls);
+  await click(v.host.querySelector('[aria-label="Kai paid"]'));
+  assert.match(summary(), /Paid 10 of 14 · not yet: Ana, Kai, Ravi, Tom/, 'back to the block');
+  assert.ok(button(v, 'Nudges · 8'), "Kai's own draft comes back");
+});
+
+test('a failed tick reverts the summary too', async () => {
+  g.fetch = respond([], { error: 'nope', message: 'Your box is busy.' }, 500);
+  const v = await card('rsvpPeople');
+  await click(button(v, 'People and paid'));
+  await click(v.host.querySelector('[aria-label="Ana paid"]'));
+  assert.match(v.host.textContent, /Paid 10 of 14 · not yet: Ana, Kai, Ravi, Tom/);
+  assert.match(v.host.textContent, /8 nudges drafted/);
+});
+
+test('phone grid: Stop shares a row when the half buttons are odd, its own row when even; the vote face drops the repeated close', async () => {
+  const stopCls = async (name) => {
+    const v = await card(name);
+    const c = v.host.querySelector('[data-action="stop"]').className;
+    v.done();
+    return c;
+  };
+  assert.match(await stopCls('rsvpOpen'), /(^| )col-span-1( |$)/);
+  assert.match(await stopCls('signupOpen'), /(^| )col-span-2( |$)/);
+  const v = await card('voteOpen');
+  assert.doesNotMatch(v.host.textContent, /Closes Wed/);
+  const closed = await card('voteClosed');
+  assert.match(button(closed, 'Delete ballots now').className, /col-span-2/);
+});
+
 // ---------------------------------------------------------------------------------------------------
 // Nudges
 

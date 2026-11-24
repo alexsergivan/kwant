@@ -6,7 +6,7 @@
 // on a closed vote's winner. A tie, not-paid and every nudge stay plain; moving up is ink New. Nothing sends:
 // a nudge is Copy or the phone's Share sheet, and a row says "Copied <time>", never "Sent".
 
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   ArrowUp,
@@ -803,15 +803,38 @@ const GatherCompactJoin: React.FC<{ g: GatherInfo; name: string }> = ({ g, name 
 
 const SHOW_FIRST = 9;
 
-export const PeoplePaidPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = ({ block, g }) => {
-  const [paid, setPaid] = useState<Record<string, boolean>>({});
+export type PaidOverrides = Record<string, boolean>;
+
+/**
+ * The card's view with the host's own paid ticks laid over the block (fix 1, card-design-check.md): the people
+ * rows, "Paid n of m · not yet", the bar, and the not-paid nudges all read from this, so one tick moves all of
+ * them and a revert moves them back. Only a change against the block counts; Yes rows only.
+ */
+export function withPaid(g: GatherInfo, over: PaidOverrides): GatherInfo {
+  const changed = g.people.filter((p) => p.answer === 'yes' && p.paid !== null && p.id in over && over[p.id] !== p.paid);
+  if (!changed.length || !g.rsvp) return g;
+  const nowPaid = changed.filter((p) => over[p.id]);
+  const nowUnpaid = changed.filter((p) => !over[p.id]);
+  const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+  const people = g.people.map((p) => (changed.includes(p) ? { ...p, paid: over[p.id] } : p));
+  const paid = g.rsvp.paid && {
+    of: g.rsvp.paid.of,
+    ticked: Math.max(0, Math.min(g.rsvp.paid.of, g.rsvp.paid.ticked + nowPaid.length - nowUnpaid.length)),
+    not_yet: [...g.rsvp.paid.not_yet.filter((n) => !nowPaid.some((p) => same(p.name, n))), ...nowUnpaid.filter((p) => !g.rsvp!.paid!.not_yet.some((n) => same(p.name, n))).map((p) => p.name)],
+  };
+  const nudges = g.nudges.filter((n) => n.why !== 'not_paid' || !nowPaid.some((p) => (n.player_id ? n.player_id === p.id : same(n.name, p.name))));
+  return { ...g, people, nudges, rsvp: { ...g.rsvp, paid } };
+}
+
+export const PeoplePaidPanel: React.FC<{ block: PocketBlock; g: GatherInfo; setPaid: React.Dispatch<React.SetStateAction<PaidOverrides>> }> = ({ block, g, setPaid }) => {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [all, setAll] = useState(false);
   const total = g.people.length;
   const shown = all ? g.people : g.people.slice(0, SHOW_FIRST);
+  // g already carries the overrides (withPaid), so p.paid is what the host sees now.
   const tick = async (p: GatherPerson) => {
-    const was = paid[p.id] ?? p.paid === true;
+    const was = p.paid === true;
     setPaid((m) => ({ ...m, [p.id]: !was }));
     setBusy(p.id);
     setError(null);
@@ -844,7 +867,7 @@ export const PeoplePaidPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = 
       ) : (
         <ul>
           {shown.map((p) => {
-            const on = paid[p.id] ?? p.paid === true;
+            const on = p.paid === true;
             return (
               <li key={p.id} className="flex min-h-[56px] items-center gap-3 border-b border-hairline px-3.5 last:border-b-0 sm:min-h-[48px]" data-person={p.name}>
                 <GuestCreature avatar={p.avatar} size={24} />
@@ -868,8 +891,8 @@ export const PeoplePaidPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = 
                     }`}
                     data-paid={on}
                   >
-                    <span className={`grid h-4 w-4 place-items-center rounded border-2 ${on ? 'border-transparent bg-[color:var(--kw-ok)] text-surface-rail' : 'border-zinc-500'}`} aria-hidden="true">
-                      {on && <Check size={11} strokeWidth={3} />}
+                    <span className={`grid h-[18px] w-[18px] shrink-0 place-items-center rounded border-2 ${on ? 'border-transparent bg-[color:var(--kw-ok)]' : 'border-zinc-500'}`} aria-hidden="true" data-tick-box>
+                      {on && <Check size={12} strokeWidth={3.5} style={{ color: 'var(--kw-surface-rail)' }} />}
                     </span>
                     {on ? 'Paid' : 'Not yet'}
                   </button>
@@ -991,11 +1014,11 @@ export const NudgesPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = ({ b
           const w = words(why);
           return (
             <div key={why} role="group" aria-label={`${w.title} · ${shownRows.length}`}>
-              <div className="flex justify-between gap-2 border-b border-hairline bg-sky-500/[0.06] px-3.5 py-2 text-[13px] font-bold text-zinc-300 sm:text-2xs">
-                <span>
+              <div className="flex flex-col items-start gap-0.5 border-b border-hairline bg-sky-500/[0.06] px-3.5 py-2 text-[13px] font-bold text-zinc-300 sm:flex-row sm:items-baseline sm:justify-between sm:gap-2 sm:text-2xs">
+                <span className="whitespace-nowrap">
                   {w.title} · {num(shownRows.length)}
                 </span>
-                <span className="font-medium text-zinc-400">{w.aside}</span>
+                <span className="text-[13px] font-medium text-zinc-400 sm:text-2xs">{w.aside}</span>
               </div>
               <ul>
                 {shownRows.map((n) => {
@@ -1223,7 +1246,6 @@ const VoteRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
             </Row>
           )}
           <Row icon={<EyeOff size={15} aria-hidden="true" />}>You see who voted, never what they picked.{g.show_names ? ' Members see the live count after they vote.' : ''}</Row>
-          {g.closes_at && <Row icon={<Clock size={15} aria-hidden="true" />}>Closes {g.closes_at}.</Row>}
           <KeptRow g={g} />
         </ul>
       </>
@@ -1252,9 +1274,9 @@ const VoteRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
     <>
       <ul className="flex flex-col gap-2">
         {winner ? (
-          <li className="flex flex-wrap items-center gap-2 text-[15px] leading-[22px] text-ok sm:text-[13px] sm:leading-5" data-winner>
-            <Trophy size={15} className="shrink-0" aria-hidden="true" />
-            <span className="min-w-0">
+          <li className="flex items-start gap-2 text-[15px] leading-[22px] text-ok sm:text-[13px] sm:leading-5" data-winner>
+            <Trophy size={15} className={ICON} aria-hidden="true" />
+            <span className="min-w-0 flex-1">
               <strong className="font-semibold">{winner}</strong> {v.outcome === 'picked' ? 'is your pick after a tie at' : 'wins with'}{' '}
               <strong className="font-semibold tabular-nums">
                 {won} of {total}
@@ -1262,9 +1284,11 @@ const VoteRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
               {v.outcome !== 'picked' && v.kind === 'ranked' && v.rounds.length > 1 ? ' in the final round' : ''}
             </span>
             {earnedPicked(g) && (
-              <Sticker tone="holo" size="sm" ariaLabel={`Picked: ${winner} won the count`}>
-                Picked
-              </Sticker>
+              <span className="shrink-0 self-start">
+                <Sticker tone="holo" size="sm" ariaLabel={`Picked: ${winner} won the count`}>
+                  Picked
+                </Sticker>
+              </span>
             )}
           </li>
         ) : (
@@ -1322,7 +1346,7 @@ const RsvpResult: React.FC<{ g: GatherInfo }> = ({ g }) => {
             </thead>
             <tbody>
               {yes.map((p) => (
-                <tr key={p.id} className="last:[&>td]:border-b-0">
+                <tr key={p.id} className="[&:last-child>td]:border-b-0">
                   <td className={TD}>
                     <span className="flex items-center gap-2">
                       <GuestCreature avatar={p.avatar} size={20} />
@@ -1376,7 +1400,7 @@ const SignupResult: React.FC<{ g: GatherInfo }> = ({ g }) => (
         </thead>
         <tbody>
           {g.slots.map((s) => (
-            <tr key={s.id} className="last:[&>td]:border-b-0">
+            <tr key={s.id} className="[&:last-child>td]:border-b-0">
               <td className={`${TD} font-semibold text-zinc-100`}>{s.name}</td>
               <td className={TD}>{s.who.length ? s.who.map((w) => (w.note ? `${w.name} (${w.note})` : w.name)).join(', ') : <span className="text-zinc-500">nobody</span>}</td>
               <td className={`${TD} whitespace-nowrap tabular-nums`}>
@@ -1512,16 +1536,16 @@ const GatherActions: React.FC<{
   onRevote: () => void;
   busy: boolean;
 }> = ({ block, g, panel, setPanel, ask, onConfirm, onPick, onRevote, busy }) => {
-  const stopCls = `${STOP} col-span-2 justify-self-center sm:ml-auto`;
   const toggle = (p: Exclude<Panel, null>) => setPanel(panel === p ? null : p);
-  const stop = (
-    <button type="button" onClick={() => onConfirm('stop')} className={stopCls} data-action="stop">
+  // Phone grid: Stop takes the free column when the half-width buttons before it are odd in number, else its own row.
+  const stop = (halves: number) => (
+    <button type="button" onClick={() => onConfirm('stop')} className={`${STOP} ${halves % 2 ? 'col-span-1' : 'col-span-2 justify-self-center'} sm:ml-auto`} data-action="stop">
       <Square size={13} aria-hidden="true" />
       Stop
     </button>
   );
-  const later = (icon: React.ReactNode, why: string, label: string) => (
-    <LaterButton icon={icon} why={why} half>
+  const later = (icon: React.ReactNode, why: string, label: string, full = false) => (
+    <LaterButton icon={icon} why={why} half className={full ? FULL : ''}>
       {label}
     </LaterButton>
   );
@@ -1550,7 +1574,7 @@ const GatherActions: React.FC<{
             </button>
           ) : null}
           <CopyButton text={resultLine(g)} label="Share the result" done="Result copied" icon={<Share2 size={14} aria-hidden="true" />} action="share-result" />
-          {later(<Trash2 size={14} aria-hidden="true" />, GATHER_LATER.deleteBallots, 'Delete ballots now')}
+          {later(<Trash2 size={14} aria-hidden="true" />, GATHER_LATER.deleteBallots, 'Delete ballots now', true)}
         </div>
       );
     if (g.face === 'rsvp') {
@@ -1559,7 +1583,7 @@ const GatherActions: React.FC<{
         <div className={GRID}>
           <CopyButton primary text={restaurantList(g)} label="Copy list for the restaurant" done="List copied" action="copy-list" />
           {unpaid && <CopyButton text={unpaid.text} label={`Nudge ${unpaid.name}`} done="Copied, not sent" icon={<BellRing size={14} aria-hidden="true" />} action="nudge-one" onCopied={() => void pocketApi.copied(block.code, unpaid.name).catch(() => undefined)} />}
-          {later(<Trash2 size={14} aria-hidden="true" />, GATHER_LATER.deleteAnswers, 'Delete answers now')}
+          {later(<Trash2 size={14} aria-hidden="true" />, GATHER_LATER.deleteAnswers, 'Delete answers now', true)}
         </div>
       );
     }
@@ -1586,7 +1610,7 @@ const GatherActions: React.FC<{
           People and paid
         </button>
         {later(<Pencil size={14} aria-hidden="true" />, GATHER_LATER.edit, 'Edit')}
-        {stop}
+        {stop(3)}
       </div>
     );
   if (g.face === 'signup')
@@ -1602,7 +1626,7 @@ const GatherActions: React.FC<{
         ) : (
           later(<Users size={14} aria-hidden="true" />, GATHER_LATER.signupPeople, 'People')
         )}
-        {stop}
+        {stop(2)}
       </div>
     );
   return (
@@ -1619,7 +1643,7 @@ const GatherActions: React.FC<{
           Nudges · {num(g.nudges.length)}
         </button>
       )}
-      {stop}
+      {stop(g.nudges.length > 0 ? 3 : 2)}
     </div>
   );
 };
@@ -1628,7 +1652,8 @@ const GatherActions: React.FC<{
 // The card
 
 export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void }> = ({ block, ask }) => {
-  const g = block.gather!;
+  const [paid, setPaid] = useState<PaidOverrides>({});
+  const g = useMemo(() => withPaid(block.gather!, paid), [block.gather, paid]);
   const [panel, setPanel] = useState<Panel>(null);
   const [confirm, setConfirm] = useState<ConfirmKind | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1696,7 +1721,7 @@ export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void
         {g.face === 'rsvp' && (results ? <RsvpResult g={g} /> : <RsvpRows g={g} nudges={g.nudges.length} />)}
         {g.face === 'signup' && (results ? <SignupResult g={g} /> : <SignupRows g={g} />)}
         {g.face === 'vote' && <VoteRows g={g} />}
-        {showsPanel === 'people' && <PeoplePaidPanel block={block} g={g} />}
+        {showsPanel === 'people' && <PeoplePaidPanel block={block} g={g} setPaid={setPaid} />}
         {showsPanel === 'nudges' && <NudgesPanel block={block} g={g} />}
         {join}
         {done ? (
