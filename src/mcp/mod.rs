@@ -545,6 +545,9 @@ Don't retry it now. Finish what you can without it, then end your turn saying wh
 /// unanswered), so the model's final reply doesn't claim what didn't happen (26b).
 pub const NO_FALSE_CLAIMS_TEXT: &str =
     "A step failed or wasn't approved. Don't say it worked or that you checked something you didn't.";
+/// unanswered-question-not-ok: the detail of a routine turn's question (`ask_user`) nobody
+/// answered before the bot's wait ended. The question stays open in Needs you.
+pub const QUESTION_STEP_DETAIL: &str = "Nobody answered before the bot had to stop, so it didn't finish";
 /// The step detail of a call nobody answered: the wait is [`APPROVAL_TIMEOUT_SECS`].
 pub const UNANSWERED_STEP_DETAIL: &str = "Waited 5 minutes for your answer; nothing ran";
 /// The step detail of a call the person said no to on its card (28b): the tool step ends

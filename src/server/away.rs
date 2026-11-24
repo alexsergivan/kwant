@@ -235,6 +235,8 @@ pub(super) fn item(row: AwayRow) -> Value {
             "channel_id": row.channel_id,
             "direct_kwant_id": row.direct_kwant_id,
         },
+        // routine-run-again-id: a routine run's routine (Run again posts to it), else null
+        "routine_id": row.routine_id,
     });
     if row.kind == "approval" {
         // The live `approval_required` event's fields, so an approval opened from here renders
@@ -729,6 +731,7 @@ mod tests {
             channel_id: None,
             direct_kwant_id: None,
             choices: None,
+            routine_id: None,
             fallback: None,
         };
         let limit = item(row("You've hit your session limit · resets 3am (Europe/Berlin)"));

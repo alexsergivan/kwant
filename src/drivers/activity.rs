@@ -412,6 +412,21 @@ impl ActivityLog {
         Some(self.end(i, "ok"))
     }
 
+    /// unanswered-question-not-ok: a question of this turn (`ask_user`, id `ref_id`) that nobody
+    /// answered before the bot's wait ended. One step of kind "question", already `unanswered`,
+    /// with [`QUESTION_TOOL`] as its tool, so a routine run that reads it isn't "ok". Returns the
+    /// steps to broadcast: the thinking step it ended, if any, then the new one.
+    pub fn question_unanswered(&mut self, ref_id: &str, question: &str) -> Vec<Step> {
+        let mut changed: Vec<Step> = self.close_thinking().into_iter().collect();
+        if let Some(i) = self.push("question", "unanswered", format!("Asked you: {question}")) {
+            self.steps[i].ref_id = Some(ref_id.to_string());
+            self.steps[i].tool = Some(QUESTION_TOOL.to_string());
+            self.steps[i].detail = Some(crate::mcp::QUESTION_STEP_DETAIL.to_string());
+            changed.push(self.end(i, "unanswered"));
+        }
+        changed
+    }
+
     /// A step that waits on the person: an approval card (`kind` "approval") or a human step.
     /// Returns the steps to broadcast: the thinking step it ended, if any, then the new one.
     pub fn wait(&mut self, kind: &'static str, ref_id: &str, title: &str, tool: Option<&str>) -> Vec<Step> {
@@ -774,6 +789,9 @@ fn grok_gateway_call<'a>(tool: &'a str, args: Option<&'a Value>) -> Option<(&'a 
 pub fn opens_page(tool: &str) -> bool {
     PAGE_OPEN_TOOLS.contains(&tool.rsplit("__").next().unwrap_or(tool))
 }
+
+/// The tool of a question step ([`ActivityLog::question_unanswered`]).
+pub const QUESTION_TOOL: &str = "ask_user";
 
 /// The page title in the text a page-opening browser tool answered with: the `title` of the page
 /// JSON it returns (kwnt's `browser_open`), or of the page after a note ("…\n\nThe page now:\n{…}").

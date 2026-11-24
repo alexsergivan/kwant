@@ -25,6 +25,9 @@ export interface AwayItem {
   link: AwayLink;
   /** Questions only. */
   choices?: string[];
+  /** routine-run-again-id, routine_run items only: the run's routine (`POST /api/routines/:id/run`). Null on other
+   * kinds; older servers leave it out. */
+  routine_id?: string | null;
   /** Approvals only, from servers that send them: the tool and the card's details. */
   tool_name?: string;
   details?: Record<string, unknown>;

@@ -210,7 +210,7 @@ async fn main_port_routes_never_take_a_pocket_key() {
     let (_, guest_key) = joined(&t, &code, "Mia").await;
     let routes = main_routes();
     assert!(routes.len() > 100, "found only {} routes", routes.len());
-    for p in ["/api/pockets", "/api/pockets/x", "/api/pockets/x/end", "/api/pockets/x/host-key", "/api/pockets/x/link", "/api/health"] {
+    for p in ["/api/pockets", "/api/pockets/x", "/api/pockets/x/end", "/api/pockets/x/host-key", "/api/pockets/x/link", "/api/pockets/x/tunnel", "/api/health"] {
         assert!(routes.iter().any(|r| r == p), "the walk misses {p}");
     }
     let creds: Vec<(&str, Req)> = vec![

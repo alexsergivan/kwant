@@ -335,13 +335,27 @@ pub async fn tool_ask(state: &AppState, scope: &SelfScope, args: &Value) -> (Str
             "The user dismissed the question without answering. Carry on with your best judgment, or stop if you can't.".into(),
             false,
         ),
-        None => (
-            "The user hasn't answered yet. Don't ask again: end your turn now with a short note on what you're waiting for. \
-            When they answer, you'll get a new turn with their answer."
-                .into(),
-            false,
-        ),
+        None => {
+            // unanswered-question-not-ok: a routine's run isn't "ok" while its question waits. The
+            // bot is told exactly what it was told before; only the turn's saved steps say so
+            if let Some(turn) = scope.turn_id.as_deref().filter(|t| routine_turn(state, t)) {
+                super::activity::question_unanswered(turn, &q.id, &q.question);
+            }
+            (
+                "The user hasn't answered yet. Don't ask again: end your turn now with a short note on what you're waiting for. \
+                When they answer, you'll get a new turn with their answer."
+                    .into(),
+                false,
+            )
+        }
     }
+}
+
+/// Whether turn `turn_id` is a routine's run (its source, noted before it started).
+fn routine_turn(state: &AppState, turn_id: &str) -> bool {
+    state
+        .turns
+        .board(|b| b.signals.get(turn_id).and_then(|s| s.source.as_ref()).is_some_and(|s| s.kind == "routine"))
 }
 
 // Routes

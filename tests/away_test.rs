@@ -506,3 +506,65 @@ async fn live_approvals_link_to_the_chat_their_turn_runs_in() {
     assert_eq!(bash["details"]["kwant_id"], lead.id);
     assert_eq!(bash["link"], json!({"thread_id": null, "channel_id": chan.id, "direct_kwant_id": null}));
 }
+
+/// routine-run-again-id: every routine run's item names its routine (`routine_id`), so a failed
+/// one can offer Run again (`POST /api/routines/:id/run`); every other kind sends `routine_id: null`.
+#[tokio::test]
+async fn routine_run_items_carry_their_routine_id() {
+    let (app, state, _tmp) = setup().await;
+    let kwants = state.db.list_kwants(&kwnt::db::spaces::SpaceId::default_space()).await.unwrap();
+    let (lead, spec) = (kwants[0].clone(), kwants[1].clone());
+    let new_routine = |name: &str| NewRoutine {
+        kwant_id: lead.id.clone(),
+        channel_id: None,
+        name: name.into(),
+        instructions: "Summarise".into(),
+        schedule: json!({"type": "interval", "every_minutes": 60}).to_string(),
+        enabled: false,
+        next_run_at: None,
+        thread_id: None,
+        context_message_id: None,
+        ..Default::default()
+    };
+    let briefing = state.db.create_routine(&new_routine("Morning briefing")).await.unwrap();
+    let report = state.db.create_routine(&new_routine("Weekly report")).await.unwrap();
+    let ok_run = state.db.start_routine_run(&briefing.id, "manual", "running", None).await.unwrap();
+    let msg = state.db.insert_message(&reply(&lead.id, "3 new orders.")).await.unwrap();
+    state.db.finish_routine_run(&ok_run.id, "ok", None, Some(&msg.id)).await.unwrap();
+    let err_run = state.db.start_routine_run(&report.id, "schedule", "error", Some("the provider timed out")).await.unwrap();
+
+    // Other kinds: a question, a pending approval, a failed hand-off
+    let place = QuestionPlace { kwant_id: spec.id.clone(), ..Default::default() };
+    let q = state.db.create_question(&place, "Ship tonight?", &["Yes".into()]).await.unwrap();
+    let ticket = state
+        .db
+        .save_approval(&NewApproval {
+            turn_id: "turn-gone".into(),
+            kwant_id: lead.id.clone(),
+            tool_name: "mcp__mail__send".into(),
+            parameters: json!({"server": "mail", "tool": "send", "arguments": {}}),
+        })
+        .await
+        .unwrap();
+    let _rx = state
+        .broker
+        .request_approval(ApprovalRequest { id: ticket.id.clone(), kwant_id: lead.id.clone(), tool_name: ticket.tool_name.clone(), details: json!({}) })
+        .await;
+    let (failed, _) = delegation(&state, &lead.id, &spec.id, "Deploy", "failed", Some("401 from the host")).await;
+
+    let null_routine = |i: &Value| assert_eq!(i.as_object().unwrap().get("routine_id"), Some(&Value::Null), "{i}");
+    let v = get(&app, "/api/away").await;
+    assert_eq!(find(&v["failed"], &err_run.id)["routine_id"], report.id.as_str());
+    assert_eq!(find(&v["finished"], &ok_run.id)["routine_id"], briefing.id.as_str());
+    null_routine(find(&v["waiting"], &q.id));
+    null_routine(find(&v["waiting"], &ticket.id));
+    null_routine(find(&v["failed"], &failed));
+
+    // The Inbox carries the same field on its away items
+    let v = get(&app, "/api/inbox").await;
+    assert_eq!(find(&v["items"], &err_run.id)["routine_id"], report.id.as_str());
+    assert_eq!(find(&v["items"], &ok_run.id)["routine_id"], briefing.id.as_str());
+    null_routine(find(&v["items"], &ticket.id));
+    null_routine(find(&v["items"], &q.id));
+    null_routine(find(&v["items"], &failed));
+}
