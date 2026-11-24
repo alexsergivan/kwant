@@ -323,9 +323,11 @@ const WorkingNow: React.FC<{ rows: AttentionRow<Kwant>[]; row: (a: AttentionRow<
   const showFirst = () => {
     // Only the bots the block doesn't show (Mira's design check 1)
     const ids = new Set(rows.slice(WORKING_MAX).map((a) => a.kwant.id));
-    const first = [...(box.current?.closest('aside') ?? document).querySelectorAll<HTMLElement>('[data-bot-row]')].find((el) => ids.has(el.dataset.botRow ?? ''));
-    if (!first) return;
-    first.scrollIntoView?.({ block: 'center', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    const row = [...(box.current?.closest('aside') ?? document).querySelectorAll<HTMLElement>('[data-bot-row]')].find((el) => ids.has(el.dataset.botRow ?? ''));
+    // The row itself just holds the data hooks; its one real button is what gets focused (Finding 1).
+    const first = row?.querySelector<HTMLElement>('button');
+    if (!row || !first) return;
+    row.scrollIntoView?.({ block: 'center', behavior: window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
     // Focus from code shows no focus-visible ring after a mouse click: a ring that stays until the row loses focus
     first.dataset.arrived = '';
     first.addEventListener('blur', () => delete first.dataset.arrived, { once: true });
@@ -448,7 +450,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
     if (memberMenu || !r) return;
     memberReturn.current = null;
     const box = asideRef.current;
-    (box?.querySelector<HTMLElement>(`[data-member-opener="${r.team}:${r.kwant}"]`) ?? box?.querySelector<HTMLElement>(`[data-bot-row="${r.kwant}"]`))?.focus();
+    (box?.querySelector<HTMLElement>(`[data-member-opener="${r.team}:${r.kwant}"]`) ?? box?.querySelector<HTMLElement>(`[data-bot-row="${r.kwant}"] button`))?.focus();
   }, [memberMenu]);
   const closeSwitcher = useCallback(() => setSwitcherOpen(false), []);
   const showChats = section !== 'bots';
@@ -639,33 +641,39 @@ export const Sidebar: React.FC<SidebarProps> = ({
     // while the browser it shows holds an open step: one browser per chat, so every row on it hides (Mira 3)
     const botWatch = browsingBots[k.id] ?? browsingOwners[k.id];
     const botBrowsing = onWatchBrowser && !warn && !asked && botWatch && !browserNeedsYou?.has(botWatch.owner) ? botWatch : undefined;
+    // One real button opens the row; Edit, Remove, the globe and the phone's "more" are its siblings, not
+    // its descendants (Finding 1: a button can't nest another interactive element). The row div keeps the
+    // query hooks ("here", rank, the pinned/bot id) and its name and status as ordinary content; the
+    // button carries the accessible name and the focus ring, since those belong on what's actually focused.
+    const rowLabel = [k.name, busyLine ?? doneLine ?? k.title].filter(Boolean).join(', ');
+    const rowDescribedBy = [tipId, pin?.alsoIn ? `pin-also-${k.id}` : null].filter(Boolean).join(' ') || undefined;
     return (
       <div
         key={`${pin ? 'pin' : chat ? 'chat' : team?.id ?? 'none'}:${k.id}`}
-        role="button"
-        tabIndex={0}
-        onClick={open}
-        // Only the row's own Enter: Enter on its ✕ or Edit is for that button, not for opening the chat.
-        onKeyDown={(e) => {
-          if (tipId && e.key === 'Escape') hideRowTip();
-          if (e.key === 'Enter' && e.target === e.currentTarget) open?.();
-        }}
+        onKeyDown={tipId ? (e) => e.key === 'Escape' && hideRowTip() : undefined}
         onMouseEnter={tipId ? (e) => showRowTip(k.id, e.currentTarget, 300) : undefined}
         onMouseLeave={tipId ? hideRowTip : undefined}
-        onFocus={tipId ? (e) => e.target === e.currentTarget && e.currentTarget.matches?.(':focus-visible') && showRowTip(k.id, e.currentTarget, 0) : undefined}
-        onBlur={tipId ? hideRowTip : undefined}
         // The pinned copy is not the bot's row: focus returns to the one in its team
         data-bot-row={pin ? undefined : k.id}
         data-pin-row={pin ? k.id : undefined}
         // The pinned copy lights with it but isn't "here"; the bot's own row is
         aria-current={active && !pin ? 'page' : undefined}
         data-rank={att?.rank}
-        aria-describedby={[tipId, pin?.alsoIn ? `pin-also-${k.id}` : null].filter(Boolean).join(' ') || undefined}
+        aria-describedby={rowDescribedBy}
         data-chat-row={chat ? (asked ? 'needs' : 'bot') : undefined}
-        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 data-[arrived]:outline data-[arrived]:outline-2 data-[arrived]:outline-sky-400 ${
+        className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left transition-colors ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
       >
+        <button
+          type="button"
+          onClick={open}
+          onFocus={tipId ? (e) => e.currentTarget.matches?.(':focus-visible') && showRowTip(k.id, e.currentTarget, 0) : undefined}
+          onBlur={tipId ? hideRowTip : undefined}
+          aria-label={rowLabel}
+          aria-describedby={rowDescribedBy}
+          className="absolute inset-0 rounded-xl cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 data-[arrived]:outline data-[arrived]:outline-2 data-[arrived]:outline-sky-400"
+        />
         <span className="shrink-0" title={status === 'cant_run' ? pinnedTip ?? "Can't run yet: no account works here" : statusText(k.name, status)}>
           <ModernAvatar role={k.avatar_sprite} name={k.name} size={chat ? 32 : 28} status={status} kwantId={k.id} />
         </span>
@@ -722,7 +730,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       e.stopPropagation();
                       onEditKwant(k);
                     }}
-                    className="opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all"
+                    className="opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-sky-300 hover:bg-sky-500/10 transition-all motion-reduce:transition-none"
                     title={`Edit or delete ${k.name}`}
                     aria-label={`Edit or delete ${k.name}`}
                   >
@@ -739,7 +747,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                       // Asks first, like the phone sheet: a stray click can't take a bot out of its team.
                       setMemberMenu({ team: team!, kwant: k, confirmRemove: true });
                     }}
-                    className="opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition-all"
+                    className="opacity-0 group-hover/fleet:opacity-100 group-focus-within/fleet:opacity-100 focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 p-0.5 rounded text-zinc-500 hover:text-rose-300 hover:bg-rose-500/10 transition-all motion-reduce:transition-none"
                     title={`Remove ${k.name} from @${team!.name}`}
                     aria-label={`Remove ${k.name} from @${team!.name}`}
                   >
@@ -808,7 +816,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             aria-haspopup="dialog"
             aria-label={`More for ${k.name}`}
             title={`More for ${k.name}`}
-            className="-mr-1.5 -my-1 w-11 h-11 shrink-0 inline-flex items-center justify-center rounded-lg text-[#a39dcc] hover:text-zinc-100 hover:bg-white/[0.06] active:bg-white/[0.08] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+            className="relative -mr-1.5 -my-1 w-11 h-11 shrink-0 inline-flex items-center justify-center rounded-lg text-[#a39dcc] hover:text-zinc-100 hover:bg-white/[0.06] active:bg-white/[0.08] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
           >
             <MoreHorizontal size={16} aria-hidden="true" />
           </button>
@@ -854,17 +862,21 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const expanded = withMembers && !collapsedTeams.has(t.id);
     return (
       <div
-        role="button"
-        tabIndex={0}
-        onClick={() => onSelectTeam(t)}
-        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && onSelectTeam(t)}
         data-team-row={t.id}
         aria-current={active ? 'page' : undefined}
         title={`Open the @${teamNamed(t.name)} chat`}
-        className={`w-full flex items-center justify-between px-1.5 py-1.5 rounded-lg text-body font-medium transition-colors text-left group cursor-pointer ${
+        className={`relative w-full flex items-center justify-between px-1.5 py-1.5 rounded-lg text-body font-medium transition-colors text-left group ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
       >
+        {/* One real button opens the row; the expand toggle, Team settings and the globe are its
+            siblings, not its descendants (Finding 1: a button can't nest another interactive element). */}
+        <button
+          type="button"
+          onClick={() => onSelectTeam(t)}
+          aria-label={`Open the @${teamNamed(t.name)} chat`}
+          className="absolute inset-0 rounded-lg cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
+        />
         <div className="flex items-center gap-1.5 min-w-0">
           {withMembers && (
             <button
@@ -875,7 +887,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }}
               aria-expanded={expanded}
               aria-label={expanded ? `Hide @${t.name} members` : `Show @${t.name} members`}
-              className="p-0.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700/60"
+              className="relative p-1.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700/60"
             >
               <ChevronDown size={12} className={`transition-transform duration-150 ${expanded ? '' : '-rotate-90'}`} />
             </button>
@@ -898,7 +910,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 playSfx('click');
                 onManageTeam(t);
               }}
-              className="opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100 p-1 hover:text-zinc-100 hover:bg-zinc-700/60 rounded transition-all text-zinc-400"
+              className="relative opacity-0 group-hover:opacity-100 focus-visible:opacity-100 max-md:opacity-100 p-1 hover:text-zinc-100 hover:bg-zinc-700/60 rounded transition-all motion-reduce:transition-none text-zinc-400"
               title={`Team settings for @${t.name}`}
               aria-label={`Team settings for @${t.name}`}
             >
@@ -985,7 +997,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         type="button"
         onClick={onClick}
         aria-label={label}
-        className="shrink-0 whitespace-nowrap flex items-center gap-1 text-2xs font-medium text-sky-300 hover:text-sky-200 hover:bg-sky-500/10 px-2 py-0.5 rounded-full border border-sky-400/25 transition-all normal-case tracking-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+        className="shrink-0 whitespace-nowrap flex items-center gap-1 text-2xs font-medium text-sky-300 hover:text-sky-200 hover:bg-sky-500/10 px-2 py-0.5 rounded-full border border-sky-400/25 transition-all motion-reduce:transition-none normal-case tracking-normal focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
         title={title}
       >
         <Plus size={11} aria-hidden="true" />

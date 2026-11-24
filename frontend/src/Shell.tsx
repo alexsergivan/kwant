@@ -298,6 +298,23 @@ export const App: React.FC = () => {
 
   return (
     <div className="h-[var(--kwnt-app-height,100dvh)] w-screen flex flex-col bg-zinc-950 text-zinc-100 overflow-hidden font-sans pt-[env(safe-area-inset-top)] pl-[env(safe-area-inset-left)] pr-[env(safe-area-inset-right)]">
+      <a
+        href="#main-pane"
+        data-skip-link
+        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-lg focus:bg-sky-500 focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-200"
+        onClick={(e) => {
+          e.preventDefault();
+          // A waiting card (an approval or question) wins over the plain conversation pane: it's
+          // what the skip link is for most of the time (Ada: Shift+Tab from the composer already
+          // reaches it, so this is just a fast way there from the top).
+          const target =
+            document.querySelector<HTMLElement>('[data-needs-you-strip]') ?? document.querySelector<HTMLElement>('[data-main-pane]');
+          target?.focus({ preventScroll: true });
+          target?.scrollIntoView?.({ block: 'start' });
+        }}
+      >
+        Skip to conversation
+      </a>
       <AppUpdateBanner />
       <div className="flex-1 min-h-0 flex">
         <SpaceRail spaces={spaces} currentId={current.id} onSwitch={switchTo} onCreate={openCreate} onOpenAppSettings={() => requestView({ kind: 'settings', scope: 'app' })} />

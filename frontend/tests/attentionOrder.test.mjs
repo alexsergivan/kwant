@@ -101,9 +101,9 @@ test('desktop: pinned "Needs you · 3" (asks only) above Channels, copies with "
   const html = d.body.innerHTML;
   assert.ok(html.indexOf('data-needs-attention') < html.indexOf('data-chats-section="channels"'));
   assert.equal(d.querySelectorAll('[data-team-group] [data-bot-row]').length, kwants.length);
-  // Copies are real buttons that point at their team; the pinned copy carries no data-bot-row
+  // Copies hold one real button that points at their team; the pinned copy carries no data-bot-row
   for (const p of pins) {
-    assert.equal(p.getAttribute('role'), 'button');
+    assert.ok(p.querySelector('button'));
     assert.equal(p.hasAttribute('data-bot-row'), false);
     // 22i: described by its tooltip (the whole ask) and by where else it is listed
     const also = p.getAttribute('aria-describedby').split(' ').find((id) => id.startsWith('pin-also-'));
