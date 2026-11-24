@@ -12,6 +12,7 @@
 //! each of whom then draws its own view from the snapshot.
 
 pub mod address;
+pub mod gather;
 pub mod guest;
 pub mod host_api;
 pub mod keys;

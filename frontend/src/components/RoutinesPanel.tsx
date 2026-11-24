@@ -59,7 +59,9 @@ const MONTH_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 /** Which routine to show when Space settings opens from a card, and why. */
 export interface RoutineFocus {
   id: string;
-  mode: 'edit' | 'pause';
+  /** `run` (routine-run-again): a failed run's toast; the row comes into view with its History open. */
+  /** `history` (routine-row-opens-history): a chat row's History; the same, focusing History, never Run now. */
+  mode: 'edit' | 'pause' | 'run' | 'history';
   /** Changes each time a card asks, so the same routine can be opened twice. */
   nonce: number;
 }
@@ -74,14 +76,22 @@ const TONE: Record<RunTone, string> = {
   needs_you: 'bg-amber-500/10 text-amber-300 border-amber-500/20',
   // 28f: the person's own no is grey, as 28a's "You said no" mark in the chat.
   said_no: 'bg-zinc-700/30 text-zinc-300 border-zinc-500/40',
+  // routine-answered-later: the person answered the run's question after it ended; calm, like "You said no".
+  answered: 'bg-zinc-700/30 text-zinc-300 border-zinc-500/40',
 };
 
 /**
  * 31f: `inHistory` is a History row's badge. While that run is going the card's header badge already says "Running",
  * so the row keeps the box and spinner and says the word to screen readers only. Every other tone keeps its word.
  */
-const StatusBadge: React.FC<{ status: string; error?: string | null; wait?: RunWait | null; inHistory?: boolean }> = ({ status, error, wait, inHistory = false }) => {
-  const st = runRowState({ status, error }, wait);
+const StatusBadge: React.FC<{ status: string; error?: string | null; answeredLater?: boolean; wait?: RunWait | null; inHistory?: boolean }> = ({
+  status,
+  error,
+  answeredLater,
+  wait,
+  inHistory = false,
+}) => {
+  const st = runRowState({ status, error, answered_later: answeredLater }, wait);
   const quiet = inHistory && st.tone === 'running';
   return (
     <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${TONE[st.tone]}`} data-run-badge={st.tone}>
@@ -483,7 +493,7 @@ export const RunRow: React.FC<{
   const link = 'kw-focus kw-hit inline-flex items-center gap-0.5 rounded font-semibold text-info hover:text-sky-200';
   return (
     <li className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[11px] text-zinc-400" data-run-row={r.id} data-run-state={st.tone}>
-      <StatusBadge status={r.status} error={r.error} wait={wait} inHistory />
+      <StatusBadge status={r.status} error={r.error} answeredLater={r.answered_later} wait={wait} inHistory />
       <span>{formatWhen(r.started_at)}</span>
       <span className="text-zinc-400">{runTriggerLabel(r.trigger)}</span>
       {/* Mira re-check 6: on a phone the links always sit on their own line under the badge. */}
@@ -551,6 +561,8 @@ const RunHistory: React.FC<{
 
 const NO_WAITS: Record<string, RunWait> = {};
 
+const motionOk = () => typeof window !== 'undefined' && !!window.matchMedia && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
 export const RoutineRow: React.FC<{
   routine: Routine;
   kwantName?: string;
@@ -558,6 +570,10 @@ export const RoutineRow: React.FC<{
   tick: number;
   /** Opened from a card's Pause: scrolls here, focuses the switch and says how to pause. */
   focusPause?: number;
+  /** routine-run-again: opened from a failed run's toast: scrolls here, opens History and focuses Run now. */
+  focusRun?: number;
+  /** routine-row-opens-history: opened from a chat row's History: the same, but focuses the History toggle. */
+  focusHistory?: number;
   onEdit: () => void;
   /** 0.9.5 F: History rows link to each run's result message. */
   onOpenRunResult?: (t: MessageTarget) => void;
@@ -567,7 +583,7 @@ export const RoutineRow: React.FC<{
   onChanged: () => void;
   /** Tests: start in the Undo window. */
   initialPending?: boolean;
-}> = ({ routine, kwantName, placeLabel, tick, focusPause, onEdit, onOpenRunResult, waits = NO_WAITS, onOpenRunCard, onChanged, initialPending = false }) => {
+}> = ({ routine, kwantName, placeLabel, tick, focusPause, focusRun, focusHistory, onEdit, onOpenRunResult, waits = NO_WAITS, onOpenRunCard, onChanged, initialPending = false }) => {
   const rowRef = useRef<HTMLLIElement>(null);
   const switchRef = useRef<HTMLInputElement>(null);
   const [highlight, setHighlight] = useState(false);
@@ -578,6 +594,17 @@ export const RoutineRow: React.FC<{
     setHighlight(true);
   }, [focusPause]);
   const [open, setOpen] = useState(false);
+  const runRef = useRef<HTMLButtonElement>(null);
+  const historyRef = useRef<HTMLButtonElement>(null);
+  const focusAt = focusRun ?? focusHistory;
+  useEffect(() => {
+    if (!focusAt) return;
+    setOpen(true);
+    setHighlight(true);
+    rowRef.current?.scrollIntoView?.({ block: 'center', behavior: motionOk() ? 'smooth' : 'auto' });
+    // Looking back lands on History, never on a button that starts a run.
+    (focusRun ? runRef : historyRef).current?.focus({ preventScroll: true });
+  }, [focusAt]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -610,7 +637,7 @@ export const RoutineRow: React.FC<{
   // Mira's 0945 pass Minor k: paused reads as paused. The pill says plain "Paused" and the last result joins the
   // "last ran" line in the existing status words. A run still going on a paused routine keeps its live badge.
   const liveWait = liveWaitOf(waits, routine.id);
-  const lastState = routine.last_status ? runRowState({ status: routine.last_status, error: routine.last_error ?? null }, liveWait) : null;
+  const lastState = routine.last_status ? runRowState({ status: routine.last_status, error: routine.last_error ?? null, answered_later: routine.last_answered_later }, liveWait) : null;
   const pausedPill = !routine.enabled && !!lastState && lastState.tone !== 'running' && lastState.tone !== 'waiting';
   const lastWord = pausedPill && lastState ? (lastState.label === 'OK' ? 'OK' : lastState.label.charAt(0).toLowerCase() + lastState.label.slice(1)) : null;
   const lastResult = lastWord ? `, ${lastWord}` : '';
@@ -647,7 +674,7 @@ export const RoutineRow: React.FC<{
                 Paused
               </span>
             ) : (
-              routine.last_status && <StatusBadge status={routine.last_status} error={routine.last_error ?? null} wait={liveWait} />
+              routine.last_status && <StatusBadge status={routine.last_status} error={routine.last_error ?? null} answeredLater={routine.last_answered_later} wait={liveWait} />
             )}
           </div>
           {/* Routines setup F: what it does, then when it runs next, then the schedule, bot and place. */}
@@ -676,10 +703,10 @@ export const RoutineRow: React.FC<{
       </div>
       {/* Phone: four 44 px buttons in one row, no indent, so Delete never wraps. Desktop is as before. */}
       <div className="grid grid-cols-4 gap-1.5 sm:flex sm:flex-wrap sm:items-center sm:pl-9">
-        <button type="button" onClick={runNow} disabled={busy} className={`${rowSmallBtn} ${rowBtn} border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}>
+        <button ref={runRef} type="button" onClick={runNow} disabled={busy} data-routine-run={routine.id} className={`${rowSmallBtn} ${rowBtn} border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}>
           <Play size={11} aria-hidden="true" /> Run now
         </button>
-        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls={historyId} className={`${rowQuietBtn} ${rowBtn}`}>
+        <button ref={historyRef} type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls={historyId} className={`${rowQuietBtn} ${rowBtn}`}>
           <span className="hidden sm:inline-flex" aria-hidden="true">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span> <History size={11} aria-hidden="true" /> History
         </button>
         <button type="button" onClick={onEdit} className={`${rowQuietBtn} ${rowBtn}`} data-routine-edit={routine.id}>
@@ -694,7 +721,7 @@ export const RoutineRow: React.FC<{
           <Trash2 size={11} aria-hidden="true" /> Delete
         </button>
         {notice && <span className="col-span-4 text-[11px] text-zinc-400" role="status">{notice}</span>}
-        {highlight && routine.enabled && !notice && (
+        {highlight && !!focusPause && routine.enabled && !notice && (
           <span className="col-span-4 text-[11px] text-sky-200" role="status">Turn the switch off to pause it.</span>
         )}
       </div>
@@ -864,6 +891,8 @@ export const RoutinesPanel: React.FC<{
                 placeLabel={place(r)}
                 tick={tick}
                 focusPause={focus?.mode === 'pause' && focus.id === r.id ? focus.nonce : undefined}
+                focusRun={focus?.mode === 'run' && focus.id === r.id ? focus.nonce : undefined}
+                focusHistory={focus?.mode === 'history' && focus.id === r.id ? focus.nonce : undefined}
                 onEdit={() => setEditing(r)}
                 onOpenRunResult={onOpenRunResult}
                 waits={waits}
