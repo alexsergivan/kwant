@@ -540,3 +540,55 @@ test('card: with no join address anywhere the panel says so and mints nothing', 
   assert.match(v.host.querySelector('[data-link-panel]').textContent, /hasn't said its address yet/);
   assert.equal(mints(calls).length, 0);
 });
+
+// ---------------------------------------------------------------------------------------------------
+// pa11 class quiz (Lin's #1143): the card's notice and the quick-link refusal
+
+const CLASS_NOTICE = 'First names or nicknames only. Everything about players is deleted when the quiz ends. Nothing is shared.';
+const STABLE = 'A quick link takes up to 60 players, so this one needs an address that stays the same: your own https, Tailscale Funnel or Same Wi-Fi.';
+
+test('pa11: the class quiz card shows its notice, as is, on ready and live; never on the normal quiz', async () => {
+  for (const name of ['readyAnywhere', 'live']) {
+    const v = await card(name, { notice: CLASS_NOTICE });
+    const n = v.host.querySelector('[data-notice]');
+    assert.equal(n?.textContent, CLASS_NOTICE, name);
+    assert.equal(holos(v) <= 1, true);
+    v.done();
+    const plain = await card(name);
+    assert.equal(plain.host.querySelector('[data-notice]'), null, `${name} normal`);
+    plain.done();
+  }
+  assert.equal(m.validPocket({ ...raw('readyAnywhere'), notice: CLASS_NOTICE }).notice, CLASS_NOTICE);
+  assert.equal('notice' in m.validPocket(raw('readyAnywhere')), false, 'a normal block has no notice key');
+  assert.equal(m.validPocket({ ...raw('readyAnywhere'), notice: 42 }), null, 'a bad notice: markdown fallback');
+  assert.equal(m.validPocket({ ...raw('readyAnywhere'), notice: 'x'.repeat(301) }), null);
+});
+
+test('pa11: join.quick_tunnel false puts the box’s line where the quick link goes, never the button or the not-set-up line', async () => {
+  const j = raw('readyAnywhere').join;
+  const v = await card('readyAnywhere', { notice: CLASS_NOTICE, join: { ...j, anywhere_url: null, quick_tunnel: false } });
+  const line = v.host.querySelector('[data-needs-stable]');
+  assert.equal(line?.textContent, STABLE);
+  assert.equal(v.host.querySelector('[data-no-link]'), null);
+  assert.ok(!v.host.textContent.includes('Uses a free Cloudflare quick link'));
+  // Same Wi-Fi still works as before.
+  await click(v.host.querySelector('[role="radio"]'));
+  assert.equal(v.host.querySelector('[data-needs-stable]'), null);
+  assert.ok(v.host.textContent.includes("Phones on mobile data can't reach your Wi-Fi."));
+  v.done();
+  // Live, compact join: the line stands in for "isn't set up".
+  const lv = await card('live', { join: { mode: 'anywhere', wifi_url: null, anywhere_url: null, quick_tunnel: false } });
+  assert.equal(lv.host.querySelector('[data-needs-stable]')?.textContent, STABLE);
+  assert.equal(lv.host.querySelector('[data-no-link]'), null);
+  lv.done();
+  // A normal quiz (no quick_tunnel, or true) keeps the quick-link line exactly as on main.
+  for (const qt of [undefined, true]) {
+    const n = await card('readyAnywhere', { join: { ...j, ...(qt === undefined ? {} : { quick_tunnel: qt }) } });
+    assert.equal(n.host.querySelector('[data-needs-stable]'), null);
+    assert.ok(n.host.textContent.includes('Uses a free Cloudflare quick link'));
+    n.done();
+  }
+  assert.equal(m.validPocket({ ...raw('readyAnywhere'), join: { ...j, quick_tunnel: 'no' } }), null);
+  assert.equal('quick_tunnel' in m.validPocket({ ...raw('readyAnywhere'), join: { ...j, quick_tunnel: true } }).join, false);
+});
+
