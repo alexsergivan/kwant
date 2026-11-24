@@ -395,7 +395,10 @@ test('phone grid: Stop shares a row when the half buttons are odd, its own row w
   assert.match(await stopCls('rsvpOpen'), /(^| )col-span-1( |$)/);
   assert.match(await stopCls('signupOpen'), /(^| )col-span-2( |$)/);
   const v = await card('voteOpen');
-  assert.doesNotMatch(v.host.textContent, /Closes Wed/);
+  // The open vote shows its close time once (it has no subtitle), right before the Kept row it points at.
+  const vt = v.host.textContent;
+  assert.equal((vt.match(/Closes Wed/g) || []).length, 1);
+  assert.ok(vt.indexOf('Closes Wed') < vt.indexOf('Kept until'), 'Closes sits before Kept until');
   const closed = await card('voteClosed');
   assert.match(button(closed, 'Delete ballots now').className, /col-span-2/);
 });

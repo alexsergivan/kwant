@@ -1246,6 +1246,7 @@ const VoteRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
             </Row>
           )}
           <Row icon={<EyeOff size={15} aria-hidden="true" />}>You see who voted, never what they picked.{g.show_names ? ' Members see the live count after they vote.' : ''}</Row>
+          {g.closes_at && <Row icon={<Clock size={15} aria-hidden="true" />}>Closes {g.closes_at}.</Row>}
           <KeptRow g={g} />
         </ul>
       </>
