@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, Check, ChevronRight, ExternalLink, Eye, EyeOff, Info, Loader2, RefreshCw, X } from 'lucide-react';
+import { scrollInScroller } from '../scrollInScroller';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { CatalogEntry, Connection, ConnectionsError, ConnectionsList, composioErrorText, connectionsApi } from '../connections';
 import {
@@ -477,7 +478,7 @@ export interface AppsAccountsProps {
   connectApi?: ConnectApi;
   /** Tests: whether Composio has a sign-in for an app (default: ask Composio). */
   appStatus?: (slug: string) => Promise<{ connected: boolean }>;
-  initialSheet?: { slug: string | null; initial?: ConnectSheetProps['initial'] };
+  initialSheet?: { slug: string | null; name?: string; initial?: ConnectSheetProps['initial'] };
   phone?: boolean;
   /** Tests and shots: Find a tool's data and text already typed, and where Add a tool goes. */
   findApi?: FindToolApi;
@@ -500,7 +501,7 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
   const accountsState: ProfilesState = p.profiles !== undefined ? { profiles: p.profiles, error: null, reload: async () => {} } : profilesHook;
   const enginesState: EnginesApi = p.engines !== undefined ? { ...enginesHook, engines: p.engines } : enginesHook;
   const [sheet, setSheet] = useState<{ app: AppTile | null; initial?: ConnectSheetProps['initial'] } | null>(
-    p.initialSheet ? { app: p.initialSheet.slug ? tileFor(APP_TILES.find((t) => t.slug === p.initialSheet!.slug) ?? { slug: p.initialSheet.slug, name: p.initialSheet.slug }) : null, initial: p.initialSheet.initial } : null,
+    p.initialSheet ? { app: p.initialSheet.slug ? tileFor(APP_TILES.find((t) => t.slug === p.initialSheet!.slug) ?? { slug: p.initialSheet.slug, name: p.initialSheet.name || p.initialSheet.slug }) : null, initial: p.initialSheet.initial } : null,
   );
   // ok: earned (the app is signed in). info: true but not the whole story yet (neutral, not green).
   const [notice, setNotice] = useState<{ text: string; tone: 'ok' | 'info' } | null>(null);
@@ -539,8 +540,12 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
 
   // Opened at a section: scroll there once it's drawn.
   useEffect(() => {
-    if (p.section === 'accounts') accountsRef.current?.scrollIntoView({ block: 'start' });
-    if (p.section === 'advanced' || p.openAdvanced) (setAdvancedOpen(true), advancedRef.current?.scrollIntoView({ block: 'start' }));
+    if (p.section === 'accounts' && accountsRef.current) scrollInScroller(accountsRef.current, 'start');
+    if (p.section === 'advanced' || p.openAdvanced) {
+      setAdvancedOpen(true);
+      // A lit connection row (34h) has already scrolled itself into the middle: leave it there.
+      if (advancedRef.current && !advancedRef.current.querySelector('[data-flash]')) scrollInScroller(advancedRef.current, 'start');
+    }
   }, [p.section, p.sectionSeq, p.openAdvanced, load.state === 'ok']); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

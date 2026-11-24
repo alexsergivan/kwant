@@ -170,6 +170,12 @@ pub trait Kit: Send + Sync + 'static {
     fn ticks_unwatched(&self) -> bool {
         false
     }
+    /// `true` when guests come back over days or weeks, so the link must keep working: such a
+    /// pocket is never offered a quick tunnel (a new address per start), only own https, Funnel
+    /// or Same Wi-Fi (pa6).
+    fn stable_address_only(&self) -> bool {
+        false
+    }
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value;
     /// What anyone with the link sees before joining (`info`, and the page's boot without a
     /// seat, as `view`): for example the Quiz's teams with counts, rounds and start time.
@@ -195,6 +201,12 @@ pub trait Kit: Send + Sync + 'static {
     fn results(&self, _ctx: &KitCtx, _state: &Value) -> Value {
         Value::Null
     }
+    /// pa3b: a verdict from the bot's strict judge (`{q, player, verdict}`), sent only by the
+    /// server through `pocket::judge`, never by a guest or host route. Kits without a judge keep
+    /// the default refusal.
+    fn judge(&self, _ctx: &mut KitCtx, _state: &mut Value, _body: &Value) -> Result<(), KitError> {
+        Err(KitError::NotNow("this kit has no judge".into()))
+    }
 }
 
 /// The kit registered under `id`. `test` exists only in debug builds or with
@@ -202,14 +214,16 @@ pub trait Kit: Send + Sync + 'static {
 pub fn kit(id: &str) -> Option<&'static dyn Kit> {
     match id {
         "test" if test_kit_allowed() => Some(&TestKit),
+        crate::kits::quiz::KIT_ID => Some(&super::quiz_kit::QuizPocket),
         super::santa::ID => Some(&super::santa::Santa),
+        super::gather::ID => Some(&super::gather::Gather),
         _ => None,
     }
 }
 
 /// Every kit id this build can make a pocket with.
 pub fn kit_ids() -> Vec<&'static str> {
-    ["test", super::santa::ID].into_iter().filter(|id| kit(id).is_some()).collect()
+    ["test", crate::kits::quiz::KIT_ID, super::santa::ID, super::gather::ID].into_iter().filter(|id| kit(id).is_some()).collect()
 }
 
 fn test_kit_allowed() -> bool {

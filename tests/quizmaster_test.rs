@@ -127,7 +127,7 @@ impl JudgeModel for StubModel {
 async fn injected_guesses_get_no_verdict_and_no_points() {
     for kind in [Stub::EchoGuess, Stub::EchoPrompt, Stub::EchoTail] {
         let game = game_with_injections();
-        assert_eq!(game.pending().len(), 2, "both guesses wait for the judge");
+        assert_eq!(game.pending().await.len(), 2, "both guesses wait for the judge");
         let model = StubModel::new(kind);
         let judge = Judge::new(model.clone(), Arc::new(JudgeBudget::new(10)));
         let out = judge.on_answer(&game).await;
@@ -136,7 +136,7 @@ async fn injected_guesses_get_no_verdict_and_no_points() {
             assert!(matches!(o, Outcome::NoVerdict { q: 3, .. }), "{o:?}");
         }
         // Nothing was sent: both still pending, no answer earns points
-        assert_eq!(game.pending().len(), 2);
+        assert_eq!(game.pending().await.len(), 2);
         let answers = host_view(&game)["host"]["answers"].clone();
         assert!(answers.as_array().unwrap().iter().all(|a| a["points"] == json!(0)), "{answers}");
         // Each guess went in once, as data, inside the one data block
@@ -156,13 +156,44 @@ async fn a_fair_yes_is_sent_and_scores() {
     let judge = Judge::new(StubModel::new(Stub::Yes), Arc::new(JudgeBudget::new(10)));
     let out = judge.on_answer(&game).await;
     assert!(out.iter().all(|o| matches!(o, Outcome::Sent { q: 3, .. })), "{out:?}");
-    assert!(game.pending().is_empty());
+    assert!(game.pending().await.is_empty());
     // A second call has nothing left to judge and spends nothing
     assert!(judge.on_answer(&game).await.is_empty());
     assert_eq!(judge.budget().used(), 2);
     // Question 4 is worth 1 point. Scores count only revealed answers, so nothing shows yet
     assert_eq!(scores(&game), vec![0, 0], "no score before the reveal");
     assert_eq!(reveal(&game), vec![1, 1]);
+}
+
+#[tokio::test]
+async fn an_item_without_a_verdict_is_not_judged_again() {
+    // pa3 qa F1: one model call per near miss. No verdict, a time-out or a failed call leaves the
+    // item to the host; the next guest's answer doesn't spend the allowance on it again.
+    for kind in [Stub::EchoGuess, Stub::Slow] {
+        let game = game_with_injections();
+        let model = StubModel::new(kind);
+        let judge = Judge::new(model.clone(), Arc::new(JudgeBudget::new(10))).with_timeout(Duration::from_millis(150));
+        let first = judge.on_answer(&game).await;
+        assert_eq!(first.len(), 2, "{first:?}");
+        assert!(first.iter().all(|o| matches!(o, Outcome::NoVerdict { .. } | Outcome::TimedOut { .. })), "{first:?}");
+        for _ in 0..3 {
+            assert!(judge.on_answer(&game).await.is_empty(), "nothing is judged twice");
+        }
+        assert_eq!(model.calls.load(Ordering::SeqCst), 2, "one call per near miss");
+        assert_eq!(judge.budget().used(), 2);
+        assert_eq!(game.pending().await.len(), 2, "both stay with the host");
+    }
+}
+
+#[tokio::test]
+async fn an_item_out_of_budget_is_not_marked_tried() {
+    let game = game_with_injections();
+    let model = StubModel::new(Stub::Yes);
+    let judge = Judge::new(model.clone(), Arc::new(JudgeBudget::new(0)));
+    assert!(judge.on_answer(&game).await.iter().all(|o| matches!(o, Outcome::BudgetOut { .. })));
+    // Still out: each answer reports BudgetOut again and makes no call
+    assert_eq!(judge.on_answer(&game).await.len(), 2);
+    assert_eq!(model.calls.load(Ordering::SeqCst), 0);
 }
 
 /// The host moves on to the reveal; returns the players' scores there, highest first.
@@ -197,7 +228,7 @@ async fn judge_timeout_sends_nothing_and_the_reveal_runs() {
     assert!(started.elapsed() < Duration::from_secs(5), "the two calls run side by side and stop at the timeout");
     assert!(out.iter().all(|o| matches!(o, Outcome::TimedOut { q: 3, .. })), "{out:?}");
     assert_eq!(model.calls.load(Ordering::SeqCst), 2);
-    assert_eq!(game.pending().len(), 2);
+    assert_eq!(game.pending().await.len(), 2);
     reveal_counts_pending_as_zero(&game);
 }
 
@@ -209,7 +240,7 @@ async fn judge_without_budget_makes_no_call_and_the_reveal_runs() {
     let out = judge.on_answer(&game).await;
     assert!(out.iter().all(|o| matches!(o, Outcome::BudgetOut { q: 3, .. })), "{out:?}");
     assert_eq!(model.calls.load(Ordering::SeqCst), 0, "no budget, no model call");
-    assert_eq!(game.pending().len(), 2);
+    assert_eq!(game.pending().await.len(), 2);
     reveal_counts_pending_as_zero(&game);
 }
 
@@ -222,7 +253,7 @@ async fn budget_of_one_judges_one_and_leaves_the_other_to_the_host() {
     assert_eq!(out.iter().filter(|o| matches!(o, Outcome::Sent { .. })).count(), 1, "{out:?}");
     assert_eq!(out.iter().filter(|o| matches!(o, Outcome::BudgetOut { .. })).count(), 1, "{out:?}");
     assert_eq!(model.calls.load(Ordering::SeqCst), 1);
-    assert_eq!(game.pending().len(), 1);
+    assert_eq!(game.pending().await.len(), 1);
     // The judged answer scores at the reveal; the one left to the host counts 0
     assert_eq!(reveal(&game), vec![1, 0]);
 }

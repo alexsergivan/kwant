@@ -407,8 +407,8 @@ export interface ChatViewProps {
   renderBotAction?: (msg: ChatMessage, meta: BotActionMeta, flash: boolean) => React.ReactNode;
   /** 0.9.0 P5: a bot's tool-note line (meta kind "tool_note"); "See the note" opens it on Connections. */
   onOpenToolNote?: (noteId: string) => void;
-  /** 0.9.5: a connection-failure line's fix button (meta kind "tool_failure") opens Connections. */
-  onOpenConnections?: () => void;
+  /** 0.9.5: a connection-failure line's fix button (meta kind "tool_failure") opens Connections; 34h: on that row. */
+  onOpenConnections?: (connectionId?: string) => void;
   /** A mission watcher's check report (message meta kind "watch"). */
   renderWatchReport?: (msg: ChatMessage, meta: WatchMeta, flash: boolean) => React.ReactNode;
   /** A bot's proposal to hire a new bot (message meta kind "hire_proposal"). */

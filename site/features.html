@@ -41,7 +41,7 @@
     <a class="nl" href="/features" aria-current="page">Features</a>
     <a class="nl" href="/docs/quickstart">Docs</a>
     <a class="nl" href="/blog/">Blog</a>
-    <a class="nl stars" href="https://github.com/alexsergivan/kwant" rel="noopener" aria-label="kwant on GitHub, 696 stars"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><b>★ 696</b></a>
+    <a class="nl stars" href="https://github.com/alexsergivan/kwant" rel="noopener" aria-label="kwant on GitHub, 701 stars"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><b>★ 701</b></a>
     <a class="btn btn-solid btn-get px" href="/docs/quickstart">Get started</a>
   </nav>
 </header>
@@ -58,7 +58,7 @@
   <div class="wrap">
     <div class="jump-scroll">
       <p class="jump-label" aria-hidden="true">Jump</p>
-      <ul class="jump"><li><a class="ver" href="#new-0945">0.9.45</a></li><li><a class="ver" href="#new-0944">0.9.44</a></li><li><a class="ver" href="#new-0943">0.9.43</a></li><li><a class="ver" href="#new-0942">0.9.42</a></li><li><a class="ver" href="#new-0941">0.9.41</a></li><li><a class="ver" href="#new-0940">0.9.40</a></li></ul><span class="sep" aria-hidden="true"></span>
+      <ul class="jump"><li><a class="ver" href="#new-0947">0.9.47</a></li><li><a class="ver" href="#new-0946">0.9.46</a></li><li><a class="ver" href="#new-0945">0.9.45</a></li><li><a class="ver" href="#new-0944">0.9.44</a></li><li><a class="ver" href="#new-0943">0.9.43</a></li><li><a class="ver" href="#new-0942">0.9.42</a></li></ul><span class="sep" aria-hidden="true"></span>
       <ul class="jump">
         <li><a href="#discovery">Suggested routines</a></li>
         <li><a href="#new-teams">Hand-offs &amp; review</a></li>
@@ -79,6 +79,38 @@
     </div>
   </div>
 </nav>
+
+<section id="new-0947" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.47</span><time datetime="2026-11-24">Nov 24, 2026</time></p>
+      <h2>"Sign in again" opens the row that needs it, and a suggested connection's card shows its real state</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0947">Smaller changes in 0.9.47</h3>
+        <p>"Sign in again" in a chat or the Inbox opens that connection's row in Settings, lit and ready to sign in. A connection card a bot suggested shows its real state after a reload or on another device: ready, needs sign-in, or removed in Settings. The Connect sheet a suggested app opens uses the app's own name, such as "Google Search Console", not its code name. Automatic retries of a failed routine read "Retried automatically" in History, and you get one notice that says how often it was retried. A routine whose question went unanswered no longer shows as OK: History says it needed your answer, and the question waits in Needs you. Routine runs in the Inbox now carry their routine's id (routine_id), groundwork for a Run again button. A failed routine's Inbox row now reads in the bot's words, not as a raw tool error. A routine's chat card now follows the routine: its current time, Paused with Resume, or a note once it's deleted. In Routines, a paused routine reads Paused, and on a phone its switch and Open result are bigger to tap. Routine rows in the Inbox drop stray bold marks, and a thread routine's row opens its thread.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v0947-signin-opens-the-row-2880.webp?v=da9bca8a2c" data-caption="Settings › Apps &amp; accounts in Trailhead Outfitters on desktop, opened at the Advanced section. Under &quot;Tool servers (MCP) 2&quot;, the Stripe row is lit with a violet border: &quot;Needs sign-in&quot; chip, mcp.example.com, &quot;Sign-in required&quot;, and a focused amber &quot;Sign in again&quot; button beside &quot;Check now&quot; and &quot;Manage tools&quot;. The wallet row below reads &quot;Not checked&quot;."><img class="app" src="assets/media/v0947-signin-opens-the-row-1440.webp?v=0a40a73f34" srcset="assets/media/v0947-signin-opens-the-row-1440.webp?v=0a40a73f34 1440w, assets/media/v0947-signin-opens-the-row-2880.webp?v=da9bca8a2c 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings › Apps &amp; accounts in Trailhead Outfitters on desktop, opened at the Advanced section. Under &quot;Tool servers (MCP) 2&quot;, the Stripe row is lit with a violet border: &quot;Needs sign-in&quot; chip, mcp.example.com, &quot;Sign-in required&quot;, and a focused amber &quot;Sign in again&quot; button beside &quot;Check now&quot; and &quot;Manage tools&quot;. The wallet row below reads &quot;Not checked&quot;."></a></div>
+    </div>
+  </div>
+</section>
+
+<section id="new-0946" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.46</span><time datetime="2026-11-23">Nov 23, 2026</time></p>
+      <h2>Sign in again and the work carries on</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0946">Smaller changes in 0.9.46</h3>
+        <p>Signing in again to a connection closes its "needs you" lines for every bot, and each chat it stopped carries on by itself.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v0946-signin-carries-on-2880.webp?v=eac896a21b" data-caption="Ann&#x27;s direct chat in Trailhead Outfitters on desktop. It starts with the request &quot;Can you pull this week&#x27;s refunds from Stripe?&quot; Below it, a green line with a plug icon and no button reads &quot;Stripe stopped working for Ann: it needs you to sign in again. It works again.&quot; Next is Ann&#x27;s earlier reply, &quot;I couldn&#x27;t read this week&#x27;s refunds: Stripe turned me away because my sign-in ran out.&quot;, marked &quot;a step failed&quot;. Last is Ann&#x27;s carry-on reply, &quot;Picked up where I stopped. This week&#x27;s refunds:&quot;, listing three refunds (Ridgeline 2P tent $299, Cascade rain jacket $149, Trail Solo 1P tent $199) and &quot;Done: 3 refunds, $647 in total.&quot;, with a plain &quot;Not checked&quot; chip. Ann, Ben and Cody are in the sidebar."><img class="app" src="assets/media/v0946-signin-carries-on-1440.webp?v=f0e11164fe" srcset="assets/media/v0946-signin-carries-on-1440.webp?v=f0e11164fe 1440w, assets/media/v0946-signin-carries-on-2880.webp?v=eac896a21b 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Ann&#x27;s direct chat in Trailhead Outfitters on desktop. It starts with the request &quot;Can you pull this week&#x27;s refunds from Stripe?&quot; Below it, a green line with a plug icon and no button reads &quot;Stripe stopped working for Ann: it needs you to sign in again. It works again.&quot; Next is Ann&#x27;s earlier reply, &quot;I couldn&#x27;t read this week&#x27;s refunds: Stripe turned me away because my sign-in ran out.&quot;, marked &quot;a step failed&quot;. Last is Ann&#x27;s carry-on reply, &quot;Picked up where I stopped. This week&#x27;s refunds:&quot;, listing three refunds (Ridgeline 2P tent $299, Cascade rain jacket $149, Trail Solo 1P tent $199) and &quot;Done: 3 refunds, $647 in total.&quot;, with a plain &quot;Not checked&quot; chip. Ann, Ben and Cody are in the sidebar."></a></div>
+    </div>
+  </div>
+</section>
 
 <section id="new-0945" class="fgroup">
   <div class="wrap">
@@ -755,7 +787,7 @@
         <h3 id="routines-setup">Routines are easier to set up</h3>
         <p>The sidebar has a <strong>Routines</strong> row. With none yet, one card explains what a routine is. The form gives examples, shows your time zone in one line (<strong>Kyiv time GMT+2</strong>), and a weekly routine has a <strong>Weekdays</strong> chip. Each card shows the first line of its instructions, when it runs next, and its schedule in words, like <strong>Weekdays at 08:30, Kyiv time</strong>.</p>
       </div>
-      <div class="frame"><a class="zoom" href="assets/media/v099-routines-setup-2880.webp?v=ba42b66b49" data-caption="Settings › Routines for Trailhead Outfitters with three cards. Competitor prices is OK, next run Mon, Nov 16, 08:30 AM, &quot;Weekdays at 08:30, Kyiv time · Ben · direct chat&quot;. Size chart sync is Failed, running every day at 07:00 with Ann. Shipping recap is switched off and Paused, every Monday at 09:00 with Cody. Each card has Run now, History, Edit and Delete, and Suggested routines sits below."><img class="app" src="assets/media/v099-routines-setup-1440.webp?v=1fc909476a" srcset="assets/media/v099-routines-setup-1440.webp?v=1fc909476a 1440w, assets/media/v099-routines-setup-2880.webp?v=ba42b66b49 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings › Routines for Trailhead Outfitters with three cards. Competitor prices is OK, next run Mon, Nov 16, 08:30 AM, &quot;Weekdays at 08:30, Kyiv time · Ben · direct chat&quot;. Size chart sync is Failed, running every day at 07:00 with Ann. Shipping recap is switched off and Paused, every Monday at 09:00 with Cody. Each card has Run now, History, Edit and Delete, and Suggested routines sits below."></a></div>
+      <div class="frame"><a class="zoom" href="assets/media/v099-routines-setup-2880.webp?v=c0da75bbb3" data-caption="Settings › Routines for Trailhead Outfitters with three cards. Competitor prices is OK, next run Mon, Nov 16, 08:30 AM, &quot;Weekdays at 08:30, Kyiv time · Ben · direct chat&quot;. Size chart sync is Failed, running every day at 07:00 with Ann. Shipping recap is switched off and Paused, every Monday at 09:00 with Cody. Each card has Run now, History, Edit and Delete, and Suggested routines sits below."><img class="app" src="assets/media/v099-routines-setup-1440.webp?v=ec18c60846" srcset="assets/media/v099-routines-setup-1440.webp?v=ec18c60846 1440w, assets/media/v099-routines-setup-2880.webp?v=c0da75bbb3 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Settings › Routines for Trailhead Outfitters with three cards. Competitor prices is OK, next run Mon, Nov 16, 08:30 AM, &quot;Weekdays at 08:30, Kyiv time · Ben · direct chat&quot;. Size chart sync is Failed, running every day at 07:00 with Ann. Shipping recap is switched off and Paused, every Monday at 09:00 with Cody. Each card has Run now, History, Edit and Delete, and Suggested routines sits below."></a></div>
     </div>
     <ul class="flist">
       <li id="fixes-099" class="span3"><h3>Smaller changes in 0.9.9</h3><p>Update checks are ready at launch; Settings asks again and links to the latest release. Tool server names are unique regardless of case. Chrome start-up errors lead with the real cause.</p></li>
@@ -2126,7 +2158,7 @@
 </footer>
 <script src="assets/js/site.js?v=02a491b838" defer></script>
 <script src="assets/js/pixel.js?v=0a1a3bf1e2" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-23","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-24","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 <script type="application/json" id="cf-beacon">{"token": "7f6ed395033a43eea3885ad0943890c2"}</script>
 </body>
 </html>

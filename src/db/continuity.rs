@@ -245,6 +245,10 @@ pub struct RoutineRow {
     pub last_status: Option<String>,
     /// The last run's error (28b round 2); `None` with no run or none recorded.
     pub last_error: Option<String>,
+    /// routine-answered-later: the last run's question was answered after the run ended (see
+    /// [`RoutineRun::answered_later`]).
+    #[sqlx(default)]
+    pub last_answered_later: bool,
     /// Its kwant's space; the channel, when set, is in the same one.
     pub space_id: String,
     /// Delivers into this thread of its kwant (then `channel_id` is empty).
@@ -275,6 +279,10 @@ pub struct RoutineRun {
     /// A line for the run's history, e.g. "Ran late: Pixel was paused at its monthly budget." (G2)
     #[sqlx(default)]
     pub note: Option<String>,
+    /// routine-answered-later: the run ended waiting on a question (`needs_you`, the question
+    /// error) and the person answered it later. Status and error stay as they were.
+    #[sqlx(default)]
+    pub answered_later: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -302,7 +310,9 @@ const ROUTINE_SELECT: &str = "SELECT r.id, r.kwant_id, r.channel_id, r.name, r.i
      r.next_run_at, r.last_run_at, r.created_at, r.space_id, r.thread_id, r.context_message_id, \
      r.origin, r.suggestion_id, r.task_class, r.acceptance, r.checks, \
      (SELECT status FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_status, \
-     (SELECT error FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_error \
+     (SELECT error FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1) AS last_error, \
+     EXISTS (SELECT 1 FROM questions q WHERE q.status = 'answered' AND q.routine_run_id = \
+       (SELECT id FROM routine_runs x WHERE x.routine_id = r.id ORDER BY x.started_at DESC, x.rowid DESC LIMIT 1)) AS last_answered_later \
      FROM routines r";
 
 impl Database {
@@ -1070,6 +1080,44 @@ impl Database {
         Ok(())
     }
 
+    /// routine-retry-once: AutoFix's own run of a failed routine is recorded with trigger `retry`, not
+    /// as a `manual` press the person never made. SQLite can't widen a CHECK, so the table is rebuilt
+    /// once with every row, column and index (after [`Self::migrate_run_statuses`]); old rows keep
+    /// their trigger, and older binaries read a `retry` row as a plain string.
+    pub(super) async fn migrate_run_triggers(&self) -> Result<(), DbError> {
+        let sql: Option<(String,)> = sqlx::query_as(
+            "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'routine_runs'",
+        )
+        .fetch_optional(&self.pool)
+        .await?;
+        if sql.is_none_or(|(sql,)| sql.contains("'retry'")) {
+            return Ok(());
+        }
+        let mut tx = self.pool.begin().await?;
+        super::spaces::rebuild(
+            &mut tx,
+            "routine_runs",
+            "CREATE TABLE routine_runs__spaces_new (
+                id TEXT PRIMARY KEY,
+                routine_id TEXT NOT NULL,
+                trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual', 'retry')),
+                started_at TIMESTAMP NOT NULL,
+                ended_at TIMESTAMP,
+                status TEXT NOT NULL CHECK (status IN ('running', 'ok', 'error', 'skipped', 'needs_you', 'incomplete')),
+                error TEXT,
+                message_id TEXT,
+                note TEXT
+            )",
+            &[
+                "CREATE INDEX IF NOT EXISTS routine_runs_by_routine ON routine_runs (routine_id, started_at)",
+                "CREATE INDEX IF NOT EXISTS routine_runs_by_end ON routine_runs (status, ended_at) WHERE ended_at IS NOT NULL",
+            ],
+        )
+        .await?;
+        tx.commit().await?;
+        Ok(())
+    }
+
     /// 26b: a manual run's start is the routine's last run too. `next_run_at` is left alone.
     pub async fn set_routine_last_run(&self, id: &str, at: DateTime<Utc>) -> Result<(), DbError> {
         sqlx::query("UPDATE routines SET last_run_at = ? WHERE id = ?")
@@ -1139,6 +1187,7 @@ impl Database {
             error: error.map(Into::into),
             message_id: None,
             note: None,
+            answered_later: false,
         })
     }
 
@@ -1219,8 +1268,9 @@ impl Database {
         limit: i64,
     ) -> Result<Vec<RoutineRun>, DbError> {
         Ok(sqlx::query_as::<_, RoutineRun>(
-            "SELECT id, routine_id, trigger, started_at, ended_at, status, error, message_id, note FROM routine_runs \
-             WHERE routine_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?",
+            "SELECT id, routine_id, trigger, started_at, ended_at, status, error, message_id, note, \
+             EXISTS (SELECT 1 FROM questions q WHERE q.routine_run_id = routine_runs.id AND q.status = 'answered') AS answered_later \
+             FROM routine_runs WHERE routine_id = ? ORDER BY started_at DESC, rowid DESC LIMIT ?",
         )
         .bind(routine_id)
         .bind(limit.clamp(1, MAX_RUNS_KEPT))
@@ -1304,5 +1354,54 @@ mod tests {
             Err(MemoryError::TooLong)
         );
     }
-}
 
+    /// routine-retry-once: a database from before `retry` keeps every run (trigger, note, rowid
+    /// order) and then takes a `retry` run; a fresh one takes it at once and isn't rebuilt.
+    #[tokio::test]
+    async fn run_triggers_widen_to_retry_and_keep_old_rows() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let fresh: (String,) = sqlx::query_as("SELECT sql FROM sqlite_master WHERE name = 'routine_runs'").fetch_one(&db.pool).await.unwrap();
+        assert!(fresh.0.contains("'retry'"), "{}", fresh.0);
+        // Back to the table as 0.9.46 has it
+        let mut tx = db.pool.begin().await.unwrap();
+        super::super::spaces::rebuild(
+            &mut tx,
+            "routine_runs",
+            "CREATE TABLE routine_runs__spaces_new (id TEXT PRIMARY KEY, routine_id TEXT NOT NULL,
+                trigger TEXT NOT NULL CHECK (trigger IN ('schedule', 'manual')), started_at TIMESTAMP NOT NULL,
+                ended_at TIMESTAMP,
+                status TEXT NOT NULL CHECK (status IN ('running', 'ok', 'error', 'skipped', 'needs_you', 'incomplete')),
+                error TEXT, message_id TEXT, note TEXT)",
+            &[],
+        )
+        .await
+        .unwrap();
+        tx.commit().await.unwrap();
+        for (id, trigger, note) in [("a", "schedule", Some("Ran late")), ("b", "manual", None)] {
+            sqlx::query("INSERT INTO routine_runs (id, routine_id, trigger, started_at, status, note) VALUES (?, 'r1', ?, ?, 'error', ?)")
+                .bind(id)
+                .bind(trigger)
+                .bind(Utc::now())
+                .bind(note)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        assert!(db.start_routine_run("r1", "retry", "running", None).await.is_err(), "the old CHECK refuses retry");
+
+        db.migrate_run_triggers().await.unwrap();
+        let rows: Vec<(String, String, Option<String>)> =
+            sqlx::query_as("SELECT id, trigger, note FROM routine_runs ORDER BY rowid").fetch_all(&db.pool).await.unwrap();
+        assert_eq!(rows, vec![("a".into(), "schedule".into(), Some("Ran late".into())), ("b".into(), "manual".into(), None)]);
+        let run = db.start_routine_run("r1", "retry", "running", None).await.unwrap();
+        assert_eq!(run.trigger, "retry");
+        // The named indexes are back (SQLite's own primary-key index has no sql)
+        let idx: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'routine_runs' AND sql IS NOT NULL ORDER BY name").fetch_all(&db.pool).await.unwrap();
+        assert_eq!(idx, vec![("routine_runs_by_end".into(),), ("routine_runs_by_routine".into(),)]);
+        // Once is enough
+        db.migrate_run_triggers().await.unwrap();
+        assert_eq!(db.list_routine_runs("r1", 10).await.unwrap().len(), 3);
+    }
+}

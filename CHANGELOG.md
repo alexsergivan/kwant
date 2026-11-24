@@ -8,6 +8,33 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.47] - 2026-11-24
+
+kwant 0.9.47: a "Sign in again" that opens the connection that needs it, suggested-connection cards that show their real state, a Connect sheet that names the app, not its code name, a failed routine that tells you once and labels its automatic retries, a routine whose question nobody answered that says it needs you instead of OK, routine runs in the Inbox that carry their routine's id, a failed routine's Inbox row that shows the bot's own words instead of the raw tool error, a routine's chat card that shows the routine as it is now, not as it was made, Routines with a plain Paused pill for a paused routine and full-size tap targets on a phone and Inbox routine rows without stray ** marks, which open the thread the routine posts in.
+
+### Added
+- Routine runs in the Inbox and the away summary (GET /api/inbox and GET /api/away) now carry routine_id, so an app can run that routine again (#1114)
+
+### Changed
+- "Sign in again" on a connection's line in a chat or in the Inbox now opens Settings › Apps & accounts › Advanced on that connection's row, lit and focused, with its own "Sign in again" button; the action has one name everywhere ("Sign in again", or "Connect again" for app accounts). (#1092)
+
+### Fixed
+- The card for a connection a bot suggested now shows the server's real state after a reload, on another device or once Settings closes: ready, needs sign-in, or "Removed in Settings". (#1096)
+- Connecting an app a bot suggested opens a sheet that uses the app's name, such as "Google Search Console", instead of its internal code name (#1105)
+- When a routine fails and kwant retries it on its own, History labels those runs "Retried automatically" instead of "Run now", and you get one notice instead of one per try (#1111)
+- A routine whose bot asked you something that nobody answered in time no longer counts as OK: History reads "Needed your answer, didn’t finish" and the question waits in Needs you (#1112)
+- A failed routine run's row in the Inbox and the away summary now shows the bot's reply about the failure instead of the raw tool error; the raw error still shows when the bot said nothing (#1118)
+- The chat card that made a routine now shows the routine as it is now: its current time and next run, "Paused" with Resume once it's paused, and a plain note once it's deleted (#1116)
+- In Routines, a paused routine's pill now reads "Paused" instead of a green OK, with its last result in the "last ran" line, and on a phone the on/off switch and "Open result" are 44 px tap targets (#1120)
+- Routine rows in the Inbox no longer show stray ** bold marks in their summary, and a routine that posts in a thread now opens that thread from its Inbox row and its failure notice (#1123)
+
+## [Mac 0.9.46] - 2026-11-23
+
+kwant 0.9.46: chats that carry on once you sign in again.
+
+### Changed
+- Signing in again to a connection now closes its open "needs you" lines for every bot ("It works again.") and each chat it stopped carries on once by itself; the first connect of a server a bot suggested carries that chat on, and deleting a connection closes its open lines as "Removed." (#1089)
+
 ## [Mac 0.9.45] - 2026-11-23
 
 kwant 0.9.45: goal notices that say who fixed them.

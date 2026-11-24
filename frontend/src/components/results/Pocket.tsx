@@ -39,9 +39,12 @@ import { QrImage } from '../DeviceSignIn';
 import { BTN, Bar, Callout, GHOST, HALF, ICON, LATER_CLS, LaterButton, LinkField, NoLinkYet, PRIMARY, Qr, Row, STOP, WARN_FILL } from './pocketParts';
 import { TEAM_PALETTES, isPalette, paletteCreature, renderCreature } from '../ModernAvatar';
 import { linkUrl, pocketApi, PocketApiError } from '../../pocketApi';
-import type { PocketLinkRole } from '../../pocketApi';
 import { useMedia } from '../../useMedia';
+import { useFocusAfterRender } from '../../focusAfterRender';
+import type { DraftCard, PocketLinkRole } from '../../pocketApi';
+import { EditPanel } from './PocketEdit';
 import { SantaCard, findMatchLike, validSanta } from './PocketSanta';
+import { GatherCard, findBallotPair, validGather } from './PocketGather';
 import type { RendererProps } from './registry';
 
 // ---------------------------------------------------------------------------------------------------
@@ -168,6 +171,9 @@ export function validPocket(raw: unknown): PocketBlock | null {
   const ended = opt(b.ended, validEnded);
   const budget = opt(b.budget, validBudget);
   const results = opt(b.results, validResults);
+  // A bad draft id or yours count only drops that field (no Edit), never the whole card.
+  const draft = typeof b.draft === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(b.draft) ? b.draft : null;
+  const yours = isCount(b.yours) ? b.yours : null;
   if ([when, progress, checks, dry_run, eta, opens_line, live, join, ended, budget, results].includes(undefined) || roundList.some((r) => !r)) return null;
   // A ready or live pocket passed its dry run; a stopped one didn't. Results only exist at the end.
   if (state === 'ready' && dry_run?.passed !== true) return null;
@@ -181,6 +187,15 @@ export function validPocket(raw: unknown): PocketBlock | null {
   if (santa && results) return null;
   // Santa joins live in `santa.join` (no quick tunnel); a quiz-style top-level join never rides along.
   if (santa && b.join !== undefined && b.join !== null) return null;
+  // Gather (pa10b): the same rules for Sign-up, RSVP and Vote, plus no person may ever carry a ballot.
+  // validGather scans `gather` for ballots itself; the rest of the block is scanned without it (the block's own
+  // `name` would make every key below it person-shaped, and `gather.ballot` is the vote's options, not a vote).
+  const gather = b.gather === undefined || b.gather === null ? null : validGather(b.gather, b.name as string);
+  const { gather: _g, ...rest } = isObj(raw) ? (raw as Record<string, unknown>) : {};
+  if (gather === undefined || (b.kit === 'gather') !== !!gather || (gather && findBallotPair(rest))) return null;
+  if (gather && (santa || results)) return null;
+  if (gather && state !== (gather.phase === 'closed' ? 'ended' : 'live')) return null;
+  if (gather && b.join !== undefined && b.join !== null) return null;
   return {
     id: b.id,
     type: 'pocket',
@@ -204,7 +219,10 @@ export function validPocket(raw: unknown): PocketBlock | null {
     ended: ended ?? null,
     budget: budget ?? null,
     results: results ?? null,
+    draft: draft ?? null,
+    yours: yours ?? null,
     santa,
+    gather,
   };
 }
 
@@ -214,7 +232,32 @@ export const showsQr = (b: Pick<PocketBlock, 'state' | 'dry_run'>): boolean =>
 
 /** The "Checked" holo: every answer has a source and the dry run passed. */
 export const earnedChecked = (b: PocketBlock): boolean =>
-  b.state === 'ready' && b.dry_run?.passed === true && !!b.checks && b.checks.total > 0 && b.checks.matched === b.checks.total;
+  b.state === 'ready' && b.dry_run?.passed === true && !!b.checks && b.checks.total > 0 && b.checks.matched === b.checks.total && !(b.yours && b.yours > 0);
+
+const CARD_STATE: Record<string, PocketBlock['state']> = { writing: 'writing', checking: 'checking', dry_run_stopped: 'dry_run_stopped', ready: 'ready', open: 'live', closed: 'ended' };
+
+/** pa4c: the editor's reply `card` (pa3 Card) laid over the chat block, the way a new block would arrive. */
+export function withCard(b: PocketBlock, c: DraftCard): PocketBlock {
+  const state = CARD_STATE[c.state] ?? b.state;
+  const ok = state === 'ready' ? true : state === 'dry_run_stopped' ? false : c.dry_run?.ok ?? b.dry_run?.passed ?? false;
+  const why = c.problems[0] ?? c.dry_run?.problems?.[0] ?? c.dry_run?.summary ?? null;
+  return {
+    ...b,
+    state,
+    checks: { matched: c.checked, total: c.total, swapped: c.failed.map((f) => `Q${f.q + 1}`) },
+    dry_run:
+      state === 'ready' || state === 'dry_run_stopped'
+        ? {
+            players: b.dry_run?.players ?? 30,
+            passed: ok,
+            stopped_at: ok ? null : b.dry_run?.stopped_at ?? null,
+            what_happened: ok ? null : why,
+            what_im_doing: ok ? null : 'Nothing yet: fix the question in Edit questions, or ask Quizmaster in chat.',
+          }
+        : b.dry_run,
+    yours: c.yours,
+  };
+}
 
 // ---------------------------------------------------------------------------------------------------
 // Words
@@ -222,7 +265,7 @@ export const earnedChecked = (b: PocketBlock): boolean =>
 const NUM = new Intl.NumberFormat('en');
 const num = (n: number) => NUM.format(n);
 const usd = (n: number) => `$${n < 0.01 && n > 0 ? '0.01' : n.toFixed(2)}`;
-const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa' };
+const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa', gather: 'Sign-up' };
 export const kitLabel = (kit: string) => KIT_LABEL[kit] ?? kit.charAt(0).toUpperCase() + kit.slice(1).replace(/_/g, ' ');
 
 export function budgetLine(b: PocketBlock): string {
@@ -234,7 +277,7 @@ export function budgetLine(b: PocketBlock): string {
 
 /** Hover reasons for buttons whose route comes later (impl.md "Disabled until pa4b"). */
 export const LATER = {
-  edit: 'Comes with question editing',
+  noDraft: 'Ask Quizmaster in chat to change a question',
   keep: 'Comes with a later update',
   editRound1: 'Edit opens when round 1 is written',
 } as const;
@@ -483,6 +526,7 @@ const CheckRow: React.FC<{ block: PocketBlock; aside?: React.ReactNode }> = ({ b
   block.checks ? (
     <Row icon={<CheckCircle2 size={15} className="text-ok" />} aside={aside}>
       {block.state === 'checking' ? `${num(block.checks.matched)} answers match a source` : `${num(block.checks.matched)}/${num(block.checks.total)} answers checked against a source`}
+      {block.yours ? ` · ${num(block.yours)} yours, not checked` : ''}
     </Row>
   ) : null;
 
@@ -739,7 +783,13 @@ const Actions: React.FC<{
   /** The role whose panel is open, for aria-expanded. */
   shown: PocketLinkRole | null;
   panelId: string;
-}> = ({ block, url, ask, onStop, onEnd, onLink, shown, panelId }) => {
+  /** pa4c: open Edit questions (or, live and ended, the read-only list). Null: no draft id on this card. */
+  onEdit: (() => void) | null;
+  editing: boolean;
+  editId: string;
+  /** The server said pocket apps are off: no Edit or See questions at all. */
+  editOff?: boolean;
+}> = ({ block, url, ask, onStop, onEnd, onLink, shown, panelId, onEdit, editing, editId, editOff }) => {
   const bigScreen = (
     <button type="button" onClick={() => onLink('screen')} aria-expanded={shown === 'screen'} aria-controls={panelId} className={`kw-btn-ghost ${HALF}`} data-action="screen">
       <Monitor size={14} aria-hidden="true" />
@@ -752,12 +802,22 @@ const Actions: React.FC<{
       Stop
     </button>
   );
-  const editWhy = block.state === 'writing' && !(block.rounds[0] && block.rounds[0].written >= block.rounds[0].total) ? LATER.editRound1 : LATER.edit;
-  const edit = (
+  // Writing: the server says still_writing until round 1 is in, and the draft isn't stable before it's all written.
+  const editWhy = block.state === 'writing' ? LATER.editRound1 : !onEdit ? LATER.noDraft : null;
+  const edit = editOff ? null : editWhy ? (
     <LaterButton icon={<Pencil size={14} aria-hidden="true" />} why={editWhy}>
       Edit questions
     </LaterButton>
+  ) : (
+    <EditButton onClick={onEdit!} expanded={editing} controls={editId}>
+      Edit questions
+    </EditButton>
   );
+  const see = onEdit && !editOff ? (
+    <EditButton onClick={onEdit} expanded={editing} controls={editId} className={`${GHOST} col-span-2 sm:col-span-1`} icon={<ListChecks size={14} aria-hidden="true" />} action="see">
+      See questions
+    </EditButton>
+  ) : null;
   const grid = 'grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center';
   const full = 'col-span-2 sm:col-span-1';
   switch (block.state) {
@@ -765,7 +825,7 @@ const Actions: React.FC<{
     case 'checking':
       return (
         <div className={grid}>
-          <span className={full}>{React.cloneElement(edit, { className: 'w-full sm:w-auto' })}</span>
+          {edit && <span className={full}>{React.cloneElement(edit, { className: 'w-full sm:w-auto' })}</span>}
           {stop}
         </div>
       );
@@ -776,7 +836,7 @@ const Actions: React.FC<{
             <ListChecks size={14} aria-hidden="true" />
             See the dry run report
           </button>
-          <span className={full}>{React.cloneElement(edit, { className: 'w-full sm:w-auto' })}</span>
+          {edit && <span className={full}>{React.cloneElement(edit, { className: 'w-full sm:w-auto' })}</span>}
           {stop}
         </div>
       );
@@ -795,7 +855,7 @@ const Actions: React.FC<{
             </button>
           )}
           {bigScreen}
-          {React.cloneElement(edit, { half: true })}
+          {edit && React.cloneElement(edit, { half: true })}
           {stop}
         </div>
       );
@@ -808,6 +868,7 @@ const Actions: React.FC<{
           </button>
           {/* No dead Pause here: the remote pauses (Mira round 1, fix 1). */}
           {React.cloneElement(bigScreen, { className: `${GHOST} ${full}` })}
+          {see}
           <button type="button" onClick={onEnd} className={`${STOP} col-span-2 justify-self-center sm:ml-auto`} data-action="end">
             <Square size={14} aria-hidden="true" />
             End quiz
@@ -825,6 +886,7 @@ const Actions: React.FC<{
             <Repeat size={14} aria-hidden="true" />
             Run it again next Friday
           </button>
+          {see}
           <LaterButton icon={<Archive size={14} aria-hidden="true" />} why={LATER.keep} className="col-span-2 border-transparent bg-transparent text-sky-300 sm:ml-auto">
             Keep the results
           </LaterButton>
@@ -832,6 +894,23 @@ const Actions: React.FC<{
       );
   }
 };
+
+/** A real Edit questions / See questions button: same size and look as the LaterButton it replaces. */
+const EditButton: React.FC<{ onClick: () => void; expanded: boolean; controls: string; className?: string; half?: boolean; icon?: React.ReactNode; action?: string; children: React.ReactNode }> = ({
+  onClick,
+  expanded,
+  controls,
+  className = '',
+  half,
+  icon,
+  action = 'edit',
+  children,
+}) => (
+  <button type="button" onClick={onClick} aria-expanded={expanded} aria-controls={controls} className={`${half ? `kw-btn-ghost ${HALF}` : GHOST} ${className}`} data-action={action}>
+    {icon ?? <Pencil size={14} aria-hidden="true" />}
+    {children}
+  </button>
+);
 
 // ---------------------------------------------------------------------------------------------------
 // Results card (design.md §6)
@@ -964,9 +1043,21 @@ const ResultsCard: React.FC<{ block: PocketBlock; results: PocketResults; ask: (
 // The card
 
 /** The Pocket renderer: Secret Santa has its own card; every other kit uses the quiz-shaped one. */
-export const Pocket: React.FC<RendererProps<PocketBlock>> = (props) => (props.block.santa ? <SantaCard block={props.block} ask={props.ask} /> : <QuizPocket {...props} />);
+export const Pocket: React.FC<RendererProps<PocketBlock>> = (props) =>
+  props.block.santa ? <SantaCard block={props.block} ask={props.ask} /> : props.block.gather ? <GatherCard block={props.block} ask={props.ask} /> : <QuizPocket {...props} />;
 
-const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block, ask }) => {
+const sameBlock = (a: PocketBlock, b: PocketBlock) => a === b || JSON.stringify(a) === JSON.stringify(b);
+
+const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, ask }) => {
+  // pa4c: after an edit the reply's card stands in until the chat's own next block arrives.
+  const [over, setOver] = useState<{ from: PocketBlock; card: DraftCard } | null>(null);
+  // Same block re-rendered (a fresh object with the same content) keeps the card; a changed block replaces it.
+  const block = over && sameBlock(over.from, chatBlock) ? withCard(chatBlock, over.card) : chatBlock;
+  const [editing, setEditing] = useState(false);
+  const [editOff, setEditOff] = useState<string | null>(null);
+  const editId = useId();
+  const focusAfter = useFocusAfterRender();
+  const phone = useMedia(PHONE);
   const [mode, setMode] = useState<PocketJoinMode>(block.join?.mode ?? 'wifi');
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [busy, setBusy] = useState(false);
@@ -979,6 +1070,27 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block, ask }) => {
   useEffect(() => () => clearTimeout(linkTimer.current), []);
 
   if (block.state === 'ended' && block.results) return <ResultsCard block={block} results={block.results} ask={ask} />;
+
+  const canEdit = !!block.draft && !editOff;
+  const closeEdit = () => {
+    setEditing(false);
+    focusAfter(() => opener.current?.querySelector<HTMLButtonElement>('[data-action="edit"],[data-action="see"]'));
+  };
+  const editPanel =
+    editing && block.draft && !editOff ? (
+      <EditPanel
+        draftId={block.draft}
+        name={block.name}
+        phone={phone}
+        readOnly={block.state === 'live' || block.state === 'ended'}
+        onCard={(card) => setOver({ from: chatBlock, card })}
+        onOff={(text) => {
+          setEditOff(text);
+          setEditing(false);
+        }}
+        onClose={closeEdit}
+      />
+    ) : null;
 
   const url = block.join && showsQr(block) ? urlFor(block.join, mode) : null;
   const act = async (kind: 'stop' | 'end') => {
@@ -1049,7 +1161,7 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block, ask }) => {
     opener.current?.querySelector<HTMLButtonElement>(`[data-action="${confirm?.kind}"]`)?.focus();
   };
 
-  return (
+  const card = (
     <section
       className="pocket-card relative flex max-w-[680px] flex-col gap-4 overflow-hidden rounded-2xl border border-sky-800 bg-surface-raised p-4 shadow-card sm:p-[18px]"
       data-pocket={block.state}
@@ -1086,17 +1198,31 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block, ask }) => {
           <ConfirmBox block={block} kind={confirm.kind} busy={busy} onYes={() => act(confirm.kind)} onNo={close} />
         ) : done?.kind === 'ok' ? null : (
           <div ref={opener}>
-            <Actions block={block} url={url} ask={ask} onStop={() => setConfirm({ kind: 'stop' })} onEnd={() => setConfirm({ kind: 'end' })} onLink={showLink} shown={link?.role ?? null} panelId={panelId} />
+            <Actions block={block} url={url} ask={ask} onStop={() => setConfirm({ kind: 'stop' })} onEnd={() => setConfirm({ kind: 'end' })} onLink={showLink} shown={link?.role ?? null} panelId={panelId} onEdit={canEdit ? () => setEditing((v) => !v) : null} editing={editing} editId={editId} editOff={!!editOff} />
           </div>
         )}
         {link && !confirm && done?.kind !== 'ok' && (block.state === 'live' || block.state === 'ready') ? (
           <LinkPanel id={panelId} link={link} name={block.name} onOpenHere={() => void openHere(link.role)} onAgain={() => void showLink(link.role)} onClose={closeLink} />
         ) : null}
+        {editOff && (
+          <p role="status" className="flex items-start gap-2 text-[15px] text-zinc-300 sm:text-[13px]" data-edit-off>
+            <AlertTriangle size={15} className={`${ICON} text-warn`} aria-hidden="true" />
+            {editOff}
+          </p>
+        )}
       </div>
       <footer className="relative -mx-4 -mb-4 flex items-start gap-2 border-t border-hairline px-4 py-3 text-meta text-zinc-400 sm:-mx-[18px] sm:-mb-[18px] sm:px-[18px]" data-budget>
         <Zap size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
         <span>{budgetLine(block)}</span>
       </footer>
     </section>
+  );
+  if (!editPanel) return card;
+  // Desktop: the panel sits under the card, wider (design §7). Phone: it's a full-screen layer.
+  return (
+    <div className="flex flex-col gap-3" data-pocket-wrap>
+      {card}
+      <div id={editId}>{editPanel}</div>
+    </div>
   );
 };

@@ -84,6 +84,8 @@ export interface Routine {
   last_status: RunStatus | null;
   /** 28f: the last run's reason, sent from 28b round 2 (absent on older servers, where the card badge reads as before). */
   last_error?: string | null;
+  /** routine-answered-later: the last run's question was answered after it ended (absent on older servers). */
+  last_answered_later?: boolean;
   created_at: string;
   /** The schedule in the server's words, e.g. "monthly on day 1 at 09:00 Europe/Berlin". */
   schedule_text?: string;
@@ -99,12 +101,15 @@ export interface Routine {
 export interface RoutineRun {
   id: string;
   routine_id: string;
-  trigger: 'schedule' | 'manual';
+  /** `retry`: AutoFix ran a failed run again (routine-retry-once). */
+  trigger: 'schedule' | 'manual' | 'retry';
   started_at: string;
   ended_at: string | null;
   status: RunStatus;
   error: string | null;
   message_id: string | null;
+  /** routine-answered-later: the run ended waiting on a question the person answered later (absent on older servers). */
+  answered_later?: boolean;
 }
 
 export interface RoutineInput {
@@ -692,7 +697,9 @@ export type ContinuityEvent =
   /** Show it once: SSE `show_once_trial_ended` (api.md §10), a "Try it once" run finished. */
   | { type: 'trial_ended'; data: { skill_id: string; recording_id: string | null; bot: string; outcome: string } }
   /** kwant suggested a routine (re-broadcast from its notification), so an open Routines list reloads. */
-  | { type: 'automation_suggested'; data: NotifyEvent };
+  | { type: 'automation_suggested'; data: NotifyEvent }
+  /** A routine was made, changed, paused or deleted (here or by a bot), so routine cards read it again. */
+  | { type: 'routines_changed'; data: { routine_id: string | null } };
 
 const bus = typeof EventTarget !== 'undefined' ? new EventTarget() : null;
 
@@ -734,6 +741,13 @@ async function request<T>(method: string, url: string, body?: unknown): Promise<
 
 const enc = encodeURIComponent;
 
+/** Tells routine cards a routine changed once the request succeeded. */
+async function changed<T>(routine_id: string | null, p: Promise<T>): Promise<T> {
+  const out = await p;
+  emitContinuity({ type: 'routines_changed', data: { routine_id } });
+  return out;
+}
+
 export const continuityApi = {
   setTeamInstructions: (id: string, instructions: string) =>
     request<{ instructions: string | null }>('PATCH', `/api/teams/${enc(id)}`, { instructions }),
@@ -756,9 +770,9 @@ export const continuityApi = {
   removeMemory: (kwantId: string, id: string) => request<void>('DELETE', `/api/kwants/${enc(kwantId)}/memories/${enc(id)}`),
 
   routines: () => request<Routine[]>('GET', '/api/routines'),
-  createRoutine: (body: RoutineInput) => request<Routine>('POST', '/api/routines', body),
-  updateRoutine: (id: string, body: Partial<RoutineInput>) => request<Routine>('PATCH', `/api/routines/${enc(id)}`, body),
-  removeRoutine: (id: string) => request<void>('DELETE', `/api/routines/${enc(id)}`),
+  createRoutine: (body: RoutineInput) => changed(null, request<Routine>('POST', '/api/routines', body)),
+  updateRoutine: (id: string, body: Partial<RoutineInput>) => changed(id, request<Routine>('PATCH', `/api/routines/${enc(id)}`, body)),
+  removeRoutine: (id: string) => changed(id, request<void>('DELETE', `/api/routines/${enc(id)}`)),
   runRoutine: (id: string) => request<RoutineRun>('POST', `/api/routines/${enc(id)}/run`),
   routineRuns: (id: string, limit = 20) => request<RoutineRun[]>('GET', `/api/routines/${enc(id)}/runs?limit=${limit}`),
 };

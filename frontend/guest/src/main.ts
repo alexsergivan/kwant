@@ -1,5 +1,5 @@
 // Entry for /p/<code>. Reads the optional v1 state the server put in the page, picks the screens by the pocket's kit
-// (Secret Santa loads its own chunk; everything else is the quiz, exactly as before), then joins the live pocket.
+// (Secret Santa and gather load their own chunks; everything else is the quiz, exactly as before), then joins the live pocket.
 import './guest.css';
 import { codeFrom, Env } from './api';
 import { GuestApp } from './app';
@@ -73,10 +73,16 @@ async function main(): Promise<void> {
   } else if (remote !== undefined) {
     const { RemoteApp } = await import('./remote/remote');
     app = new RemoteApp(root, env, code, remote || undefined);
-  } else if ((await kit(b)) === 'santa') {
-    const { SantaApp } = await import('./santa/app');
-    app = new SantaApp(root, { ...env, store: store() }, code);
-  } else app = new GuestApp(root, env, code);
+  } else {
+    const k = await kit(b);
+    if (k === 'santa') {
+      const { SantaApp } = await import('./santa/app');
+      app = new SantaApp(root, { ...env, store: store() }, code);
+    } else if (k === 'gather') {
+      const { GatherApp } = await import('./gather/app');
+      app = new GatherApp(root, env, code);
+    } else app = new GuestApp(root, env, code);
+  }
   void app.start(b);
   // A socket can die quietly while the phone sleeps or switches network: ask the box again on wake, online and restore.
   document.addEventListener('visibilitychange', () => {

@@ -125,7 +125,7 @@ test('installing, installed, needs sign-in and dismissed states', () => {
   assert.match(ready, /Ready\. Scout can use it from its next reply\./);
   assert.doesNotMatch(ready, /type="password"|>Install</);
 
-  const signIn = ui.render(props(httpMeta({ status: 'installed', server_id: 'srv' }), { needsSignIn: true }));
+  const signIn = ui.render(props(httpMeta({ status: 'installed', server_id: 'srv' }), { serverState: 'needs_sign_in' }));
   assert.match(signIn, /Sign in to Echo so Scout can use it/);
   assert.match(signIn, />Sign in</);
 

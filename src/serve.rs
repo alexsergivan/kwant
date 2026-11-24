@@ -78,6 +78,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
     crate::server::show_once::spawn_sweeper(state.clone(), cancel.clone());
     // Pocket apps (pa1): the guest listener, expiry sweeper and kit timers, only while switched on
     crate::pocket::listener::spawn(state.clone(), cancel.clone());
+    // pa3b: the Quizmaster opens, moves and closes pockets through the core (every use checks the switch)
+    crate::server::quizmaster_tools::register_pocket_core(std::sync::Arc::new(crate::server::quizmaster_live::CoreAdapter));
     crate::server::engine_routes::spawn_startup_check(state.clone());
     crate::server::parallel_routes::spawn_startup_sweep(state.clone());
     crate::server::app_update_routes::spawn_notifier(state.clone());
@@ -93,6 +95,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
         state.agent_vm.start_reaper();
     }
     let api_token = state.api_token.clone();
+    let pocket = state.pocket.clone();
     let app = create_router(state);
 
     let addr = format!("{}:{}", config.host, config.port);
@@ -125,6 +128,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
         _ = shutdown => println!("Shutting down…"),
     }
     cancel.cancel();
+    // A quick tunnel never outlives kwant (and a restart never brings it back)
+    pocket.tunnel.stop_all();
+    pocket.awake.set(false);
     browser.shutdown().await;
     let _ = tokio::time::timeout(std::time::Duration::from_secs(5), sidecar).await;
     Ok(())

@@ -13,7 +13,14 @@
 //! - `POST   /api/pockets/:code/end`       `{pocket: card}`
 //! - `POST   /api/pockets/:code/when`      `{when: RFC 3339 | null}` → `{pocket: card}` (pa7: moves the
 //!   times that came from `when` and re-plans the reminder; open pockets only)
-//! - `POST   /api/pockets/:code/host-key`  `{host_key}` (the old one stops working)
+//! - `POST   /api/pockets/:code/host-key`  `{host_key}` (the old one and every host link stop
+//!   working; screen links stay)
+//! - `POST   /api/pockets/:code/link`      `{role: "host"|"screen"}` → `{token, role, expires_at}`:
+//!   a one-time sign-in for the remote or the big screen (pa1b, Pocket API v1.1). Revokes nothing
+//! - `POST   /api/pockets/:code/tunnel`    `{on: true|false}` → the same as `GET`: join from anywhere
+//!   through a quick tunnel (pa6, Pocket API v1.2). 409 `no_quick_tunnel` for a long-lived kit,
+//!   `pocket_ended`, `guest_port_closed`. It starts in the background: `join.tunnel.state`
+//!   goes `starting` → `on` or `failed`
 //! - `DELETE /api/pockets/:code`           204, final
 
 use super::kits::Viewer;
@@ -33,6 +40,8 @@ pub fn router() -> Router<AppState> {
         .route("/api/pockets/:code/end", post(end))
         .route("/api/pockets/:code/when", post(set_when))
         .route("/api/pockets/:code/host-key", post(host_key))
+        .route("/api/pockets/:code/link", post(link))
+        .route("/api/pockets/:code/tunnel", post(tunnel))
         .route("/api/pockets/:code/action", post(action))
         .route("/api/pockets/:code/remove", post(remove))
         .route("/api/pockets/:code/reset-pin", post(reset_pin))
@@ -103,7 +112,7 @@ async fn read_json(state: &AppState, s: &Snapshot) -> PResult<Value> {
     let ctx = super::kits::KitCtx::new(&s.spec, &s.players, now);
     let summary = s.kit().map(|k| k.host_summary(&ctx, &s.kit_state));
     let host_view = s.kit().map(|k| k.view(&ctx, &s.kit_state, &Viewer::Host));
-    let join = super::address::join(state, code).await;
+    let join = super::address::join(state, s).await;
     Ok(json!({ "pocket": card(s), "summary": summary, "removed": counts.removed, "host_view": host_view, "join": join }))
 }
 
@@ -153,6 +162,35 @@ async fn set_when(State(state): State<AppState>, Path(code): Path<String>, Json(
 async fn host_key(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
     found(&state, &code).await?;
     Ok(Json(json!({ "host_key": super::rotate_host_key(&state, &code).await? })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct LinkRequest {
+    #[serde(default)]
+    pub role: String,
+}
+
+/// A one-time, 10-minute sign-in token for a remote (`host`) or a big screen (`screen`). The
+/// app puts it in the link's fragment (`/p/<code>#remote=<token>` or `#screen=<token>`).
+async fn link(State(state): State<AppState>, Path(code): Path<String>, Json(req): Json<LinkRequest>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    let role = super::HostRole::parse(req.role.trim())
+        .ok_or_else(|| PocketError::new(StatusCode::BAD_REQUEST, "bad_role", "A link is for \"host\" (the remote) or \"screen\" (the big screen)."))?;
+    let (token, expires_at) = super::mint_link(&state, &code, role, chrono::Utc::now()).await?;
+    Ok(Json(json!({ "token": token, "role": role.as_str(), "expires_at": expires_at })))
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct TunnelRequest {
+    pub on: bool,
+}
+
+/// Join from anywhere on or off for this pocket (pa6).
+async fn tunnel(State(state): State<AppState>, Path(code): Path<String>, Json(req): Json<TunnelRequest>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    super::set_tunnel(&state, &code, req.on).await?;
+    let s = found(&state, &code).await?;
+    read_json(&state, &s).await.map(Json)
 }
 
 async fn delete(State(state): State<AppState>, Path(code): Path<String>) -> PResult<StatusCode> {

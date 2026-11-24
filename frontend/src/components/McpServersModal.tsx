@@ -112,8 +112,10 @@ export const SignInBox: React.FC<{
   isConnecting: boolean;
   macApp: boolean;
   failure?: OAuthFailure;
+  /** 34h: kwnt held a sign-in that ran out: "Sign in again" (else "Sign in"). */
+  again?: boolean;
   onConnect: () => void;
-}> = ({ serverName, isConnecting, macApp, failure, onConnect }) => {
+}> = ({ serverName, isConnecting, macApp, failure, again = false, onConnect }) => {
   const deadEnd = failure && !isConnecting ? signInDeadEnd(failure.code, serverName, 'servers') : null;
   return (
     <div className="mt-2.5 ml-12 p-2.5 rounded-lg bg-amber-500/5 border border-amber-500/20 text-[11px] space-y-2">
@@ -143,7 +145,7 @@ export const SignInBox: React.FC<{
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-[11px] font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-60"
         >
           {isConnecting && !macApp ? <Loader2 size={12} className="animate-spin" /> : <KeyRound size={12} />}
-          {isConnecting ? (macApp ? 'Open the sign-in again' : 'Waiting…') : failure ? 'Retry' : 'Connect'}
+          {isConnecting ? (macApp ? 'Open the sign-in again' : 'Waiting…') : failure ? 'Retry' : again ? 'Sign in again' : 'Sign in'}
         </button>
       )}
     </div>
@@ -872,6 +874,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             isConnecting={isConnecting}
             macApp={macApp}
             failure={oauthError}
+            again={isSignedIn(server)}
             onConnect={() => connect(server)}
           />
         )}

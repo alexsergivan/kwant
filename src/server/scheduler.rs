@@ -64,6 +64,9 @@ pub struct RoutineView {
     /// The last run's error, e.g. "You said no to Bash; nothing ran" (28b round 2), so the routine
     /// card can tell a no from a failure. `null`: no run yet, or it had none.
     pub last_error: Option<String>,
+    /// routine-answered-later: the last run's question was answered after it ended, so the
+    /// card's header badge reads "Answered later".
+    pub last_answered_later: bool,
     pub created_at: DateTime<Utc>,
     /// The schedule in words, e.g. "monthly on the 1st at 09:00 Europe/Berlin".
     pub schedule_text: String,
@@ -106,6 +109,7 @@ impl From<RoutineRow> for RoutineView {
             last_run_at: r.last_run_at,
             last_status: r.last_status,
             last_error: r.last_error,
+            last_answered_later: r.last_answered_later,
             created_at: r.created_at,
         }
     }
@@ -500,6 +504,11 @@ pub async fn run_now(State(state): State<AppState>, Path(id): Path<String>) -> R
     }
 }
 
+/// The trigger of AutoFix's own run of a failed routine (routine-retry-once). Like `schedule`, it is
+/// no press: only `manual` (Run now) takes the press-only paths below. History says "Retried
+/// automatically".
+pub const RETRY: &str = "retry";
+
 /// Records a run and starts it in the background, or records it as skipped when the routine is
 /// still running. `None` if the run couldn't be recorded.
 pub async fn start_run(state: &AppState, routine: RoutineRow, trigger: &str) -> Option<RoutineRun> {
@@ -595,13 +604,25 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
         state.running_routines.lock().await.remove(&routine.id);
         let _ = state.event_sender.send(RuntimeEvent::RoutineRun {
             routine_id: routine.id.clone(),
-            run_id,
+            run_id: run_id.clone(),
             status: status.into(),
             waiting: false,
             approval_id: None,
         });
-        // A run that needs the person already has its card in the Inbox: no second notice
-        if matches!(status, "error" | "incomplete") {
+        // A run that needs the person already has its card in the Inbox: no second notice. One
+        // failure is one notice: none while AutoFix will run it again, and the last attempt's says
+        // how often it was retried (routine-retry-once)
+        let retries = if matches!(status, "error" | "incomplete") {
+            super::missions::autofix::routine_run_failed(&state, &routine.id, &run_id, status).await
+        } else {
+            None
+        };
+        if let Some(retries) = retries {
+            // A routine that posts in a thread opens it (routine-inbox-tidy), while it still exists
+            let thread_id = match &routine.thread_id {
+                Some(t) => state.db.get_thread(t).await.ok().flatten().map(|t| t.id),
+                None => None,
+            };
             let kwant_name = state
                 .db
                 .get_kwant(&routine.kwant_id)
@@ -618,8 +639,8 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
                     kwant_name,
                     channel_id: routine.channel_id.clone(),
                     title: format!("Routine \"{}\" failed", routine.name),
-                    body: failed_body(&routine.name, err),
-                    thread_id: None,
+                    body: failed_body(&routine.name, err, retries),
+                    thread_id,
                     card_id: None,
                 },
             )
@@ -630,16 +651,22 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
 }
 
 /// The notification for a routine run that failed (0.9.5): what stopped, why (the error's first
-/// line, clipped) and what to do about it.
-pub fn failed_body(name: &str, err: Option<&str>) -> String {
+/// line, clipped) and what to do about it; then, when AutoFix ran it again first, how often.
+pub fn failed_body(name: &str, err: Option<&str>, retries: i64) -> String {
     let why = err.map(super::stopped::short_line).filter(|w| !w.is_empty());
     let why: Option<String> = why.map(|w| {
         let w = w.trim_end_matches('.');
         if w.chars().count() > 160 { format!("{}…", w.chars().take(160).collect::<String>().trim_end()) } else { w.to_string() }
     });
-    match why {
+    let body = match why {
         Some(why) => format!("The routine \"{name}\" did not finish: {why}. Open the routine to see the run or run it again."),
         None => format!("The routine \"{name}\" did not finish. Open the routine to see the run or run it again."),
+    };
+    match retries {
+        n if n <= 0 => body,
+        1 => format!("{body} It was retried once."),
+        2 => format!("{body} It was retried twice."),
+        n => format!("{body} It was retried {n} times."),
     }
 }
 
@@ -656,6 +683,11 @@ fn send_run_event(state: &AppState, run: &RoutineRun) {
 /// A routine run's error when a step waits on an approval card nobody answered (status
 /// `needs_you`, 26b).
 pub const NEEDS_YOU_ERROR: &str = "A step is waiting for your approval, so it didn't run";
+
+/// unanswered-question-not-ok: a routine run's error when it waits on a question (`ask_user`)
+/// nobody answered (status `needs_you`). The open question is its one Inbox item
+/// (`db::away::FAILED_RUNS` leaves the run out), and History reads "Needed your answer, didn’t finish".
+pub const QUESTION_ERROR: &str = "A step is waiting for your answer, so it didn't finish";
 
 /// What a routine's turn did, once it replied.
 struct Ran {
@@ -674,18 +706,24 @@ pub struct StepSeen {
     /// A "failed" step the person said no to on its card (28b): its reason is the `said_no` sentence, and
     /// a real failure's reason wins over it.
     pub said_no: bool,
+    /// An `unanswered` question of the turn (unanswered-question-not-ok), not an approval card.
+    pub question: bool,
 }
 
 /// The run's status from what its turn's steps did, in order (26b; P1: never "ok" when nothing
 /// ran):
-/// - any call `unanswered` (its card is still open) → `needs_you`, [`NEEDS_YOU_ERROR`];
+/// - any call `unanswered` (its card is still open) → `needs_you`, [`NEEDS_YOU_ERROR`]; when
+///   only questions went unanswered, [`QUESTION_ERROR`] (an open card wins: it names a call
+///   that didn't run);
 /// - a call that failed (error, denied, cancelled) with no later "ok" call of the same tool →
 ///   `incomplete`, with the first such call's reason on one line. A real failure's reason wins
 ///   over a "You said no" one (28b round 2), so a no never hides what broke after it;
 /// - otherwise `ok`.
 pub fn run_outcome(steps: &[StepSeen]) -> (&'static str, Option<String>) {
-    if steps.iter().any(|s| s.status == "unanswered") {
-        return ("needs_you", Some(NEEDS_YOU_ERROR.to_string()));
+    let mut unanswered = steps.iter().filter(|s| s.status == "unanswered").peekable();
+    if unanswered.peek().is_some() {
+        let error = if unanswered.all(|s| s.question) { QUESTION_ERROR } else { NEEDS_YOU_ERROR };
+        return ("needs_you", Some(error.to_string()));
     }
     let unfixed: Vec<&StepSeen> = steps
         .iter()
@@ -774,6 +812,7 @@ pub fn steps_seen(
             status,
             reason,
             said_no: said,
+            question: false,
         });
     }
     for step in activity {
@@ -794,6 +833,8 @@ pub fn steps_seen(
             status,
             reason,
             said_no: said,
+            // unanswered-question-not-ok: `activity.rs` `question_unanswered`
+            question: step["kind"] == "question",
         });
     }
     seen
@@ -833,10 +874,12 @@ fn take(left: &mut Vec<&str>, tool: &str) -> bool {
 /// The meta key of a routine run's id on each reply of its turn (see `run_routine_turn`).
 pub(super) const ROUTINE_RUN_KEY: &str = "routine_run";
 
-/// What a run's own replies show: their steps, and the id of the last one.
+/// What a run's own replies show: their steps, the id of the last one, and the questions
+/// (`ask_user` ids) they left unanswered.
 struct OwnReplies {
     steps: Vec<StepSeen>,
     last_id: Option<String>,
+    questions: Vec<String>,
 }
 
 /// The bot's replies after the routine's message (`prompt_id`) that belong to run `run_id` (its
@@ -851,7 +894,7 @@ async fn own_replies(
     run_id: &str,
 ) -> OwnReplies {
     let messages = state.db.list_messages(chat, 40).await.unwrap_or_default();
-    let mut own = OwnReplies { steps: Vec::new(), last_id: None };
+    let mut own = OwnReplies { steps: Vec::new(), last_id: None, questions: Vec::new() };
     let Some(start) = messages.iter().position(|m| m.id == prompt_id) else {
         return own;
     };
@@ -868,9 +911,21 @@ async fn own_replies(
             continue;
         }
         own.steps.extend(steps_seen(parse(&m.tool_calls).as_ref(), meta.as_ref()));
+        own.questions.extend(unanswered_questions(meta.as_ref()));
         own.last_id = Some(m.id.clone());
     }
     own
+}
+
+/// routine-answered-later: the ids of the questions a reply's activity (`meta.activity`) shows
+/// unanswered (`activity.rs` `question_unanswered`: kind "question", the question id in `ref_id`).
+fn unanswered_questions(meta: Option<&serde_json::Value>) -> Vec<String> {
+    meta.and_then(|m| m["activity"]["steps"].as_array())
+        .into_iter()
+        .flatten()
+        .filter(|s| s["kind"] == "question" && s["status"] == "unanswered")
+        .filter_map(|s| s["ref_id"].as_str().map(str::to_string))
+        .collect()
 }
 
 /// 26b: routine runs whose turn is going, by bot and chat (one reply per bot per chat at a time),
@@ -1005,9 +1060,18 @@ async fn execute(state: &AppState, routine: &RoutineRow, run_id: &str) -> Result
     .await?;
     drop(in_chat);
     let own = own_replies(state, &chat, &kwant.name, &saved.id, run_id).await;
+    let outcome = run_outcome(&own.steps);
+    // routine-answered-later: a run that ends waiting on its questions is linked to them, so
+    // answering one later (on its card, in the chat or elsewhere) shows on the run's History row.
+    // Linked before the run's status is written: an answer in between still counts
+    if outcome.1.as_deref() == Some(QUESTION_ERROR) {
+        if let Err(e) = state.db.link_questions_to_run(&own.questions, run_id).await {
+            tracing::warn!(error = %e, run_id, "could not link the run's open questions");
+        }
+    }
     // The run's own last reply; the turn's answer is the chat's latest reply by the bot, which
     // can be another run's when two share the chat
-    Ok(Ran { reply_id: own.last_id.or(reply_id), outcome: run_outcome(&own.steps) })
+    Ok(Ran { reply_id: own.last_id.or(reply_id), outcome })
 }
 
 /// The chat id a routine delivers to: its thread, its channel, or its bot's direct chat.
@@ -1227,13 +1291,23 @@ mod no_silent_stop_tests {
     #[test]
     fn a_failed_routine_says_why_and_what_to_do() {
         assert_eq!(
-            failed_body("Daily digest", Some("⚠️ [Ben] The model sent nothing for 300 s, so this reply was stopped.\nmore")),
+            failed_body("Daily digest", Some("⚠️ [Ben] The model sent nothing for 300 s, so this reply was stopped.\nmore"), 0),
             "The routine \"Daily digest\" did not finish: The model sent nothing for 300 s, so this reply was stopped. Open the routine to see the run or run it again."
         );
-        assert_eq!(failed_body("D", None), "The routine \"D\" did not finish. Open the routine to see the run or run it again.");
-        assert_eq!(failed_body("D", Some("  \n ")), failed_body("D", None));
-        let long = failed_body("D", Some(&"x".repeat(500)));
+        assert_eq!(failed_body("D", None, 0), "The routine \"D\" did not finish. Open the routine to see the run or run it again.");
+        assert_eq!(failed_body("D", Some("  \n "), 0), failed_body("D", None, 0));
+        let long = failed_body("D", Some(&"x".repeat(500)), 0);
         assert!(long.contains(&format!("{}…", "x".repeat(160))) && !long.contains(&"x".repeat(161)), "{long}");
+    }
+
+    /// routine-retry-once: the last attempt's notice says how often AutoFix ran it again.
+    #[test]
+    fn a_retried_routine_says_how_often() {
+        let base = "The routine \"D\" did not finish: it died. Open the routine to see the run or run it again.";
+        assert_eq!(failed_body("D", Some("it died"), 0), base);
+        assert_eq!(failed_body("D", Some("it died"), 1), format!("{base} It was retried once."));
+        assert_eq!(failed_body("D", Some("it died"), 2), format!("{base} It was retried twice."));
+        assert_eq!(failed_body("D", Some("it died"), 4), format!("{base} It was retried 4 times."));
     }
 }
 
@@ -1247,7 +1321,59 @@ mod run_outcome_tests {
             status,
             reason: reason.map(str::to_string),
             said_no: false,
+            question: false,
         }
+    }
+
+    /// An unanswered question of the turn (unanswered-question-not-ok).
+    fn asked() -> StepSeen {
+        StepSeen {
+            question: true,
+            ..step("ask_user", "unanswered", Some(crate::mcp::QUESTION_STEP_DETAIL))
+        }
+    }
+
+    /// unanswered-question-not-ok: a question nobody answered isn't "ok", and says it waits on an
+    /// answer; an open approval card keeps 26b's words, also next to a question.
+    #[test]
+    fn an_unanswered_question_needs_you_in_its_own_words() {
+        assert_eq!(run_outcome(&[asked()]), ("needs_you", Some(QUESTION_ERROR.into())));
+        assert_eq!(run_outcome(&[step("web", "ok", None), asked()]), ("needs_you", Some(QUESTION_ERROR.into())));
+        assert_eq!(run_outcome(&[asked(), step("ha", "unanswered", None)]), ("needs_you", Some(NEEDS_YOU_ERROR.into())));
+        assert_eq!(run_outcome(&[step("ha", "unanswered", None), asked()]), ("needs_you", Some(NEEDS_YOU_ERROR.into())));
+        // An answered question leaves no step: the run is what its calls did
+        assert_eq!(run_outcome(&[step("ask_user", "ok", None)]), ("ok", None));
+        assert_ne!(QUESTION_ERROR, NEEDS_YOU_ERROR);
+    }
+
+    /// The question step `activity.rs` saves is read as a question; an approval step is not.
+    #[test]
+    fn a_saved_question_step_reads_as_a_question() {
+        let meta = json!({"activity": {"steps": [
+            {"kind": "tool", "tool": "mcp__kwnt__ask_user", "status": "ok"},
+            {"kind": "question", "tool": "ask_user", "status": "unanswered", "detail": crate::mcp::QUESTION_STEP_DETAIL},
+        ]}});
+        let seen = steps_seen(None, Some(&meta));
+        assert_eq!(seen, vec![step("mcp__kwnt__ask_user", "ok", None), asked()]);
+        assert_eq!(run_outcome(&seen), ("needs_you", Some(QUESTION_ERROR.into())));
+        let card = json!({"activity": {"steps": [{"kind": "approval", "tool": "ask_user", "status": "unanswered"}]}});
+        assert_eq!(run_outcome(&steps_seen(None, Some(&card))), ("needs_you", Some(NEEDS_YOU_ERROR.into())));
+    }
+
+    /// routine-answered-later: only a reply's unanswered question steps name the questions its run
+    /// is linked to; an approval card's ticket or an answered ask never does.
+    #[test]
+    fn a_reply_names_only_its_unanswered_questions() {
+        let meta = json!({"activity": {"steps": [
+            {"kind": "question", "tool": "ask_user", "status": "unanswered", "ref_id": "q1"},
+            {"kind": "approval", "tool": "Bash", "status": "unanswered", "ref_id": "ticket1"},
+            {"kind": "tool", "tool": "mcp__kwnt__ask_user", "status": "ok", "ref_id": "q0"},
+            {"kind": "question", "tool": "ask_user", "status": "unanswered"},
+            {"kind": "question", "tool": "ask_user", "status": "unanswered", "ref_id": "q2"},
+        ]}});
+        assert_eq!(unanswered_questions(Some(&meta)), vec!["q1".to_string(), "q2".to_string()]);
+        assert!(unanswered_questions(None).is_empty());
+        assert!(unanswered_questions(Some(&json!({}))).is_empty());
     }
 
     /// A step the person said no to on its card (28b).
