@@ -730,6 +730,151 @@ export const GATHER_FIXTURES = {
   signupResult: gatherFixture('Your potluck sign-up is closed. Every slot is full except Washing-up crew.', 'Potluck sign-up', 'ended', signupClosed),
 } satisfies Record<string, Fixture>;
 
+// Front desk (pa13): Marta's sea-view flat in Piran, answered by Bell. Guests, words, times and costs are made up,
+// after Mira's pa13 mockups. Times are today's clock (yesterday's when that is still ahead), as in the mockups.
+const DESK_FUNNEL = 'https://marta-mac.tail5e2c.ts.net/p/seaview';
+const DESK_WIFI = 'http://192.168.1.20:7480/p/seaview';
+const deskAt = (h: number, m: number, daysAgo = 0) => {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  d.setHours(h, m, 0, 0);
+  // Never in the future: an answer must come after the hand-off it answers.
+  if (d.getTime() > Date.now()) d.setDate(d.getDate() - 1);
+  return d.toISOString();
+};
+const deskGuest = (id: string, name: string, creature: string, over: Record<string, unknown> = {}) => ({
+  id,
+  name,
+  creature,
+  waiting: false,
+  handoff_reason: null,
+  last: null,
+  unread: 0,
+  msgs: 0,
+  delete_on: '2026-12-08',
+  ...over,
+});
+const DESK_GUESTS = [
+  deskGuest('g-emma', 'Emma', 'beret', {
+    waiting: true,
+    handoff_reason: 'Emma asks to check out at 1 PM',
+    last: { from: 'guest', text: 'Could we check out at 1 instead of 10 on Sunday? Our ferry is at 3.', at: deskAt(14, 14) },
+    unread: 1,
+    msgs: 6,
+  }),
+  deskGuest('g-tom', 'Tom', 'visor', { last: { from: 'bot', text: 'The Wi-Fi is SeaView-5G, the password is on the fridge door.', at: deskAt(13, 41) }, msgs: 4 }),
+  deskGuest('g-yuki', 'Yuki', 'ears', { last: { from: 'guest', text: 'Thanks, found the beach towels!', at: deskAt(11, 5) }, unread: 1, msgs: 8 }),
+  deskGuest('g-luca', 'Luca', 'bulb', { last: { from: 'bot', text: 'Bins go out on Tuesday night: blue for paper, yellow for plastic.', at: deskAt(19, 30, 2) }, msgs: 3, delete_on: '2026-12-01' }),
+];
+const deskBase = {
+  title: 'Sea-view flat',
+  place: 'Piran',
+  host_name: 'Marta',
+  answer_bot: { id: 'kw-never-shown-01', name: 'Bell', sprite: 'desk', model: 'Claude Haiku 5.5' },
+  counts: { guests: 4, waiting: 1, replies_today: 23, daily_cap: 50, messages_today: 31 },
+  cap_resets_at: deskAt(24, 0),
+  cost_per_reply_usd: 0.004,
+  guide_chars: 2840,
+  guide_facts: 24,
+  guide_preview:
+    'Wi-Fi: SeaView-5G, password on the fridge door.\nCheck-in from 3 PM, check-out by 10 AM. Keys in the lockbox, code sent the day before.\nParking: the blue zone on Tartinijev trg, 2 min walk. Beach towels in the hall cupboard.',
+  guests: DESK_GUESTS,
+  join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: DESK_FUNNEL, wifi_url: DESK_WIFI },
+};
+const deskFixture = (reply: string, state: 'writing' | 'live' | 'ended', desk: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: 'pocket:seaview' },
+    code: 'seaview',
+    kit: 'desk',
+    name: 'Sea-view flat',
+    when: null,
+    state,
+    santa: null,
+    desk: { ...deskBase, ...desk },
+  });
+const deskCapGuests = [
+  deskGuest('g-ana', 'Ana', 'spikes', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'Is there a hair dryer somewhere?', at: deskAt(21, 12) }, unread: 1, msgs: 5 }),
+  deskGuest('g-emma', 'Emma', 'beret', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'What time does the bakery downstairs open?', at: deskAt(20, 48) }, unread: 1, msgs: 9 }),
+  deskGuest('g-ben', 'Ben', 'horns', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'Can we leave the bags here after check-out?', at: deskAt(20, 3) }, unread: 2, msgs: 7 }),
+  deskGuest('g-tom', 'Tom', 'visor', { last: { from: 'bot', text: 'The nearest pharmacy is on Tartinijev trg, open till 8 PM.', at: deskAt(19, 2) }, msgs: 12 }),
+];
+export const DESK_FIXTURES = {
+  setup: deskFixture("Here's the front desk for your flat. Bell answers from this guide only; check it, then start.", 'writing', { guests: [], counts: { guests: 0, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 } }),
+  address: deskFixture('The front desk needs an address that stays the same, because guests come back over days.', 'writing', {
+    guests: [],
+    counts: { guests: 0, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 },
+    start_error: 'needs_stable_address',
+    join: { mode: 'wifi', anywhere_kind: null, anywhere_url: null, wifi_url: DESK_WIFI },
+  }),
+  ready: deskFixture('The front desk is open. Print the QR for the fridge or send the link before guests arrive.', 'live', {
+    guests: [],
+    counts: { guests: 0, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 },
+  }),
+  live: deskFixture('Four guests have written today. Bell answered the rest; Emma needs you.', 'live', {}),
+  conversation: deskFixture("Here's Tom's chat.", 'live', {}),
+  waiting: deskFixture('Emma asks to check out at 1 PM. Bell never says yes to that, so it waits for you.', 'live', {}),
+  answered: deskFixture('Your answer went to Emma.', 'live', {}),
+  cap: deskFixture('Bell wrote 50 replies today, its limit. Three guests are waiting for you.', 'live', {
+    counts: { guests: 4, waiting: 3, replies_today: 50, daily_cap: 50, messages_today: 64 },
+    guests: deskCapGuests,
+  }),
+  ended: deskFixture('The front desk is stopped. Each chat is deleted 7 days after its last message.', 'ended', {
+    counts: { guests: 6, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 },
+    guests: DESK_GUESTS.map((g) => ({ ...g, waiting: false, handoff_reason: null, unread: 0 })),
+    ended: { at: '2026-12-10', deletes_on: '2026-12-17', days: 12, bot_replies: 41, host_replies: 3, messages: 58 },
+  }),
+} satisfies Record<string, Fixture>;
+/** Which guest's chat each fixture opens (DeskCard `openGuest`). */
+export const DESK_OPEN: Partial<Record<keyof typeof DESK_FIXTURES, string>> = { conversation: 'g-tom', waiting: 'g-emma', answered: 'g-emma' };
+/** `read.conversation` for the opened guests, as Lin's `?view=guest:<id>` returns it. */
+export const DESK_CONVERSATIONS: Record<string, unknown> = {
+  'g-tom': {
+    api: 1,
+    version: 3,
+    guest: { id: 'g-tom', name: 'Tom', creature: 'visor', delete_on: '2026-12-08', waiting: false, handoff_reason: null },
+    messages: [
+      { id: 'm1', from: 'guest', text: "Hi! What's the Wi-Fi password?", at: deskAt(13, 40) },
+      { id: 'm2', from: 'bot', text: 'The Wi-Fi is SeaView-5G, the password is on the fridge door.', at: deskAt(13, 40) },
+      { id: 'm3', from: 'guest', text: 'And is there parking nearby?', at: deskAt(13, 41) },
+      { id: 'm4', from: 'bot', text: 'Yes: the blue zone on Tartinijev trg, a 2-minute walk. Pay at the machine or in the app.', at: deskAt(13, 41) },
+    ],
+  },
+  'g-emma': {
+    api: 1,
+    version: 7,
+    guest: { id: 'g-emma', name: 'Emma', creature: 'beret', delete_on: '2026-12-08', waiting: true, handoff_reason: 'Emma asks to check out at 1 PM' },
+    messages: [
+      { id: 'e1', from: 'guest', text: 'Where can we buy fresh fish?', at: deskAt(9, 12) },
+      { id: 'e2', from: 'bot', text: 'The fish market by the harbour opens at 7 AM, closed on Mondays.', at: deskAt(9, 12) },
+      { id: 'e3', from: 'guest', text: 'Could we check out at 1 instead of 10 on Sunday? Our ferry is at 3.', at: deskAt(14, 13) },
+      { id: 'e4', from: 'bot', text: "I can't say yes to a late check-out, so I've asked Marta. She'll reply here.", at: deskAt(14, 14) },
+      { id: 'e5', from: 'note', text: '', note: 'handoff', at: deskAt(14, 14) },
+    ],
+  },
+};
+/** The Needs-you items (`GET /api/waiting`, kind pocket_desk) for the live and cap fixtures. */
+export const DESK_WAITING = {
+  follow_up_hours: 24,
+  items: [
+    {
+      kind: 'pocket_desk',
+      id: 'desk:seaview:g-emma',
+      pocket_code: 'seaview',
+      pocket_title: 'Sea-view flat',
+      guest_id: 'g-emma',
+      guest_name: 'Emma',
+      text: 'Emma asks to check out at 1 PM',
+      quote: 'Could we check out at 1 instead of 10 on Sunday? Our ferry is at 3.',
+      asked_at: deskAt(14, 14),
+      kwant_id: 'kw-never-shown-01',
+      kwant_name: 'Bell',
+      channel_id: null,
+      direct_kwant_id: 'kw-never-shown-01',
+      thread_id: 't-desk',
+    },
+  ],
+};
+
 export const FIXTURES = {
   comparison,
   chartLine,

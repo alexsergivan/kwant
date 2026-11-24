@@ -1234,7 +1234,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   }, [approvalKey]);
   // 33q: rows settle to their real height after the first paint (kw-row-lazy rows start at an estimate, a chart
   // measures its width), so while the person follows the bottom a row changing height keeps the newest in view.
-  // Only a real change of height counts (not a row's first observation), and never during a jump.
+  // Only a real change of height counts, and never during a jump. chat-gap-scroll: a row new to this list is measured
+  // when it's observed, before the pin below lands on it: a row below the screen still has its 160 px estimate then,
+  // and draws at its real height a frame later. Its first observation used to be ignored, so with no reply streaming
+  // (nothing else re-pins) the newest message stayed that difference below the view.
   const rowHeightsRef = useRef(new WeakMap<Element, number>());
   useEffect(() => {
     const el = scrollRef.current;
@@ -1250,7 +1253,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
       }
       if (grew && stickRef.current && !jumpingRef.current) pinToBottom(el);
     });
-    el.querySelectorAll('[data-message-id]').forEach((r) => ro.observe(r));
+    el.querySelectorAll('[data-message-id]').forEach((r) => {
+      if (!heights.has(r)) heights.set(r, r.getBoundingClientRect().height);
+      ro.observe(r);
+    });
     return () => ro.disconnect();
   }, [messages, contextKey]);
   useEffect(() => () => jumpEndRef.current?.(), []);
