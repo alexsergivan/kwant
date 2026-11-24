@@ -3396,6 +3396,18 @@ endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & \"%_prog%\"  \"%dp0%\\n
             assert!(why.contains("didn't say which tools it offered"), "{why}");
         }
 
+        /// 35b red proof: a Mistral Vibe turn reads vibe's streamed reply (`--output streaming`).
+        const VIBE_TEXT: &str = r#"echo '{"type":"message","role":"assistant","content":[{"type":"text","text":"The card."}],"outcome":{"type":"committed"}}'"#;
+
+        #[tokio::test]
+        async fn a_vibe_turn_answers_with_vibes_streamed_reply() {
+            let fake = Fake::new("vibe", &format!("{RECORD}\n{VIBE_TEXT}"));
+            let out = fake.run(turn(false)).await.expect("a vibe turn runs");
+            assert_eq!(out.text.trim(), "The card.");
+            let argv = fake.argv();
+            assert!(has_pair(&argv, "--output", "streaming"), "{argv:?}");
+        }
+
         // 29y: a CLI killed mid-turn says why. On a test machine nothing raises the OOM-kill
         // count, so a `kill -9` reads as the outside line; the memory line is pinned in
         // `killed_cli_tests`.

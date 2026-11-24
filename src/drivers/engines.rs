@@ -1287,6 +1287,16 @@ fn unavailable(target_model: &str, reports: &[EngineReport]) -> String {
 mod tests {
     use super::*;
 
+    /// 35b red proof: Mistral's family runs on the Mistral Vibe CLI (`vibe`) and the Mistral API.
+    #[test]
+    fn mistral_runs_on_the_vibe_cli_and_the_api() {
+        let (cli, api) = EngineId::of_family(Engine::Mistral);
+        assert_eq!(cli.as_str(), "vibe");
+        assert_eq!(cli.kind(), EngineKind::Cli);
+        assert_eq!(api, EngineId::MistralApi);
+        assert_eq!(EngineId::parse("vibe"), Some(cli));
+    }
+
     #[test]
     fn no_engine_notice_flags_the_setup_card() {
         let (text, meta) = no_engine_notice("Architect", false);
