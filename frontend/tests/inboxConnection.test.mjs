@@ -38,22 +38,23 @@ const render = (props) => {
   return new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html');
 };
 
-test('a connection row says who needs what, with Reconnect, in Waiting on you', () => {
+test('a connection row says who needs what, with Sign in again (34h: never Reconnect), in Waiting on you', () => {
   const d = render({ onOpenConnections: () => {} });
   const li = d.querySelector('[data-row="msg1"]');
   assert.ok(li, 'the row is listed');
   assert.equal(li.getAttribute('data-group'), 'waiting_on_you');
   assert.match(li.textContent, /Gmail needs you to sign in again for Ben/);
-  assert.match(li.textContent, /Sign in again/);
+  assert.equal(li.textContent.match(/Sign in again/g)?.length, 1, 'said once, by the button; the state word is Needs sign-in');
+  assert.match(li.textContent, /Needs sign-in/);
   const btn = li.querySelector('[data-reconnect="msg1"]');
   assert.ok(btn);
-  assert.equal(btn.textContent, 'Reconnect');
+  assert.equal(btn.textContent, 'Sign in again', 'named by cause, even on a line stored with "Reconnect"');
   assert.match(btn.className, /h-11/, '44 px on a phone');
-  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open' }), { label: 'Sign in again', tone: 'amber' });
-  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open', cause: 'sign_in' }), { label: 'Sign in again', tone: 'amber' });
+  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open' }), { label: 'Needs sign-in', tone: 'amber' });
+  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open', cause: 'sign_in' }), { label: 'Needs sign-in', tone: 'amber' });
 });
 
-test('a Composio app with no active account says Connect again, still with Reconnect', () => {
+test('a Composio app with no active account says Connect again, on its button too', () => {
   const composio = {
     ...row, id: 'msg2', kwant_name: 'TechLead', title: 'Google Calendar needs to be connected again for TechLead',
     connection: 'Google Calendar', cause: 'reconnect', sort_key: [0, 0, 0, 'TechLead', 'msg2'],
@@ -67,10 +68,12 @@ test('a Composio app with no active account says Connect again, still with Recon
   const li = new DOMParser().parseFromString(`<body>${html}</body>`, 'text/html').querySelector('[data-row="msg2"]');
   assert.ok(li, 'the row is listed');
   assert.match(li.textContent, /Google Calendar needs to be connected again for TechLead/);
-  assert.match(li.textContent, /Connect again/);
+  assert.equal(li.textContent.match(/Connect again/g)?.length, 1, 'said once, by the button; the state word is Disconnected');
+  assert.match(li.textContent, /Disconnected/);
   assert.doesNotMatch(li.textContent, /Sign in again/);
-  assert.equal(li.querySelector('[data-reconnect="msg2"]').textContent, 'Reconnect');
-  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open', cause: 'reconnect' }), { label: 'Connect again', tone: 'amber' });
+  assert.equal(li.querySelector('[data-reconnect="msg2"]').textContent, 'Connect again');
+  assert.doesNotMatch(li.textContent, /Reconnect/);
+  assert.deepEqual(m.itemLabel({ kind: 'connection', status: 'open', cause: 'reconnect' }), { label: 'Disconnected', tone: 'amber' });
 });
 
 test('without a way to open Connections there is no button', () => {
