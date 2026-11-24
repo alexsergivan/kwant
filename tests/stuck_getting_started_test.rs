@@ -167,7 +167,7 @@ async fn the_sweep_stops_a_silent_turn_with_a_line_in_its_chat_then_unlists_it()
     assert_eq!(ended, vec![("t-silent".to_string(), Lost::Silent)]);
     assert!(job.token.is_cancelled(), "its work is told to stop");
     let line = state.db.list_messages(&chat, 10).await.unwrap().into_iter().find(|m| m.sender_role == "system").expect("a line in the chat");
-    assert_eq!(line.text, "Quant stopped: nothing happened in this reply for 6 minutes. Send your message again to retry.");
+    assert_eq!(line.text, "Quant got stuck for 6 minutes, so the work was stopped. Ask again if you still need it.");
     assert!(line.meta.as_deref().unwrap_or_default().contains("\"turn_lost\""), "{:?}", line.meta);
 
     // Its work never winds down (a hung engine): the next sweep unlists it, without a second line

@@ -93,7 +93,7 @@ pub fn judge(turn: &ActiveTurn, seen: &Seen, now: DateTime<Utc>, silence: Durati
 /// The line a silent turn leaves in its chat.
 pub fn silent_line(kwant_name: &str, silence: Duration) -> String {
     let mins = (silence.as_secs() / 60).max(1);
-    format!("{kwant_name} stopped: nothing happened in this reply for {mins} minutes. Send your message again to retry.")
+    format!("{kwant_name} got stuck for {mins} minutes, so the work was stopped. Ask again if you still need it.")
 }
 
 /// Starts the sweep; it stops with `shutdown`.
@@ -328,7 +328,7 @@ mod tests {
     fn the_line_names_the_bot_and_the_wait_in_minutes() {
         assert_eq!(
             silent_line("Quant", SIX_MIN),
-            "Quant stopped: nothing happened in this reply for 6 minutes. Send your message again to retry."
+            "Quant got stuck for 6 minutes, so the work was stopped. Ask again if you still need it."
         );
     }
 }
