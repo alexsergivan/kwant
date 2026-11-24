@@ -909,7 +909,7 @@ test('built: phone files at most 80 KB gzipped (JS + CSS + HTML + font); the big
     else phone += gz;
     rows.push(`${f} ${buf.length} B raw, ${gz} B gz`);
   }
-  // A phone loads one kit: the entry lazily imports each kit's own chunk (Secret Santa, gather, the Wall), and only the
+  // A phone loads one kit: the entry lazily imports each kit's own chunk (Secret Santa, gather, the Wall, the front desk), and only the
   // pocket's kit is fetched. So the budget counts every phone file except the other kits' JS chunks: all of them minus
   // the lazy kit chunks, plus the largest one. CSS and shared chunks still count in full, which keeps it on the safe side.
   const entry = readFileSync(new URL('index.html', dist), 'utf8').match(/g-[\w-]+\.js/)?.[0];

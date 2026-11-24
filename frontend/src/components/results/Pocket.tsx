@@ -47,6 +47,7 @@ import { EditPanel } from './PocketEdit';
 import { SantaCard, findMatchLike, validSanta } from './PocketSanta';
 import { WallCard, validWall } from './PocketWall';
 import { GatherCard, findBallotPair, validGather } from './PocketGather';
+import { DeskCard, validDesk } from './PocketDesk';
 import type { RendererProps } from './registry';
 
 // ---------------------------------------------------------------------------------------------------
@@ -207,6 +208,12 @@ export function validPocket(raw: unknown): PocketBlock | null {
   if (gather && (santa || results)) return null;
   if (gather && state !== (gather.phase === 'closed' ? 'ended' : 'live')) return null;
   if (gather && b.join !== undefined && b.join !== null) return null;
+  // Front desk (pa13): `desk` carries its own join (no quick tunnel); set-up is "writing", then "live", then "ended".
+  const desk = b.desk === undefined || b.desk === null ? null : validDesk(b.desk, b.name as string);
+  if (desk === undefined || (b.kit === 'desk') !== !!desk) return null;
+  if (desk && (santa || gather || results)) return null;
+  if (desk && !['writing', 'live', 'ended'].includes(state)) return null;
+  if (desk && b.join !== undefined && b.join !== null) return null;
   return {
     id: b.id,
     type: 'pocket',
@@ -234,6 +241,7 @@ export function validPocket(raw: unknown): PocketBlock | null {
     yours: yours ?? null,
     santa,
     gather,
+    desk,
     ...(wall ? { wall } : {}),
     ...(notice ? { notice } : {}),
   };
@@ -278,7 +286,7 @@ export function withCard(b: PocketBlock, c: DraftCard): PocketBlock {
 const NUM = new Intl.NumberFormat('en');
 const num = (n: number) => NUM.format(n);
 const usd = (n: number) => `$${n < 0.01 && n > 0 ? '0.01' : n.toFixed(2)}`;
-const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa', wall: 'Photo wall', gather: 'Sign-up' };
+const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa', wall: 'Photo wall', gather: 'Sign-up', desk: 'Guest Guide' };
 export const kitLabel = (kit: string) => KIT_LABEL[kit] ?? kit.charAt(0).toUpperCase() + kit.slice(1).replace(/_/g, ' ');
 
 export function budgetLine(b: PocketBlock): string {
@@ -1096,6 +1104,8 @@ export const Pocket: React.FC<RendererProps<PocketBlock>> = (props) =>
     <GatherCard block={props.block} ask={props.ask} />
   ) : props.block.wall ? (
     <WallCard block={props.block} ask={props.ask} join={<WallJoin block={props.block} />} />
+  ) : props.block.desk ? (
+    <DeskCard block={props.block} ask={props.ask} />
   ) : (
     <QuizPocket {...props} />
   );

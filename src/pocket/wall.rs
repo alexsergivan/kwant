@@ -115,6 +115,33 @@ struct St {
     /// True once the host showed the best photos to guests (`set_best`).
     #[serde(default)]
     best_set: bool,
+    // pa14b: the best-30 pick the morning after the wall closes (see `wall_pick`)
+    /// The wall's bot is picking now (the card's state 6).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    picking: bool,
+    /// Times a pick started: once, plus once more if a restart cut it off ([`PICK_TRIES`]).
+    #[serde(default, skip_serializing_if = "is_zero8")]
+    pick_tries: u8,
+    /// The pick ran, failed, or isn't needed (the host chose by hand): it never starts again.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pick_done: bool,
+    /// The pick's best (at most 30 approved ids), for the host to look over (state 7). Never in
+    /// a guest's, the lobby's or the big screen's view.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    proposed_best: Vec<String>,
+    /// The proposal came from the bot's turn ([`pick_propose`]), not from "30 or fewer, so all"
+    /// ([`pick_propose_all`]): only then can the best shown be the bot's (`best_by: "snap"`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    proposed_by_bot: bool,
+    /// The best shown now is the pick's proposal, unchanged (`best_by: "snap"`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    best_by_snap: bool,
+    /// Bot calls this wall cost, for the budget line.
+    #[serde(default, skip_serializing_if = "is_zero32")]
+    bot_calls: u32,
+    /// The "I picked the best 30 and showed them" line went to the person's chat.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    snap_said: bool,
 }
 
 /// One photo's record. A hidden one keeps only `id` and `status`.
@@ -153,12 +180,20 @@ fn is_zero16(n: &u16) -> bool {
     *n == 0
 }
 
+fn is_zero8(n: &u8) -> bool {
+    *n == 0
+}
+
+fn is_zero32(n: &u32) -> bool {
+    *n == 0
+}
+
 impl Photo {
     fn hidden(id: &str) -> Photo {
         Photo { id: id.to_string(), status: HIDDEN.into(), ..Photo::default() }
     }
 
-    fn file_name(&self) -> Option<String> {
+    pub(super) fn file_name(&self) -> Option<String> {
         Kind::from_ext(&self.ext).map(|k| format!("{}.{}", self.id, k.ext()))
     }
 }
@@ -232,7 +267,7 @@ fn delete_on(spec: &Value) -> Option<String> {
 
 impl Wall {
     fn facts(ctx: &KitCtx, s: &St) -> Value {
-        json!({
+        let mut v = json!({
             "title": spec_str(ctx.spec, "title"),
             "host_name": spec_str(ctx.spec, "host_name"),
             "when": ctx.spec.get("when").or_else(|| ctx.spec.get("event_at")).and_then(spec_date),
@@ -241,7 +276,12 @@ impl Wall {
             "state": if uploads_open(ctx, s) { "open" } else { "closed" },
             "captions": caps(ctx.spec).captions,
             "best_set": s.best_set,
-        })
+        });
+        // pa14b: guests may see that the bot picked the best shown (never what it proposed)
+        if s.best_set && s.best_by_snap {
+            v["best_by"] = json!("snap");
+        }
+        v
     }
 
     /// An approved photo as a guest or the big screen sees it: first name, no player id.
@@ -313,10 +353,16 @@ impl Wall {
         v["best"] = json!(s.photos.iter().filter(|p| p.best).map(|p| p.id.as_str()).collect::<Vec<_>>());
         v["best_max"] = json!(BEST_MAX);
         v["keep_days"] = json!(KEEP_DAYS);
-        // pa14b's fields, ahead of it: no check picks yet, so a best set is always the host's own
-        // (the card's "Your best", no Picked sticker) and nothing is ever being picked
-        v["best_by"] = if s.photos.iter().any(|p| p.best) { json!("host") } else { Value::Null };
-        v["picking"] = json!(false);
+        // pa14b: "snap" while the best shown is the pick's proposal unchanged (the Picked
+        // sticker), "host" for any swap or hand pick, null with no best
+        v["best_by"] = match (s.photos.iter().any(|p| p.best), s.best_by_snap) {
+            (false, _) => Value::Null,
+            (true, true) => json!("snap"),
+            (true, false) => json!("host"),
+        };
+        v["picking"] = json!(s.picking);
+        v["proposed_best"] = json!(s.proposed_best);
+        v["budget"] = budget(s);
         v
     }
 
@@ -391,9 +437,17 @@ impl Wall {
 
     fn hide(ctx: &mut KitCtx, s: &mut St, id: &str) -> Result<(), KitError> {
         let p = s.photos.iter_mut().find(|p| p.id == id).ok_or_else(|| bad(format!("There's no photo {id}.")))?;
-        if p.status != HIDDEN {
-            *p = Photo::hidden(id);
-            ctx.event(None, "photo_hidden", json!({ "id": id }));
+        if p.status == HIDDEN {
+            return Ok(());
+        }
+        *p = Photo::hidden(id);
+        ctx.event(None, "photo_hidden", json!({ "id": id }));
+        // pa14b: a hidden photo leaves the pick's proposal too
+        s.proposed_best.retain(|x| x != id);
+        // pa14 QA F4: once no photo is among the best any more, guests stop seeing a best
+        if !s.photos.iter().any(|p| p.best) {
+            s.best_set = false;
+            s.best_by_snap = false;
         }
         Ok(())
     }
@@ -543,7 +597,18 @@ impl Kit for Wall {
                 }
                 // Shown to guests from now on; an empty list takes the best away again
                 s.best_set = !chosen.is_empty();
+                // pa14b: the bot's proposal unchanged counts as the bot's ("snap"); any swap, a
+                // hand pick, or "30 or fewer, so all" (no bot picked anything) is the host's.
+                // A hand pick also means no pick ever runs after it.
+                let proposal: BTreeSet<String> = s.proposed_best.iter().cloned().collect();
+                s.best_by_snap = s.proposed_by_bot && !chosen.is_empty() && chosen == proposal;
+                s.pick_done = true;
+                s.picking = false;
                 ctx.event(None, "best_set", json!({ "count": chosen.len() }));
+                if s.best_by_snap && !s.snap_said {
+                    s.snap_said = true;
+                    ctx.event(None, SNAP_SHOWN_EVENT, json!({ "count": chosen.len() }));
+                }
             }
             _ => return Err(bad(format!("unknown action {name}"))),
         }
@@ -564,6 +629,11 @@ impl Kit for Wall {
 
     fn ticks_unwatched(&self) -> bool {
         true
+    }
+
+    fn host_actions_after_end(&self) -> &'static [&'static str] {
+        // pa14b: the best 30 are picked the morning after; the host can still show them
+        &["set_best"]
     }
 
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value {
@@ -590,6 +660,183 @@ impl Kit for Wall {
     }
 }
 
+// ---- pa14b: the best-30 pick ----
+
+/// What a `set_best` emits the first time the host shows the pick's proposal unchanged: the
+/// pocket core then posts the "I picked the best 30 and showed them" line ([`super::wall_pick`]).
+pub const SNAP_SHOWN_EVENT: &str = "snap_best_shown";
+/// Times a pick may start: once, and once more on the next tick after a restart cut it off.
+pub const PICK_TRIES: u8 = 2;
+/// The pick's one bot call, roughly, for the budget line (one turn with up to 90 small previews).
+pub const USD_PER_PICK_CALL: f64 = 0.10;
+
+/// What the scheduled pick does with one wall now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PickStep {
+    /// Nothing yet (not due, or running here), or never again (done).
+    Wait,
+    /// No pick: the host chose by hand, or nothing is approved. Mark it done.
+    Skip,
+    /// 30 or fewer approved: all of them are the proposal, no bot call.
+    ProposeAll(Vec<String>),
+    /// More than 30 approved: the bot picks from these.
+    Ask(Vec<String>),
+}
+
+fn approved_ids(s: &St) -> Vec<String> {
+    s.photos.iter().filter(|p| p.status == APPROVED).map(|p| p.id.clone()).collect()
+}
+
+/// The next step for a wall's pick. `due`: it is the morning after uploads stopped. `running_here`:
+/// this process runs its pick now (state saying `picking` without that is a restart's leftover).
+pub fn pick_step(state: &Value, due: bool, running_here: bool) -> PickStep {
+    let s = load(state);
+    if s.pick_done || (s.picking && running_here) {
+        return PickStep::Wait;
+    }
+    // A host who already chose by hand is never overridden
+    if s.best_set || s.photos.iter().any(|p| p.best) {
+        return PickStep::Skip;
+    }
+    if !due {
+        return PickStep::Wait;
+    }
+    let approved = approved_ids(&s);
+    match approved.len() {
+        0 => PickStep::Skip,
+        n if n <= BEST_MAX => PickStep::ProposeAll(approved),
+        _ => PickStep::Ask(approved),
+    }
+}
+
+/// The pick won't run (the host chose, nothing approved, or no bot to ask): never again.
+pub fn pick_skip(state: &mut Value) {
+    let mut s = load(state);
+    s.picking = false;
+    s.pick_done = true;
+    store(state, &s);
+}
+
+/// 30 or fewer approved: they're all proposed, without a bot call.
+pub fn pick_propose_all(ctx: &mut KitCtx, state: &mut Value, ids: &[String]) {
+    let mut s = load(state);
+    s.proposed_best = ids.iter().take(BEST_MAX).cloned().collect();
+    s.proposed_by_bot = false;
+    s.picking = false;
+    s.pick_done = true;
+    ctx.event(None, "best_proposed", json!({ "count": s.proposed_best.len(), "by": "all" }));
+    store(state, &s);
+}
+
+/// The bot's turn starts: `picking`, one more try and one more bot call. `false` (and done, not
+/// picking) once [`PICK_TRIES`] are used up: a pick is never retried in a loop.
+pub fn pick_start(state: &mut Value) -> bool {
+    let mut s = load(state);
+    if s.pick_tries >= PICK_TRIES {
+        s.picking = false;
+        s.pick_done = true;
+        store(state, &s);
+        return false;
+    }
+    s.picking = true;
+    s.pick_tries += 1;
+    s.bot_calls += 1;
+    store(state, &s);
+    true
+}
+
+/// The turn failed, the bot is gone, or it never proposed: back to not picking, no proposal,
+/// and no pick again.
+pub fn pick_fail(ctx: &mut KitCtx, state: &mut Value) {
+    let mut s = load(state);
+    s.picking = false;
+    s.pick_done = true;
+    s.proposed_best.clear();
+    s.proposed_by_bot = false;
+    ctx.event(None, "best_pick_failed", json!({}));
+    store(state, &s);
+}
+
+/// The pick ran, failed or won't run: nothing more to do for it.
+pub fn pick_settled(state: &Value) -> bool {
+    load(state).pick_done
+}
+
+/// (approved photos, best photos) for the state-8 line.
+pub fn best_counts(state: &Value) -> (usize, usize) {
+    let s = load(state);
+    (s.photos.iter().filter(|p| p.status == APPROVED).count(), s.photos.iter().filter(|p| p.best).count())
+}
+
+pub fn is_picking(state: &Value) -> bool {
+    load(state).picking
+}
+
+pub fn proposed_count(state: &Value) -> usize {
+    load(state).proposed_best.len()
+}
+
+/// The ids the bot may look at while picking: the approved photos (a placeholder record for
+/// each), oldest first.
+pub fn approved_photos(state: &Value) -> Vec<Photo> {
+    load(state).photos.into_iter().filter(|p| p.status == APPROVED).collect()
+}
+
+/// Shortens text from the bot before it goes back to it in a refusal.
+fn quoted(id: &str) -> String {
+    let t: String = id.chars().filter(|c| !c.is_control()).take(40).collect();
+    format!("{t:?}")
+}
+
+/// The bot's answer (`pocket_wall_propose_best`): at most 30 approved photos of this wall, no
+/// repeats. A refusal leaves the pick running, so the bot can fix its list in the same turn.
+pub fn pick_propose(ctx: &mut KitCtx, state: &mut Value, ids: &Value) -> Result<usize, KitError> {
+    let mut s = load(state);
+    if !s.picking {
+        return Err(not_now("This wall isn't picking its best photos now."));
+    }
+    let list = ids.as_array().ok_or_else(|| bad("ids must be a list of photo ids."))?;
+    if list.is_empty() {
+        return Err(bad("Send at least one photo id."));
+    }
+    if list.len() > BEST_MAX {
+        return Err(bad(format!("At most {BEST_MAX} photos; that list has {}.", list.len())));
+    }
+    let mut seen = BTreeSet::new();
+    let mut out = Vec::with_capacity(list.len());
+    for v in list {
+        let id = v.as_str().ok_or_else(|| bad("Photo ids are text."))?;
+        if !seen.insert(id) {
+            return Err(bad(format!("{} is in the list twice.", quoted(id))));
+        }
+        if !s.photos.iter().any(|p| p.id == id && p.status == APPROVED) {
+            return Err(bad(format!("{} isn't one of this wall's approved photos.", quoted(id))));
+        }
+        out.push(id.to_string());
+    }
+    let n = out.len();
+    s.proposed_best = out;
+    s.proposed_by_bot = true;
+    s.picking = false;
+    s.pick_done = true;
+    ctx.event(None, "best_proposed", json!({ "count": n, "by": "snap" }));
+    store(state, &s);
+    Ok(n)
+}
+
+/// The host's budget line: the pick's one bot call, in rough dollars.
+fn budget(s: &St) -> Value {
+    let usd = (f64::from(s.bot_calls) * USD_PER_PICK_CALL * 100.0).round() / 100.0;
+    let line = match s.bot_calls {
+        0 => format!(
+            "No bot calls so far. If more than {BEST_MAX} photos are on the wall when it closes, picking the best {BEST_MAX} the next morning takes 1 bot call, about ${USD_PER_PICK_CALL:.2}."
+        ),
+        1 => format!("1 bot call so far, about ${usd:.2} on your account, to pick the best {BEST_MAX}."),
+        n => format!("{n} bot calls so far, about ${usd:.2} on your account, to pick the best {BEST_MAX}."),
+    };
+    json!({ "bot_calls": s.bot_calls, "usd": usd, "line": line })
+}
+
 // ---- Files ----
 
 /// `<data_dir>/pocket/<code>`: `None` for a code that isn't one (never a path from a request).
@@ -597,7 +844,7 @@ fn pocket_dir(state: &AppState, code: &str) -> Option<PathBuf> {
     keys::valid_code(code).then(|| state.config.data_dir.join("pocket").join(code))
 }
 
-fn wall_dir(state: &AppState, code: &str) -> Option<PathBuf> {
+pub(super) fn wall_dir(state: &AppState, code: &str) -> Option<PathBuf> {
     pocket_dir(state, code).map(|d| d.join("wall"))
 }
 
@@ -1167,6 +1414,253 @@ mod tests {
         assert!(header_caption(&on, Some(b"%FF%FE")).is_err(), "not UTF-8");
         assert_eq!(caption_of(&json!({ "title": "W", "captions": false }), "hi"), (None, false));
         assert!(creature("pl_0") < 8 && creature("pl_0") == creature("pl_0"));
+    }
+
+    // ---- pa14b: the best-30 pick ----
+
+    fn approved(n: usize) -> Value {
+        let rows: Vec<(&str, &str)> = (0..n).map(|i| (if i % 2 == 0 { "pl_0" } else { "pl_1" }, APPROVED)).collect();
+        with_photos(&rows)
+    }
+
+    fn picking(n: usize) -> Value {
+        let mut state = approved(n);
+        assert!(pick_start(&mut state));
+        state
+    }
+
+    #[test]
+    fn pick_step_waits_skips_or_asks() {
+        // Not due yet: nothing, whatever the count
+        assert_eq!(pick_step(&approved(40), false, false), PickStep::Wait);
+        // Due: none approved is a skip, 30 or fewer are all proposed without a call, 31+ ask
+        assert_eq!(pick_step(&approved(0), true, false), PickStep::Skip);
+        let all = pick_step(&approved(30), true, false);
+        assert!(matches!(&all, PickStep::ProposeAll(ids) if ids.len() == 30), "{all:?}");
+        let ask = pick_step(&approved(31), true, false);
+        assert!(matches!(&ask, PickStep::Ask(ids) if ids.len() == 31), "{ask:?}");
+        // Pending and hidden photos don't count
+        let mixed = with_photos(&[("pl_0", APPROVED), ("pl_0", PENDING), ("pl_1", HIDDEN)]);
+        assert_eq!(pick_step(&mixed, true, false), PickStep::ProposeAll(vec!["ph_0".into()]));
+        // A host who chose by hand is never overridden, even before it's due
+        let ps = players();
+        let spec = json!({ "title": "W" });
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let mut chose = approved(40);
+        Wall.act(&mut ctx, &mut chose, &Viewer::Host, "set_best", &json!({ "ids": ["ph_3"] })).unwrap();
+        assert_eq!(pick_step(&chose, true, false), PickStep::Wait, "a hand pick settles it");
+        let mut st = load(&chose);
+        st.pick_done = false;
+        store(&mut chose, &st);
+        assert_eq!(pick_step(&chose, true, false), PickStep::Skip, "and a best is a skip even if not settled");
+        // Done is done
+        let mut done = approved(40);
+        pick_skip(&mut done);
+        assert!(pick_settled(&done));
+        assert_eq!(pick_step(&done, true, false), PickStep::Wait);
+        // Picking: wait while it runs here; a restart's leftover asks again
+        let running = picking(40);
+        assert_eq!(pick_step(&running, true, true), PickStep::Wait);
+        assert!(matches!(pick_step(&running, true, false), PickStep::Ask(_)));
+    }
+
+    #[test]
+    fn pick_runs_at_most_twice() {
+        let mut state = approved(40);
+        assert!(pick_start(&mut state), "the first try");
+        assert!(is_picking(&state));
+        assert!(pick_start(&mut state), "once more after a restart");
+        assert!(!pick_start(&mut state), "then never");
+        assert!(!is_picking(&state) && pick_settled(&state));
+        let st = load(&state);
+        assert_eq!((st.pick_tries, st.bot_calls), (PICK_TRIES, 2));
+    }
+
+    #[test]
+    fn propose_takes_only_approved_ids_of_this_wall() {
+        let ps = players();
+        let spec = json!({ "title": "W" });
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        // Not picking: refused
+        let mut idle = approved(40);
+        assert!(matches!(pick_propose(&mut ctx, &mut idle, &json!(["ph_0"])), Err(KitError::NotNow(_))));
+        let mut state = picking(40);
+        let mut st = load(&state);
+        st.photos[5].status = PENDING.into();
+        st.photos[6] = Photo::hidden("ph_6");
+        store(&mut state, &st);
+        fn refused(state: &mut Value, ctx: &mut KitCtx<'_>, ids: Value, needle: &str) {
+            match pick_propose(ctx, state, &ids) {
+                Err(KitError::BadInput(m)) => assert!(m.contains(needle), "{m}"),
+                other => panic!("{ids}: {other:?}"),
+            }
+        }
+        refused(&mut state, &mut ctx, json!("ph_0"), "list");
+        refused(&mut state, &mut ctx, json!([]), "at least one");
+        let many: Vec<String> = (0..31).map(|i| format!("ph_{i}")).collect();
+        refused(&mut state, &mut ctx, json!(many), "At most 30");
+        refused(&mut state, &mut ctx, json!(["ph_0", "ph_1", "ph_0"]), "twice");
+        refused(&mut state, &mut ctx, json!(["ph_0", 7]), "text");
+        refused(&mut state, &mut ctx, json!(["ph_0", "ph_999"]), "approved");
+        refused(&mut state, &mut ctx, json!(["ph_5"]), "approved");
+        refused(&mut state, &mut ctx, json!(["ph_6"]), "approved");
+        refused(&mut state, &mut ctx, json!(["xx_other_wall"]), "approved");
+        let long = format!("{}\n\u{7}", "z".repeat(500));
+        match pick_propose(&mut ctx, &mut state, &json!([long])) {
+            Err(KitError::BadInput(m)) => assert!(m.len() < 120 && !m.contains('\u{7}'), "{m}"),
+            other => panic!("{other:?}"),
+        }
+        assert!(is_picking(&state) && proposed_count(&state) == 0, "a refusal leaves the pick running");
+        assert!(ctx.events.is_empty());
+        let ids: Vec<String> = (10..40).map(|i| format!("ph_{i}")).collect();
+        assert_eq!(pick_propose(&mut ctx, &mut state, &json!(ids)).unwrap(), 30);
+        assert!(!is_picking(&state) && pick_settled(&state));
+        assert_eq!(load(&state).proposed_best, ids);
+        assert_eq!(ctx.events.last().map(|e| e.kind.as_str()), Some("best_proposed"));
+        assert!(matches!(pick_propose(&mut ctx, &mut state, &json!(["ph_0"])), Err(KitError::NotNow(_))), "once");
+    }
+
+    #[test]
+    fn pick_fail_leaves_no_proposal() {
+        let ps = players();
+        let spec = json!({ "title": "W" });
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let mut state = picking(40);
+        pick_fail(&mut ctx, &mut state);
+        assert!(!is_picking(&state) && pick_settled(&state) && proposed_count(&state) == 0);
+        assert_eq!(pick_step(&state, true, false), PickStep::Wait, "not retried");
+        // The host still stars by hand, after End too
+        assert_eq!(Wall.host_actions_after_end(), ["set_best"]);
+        Wall.act(&mut ctx, &mut state, &Viewer::Host, "set_best", &json!({ "ids": ["ph_1", "ph_2"] })).unwrap();
+        let host = Wall.view(&ctx, &state, &Viewer::Host);
+        assert_eq!((host["best_by"].clone(), host["picking"].clone()), (json!("host"), json!(false)));
+    }
+
+    #[test]
+    fn best_by_is_snap_only_for_the_proposal_unchanged() {
+        let ps = players();
+        let spec = json!({ "title": "W" });
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let mut state = picking(40);
+        let ids: Vec<String> = (0..30).map(|i| format!("ph_{i}")).collect();
+        pick_propose(&mut ctx, &mut state, &json!(ids)).unwrap();
+        let host = Wall.view(&ctx, &state, &Viewer::Host);
+        assert_eq!(host["proposed_best"].as_array().map(Vec::len), Some(30));
+        assert_eq!((host["best_by"].clone(), host["picking"].clone()), (Value::Null, json!(false)), "nothing shown yet");
+        // A swap is the host's
+        let mut swapped = ids.clone();
+        swapped[0] = "ph_35".into();
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let mut s2 = state.clone();
+        Wall.act(&mut ctx, &mut s2, &Viewer::Host, "set_best", &json!({ "ids": swapped })).unwrap();
+        assert_eq!(Wall.view(&ctx, &s2, &Viewer::Host)["best_by"], "host");
+        assert!(Wall.view(&ctx, &s2, &Viewer::Guest("pl_0".into())).get("best_by").is_none());
+        assert!(!ctx.events.iter().any(|e| e.kind == SNAP_SHOWN_EVENT));
+        // Fewer is the host's too
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let mut s3 = state.clone();
+        Wall.act(&mut ctx, &mut s3, &Viewer::Host, "set_best", &json!({ "ids": &ids[..29] })).unwrap();
+        assert_eq!(Wall.view(&ctx, &s3, &Viewer::Host)["best_by"], "host");
+        // Unchanged (any order) is the bot's, and says so once
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let mut rev = ids.clone();
+        rev.reverse();
+        Wall.act(&mut ctx, &mut state, &Viewer::Host, "set_best", &json!({ "ids": rev })).unwrap();
+        assert_eq!(Wall.view(&ctx, &state, &Viewer::Host)["best_by"], "snap");
+        assert_eq!(Wall.view(&ctx, &state, &Viewer::Guest("pl_0".into()))["best_by"], "snap");
+        assert_eq!(ctx.events.iter().filter(|e| e.kind == SNAP_SHOWN_EVENT).count(), 1);
+        Wall.act(&mut ctx, &mut state, &Viewer::Host, "set_best", &json!({ "ids": ids })).unwrap();
+        assert_eq!(ctx.events.iter().filter(|e| e.kind == SNAP_SHOWN_EVENT).count(), 1, "said once");
+        // Then a swap makes it the host's
+        Wall.act(&mut ctx, &mut state, &Viewer::Host, "set_best", &json!({ "ids": swapped })).unwrap();
+        assert_eq!(Wall.view(&ctx, &state, &Viewer::Host)["best_by"], "host");
+    }
+
+    #[test]
+    fn all_of_thirty_or_fewer_unchanged_is_the_hosts_not_the_bots() {
+        // copy check (Mira, 3032d327): no bot picked anything, so no holo sticker, no state-8 line
+        let ps = players();
+        let spec = json!({ "title": "W" });
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let mut state = approved(12);
+        let ids: Vec<String> = (0..12).map(|i| format!("ph_{i}")).collect();
+        pick_propose_all(&mut ctx, &mut state, &ids);
+        assert!(!load(&state).proposed_by_bot);
+        Wall.act(&mut ctx, &mut state, &Viewer::Host, "set_best", &json!({ "ids": ids })).unwrap();
+        assert_eq!(Wall.view(&ctx, &state, &Viewer::Host)["best_by"], "host");
+        assert!(Wall.view(&ctx, &state, &Viewer::Guest("pl_0".into())).get("best_by").is_none());
+        assert!(!ctx.events.iter().any(|e| e.kind == SNAP_SHOWN_EVENT), "no state-8 line");
+        // More than 30, the bot's 30 unchanged: still the bot's
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let mut state = picking(40);
+        let ids: Vec<String> = (0..30).map(|i| format!("ph_{i}")).collect();
+        pick_propose(&mut ctx, &mut state, &json!(ids)).unwrap();
+        assert!(load(&state).proposed_by_bot);
+        Wall.act(&mut ctx, &mut state, &Viewer::Host, "set_best", &json!({ "ids": ids })).unwrap();
+        assert_eq!(Wall.view(&ctx, &state, &Viewer::Host)["best_by"], "snap");
+        assert_eq!(ctx.events.iter().filter(|e| e.kind == SNAP_SHOWN_EVENT).count(), 1);
+    }
+
+    #[test]
+    fn the_proposal_is_for_the_host_only() {
+        let ps = players();
+        let spec = json!({ "title": "W" });
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let mut state = picking(40);
+        let guest = Wall.view(&ctx, &state, &Viewer::Guest("pl_0".into()));
+        assert!(guest.get("picking").is_none());
+        let ids: Vec<String> = (0..30).map(|i| format!("ph_{i}")).collect();
+        pick_propose(&mut ctx, &mut state, &json!(ids)).unwrap();
+        for (who, v) in [
+            ("guest", Wall.view(&ctx, &state, &Viewer::Guest("pl_0".into()))),
+            ("screen", Wall.view(&ctx, &state, &Viewer::BigScreen)),
+            ("lobby", Wall.lobby(&ctx, &state)),
+        ] {
+            let text = v.to_string();
+            for key in ["proposed_best", "picking", "budget", "bot_calls"] {
+                assert!(!text.contains(key), "{who} has {key}: {text}");
+            }
+            assert!(!text.contains("\"best\":true"), "{who}: nothing is best until the host says yes");
+        }
+        let summary = Wall.host_summary(&ctx, &state);
+        assert_eq!(summary["proposed_best"].as_array().map(Vec::len), Some(30));
+        assert_eq!(summary["budget"]["bot_calls"], 1);
+    }
+
+    #[test]
+    fn hiding_the_last_best_photo_takes_the_best_away() {
+        let ps = players();
+        let spec = json!({ "title": "W" });
+        let mut ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let mut state = picking(40);
+        let ids: Vec<String> = (0..2).map(|i| format!("ph_{i}")).collect();
+        pick_propose(&mut ctx, &mut state, &json!(ids)).unwrap();
+        Wall.act(&mut ctx, &mut state, &Viewer::Host, "set_best", &json!({ "ids": ids })).unwrap();
+        Wall.act(&mut ctx, &mut state, &Viewer::Host, "hide", &json!({ "id": "ph_0" })).unwrap();
+        let st = load(&state);
+        assert!(st.best_set && st.best_by_snap, "one best photo left");
+        assert_eq!(st.proposed_best, ["ph_1"], "the hidden one leaves the proposal");
+        Wall.act(&mut ctx, &mut state, &Viewer::Host, "hide", &json!({ "id": "ph_1" })).unwrap();
+        let st = load(&state);
+        assert!(!st.best_set && !st.best_by_snap, "F4: no best photo, so no best for guests");
+        let guest = Wall.view(&ctx, &state, &Viewer::Guest("pl_0".into()));
+        assert_eq!(guest["best_set"], false);
+        assert_eq!(Wall.view(&ctx, &state, &Viewer::Host)["best_by"], Value::Null);
+    }
+
+    #[test]
+    fn budget_line() {
+        let ps = players();
+        let spec = json!({ "title": "W" });
+        let ctx = KitCtx::new(&spec, &ps, Utc::now());
+        let none = Wall.host_summary(&ctx, &approved(3));
+        assert_eq!(none["budget"]["bot_calls"], 0);
+        assert!(none["budget"]["line"].as_str().unwrap().starts_with("No bot calls so far."));
+        let one = Wall.host_summary(&ctx, &picking(40));
+        assert_eq!(one["budget"]["line"], "1 bot call so far, about $0.10 on your account, to pick the best 30.");
+        let mut two = picking(40);
+        assert!(pick_start(&mut two));
+        assert_eq!(Wall.host_summary(&ctx, &two)["budget"]["usd"], 0.2);
     }
 
     #[test]
