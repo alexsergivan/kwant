@@ -1,0 +1,63 @@
+/* The Wall on the big screen (pa14): its own lazy CSS file beside the screen-wall chunk, on top of the quiz screen's
+   screen.css (stage, top bar, calm screens, QR paper). Measurements from pa14/pocket.css "big screen" (Mira), with
+   every font size raised to at least 32 px (readable from 5 m, the same rule as screen.css). No colour of its own:
+   guest.css and screen.css tokens only, checked by test. */
+
+/* ---- TV1/TV2: one photo, contained over the same photo blurred ---- */
+.wtv .wslide { position: absolute; left: 72px; right: 72px; top: 130px; bottom: 150px; margin: 0; border-radius: 28px; overflow: hidden; background: var(--kw-surface-main); }
+.wtv .wblur, .wtv .wfit { position: absolute; container-type: size; }
+.wtv .wblur { inset: -40px; filter: blur(40px) brightness(0.45); }
+.wtv .wfit { inset: 0; }
+.wtv .wslide img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; display: block; }
+.wtv .wblur img { object-fit: cover; }
+.wtv .wfit img { object-fit: contain; }
+.wtv .wslide.in { z-index: 1; animation: wtv-in 200ms var(--kw-ease) both; box-shadow: -30px 0 60px var(--kw-surface-rail); }
+.wtv .wslide.out { animation: wtv-out 200ms var(--kw-ease) both; }
+@keyframes wtv-in { from { transform: translateX(22%); opacity: 0.9; } to { transform: none; opacity: 1; } }
+@keyframes wtv-out { from { transform: none; opacity: 1; } to { transform: translateX(-22%); opacity: 0; } }
+
+.wtv .wnew { position: absolute; z-index: 2; left: 104px; top: 162px; margin: 0; display: inline-flex; gap: 14px; align-items: center; height: 68px; padding: 0 28px 0 18px; border-radius: 999px; background: var(--kw-surface-rail); border: 2px solid var(--sky-500); font-size: 32px; font-weight: 700; color: var(--zinc-50); white-space: nowrap; }
+.wtv .wnew svg.pi { width: 36px; height: 36px; color: var(--sky-300); }
+
+.wtv .wcap { position: absolute; left: 72px; bottom: 30px; display: flex; gap: 22px; align-items: center; max-width: 1180px; min-width: 0; }
+.wtv .wcap > div { min-width: 0; }
+.wtv .wcr { width: 72px; height: 90px; flex-shrink: 0; }
+.wtv .wcap q { display: block; font-size: 44px; line-height: 54px; font-weight: 700; color: var(--zinc-50); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wtv .wcap small { display: block; font-size: 32px; line-height: 40px; color: var(--zinc-300); font-weight: 500; margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Bottom right: the way in, a 104 px QR on its paper */
+.wtv .wqr { position: absolute; right: 72px; bottom: 28px; display: flex; gap: 20px; align-items: center; font-size: 32px; line-height: 40px; color: var(--zinc-200); text-align: right; }
+.wtv .wqr p { margin: 0; white-space: nowrap; }
+.wtv .wqr b { display: block; color: var(--zinc-50); font-size: 34px; }
+.wtv .wqrbox { display: block; width: 104px; height: 104px; padding: 6px; border-radius: 10px; background: var(--qr-paper); }
+.wtv .wqrsvg { display: block; width: 100%; height: 100%; }
+.wtv .wqrsvg path { fill: var(--kw-surface-rail); }
+
+/* ---- TV3: before the first photo ---- */
+.wtv .wbigqr { position: absolute; left: 72px; top: 150px; width: 560px; height: 560px; padding: 26px; border-radius: 28px; background: var(--qr-paper); }
+.wtv .wscan { position: absolute; left: 720px; right: 72px; top: 190px; }
+.wtv .wscan h1 { font-size: 92px; line-height: 104px; font-weight: 800; letter-spacing: -0.02em; max-width: 900px; }
+.wtv .wscan .tvsoft { margin: 24px 0 0; max-width: 1000px; }
+.wtv .wlink { margin: 40px 0 0; font-size: 34px; color: var(--zinc-200); overflow-wrap: anywhere; }
+.wtv .wsnap { position: absolute; left: 72px; bottom: 60px; }
+.wtv .wsnap .b { margin: 0 0 20px; }
+.wtv .qm160, .wtv .tvqm { width: 160px; height: 160px; }
+
+/* ---- TV4: still view, a 3x2 grid, no movement ---- */
+.wtv .wgrid { position: absolute; left: 72px; right: 72px; top: 130px; bottom: 150px; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); grid-template-rows: 1fr 1fr; gap: 20px; }
+.wtv .wtile { position: relative; overflow: hidden; border-radius: 20px; background: var(--kw-surface-main); container-type: size; }
+.wtv .wtile img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+.wtv .wtcap { position: absolute; left: 0; right: 0; bottom: 0; margin: 0; padding: 44px 20px 14px; font-size: 32px; line-height: 40px; font-weight: 600; color: var(--zinc-50); background: linear-gradient(0deg, color-mix(in srgb, var(--kw-surface-rail) 88%, transparent), transparent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wtv .wtcap small { display: block; font-size: 32px; font-weight: 500; color: var(--zinc-200); overflow: hidden; text-overflow: ellipsis; }
+
+/* The box strips EXIF, so its `rotate` turns the photo here, inside the same box (last, so it wins over the tile and slide rules). */
+.wtv img.r90, .wtv img.r180, .wtv img.r270 { left: 50%; top: 50%; }
+.wtv img.r180 { transform: translate(-50%, -50%) rotate(180deg); }
+.wtv img.r90, .wtv img.r270 { width: 100cqh; height: 100cqw; }
+.wtv img.r90 { transform: translate(-50%, -50%) rotate(90deg); }
+.wtv img.r270 { transform: translate(-50%, -50%) rotate(270deg); }
+
+@media (prefers-reduced-motion: reduce) {
+  .wtv .wslide.in, .wtv .wslide.out { animation: none; }
+  .wtv .wslide.out { display: none; }
+}

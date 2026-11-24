@@ -1034,6 +1034,7 @@ mod tests {
         assert!(person_only(&post, "/api/pockets/abcdef/action"));
         assert!(person_only(&post, "/api/pockets/abcdef/remove"));
         assert!(person_only(&post, "/api/pockets/abcdef/reset-pin"));
+        assert!(person_only(&get, "/api/pockets/abcdef/photo/ph_AAAAAAAAAAAAAAAA"));
         assert!(person_only(&get, "/api/quiz-drafts/qd_1"));
         assert!(person_only(&post, "/api/quiz-drafts/qd_1/questions"));
         assert!(person_only(&Method::PATCH, "/api/quiz-drafts/qd_1/questions/2"));

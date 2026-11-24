@@ -116,6 +116,11 @@ pub async fn judge_now(state: &AppState, code: &str) -> Vec<Outcome> {
         forget(code);
         return Vec::new();
     }
+    // pa11 qa F4: a class quiz says "Nothing is shared", so a guest's guess never goes to a model
+    // (the host's may be a hosted one). Its near misses count 0 until the host settles them.
+    if matches!(pocket::snapshot(state, code).await, Ok(Some(s)) if crate::pocket::quiz_kit::is_class(&s.spec)) {
+        return Vec::new();
+    }
     if target.pending().await.is_empty() {
         return Vec::new();
     }

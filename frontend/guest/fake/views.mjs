@@ -56,6 +56,11 @@ const lobby = { ...base, phase: 'lobby', me, teams, player_count: 14, team_count
 
 const pub = { ...base, phase: 'lobby', teams, player_count: 14, team_count: 5 };
 
+/** pa11: the class quiz's line and the join refusal, word for word from src/pocket (quiz_kit.rs CLASS_NOTICE, words.rs). */
+export const CLASS_NOTICE = 'First names or nicknames only. Everything about players is deleted when the quiz ends. Nothing is shared.';
+export const FIRST_ONLY = 'First name or nickname only, please: no surname, email or phone number.';
+const notFirstName = (n = '') => n.trim().split(/\s+/).length > 2 || /[@＠]/.test(n) || (n.match(/\d/g) ?? []).length >= 6;
+
 /**
  * Each scenario: what `state` (with this phone's cookie), `info` (no seat yet), `join`, `rejoin` (by name) and
  * `action` answer. A number is an HTTP error status; `state: 401` means this phone has no seat.
@@ -63,6 +68,13 @@ const pub = { ...base, phase: 'lobby', teams, player_count: 14, team_count: 5 };
 export const scenarios = {
   join: { state: 401, info: pub, join: lobby, rejoin: { ...lobby, phase: 'question', question: qChoice } },
   'join-solo': { state: 401, info: { ...base, phase: 'lobby', teams: null, team_max: undefined, retention: { kind: 'at_end' } }, join: { ...lobby, teams: null, me: { ...me, team: undefined, team_name: undefined } } },
+  // pa11 class quiz (Lin's #1143): the class line, first names only, deleted at End. Not in `order`: tests/guestPage
+  // and the shots open it by name. A name of 3+ words, an @ or 6+ digits gets 400 name_first_only (the box's rule).
+  'join-class': {
+    state: 401,
+    info: { ...base, title: 'Year 8 Science', host: 'Ms Patel', phase: 'lobby', teams: null, team_max: undefined, player_count: 0, max_players: 70, retention: { kind: 'at_end' }, first_names_only: true, notice: CLASS_NOTICE },
+    join: { ...lobby, title: 'Year 8 Science', host: 'Ms Patel', teams: null, retention: { kind: 'at_end' }, first_names_only: true, notice: CLASS_NOTICE, me: { ...me, team: undefined, team_name: undefined } },
+  },
   lobby: { state: lobby },
   rejoin: { state: { ...base, phase: 'question', me, question: qChoice } },
   away: { state: 503, info: pub },
@@ -113,7 +125,7 @@ export const errorBody = (status, error = ERRORS[status] ?? 'error') => ({ error
 
 /** A flat scenario view as pa1's v1 state envelope: pocket and me facts from pa1, the rest as the kit's `view`. */
 export function envelope(v, { code = 'CODE', version = 1, withView = true } = {}) {
-  const { v: _v, kit, title, max_players, player_count, retention, deletes_on, me, ...kit_view } = v;
+  const { v: _v, kit, title, max_players, player_count, retention, deletes_on, me, notice, first_names_only, ...kit_view } = v;
   const { name, avatar, team_name, ...kit_me } = me ?? {};
   const ended = v.phase === 'ended';
   const out = {
@@ -124,6 +136,9 @@ export function envelope(v, { code = 'CODE', version = 1, withView = true } = {}
       code, kit, title, state: ended ? 'ended' : 'open', opens_at: null, closes_at: null,
       ended_at: ended ? '2026-11-27T22:10:00Z' : null, expires_at: deletes_on ? `${deletes_on}T22:10:00Z` : null,
       players: player_count ?? 14, max_players, needs_pin: false, retention,
+      // pa11: only a class quiz sends these, so every other scenario's envelope stays as it was.
+      ...(first_names_only !== undefined ? { first_names_only } : {}),
+      ...(notice !== undefined ? { notice } : {}),
     },
   };
   if (me) out.me = { id: 'p1', name, avatar, team: team_name ?? null, notices: [] };
@@ -176,6 +191,7 @@ export class FakeBox {
     }
     if (what === 'join') {
       if (this.joinError) return err(this.joinError === 'full' || this.joinError === 'name_taken' || this.joinError === 'not_open_yet' ? 409 : 400, this.joinError);
+      if (this.s.info?.first_names_only && notFirstName(body.name)) return { status: 400, body: { error: 'name_first_only', message: FIRST_ONLY } };
       if (!this.s.join) return err(410);
       const v = fill(this.s.join, this.code);
       this.set({ ...v, me: { ...v.me, name: body.name ?? v.me.name, avatar: body.avatar ?? v.me.avatar, team_name: body.team ?? v.me.team_name } });
