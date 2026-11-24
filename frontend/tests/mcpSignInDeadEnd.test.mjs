@@ -69,12 +69,14 @@ test('tool servers screen, cimd_needs_https: no Retry or Connect, the localhost 
   assert.ok(html.includes(`<p class="text-zinc-400">${LOCALHOST}</p>`));
 });
 
-test('tool servers screen keeps Retry for other errors, and Connect with none', () => {
+test('tool servers screen keeps Retry for other errors, and Sign in with none (34h: never Connect)', () => {
   const failed = ui.box({ message: 'token request failed: 500' });
   assert.match(failed, /<button[^>]*>.*Retry<\/button>/);
   assert.match(text(failed), /token request failed: 500/);
   assert.doesNotMatch(failed, /text-zinc-400/);
-  assert.match(ui.box(undefined), /<button[^>]*>.*Connect<\/button>/);
+  assert.match(ui.box(undefined), /<button[^>]*>.*Sign in<\/button>/);
+  assert.match(ui.box(undefined, { again: true }), /<button[^>]*>.*Sign in again<\/button>/);
+  assert.doesNotMatch(ui.box(undefined), />[^<]*Connect<\/button>/);
   // A new attempt in progress shows the waiting state, not the old dead end.
   const waiting = ui.box({ message: 'm', code: 'cimd_needs_https' }, { isConnecting: true });
   assert.match(waiting, /Waiting…<\/button>/);

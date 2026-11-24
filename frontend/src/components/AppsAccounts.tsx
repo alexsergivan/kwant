@@ -5,6 +5,7 @@
 import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { AlertTriangle, Check, ChevronRight, ExternalLink, Eye, EyeOff, Info, Loader2, RefreshCw, X } from 'lucide-react';
+import { scrollInScroller } from '../scrollInScroller';
 import { PERSON_SIGNED_IN_EVENT, requestPersonToken } from '../auth';
 import { CatalogEntry, Connection, ConnectionsError, ConnectionsList, composioErrorText, connectionsApi } from '../connections';
 import {
@@ -539,8 +540,12 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
 
   // Opened at a section: scroll there once it's drawn.
   useEffect(() => {
-    if (p.section === 'accounts') accountsRef.current?.scrollIntoView({ block: 'start' });
-    if (p.section === 'advanced' || p.openAdvanced) (setAdvancedOpen(true), advancedRef.current?.scrollIntoView({ block: 'start' }));
+    if (p.section === 'accounts' && accountsRef.current) scrollInScroller(accountsRef.current, 'start');
+    if (p.section === 'advanced' || p.openAdvanced) {
+      setAdvancedOpen(true);
+      // A lit connection row (34h) has already scrolled itself into the middle: leave it there.
+      if (advancedRef.current && !advancedRef.current.querySelector('[data-flash]')) scrollInScroller(advancedRef.current, 'start');
+    }
   }, [p.section, p.sectionSeq, p.openAdvanced, load.state === 'ok']); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {

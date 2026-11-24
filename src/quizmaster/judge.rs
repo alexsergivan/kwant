@@ -88,13 +88,15 @@ pub trait JudgeModel: Send + Sync {
     async fn reply(&self, prompt: String) -> Result<String, String>;
 }
 
-/// The game the judge settles, under whatever lock its owner holds.
+/// The game the judge settles, under whatever lock its owner holds. Async so a live pocket can
+/// take its own lock, save and push views inside `settle` (pa3b).
+#[async_trait]
 pub trait JudgeTarget: Send + Sync {
     /// Near misses waiting now.
-    fn pending(&self) -> Vec<Pending>;
+    async fn pending(&self) -> Vec<Pending>;
     /// Sends `action(Actor::Judge, "judge", {q, player, verdict})`. The kit refuses an item that
     /// is no longer pending (the host settled it, or the player was removed).
-    fn settle(&self, q: usize, player: &str, verdict: JudgeVerdict) -> Result<ActionOutcome, ActionError>;
+    async fn settle(&self, q: usize, player: &str, verdict: JudgeVerdict) -> Result<ActionOutcome, ActionError>;
 }
 
 /// The near misses in a host view (`host.pending`).
@@ -122,13 +124,14 @@ impl LockedGame {
     }
 }
 
+#[async_trait]
 impl JudgeTarget for LockedGame {
-    fn pending(&self) -> Vec<Pending> {
+    async fn pending(&self) -> Vec<Pending> {
         let g = self.game.lock().unwrap_or_else(|e| e.into_inner());
         pending_in_host_view(&g.view(&Viewer::Host, chrono::Utc::now()))
     }
 
-    fn settle(&self, q: usize, player: &str, verdict: JudgeVerdict) -> Result<ActionOutcome, ActionError> {
+    async fn settle(&self, q: usize, player: &str, verdict: JudgeVerdict) -> Result<ActionOutcome, ActionError> {
         let mut g = self.game.lock().unwrap_or_else(|e| e.into_inner());
         g.action(&Actor::Judge, "judge", &judge_body(q, player, verdict), chrono::Utc::now())
     }
@@ -143,7 +146,11 @@ pub struct JudgeBudget {
 
 impl JudgeBudget {
     pub fn new(calls: u32) -> Self {
-        Self { left: AtomicU32::new(calls), used: AtomicU32::new(0) }
+        Self::resume(calls, 0)
+    }
+    /// An allowance of `calls` of which `used` were already spent (read back after a restart).
+    pub fn resume(calls: u32, used: u32) -> Self {
+        Self { left: AtomicU32::new(calls.saturating_sub(used)), used: AtomicU32::new(used) }
     }
     /// Takes one call, or false when none are left.
     pub fn take(&self) -> bool {
@@ -192,11 +199,14 @@ pub struct Judge {
     budget: Arc<JudgeBudget>,
     timeout: Duration,
     in_flight: Mutex<HashSet<(usize, PlayerId)>>,
+    /// Items that already had their one model call (pa3 qa F1): a reply that wasn't a verdict, a
+    /// time-out or a failed call leaves the item to the host, and later answers don't re-judge it.
+    tried: Mutex<HashSet<(usize, PlayerId)>>,
 }
 
 impl Judge {
     pub fn new(model: Arc<dyn JudgeModel>, budget: Arc<JudgeBudget>) -> Self {
-        Self { model, budget, timeout: TIMEOUT, in_flight: Mutex::new(HashSet::new()) }
+        Self { model, budget, timeout: TIMEOUT, in_flight: Mutex::new(HashSet::new()), tried: Mutex::new(HashSet::new()) }
     }
 
     /// The same judge with another time limit (tests).
@@ -210,17 +220,26 @@ impl Judge {
     }
 
     /// The hook pa1 calls after a guest's `answer` action: judges every near miss that isn't
-    /// already being judged. The lock is held only to read and to settle, never during the call.
+    /// already being judged and hasn't had its one call. The lock is held only to read and to
+    /// settle, never during the call.
     pub async fn on_answer(&self, target: &dyn JudgeTarget) -> Vec<Outcome> {
+        let waiting = target.pending().await;
         let fresh: Vec<Pending> = {
+            let tried = self.tried.lock().unwrap_or_else(|e| e.into_inner());
             let mut busy = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
-            target.pending().into_iter().filter(|p| busy.insert((p.q, p.player.clone()))).collect()
+            waiting.into_iter().filter(|p| !tried.contains(&(p.q, p.player.clone())) && busy.insert((p.q, p.player.clone()))).collect()
         };
         let calls = fresh.iter().map(|p| self.one(target, p));
         let out = futures::future::join_all(calls).await;
+        let mut tried = self.tried.lock().unwrap_or_else(|e| e.into_inner());
         let mut busy = self.in_flight.lock().unwrap_or_else(|e| e.into_inner());
-        for p in &fresh {
+        for (p, o) in fresh.iter().zip(&out) {
             busy.remove(&(p.q, p.player.clone()));
+            // Out of budget means no call was made: the item may still be judged if the allowance
+            // is ever raised. Every other outcome used the item's one call.
+            if !matches!(o, Outcome::BudgetOut { .. }) {
+                tried.insert((p.q, p.player.clone()));
+            }
         }
         out
     }
@@ -238,7 +257,7 @@ impl Judge {
         let Some(verdict) = parse_verdict(&reply) else {
             return Outcome::NoVerdict { q, player };
         };
-        match target.settle(q, &player, verdict) {
+        match target.settle(q, &player, verdict).await {
             Ok(_) => Outcome::Sent { q, player, verdict },
             Err(e) => Outcome::Refused { q, player, why: e.to_string() },
         }
@@ -299,6 +318,18 @@ mod tests {
         assert!(b.take());
         assert!(!b.take());
         assert_eq!((b.left(), b.used()), (0, 2));
+    }
+
+    #[test]
+    fn a_resumed_budget_keeps_what_was_used() {
+        let b = JudgeBudget::resume(3, 2);
+        assert_eq!((b.left(), b.used()), (1, 2));
+        assert!(b.take());
+        assert!(!b.take());
+        assert_eq!(b.used(), 3);
+        let over = JudgeBudget::resume(2, 5);
+        assert_eq!((over.left(), over.used()), (0, 5));
+        assert!(!over.take());
     }
 
     #[test]

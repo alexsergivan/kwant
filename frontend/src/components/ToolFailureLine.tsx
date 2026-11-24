@@ -1,6 +1,6 @@
 // 0.9.5: the plain line a chat shows when one of a bot's connections fails (meta kind
-// "tool_failure"): "Gmail stopped working for Ben: it needs to be connected again. Reconnect".
-// Quiet like a tool note; the fix button opens Connections. Once the connection works again the
+// "tool_failure"): "Gmail stopped working for Ben: it needs you to sign in again. Sign in again".
+// Quiet like a tool note; the fix button opens Connections on that connection's row (34h). Once the connection works again the
 // line stays, says so in green with a plugged icon, and loses its button. Mira's design check
 // (release-095/tool-failure-line/design-check.md F3–F6): a needs-you line is brighter with an
 // amber button and tells a screen reader; lines of one turn sit 4 px apart; the button has a
@@ -8,7 +8,7 @@
 // phones' 44 px min-height (data-compact), which would make its line of text twice as tall.
 import React from 'react';
 import { Plug, Unplug } from 'lucide-react';
-import { ToolFailureMeta } from '../toolFailures';
+import { ToolFailureMeta, fixLabel } from '../toolFailures';
 
 export const ToolFailureLine: React.FC<{
   meta: ToolFailureMeta;
@@ -16,7 +16,8 @@ export const ToolFailureLine: React.FC<{
   flash?: boolean;
   /** The message before is also a kwant line (a tool failure or tool note): sit 4 px under it (F5). */
   tight?: boolean;
-  onFix?: () => void;
+  /** Gets the line's connection id ("mcp:<id>") so Connections opens on its row. */
+  onFix?: (connectionId?: string) => void;
 }> = ({ meta, messageId, flash = false, tight = false, onFix }) => {
   const open = !meta.resolved_at;
   const urgent = open && meta.needs_you;
@@ -40,10 +41,10 @@ export const ToolFailureLine: React.FC<{
             <button
               type="button"
               data-compact
-              onClick={onFix}
+              onClick={() => onFix(meta.fix?.connection_id ?? undefined)}
               className={`relative before:absolute before:content-[''] before:-inset-x-2 before:-inset-y-[14px] font-medium ${urgent ? 'text-amber-200' : 'text-zinc-200'} underline-offset-2 hover:underline rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500`}
             >
-              {meta.fix.label}
+              {fixLabel(meta.cause, meta.fix.label)}
             </button>
           </>
         )}

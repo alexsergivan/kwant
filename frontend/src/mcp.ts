@@ -1,5 +1,8 @@
 // MCP server helpers shared by the servers screen, the per-kwant picker and chat.
 // Contract: docs/mcp-api.md
+import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
+import { type SignInDeadEndCode, isSignInDeadEndCode } from './mcpSignInDeadEnd';
+import { request } from './threads';
 
 export type McpTransport = 'stdio' | 'http';
 
@@ -879,4 +882,72 @@ export interface OpenAddTool {
   preset?: string;
   directory?: import('./connections').DirectoryEntry;
   address?: boolean;
+}
+
+/**
+ * What signing in to a URL server came to: nothing when the server answers signed in, a dead-end
+ * code when retrying can't help (the caller shows its next step), else the line to show.
+ */
+export type SignInToServerResult = string | { code: SignInDeadEndCode } | void;
+
+const errorText = (err: unknown) => (err instanceof Error ? err.message : 'Something went wrong.');
+
+/**
+ * 34h: one sign-in for a URL server, shared by a bot's suggestion card and the Connections row's
+ * "Sign in again". Call it straight from the click: the browser's sign-in window opens before the
+ * first await, and the address comes after. In the desktop app the sign-in opens in the default
+ * browser and the server is watched instead. Ends with a test of the server.
+ */
+export async function signInToServer(serverId: string): Promise<SignInToServerResult> {
+  const macApp = inDesktopApp();
+  const popup = macApp ? null : window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
+  const before = macApp ? await mcpSignIn(serverId).catch(() => undefined) : undefined;
+  let url: string;
+  try {
+    const res = await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}/oauth/start`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ origin: window.location.origin }),
+    });
+    const data = await res.json().catch(() => null);
+    // A code means retrying can't help: the caller swaps its button for a next step.
+    if (!res.ok && isSignInDeadEndCode(data?.code)) {
+      popup?.close();
+      return { code: data.code };
+    }
+    if (!res.ok) throw new Error(typeof data?.error === 'string' ? data.error : `Request failed (HTTP ${res.status}).`);
+    if (typeof data?.authorize_url !== 'string' || !/^https?:\/\//.test(data.authorize_url)) throw new Error('The server didn’t return a sign-in page.');
+    url = data.authorize_url;
+  } catch (err) {
+    popup?.close();
+    return `Couldn't start the sign-in: ${errorText(err)}`;
+  }
+  if (!popup || popup.closed) {
+    leaveForSignIn(url);
+    if (!macApp) return;
+    const finished = await new Promise<boolean>((resolve) => {
+      pollUntil(async () => signInChanged(before, await mcpSignIn(serverId)), () => resolve(true), {
+        onTimeout: () => resolve(false),
+      });
+    });
+    if (!finished) return 'The sign-in didn’t finish in your browser. Try again.';
+  } else {
+    popup.location.href = url;
+    popup.focus();
+    await new Promise<void>((resolve) => {
+      const t = window.setInterval(() => {
+        if (popup.closed) {
+          window.clearInterval(t);
+          resolve();
+        }
+      }, 500);
+    });
+  }
+  try {
+    const test = await request<McpTestResult>('POST', `/api/mcp/servers/${encodeURIComponent(serverId)}/test`);
+    if (test.ok) return;
+    return test.auth_required ? 'The sign-in didn’t finish.' : test.error || 'The server still isn’t answering.';
+  } catch (err) {
+    return errorText(err);
+  }
 }

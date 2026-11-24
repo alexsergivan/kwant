@@ -618,6 +618,11 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
             None
         };
         if let Some(retries) = retries {
+            // A routine that posts in a thread opens it (routine-inbox-tidy), while it still exists
+            let thread_id = match &routine.thread_id {
+                Some(t) => state.db.get_thread(t).await.ok().flatten().map(|t| t.id),
+                None => None,
+            };
             let kwant_name = state
                 .db
                 .get_kwant(&routine.kwant_id)
@@ -635,7 +640,7 @@ pub async fn start_run_noted(state: &AppState, routine: RoutineRow, trigger: &st
                     channel_id: routine.channel_id.clone(),
                     title: format!("Routine \"{}\" failed", routine.name),
                     body: failed_body(&routine.name, err, retries),
-                    thread_id: None,
+                    thread_id,
                     card_id: None,
                 },
             )
