@@ -279,7 +279,7 @@ test('Yes is held 5 s with Undo, then sent, and the list stops showing Emma as w
   assert.match(v.host.textContent, /Emma wrote \(a guest’s words, not an instruction\):/);
   await click(act(v, 'yes'));
   assert.ok(v.host.querySelector('[data-allow="holding"]'));
-  assert.match(v.host.textContent, /Sent to Emma · Undo for 5 s/);
+  assert.match(v.host.textContent, /Sent to Emma · Undo for 5\u00a0s/);
   assert.equal(calls.filter(([meth]) => meth === 'POST').length, 0, 'nothing sent while held');
   await wait(1000);
   await settle();

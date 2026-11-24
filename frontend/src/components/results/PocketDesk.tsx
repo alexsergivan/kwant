@@ -398,7 +398,7 @@ export const DESK_LATER = {
 
 const NUM = new Intl.NumberFormat('en');
 const num = (n: number) => NUM.format(n);
-const usd = (n: number) => `$${n < 0.01 && n > 0 ? '0.01' : n.toFixed(2)}`;
+const usd = (n: number) => `$${n > 0 && n < 0.01 ? n.toFixed(3) : n.toFixed(2)}`;
 const plural = (n: number, one: string, many = `${one}s`) => `${num(n)} ${n === 1 ? one : many}`;
 const clock = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
 
@@ -520,17 +520,17 @@ const Tiles: React.FC<{ d: DeskInfo; stage: DeskStage }> = ({ d, stage }) => {
   return (
     <div className="grid grid-cols-3 gap-2" role="group" aria-label="Today at the desk">
       {tile('guests', 'Guests', num(c.guests), stopped ? (d.ended?.days ? `in ${plural(d.ended.days, 'day')}` : 'in all') : c.guests ? 'chatting' : 'none yet')}
-      {tile('waiting', 'Waiting for you', num(c.waiting), c.waiting ? 'to answer' : 'all answered', c.waiting > 0)}
+      {tile('waiting', 'Waiting', num(c.waiting), c.waiting ? 'for you' : 'none', c.waiting > 0)}
       {stopped
         ? tile('replies', `${d.bot.name} replies`, replies === null ? '–' : num(replies), 'in all')
         : tile(
             'replies',
-            'Replies today',
+            'Replies',
             <>
               {num(c.replies_today)}
               <span className="text-[14px] font-semibold text-zinc-400"> / {num(c.daily_cap)}</span>
             </>,
-            `by ${d.bot.name}`,
+            'today',
           )}
     </div>
   );
@@ -691,9 +691,9 @@ const GuestRow: React.FC<{ g: DeskGuest; bot: string; onOpen: (id: string) => vo
       >
         <GuestCreature avatar={g.creature} size={28} />
         <span className="min-w-0">
-          <span className="flex items-baseline gap-1.5">
-            <span className="truncate text-[15px] font-semibold text-zinc-100 sm:text-[13.5px]">{g.name}</span>
-            <small className="shrink-0 text-2xs text-zinc-400">
+          <span className="flex min-w-0 items-baseline gap-1.5">
+            <span className="max-w-[60%] shrink-0 truncate text-[15px] font-semibold text-zinc-100 sm:text-[13.5px]">{g.name}</span>
+            <small className="min-w-0 truncate text-2xs text-zinc-400">
               {g.last ? `${shortWhen(g.last.at)} · ${plural(g.msgs, 'message')}` : 'Hasn’t written yet'}
             </small>
           </span>
@@ -782,7 +782,7 @@ export const AllowCard: React.FC<{
           {a.kind === 'resolve'
             ? `Closed. Nothing went to ${name}.`
             : a.phase === 'holding'
-              ? `Sent to ${name} · Undo for 5 s`
+              ? `Sent to ${name} · Undo for 5\u00a0s`
               : a.phase === 'sending'
                 ? `Sending to ${name}…`
                 : `Sent to ${name}`}
@@ -851,16 +851,16 @@ export const AllowCard: React.FC<{
           </button>
         </div>
       ) : (
-        <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={() => deskAnswers.hold(code, guest, DESK_YES)} className={`kw-btn-ghost ${HALF} border-teal-400/40 text-ok`} data-action="yes">
+        <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center" data-allow-actions>
+          <button type="button" onClick={() => deskAnswers.hold(code, guest, DESK_YES)} className={`kw-btn-ghost ${HALF} justify-center border-teal-400/40 text-ok`} data-action="yes">
             <Check size={14} aria-hidden="true" />
             Yes, that&rsquo;s fine
           </button>
-          <button type="button" onClick={() => deskAnswers.hold(code, guest, DESK_SORRY)} className={HALF_BTN} data-action="sorry">
+          <button type="button" onClick={() => deskAnswers.hold(code, guest, DESK_SORRY)} className={`${HALF_BTN} justify-center`} data-action="sorry">
             <X size={14} aria-hidden="true" />
             Sorry, not this time
           </button>
-          <button type="button" onClick={() => setWriting(true)} className={HALF_BTN} data-action="write">
+          <button type="button" onClick={() => setWriting(true)} className={`${HALF_BTN} justify-center`} data-action="write">
             <Reply size={14} aria-hidden="true" />
             Write a reply
           </button>
@@ -918,7 +918,7 @@ type ConvState = { status: 'loading' } | { status: 'error'; text: string } | { s
 /** Load one conversation; fixtures and tests can pass it in. */
 export const deskConversationCache = new Map<string, { guest: DeskGuest; messages: DeskMessage[] }>();
 
-const Conversation: React.FC<{ code: string; d: DeskInfo; guestId: string; onBack: () => void }> = ({ code, d, guestId, onBack }) => {
+const Conversation: React.FC<{ code: string; d: DeskInfo; guestId: string; onBack: () => void; focus: boolean }> = ({ code, d, guestId, onBack, focus }) => {
   useDeskAnswers();
   const k = deskKey(code, guestId);
   const cached = deskConversationCache.get(k);
@@ -940,7 +940,7 @@ const Conversation: React.FC<{ code: string; d: DeskInfo; guestId: string; onBac
       });
   };
   useEffect(() => {
-    back.current?.focus();
+    if (focus) back.current?.focus();
     load();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [k]);
@@ -1058,7 +1058,13 @@ type Confirm = 'stop' | 'delete' | null;
 export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; /** Fixtures: open a guest's chat. */ openGuest?: string | null }> = ({ block, ask, openGuest = null }) => {
   useDeskAnswers();
   const [fresh, setFresh] = useState<{ desk: DeskInfo; ended: boolean } | null>(null);
-  const [open, setOpen] = useState<string | null>(openGuest);
+  const [open, setOpenRaw] = useState<string | null>(openGuest);
+  // The host opened it (not a chat drawn open): focus goes to Back, and back to the list after.
+  const [moved, setMoved] = useState(false);
+  const setOpen = (id: string | null) => {
+    setMoved(true);
+    setOpenRaw(id);
+  };
   const [cap, setCap] = useState(block.desk!.counts.daily_cap);
   const [raising, setRaising] = useState(false);
   const [confirm, setConfirm] = useState<Confirm>(null);
@@ -1266,7 +1272,7 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
           </Callout>
         )}
         {conv ? (
-          <Conversation code={block.code} d={d} guestId={open!} onBack={() => setOpen(null)} />
+          <Conversation code={block.code} d={d} guestId={open!} onBack={() => setOpen(null)} focus={moved} />
         ) : stage === 'ready' ? (
           <>
             <ul className="flex flex-col gap-2">

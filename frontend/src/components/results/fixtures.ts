@@ -755,16 +755,16 @@ const deskGuest = (id: string, name: string, creature: string, over: Record<stri
   ...over,
 });
 const DESK_GUESTS = [
-  deskGuest('g-emma', 'Emma', 'fox', {
+  deskGuest('g-emma', 'Emma', 'beret', {
     waiting: true,
     handoff_reason: 'Emma asks to check out at 1 PM',
     last: { from: 'guest', text: 'Could we check out at 1 instead of 10 on Sunday? Our ferry is at 3.', at: deskAt(14, 14) },
     unread: 1,
     msgs: 6,
   }),
-  deskGuest('g-tom', 'Tom', 'otter', { last: { from: 'bot', text: 'The Wi-Fi is SeaView-5G, the password is on the fridge door.', at: deskAt(13, 41) }, msgs: 4 }),
-  deskGuest('g-yuki', 'Yuki', 'cat', { last: { from: 'guest', text: 'Thanks, found the beach towels!', at: deskAt(11, 5) }, unread: 1, msgs: 8 }),
-  deskGuest('g-luca', 'Luca', 'owl', { last: { from: 'bot', text: 'Bins go out on Tuesday night: blue for paper, yellow for plastic.', at: deskAt(19, 30, 2) }, msgs: 3, delete_on: '2026-12-01' }),
+  deskGuest('g-tom', 'Tom', 'visor', { last: { from: 'bot', text: 'The Wi-Fi is SeaView-5G, the password is on the fridge door.', at: deskAt(13, 41) }, msgs: 4 }),
+  deskGuest('g-yuki', 'Yuki', 'ears', { last: { from: 'guest', text: 'Thanks, found the beach towels!', at: deskAt(11, 5) }, unread: 1, msgs: 8 }),
+  deskGuest('g-luca', 'Luca', 'bulb', { last: { from: 'bot', text: 'Bins go out on Tuesday night: blue for paper, yellow for plastic.', at: deskAt(19, 30, 2) }, msgs: 3, delete_on: '2026-12-01' }),
 ];
 const deskBase = {
   title: 'Sea-view flat',
@@ -793,10 +793,10 @@ const deskFixture = (reply: string, state: 'writing' | 'live' | 'ended', desk: R
     desk: { ...deskBase, ...desk },
   });
 const deskCapGuests = [
-  deskGuest('g-ana', 'Ana', 'bunny', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'Is there a hair dryer somewhere?', at: deskAt(21, 12) }, unread: 1, msgs: 5 }),
-  deskGuest('g-emma', 'Emma', 'fox', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'What time does the bakery downstairs open?', at: deskAt(20, 48) }, unread: 1, msgs: 9 }),
-  deskGuest('g-ben', 'Ben', 'bear', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'Can we leave the bags here after check-out?', at: deskAt(20, 3) }, unread: 2, msgs: 7 }),
-  deskGuest('g-tom', 'Tom', 'otter', { last: { from: 'bot', text: 'The nearest pharmacy is on Tartinijev trg, open till 8 PM.', at: deskAt(19, 2) }, msgs: 12 }),
+  deskGuest('g-ana', 'Ana', 'spikes', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'Is there a hair dryer somewhere?', at: deskAt(21, 12) }, unread: 1, msgs: 5 }),
+  deskGuest('g-emma', 'Emma', 'beret', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'What time does the bakery downstairs open?', at: deskAt(20, 48) }, unread: 1, msgs: 9 }),
+  deskGuest('g-ben', 'Ben', 'horns', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'Can we leave the bags here after check-out?', at: deskAt(20, 3) }, unread: 2, msgs: 7 }),
+  deskGuest('g-tom', 'Tom', 'visor', { last: { from: 'bot', text: 'The nearest pharmacy is on Tartinijev trg, open till 8 PM.', at: deskAt(19, 2) }, msgs: 12 }),
 ];
 export const DESK_FIXTURES = {
   setup: deskFixture("Here's the front desk for your flat. Bell answers from this guide only; check it, then start.", 'writing', { guests: [], counts: { guests: 0, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 } }),
@@ -831,7 +831,7 @@ export const DESK_CONVERSATIONS: Record<string, unknown> = {
   'g-tom': {
     api: 1,
     version: 3,
-    guest: { id: 'g-tom', name: 'Tom', creature: 'otter', delete_on: '2026-12-08', waiting: false, handoff_reason: null },
+    guest: { id: 'g-tom', name: 'Tom', creature: 'visor', delete_on: '2026-12-08', waiting: false, handoff_reason: null },
     messages: [
       { id: 'm1', from: 'guest', text: "Hi! What's the Wi-Fi password?", at: deskAt(13, 40) },
       { id: 'm2', from: 'bot', text: 'The Wi-Fi is SeaView-5G, the password is on the fridge door.', at: deskAt(13, 40) },
@@ -842,7 +842,7 @@ export const DESK_CONVERSATIONS: Record<string, unknown> = {
   'g-emma': {
     api: 1,
     version: 7,
-    guest: { id: 'g-emma', name: 'Emma', creature: 'fox', delete_on: '2026-12-08', waiting: true, handoff_reason: 'Emma asks to check out at 1 PM' },
+    guest: { id: 'g-emma', name: 'Emma', creature: 'beret', delete_on: '2026-12-08', waiting: true, handoff_reason: 'Emma asks to check out at 1 PM' },
     messages: [
       { id: 'e1', from: 'guest', text: 'Where can we buy fresh fish?', at: deskAt(9, 12) },
       { id: 'e2', from: 'bot', text: 'The fish market by the harbour opens at 7 AM, closed on Mondays.', at: deskAt(9, 12) },
