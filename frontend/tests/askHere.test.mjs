@@ -75,7 +75,7 @@ test('one action per item: the server says it, else it is inferred from the kind
   assert.equal(m.askAction({ ...stopped, action: 'bogus' }), 'retry', 'an unknown action is ignored (older shape)');
   assert.equal(m.askAction({ ...stopped, action: null }), null, 'an explicit null: nothing resolves it but Done');
   assert.equal(m.askAction(item('delegation')), null);
-  assert.deepEqual(Object.values(m.ACTION_LABEL), ['Retry', 'Continue', 'Ask again', 'Go to the question', 'Go to the approval', 'Open the browser step']);
+  assert.deepEqual(Object.values(m.ACTION_LABEL), ['Retry', 'Continue', 'Ask again', 'Go to the question', 'Go to the approval', 'Open the browser step', 'Run again']);
 });
 
 test('the full line: the title whole; a title cut for a row gives way to the summary; an approval its question', () => {

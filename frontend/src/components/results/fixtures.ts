@@ -536,6 +536,200 @@ export const SANTA_FIXTURES = {
 /** What host/reset-pin answers for the shots and tests: a one-time code and its expiry (24 h). */
 export const SANTA_RESET_CODE = { code: 'K7QX', expires_at: '2026-12-08T21:41:00+01:00' };
 
+// Pocket apps (pa10b/design.md): Riverside Runners, host Oleks, 22 members, euros. Names, places and creatures are
+// made up. One engine, three faces: RSVP, Sign-up and Vote, states 1-9 plus People, Nudges and the closed results.
+// `gather` is Lin's host view as the box sends it (pa10b/server-shape.md, src/pocket/gather.rs) plus the pocket's
+// title and expires_at: RFC 3339 times (+01:00, Berlin in December), food keys, `{link}` in the drafts.
+const GATHER_FUNNEL = 'https://oleks-mac.tail4b2e.ts.net/p/runclub';
+const GATHER_WIFI = 'http://192.168.1.20:7480/p/runclub';
+const CREATURES = ['beret', 'antenna', 'visor', 'bulb', 'spikes', 'goggles', 'horns', 'ears'];
+const av = (i: number) => CREATURES[i % CREATURES.length];
+const at = (day: number, hm: string) => `2026-12-${String(day).padStart(2, '0')}T${hm}:00+01:00`;
+type P = [name: string, answer: 'yes' | 'maybe' | 'no' | null, plus: number, food: string[], paid: boolean];
+const person = ([name, answer, plus_ones, food, paid]: P, i: number) => ({
+  id: `g${i + 1}`, name, avatar: av(i), answer, plus_ones, food, food_other: null, answered_at: at(1, '18:00'), paid_at: answer === 'yes' && paid ? at(3, '12:00') : null,
+});
+/** RSVP counts as gather.rs builds them from the rows. */
+function rsvpParts(rows: P[]) {
+  const yes = rows.filter((r) => r[1] === 'yes');
+  const plus = yes.reduce((n, r) => n + r[2], 0);
+  const food: Record<string, number> = {};
+  for (const r of yes) for (const k of r[3]) food[k] = (food[k] ?? 0) + 1;
+  return {
+    counts: { yes: yes.length, maybe: rows.filter((r) => r[1] === 'maybe').length, no: rows.filter((r) => r[1] === 'no').length, plus_ones: plus, coming: yes.length + plus },
+    paid: { ticked: yes.filter((r) => r[4]).length, of: yes.length, not_yet: yes.filter((r) => !r[4]).map((r) => r[0]) },
+    food: { counts: food, other: [] },
+  };
+}
+// State 1-3: Yes 14 (+3) · Maybe 4 · No 2 · Paid 10 of 14 (not yet: Ana, Kai, Ravi, Tom) · 2 of 22 haven't answered.
+const RSVP_OPEN_PEOPLE: P[] = [
+  ['Oleks', 'yes', 1, ['vegetarian'], true], ['Mia', 'yes', 1, [], true], ['Priya', 'yes', 0, ['vegan'], true], ['Ana', 'yes', 0, ['nut_allergy'], false],
+  ['Kai', 'yes', 0, [], false], ['Ravi', 'yes', 0, ['vegetarian'], false], ['Tom', 'yes', 0, [], false], ['Leo', 'maybe', 0, [], false], ['Finn', 'no', 0, [], false],
+  ['Jonas', 'yes', 0, [], true], ['Elif', 'yes', 1, ['vegetarian'], true], ['Marta', 'yes', 0, ['gluten_free'], true], ['Ben', 'yes', 0, [], true],
+  ['Lucia', 'yes', 0, [], true], ['Omar', 'yes', 0, [], true], ['Zoe', 'maybe', 0, [], false], ['Nina', 'maybe', 0, [], false], ['Sam', 'maybe', 0, [], false], ['Ida', 'no', 0, [], false], ['Hana', 'yes', 0, [], true],
+];
+const idOf = (rows: P[], name: string) => `g${rows.findIndex((r) => r[0] === name) + 1}`;
+const maybeNote = (n: string) => `Hi ${n}! Still a maybe for the club dinner on Sat at The Old Mill? Answers close Thu at 8 PM so Oleks can book the table. Tap to change it: {link}`;
+const unpaidNote = (n: string) => `Hi ${n}, a quick one: the €35 for Saturday's dinner is still open. Pay Oleks whenever suits you before the dinner. Thanks!`;
+const draft = (rows: P[], to: string, kind: string, text: string, copied_at: string | null = null, next_copy_at: string | null = null) => ({
+  to, player_id: idOf(rows, to), kind, text, copied_at, next_copy_at, can_copy: next_copy_at === null,
+});
+const RSVP_DRAFTS = [
+  draft(RSVP_OPEN_PEOPLE, 'Leo', 'maybe', maybeNote('Leo')),
+  draft(RSVP_OPEN_PEOPLE, 'Zoe', 'maybe', maybeNote('Zoe'), at(9, '21:12'), at(11, '21:12')),
+  draft(RSVP_OPEN_PEOPLE, 'Nina', 'maybe', maybeNote('Nina')),
+  draft(RSVP_OPEN_PEOPLE, 'Sam', 'maybe', maybeNote('Sam')),
+  draft(RSVP_OPEN_PEOPLE, 'Ana', 'not_paid', unpaidNote('Ana')),
+  draft(RSVP_OPEN_PEOPLE, 'Kai', 'not_paid', unpaidNote('Kai'), at(8, '18:40'), at(10, '18:40')),
+  draft(RSVP_OPEN_PEOPLE, 'Ravi', 'not_paid', unpaidNote('Ravi')),
+  draft(RSVP_OPEN_PEOPLE, 'Tom', 'not_paid', unpaidNote('Tom')),
+];
+const gatherBase = {
+  host_name: 'Oleks',
+  show_names: true,
+  members: 22,
+  not_answered: [],
+  people: [],
+  drafts: [],
+  join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: GATHER_FUNNEL, wifi_url: GATHER_WIFI },
+};
+const gatherFixture = (reply: string, name: string, state: 'live' | 'ended', gather: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: 'pocket:runclub' },
+    code: 'runclub',
+    kit: 'gather',
+    name,
+    when: null,
+    state,
+    budget: { calls: 3, usd: 0.01 },
+    gather: { ...gatherBase, ...gather },
+  });
+const rsvpOpen = {
+  face: 'rsvp',
+  phase: 'open',
+  title: 'End-of-season dinner',
+  when: at(12, '19:30'),
+  place: 'The Old Mill',
+  price: '€35 each, paid to Oleks',
+  closes_at: at(10, '20:00'),
+  event_at: at(12, '19:30'),
+  expires_at: at(19, '19:30'),
+  not_answered: ['Rosa', 'Theo'],
+  ...rsvpParts(RSVP_OPEN_PEOPLE),
+  people: RSVP_OPEN_PEOPLE.map(person),
+  drafts: RSVP_DRAFTS,
+};
+type Who = [id: string, name: string, note: string | null];
+const slot = (i: number, name: string, cap: number, who: Who[], waiting: Array<[string, string]> = []) => ({
+  slot: i, name, cap,
+  people: who.map(([id, n, note], j) => ({ id, name: n, avatar: av(i + j), note })),
+  waiting: waiting.length,
+  waiting_people: waiting.map(([id, n], j) => ({ id, name: n, avatar: av(i + j + 3) })),
+});
+const POTLUCK_SLOTS = [
+  slot(0, 'Mains', 3, [['g3', 'Priya', 'lentil stew']]),
+  slot(1, 'Sides', 4, [['g4', 'Ana', null], ['g5', 'Kai', null], ['g7', 'Tom', null]]),
+  slot(2, 'Desserts', 2, [['g2', 'Mia', 'apple cake'], ['g13', 'Ben', 'brownies']], [['g20', 'Hana'], ['g8', 'Leo']]),
+  slot(3, 'Drinks', 2, [['g15', 'Omar', null]]),
+  slot(4, 'Washing-up crew', 3, []),
+];
+const signupOpen = {
+  face: 'signup',
+  phase: 'open',
+  title: 'Christmas potluck',
+  when: at(20, '13:00'),
+  place: 'the clubhouse',
+  closes_at: at(19, '18:00'),
+  event_at: at(20, '13:00'),
+  expires_at: at(27, '13:00'),
+  slots: POTLUCK_SLOTS,
+  moved_up: [],
+};
+const OPTIONS = ['The Old Mill', 'Casa Lupa', 'Golden Lotus', 'Pizza at the clubhouse'].map((name, option) => ({ option, name }));
+const VOTERS = ['Mia', 'Priya', 'Jonas', 'Ana', 'Kai', 'Oleks', 'Elif', 'Marta', 'Ben', 'Lucia', 'Omar', 'Hana', 'Tom', 'Ravi', 'Zoe'].map((name, i) => ({ id: `v${i + 1}`, name, avatar: av(i + 1), at: at(1, '19:00') }));
+const c = (...votes: number[]) => votes.map((v, option) => ({ option, votes: v })).filter((x) => x.votes >= 0);
+const ROUND1 = c(6, 5, 3, 1);
+const voteBase = {
+  face: 'vote',
+  title: "Where's the end-of-season dinner?",
+  closes_at: at(2, '20:00'),
+  expires_at: at(9, '20:00'),
+  not_answered: ['Leo', 'Finn', 'Nina', 'Sam', 'Ida', 'Rosa', 'Theo'],
+  voted: 15,
+  voters: VOTERS,
+};
+const voteOpen = { ...voteBase, phase: 'open', ballot: { kind: 'ranked', options: OPTIONS, in_play: [0, 1, 2, 3] }, live: ROUND1 };
+const ROUNDS_DONE = [
+  { round: 1, counts: ROUND1, exhausted: 0, dropped: [{ option: 3 }] },
+  { round: 2, counts: c(6, 6, 3), exhausted: 0, dropped: [{ option: 2 }] },
+  { round: 3, counts: c(8, 7), exhausted: 0, dropped: [] },
+];
+// Closed RSVP (results-1440 left): 19 coming (15 + 4), 4 no, 3 never answered, paid 14 of 15.
+const RSVP_CLOSED_PEOPLE: P[] = [
+  ['Oleks', 'yes', 1, ['vegetarian'], true], ['Mia', 'yes', 1, [], true], ['Priya', 'yes', 0, ['vegan'], true], ['Jonas', 'yes', 0, [], true], ['Ana', 'yes', 0, ['nut_allergy'], true],
+  ['Kai', 'yes', 0, [], true], ['Ravi', 'yes', 0, ['vegetarian'], true], ['Tom', 'yes', 0, [], true], ['Elif', 'yes', 1, ['vegetarian'], true], ['Marta', 'yes', 0, ['gluten_free'], true],
+  ['Ben', 'yes', 0, [], true], ['Lucia', 'yes', 0, ['vegetarian'], true], ['Omar', 'yes', 0, [], false], ['Hana', 'yes', 0, [], true], ['Leo', 'yes', 1, [], true],
+  ['Finn', 'no', 0, [], false], ['Ida', 'no', 0, [], false], ['Nina', 'no', 0, [], false], ['Sam', 'no', 0, [], false],
+];
+const rsvpClosed = {
+  ...rsvpOpen,
+  phase: 'closed',
+  not_answered: ['Zoe', 'Rosa', 'Theo'],
+  ...rsvpParts(RSVP_CLOSED_PEOPLE),
+  people: RSVP_CLOSED_PEOPLE.map(person),
+  drafts: [draft(RSVP_CLOSED_PEOPLE, 'Omar', 'not_paid', unpaidNote('Omar'))],
+  join: null,
+};
+const signupClosed = {
+  ...signupOpen,
+  phase: 'closed',
+  slots: [
+    slot(0, 'Mains', 3, [['g3', 'Priya', 'lentil stew'], ['g11', 'Elif', 'lasagne'], ['g15', 'Omar', 'curry']]),
+    slot(1, 'Sides', 4, [['g4', 'Ana', null], ['g5', 'Kai', null], ['g7', 'Tom', null], ['g14', 'Lucia', null]]),
+    slot(2, 'Desserts', 2, [['g2', 'Mia', 'apple cake'], ['g20', 'Hana', 'gingerbread']], [['g8', 'Leo']]),
+    slot(3, 'Drinks', 2, [['g15', 'Omar', null], ['g10', 'Jonas', null]]),
+    slot(4, 'Washing-up crew', 3, [['g12', 'Marta', null], ['g6', 'Ravi', null]]),
+  ],
+  join: null,
+};
+const voteClosed = {
+  ...voteBase,
+  phase: 'closed',
+  join: null,
+  ballot: { kind: 'ranked', options: OPTIONS, in_play: [0, 1, 2, 3] },
+  result: { outcome: 'winner', winner: { option: 0 }, tied: [], ballots_counted: 15, rounds: ROUNDS_DONE },
+};
+const HANA_NOTE = "Hi Hana! A spot opened up in Desserts for Sunday's potluck, so you're in now. See you at 1 PM at the clubhouse!";
+export const GATHER_FIXTURES = {
+  rsvpOpen: gatherFixture("Your dinner RSVP is open. Share the link in the club chat; I'll keep count and draft nudges for you to send.", 'Dinner RSVP', 'live', rsvpOpen),
+  rsvpPeople: gatherFixture("Here's who answered. Paid ticks are yours only.", 'Dinner RSVP', 'live', rsvpOpen),
+  rsvpNudges: gatherFixture('8 nudges are drafted. Nothing sends by itself: copy one and send it from your own chat.', 'Dinner RSVP', 'live', rsvpOpen),
+  rsvpNoAddress: gatherFixture('Your dinner RSVP is open on your Wi-Fi. To let members answer from home, set up Tailscale Funnel (the How to has the steps).', 'Dinner RSVP', 'live', {
+    ...rsvpOpen,
+    join: { mode: 'wifi', anywhere_kind: null, anywhere_url: null, wifi_url: GATHER_WIFI },
+  }),
+  signupOpen: gatherFixture('Your potluck sign-up is open. Desserts is full; Hana and Leo are on its waiting list.', 'Potluck sign-up', 'live', signupOpen),
+  signupMoved: gatherFixture('Ben left Desserts, so Hana moved up from the waiting list.', 'Potluck sign-up', 'live', {
+    ...signupOpen,
+    slots: POTLUCK_SLOTS.map((s) => (s.slot === 2 ? slot(2, 'Desserts', 2, [['g2', 'Mia', 'apple cake'], ['g20', 'Hana', 'gingerbread']], [['g8', 'Leo']]) : s)),
+    moved_up: [{ id: 'g20', name: 'Hana', slot: 2, at: at(14, '16:12'), seen: false }],
+    drafts: [{ to: 'Hana', player_id: 'g20', kind: 'moved_up', text: HANA_NOTE, copied_at: null, next_copy_at: null, can_copy: true }],
+  }),
+  voteOpen: gatherFixture("The dinner vote is open. 15 of 22 have voted; it closes Wed at 8 PM.", 'Dinner vote', 'live', voteOpen),
+  voteClosed: gatherFixture('The vote is closed: The Old Mill won, 8 to 7 in the final round.', 'Dinner vote', 'ended', voteClosed),
+  voteTie: gatherFixture("It's a tie between The Old Mill and Casa Lupa. You pick, or open the vote again for 24 hours.", 'Dinner vote', 'live', {
+    ...voteBase,
+    phase: 'tie',
+    join: null,
+    voted: 14,
+    voters: VOTERS.slice(0, 14),
+    ballot: { kind: 'ranked', options: OPTIONS, in_play: [0, 1] },
+    result: { outcome: 'tie', winner: null, tied: c(7, 7), ballots_counted: 14, rounds: [{ ...ROUNDS_DONE[0], counts: c(6, 5, 2, 1), dropped: [{ option: 2 }, { option: 3 }] }, { round: 2, counts: c(7, 7), exhausted: 0, dropped: [] }] },
+  }),
+  rsvpResult: gatherFixture('Your dinner RSVP is closed. 19 are coming; the list for The Old Mill is ready to copy.', 'Dinner RSVP', 'ended', rsvpClosed),
+  signupResult: gatherFixture('Your potluck sign-up is closed. Every slot is full except Washing-up crew.', 'Potluck sign-up', 'ended', signupClosed),
+} satisfies Record<string, Fixture>;
+
 export const FIXTURES = {
   comparison,
   chartLine,
