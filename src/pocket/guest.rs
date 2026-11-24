@@ -463,8 +463,9 @@ async fn action(
     // holds one gets the kit's has_ticket answer instead, and only a take that worked counts
     let take_ip = (s.row.kit == super::queue::ID && req.name == "take" && !super::queue::has_live_ticket(&s.kit_state, &p.id)).then(|| client_ip(peer(ci), &headers));
     if let Some(ip) = take_ip {
-        if !state.pocket.limits.may_take(&code, &p.id, ip) {
-            return Err(PocketError::new(StatusCode::TOO_MANY_REQUESTS, "slow_down", "This phone has taken 3 tickets in the last hour. Wait a bit, or ask at the counter."));
+        // The body says which limit it was, so the page can say "this phone" or "this network"
+        if let Err(hit) = state.pocket.limits.may_take(&code, &p.id, ip) {
+            return Err(PocketError::new(StatusCode::TOO_MANY_REQUESTS, "slow_down", hit.message()).with(json!({ "limit": hit.as_str() })));
         }
     }
     let viewer = Viewer::Guest(p.id.clone());

@@ -294,6 +294,24 @@ fn body_text(body: &Value, key: &str, max: usize) -> Result<Option<String>, KitE
     }
 }
 
+/// The guest's first name in a `take` body, with guest-facing lines: `None` when missing or blank.
+fn name_text(body: &Value) -> Result<Option<String>, KitError> {
+    match body.get("name") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) => {
+            if has_control(s) {
+                return Err(KitError::BadInput("That name has a character we can't use. Try letters only.".into()));
+            }
+            let t = s.split_whitespace().collect::<Vec<_>>().join(" ");
+            if t.chars().count() > NAME_MAX {
+                return Err(KitError::BadInput(format!("Names are at most {NAME_MAX} characters.")));
+            }
+            Ok(Some(t).filter(|t| !t.is_empty()))
+        }
+        Some(_) => Err(KitError::BadInput("Type a first name, or leave it empty.".into())),
+    }
+}
+
 /// A ticket number in a host body: a whole number from 1 (`2` or `2.0`), else 400.
 fn ticket_no(body: &Value, key: &str) -> Result<Option<u64>, KitError> {
     match body.get(key) {
@@ -344,8 +362,11 @@ impl St {
         self.tickets.iter().find(|t| t.guest == id)
     }
 
+    /// The ticket with `number`: a live one first, so a finished ticket waiting for the sweep can
+    /// never shadow a live ticket with the same number.
     fn find_mut(&mut self, number: u64) -> Option<&mut Ticket> {
-        self.tickets.iter_mut().find(|t| t.number == number && !t.closed)
+        let i = self.tickets.iter().position(|t| t.number == number && t.live()).or_else(|| self.tickets.iter().position(|t| t.number == number && !t.closed))?;
+        self.tickets.get_mut(i)
     }
 
     fn avg_minutes(&self) -> Option<i64> {
@@ -513,7 +534,7 @@ impl Queue {
             return Err(coded(409, "full", "The queue is full right now.", json!({ "max_waiting": max })));
         }
         // A first name only when the spec asks for one; otherwise nothing sent is kept
-        let name = match body_text(body, "name", NAME_MAX)? {
+        let name = match name_text(body)? {
             Some(n) if ask_name(ctx.spec) => {
                 if words::blocked(&n) {
                     return Err(KitError::BadInput("Pick another name.".into()));
@@ -589,7 +610,7 @@ impl Queue {
                     return Err(KitError::NotNow(format!("Ticket #{n} wasn't skipped.")));
                 }
                 if t.recall_until().is_none_or(|u| u <= now) {
-                    return Err(coded(410, "too_late", "It's more than 10 minutes since that ticket was skipped.", json!({})));
+                    return Err(coded(410, "too_late", &format!("#{n} was skipped more than 10 minutes ago, so it can't come back."), json!({})));
                 }
                 s.skipped_today = s.skipped_today.saturating_sub(1);
                 // Called again at once, ahead of everyone waiting
@@ -645,8 +666,10 @@ impl Queue {
                 s.closed_at = None;
                 s.auto_closed = false;
                 s.closed_waiting = 0;
-                // Closed tickets have told their guests by now; the sweep takes the guests
-                s.tickets.retain(|t| !t.closed);
+                // Numbers start again at #1, so no old ticket may stay to share a number with a new
+                // one. Names are already wiped; the guests become guests with no ticket and the
+                // sweep takes them
+                s.tickets.clear();
                 s.roll_day(now);
                 s.set_closes_at(now);
             }
@@ -1130,6 +1153,60 @@ mod tests {
         }
         let h = Queue.view(&ctx, &st, &Viewer::Host).to_string();
         assert!(h.contains("Mia") && h.contains("Ben") && !h.contains("\"guest\""), "the host sees names, never keys: {h}");
+    }
+
+    #[test]
+    fn reopen_never_shares_a_number_with_an_old_ticket() {
+        // Rigel F1: #3 served, close, reopen, a new #3 taken: serving it works
+        let sp = spec();
+        let mut st = fresh(&sp, at(0));
+        for g in ["a", "b", "c"] {
+            act(&sp, &mut st, at(0), &guest(g), "take", json!({})).unwrap();
+        }
+        act(&sp, &mut st, at(0), &Viewer::Host, "serve", json!({ "ticket": 3 })).unwrap();
+        act(&sp, &mut st, at(1), &Viewer::Host, "close", json!({})).unwrap();
+        act(&sp, &mut st, at(1), &Viewer::Host, "reopen", json!({})).unwrap();
+        assert!(load(&st).tickets.is_empty(), "reopen drops every old ticket");
+        for g in ["d", "a", "b"] {
+            act(&sp, &mut st, at(2), &guest(g), "take", json!({})).unwrap();
+        }
+        act(&sp, &mut st, at(2), &Viewer::Host, "serve", json!({ "ticket": 3 })).unwrap();
+        let s = load(&st);
+        assert_eq!(s.tickets.iter().find(|t| t.guest == "b").map(|t| t.state.as_str()), Some(SERVED));
+        assert_eq!(s.served_today, 2);
+        // call_next {served} on the new numbers works the same way
+        act(&sp, &mut st, at(3), &Viewer::Host, "call_next", json!({})).unwrap();
+        act(&sp, &mut st, at(3), &Viewer::Host, "call_next", json!({ "served": 1 })).unwrap();
+        assert_eq!(load(&st).now_serving, Some(2));
+    }
+
+    #[test]
+    fn a_live_ticket_wins_over_a_finished_one_with_the_same_number() {
+        let old = Ticket { number: 3, name: None, state: SERVED.into(), taken_at: at(0), called_at: None, done_at: Some(at(0)), guest: "c".into(), closed: false };
+        let new = Ticket { state: WAITING.into(), done_at: None, guest: "b".into(), ..old.clone() };
+        let mut s = St { tickets: vec![old, new], ..St::default() };
+        assert_eq!(s.find_mut(3).map(|t| t.guest.clone()).as_deref(), Some("b"));
+        s.tickets.truncate(1);
+        assert_eq!(s.find_mut(3).map(|t| t.guest.clone()).as_deref(), Some("c"), "a finished ticket alone still gives not_now, not 404");
+    }
+
+    #[test]
+    fn guest_lines_for_names_and_too_late() {
+        let sp = json!({ "title": "A", "ask_name": true });
+        let mut st = fresh(&sp, at(0));
+        let line = |e: KitError| match e {
+            KitError::BadInput(m) | KitError::NotNow(m) => m,
+            KitError::Coded { message, .. } => message,
+        };
+        let take = |name: Value| line(act(&sp, &mut st.clone(), at(0), &guest("a"), "take", json!({ "name": name })).unwrap_err());
+        assert_eq!(take(json!("x".repeat(25))), "Names are at most 24 characters.");
+        assert_eq!(take(json!("Mi\u{7}a")), "That name has a character we can't use. Try letters only.");
+        assert_eq!(take(json!(7)), "Type a first name, or leave it empty.");
+        act(&sp, &mut st, at(0), &guest("a"), "take", json!({})).unwrap();
+        act(&sp, &mut st, at(0), &Viewer::Host, "call_next", json!({})).unwrap();
+        act(&sp, &mut st, at(1), &Viewer::Host, "skip", json!({ "ticket": 1 })).unwrap();
+        let e = act(&sp, &mut st, at(11), &Viewer::Host, "recall", json!({ "ticket": 1 })).unwrap_err();
+        assert_eq!(line(e), "#1 was skipped more than 10 minutes ago, so it can't come back.");
     }
 
     #[test]

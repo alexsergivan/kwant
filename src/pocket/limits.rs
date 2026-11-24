@@ -44,12 +44,17 @@ impl Limits {
         self.photos.take((code.to_string(), player.to_string()), PHOTO_BURST, PHOTOS_PER_SEC, Instant::now())
     }
 
-    /// `true` when `player` of queue `code`, from `ip`, may take a ticket now. Spends nothing:
-    /// [`Self::took`] counts a take that gave a ticket.
-    pub fn may_take(&self, code: &str, player: &str, ip: IpAddr) -> bool {
+    /// `Ok` when `player` of queue `code`, from `ip`, may take a ticket now, else which limit
+    /// stops it (the key's first). Spends nothing: [`Self::took`] counts a take that gave a ticket.
+    pub fn may_take(&self, code: &str, player: &str, ip: IpAddr) -> Result<(), TakeLimit> {
         let now = Instant::now();
-        self.takes.has((code.to_string(), player.to_string()), TAKES_PER_KEY_HOUR, TAKES_PER_KEY_HOUR / 3600.0, now)
-            && self.take_ips.has((code.to_string(), ip), TAKES_PER_IP_HOUR, TAKES_PER_IP_HOUR / 3600.0, now)
+        if !self.takes.has((code.to_string(), player.to_string()), TAKES_PER_KEY_HOUR, TAKES_PER_KEY_HOUR / 3600.0, now) {
+            return Err(TakeLimit::Phone);
+        }
+        if !self.take_ips.has((code.to_string(), ip), TAKES_PER_IP_HOUR, TAKES_PER_IP_HOUR / 3600.0, now) {
+            return Err(TakeLimit::Network);
+        }
+        Ok(())
     }
 
     /// Counts one ticket taken by `player` of `code` from `ip`.
@@ -62,6 +67,31 @@ impl Limits {
     /// One join, rejoin or reset-code try from `ip`.
     pub fn signin(&self, ip: IpAddr) -> bool {
         self.signins.take(ip, SIGNIN_BURST, SIGNIN_PER_SEC, Instant::now())
+    }
+}
+
+/// Which queue take limit was hit: 3 an hour per guest key, or 30 an hour per address.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TakeLimit {
+    Phone,
+    Network,
+}
+
+impl TakeLimit {
+    /// The `limit` field of the 429 body.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            TakeLimit::Phone => "phone",
+            TakeLimit::Network => "network",
+        }
+    }
+
+    /// The guest-facing line (Mira's copy check).
+    pub fn message(self) -> &'static str {
+        match self {
+            TakeLimit::Phone => "This phone has taken 3 tickets in the last hour. Wait a bit, or ask at the counter.",
+            TakeLimit::Network => "Lots of tickets have come from this network in the last hour. Wait a bit, or ask at the counter.",
+        }
     }
 }
 
@@ -135,16 +165,18 @@ mod tests {
         let l = Limits::default();
         let ip = IpAddr::from([10, 0, 0, 1]);
         for _ in 0..3 {
-            assert!(l.may_take("Q", "a", ip));
+            assert_eq!(l.may_take("Q", "a", ip), Ok(()));
             l.took("Q", "a", ip);
         }
-        assert!(!l.may_take("Q", "a", ip), "3 takes an hour per key");
-        assert!(l.may_take("Q", "b", ip), "another key on the same Wi-Fi");
-        assert!(l.may_take("R", "a", ip), "per pocket");
+        assert_eq!(l.may_take("Q", "a", ip), Err(TakeLimit::Phone), "3 takes an hour per key");
+        assert_eq!(l.may_take("Q", "b", ip), Ok(()), "another key on the same Wi-Fi");
+        assert_eq!(l.may_take("R", "a", ip), Ok(()), "per pocket");
         for i in 0..27 {
             l.took("Q", &format!("k{i}"), ip);
         }
-        assert!(!l.may_take("Q", "fresh", ip), "30 an hour per address");
-        assert!(l.may_take("Q", "fresh", IpAddr::from([10, 0, 0, 2])));
+        assert_eq!(l.may_take("Q", "fresh", ip), Err(TakeLimit::Network), "30 an hour per address");
+        assert_eq!(l.may_take("Q", "fresh", IpAddr::from([10, 0, 0, 2])), Ok(()));
+        assert_eq!((TakeLimit::Phone.as_str(), TakeLimit::Network.as_str()), ("phone", "network"));
+        assert!(TakeLimit::Network.message().starts_with("Lots of tickets have come from this network"));
     }
 }

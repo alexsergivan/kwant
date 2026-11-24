@@ -228,6 +228,35 @@ async fn numbers_count_from_one_call_next_serves_and_calls_and_reopen_starts_aga
 }
 
 #[tokio::test]
+async fn after_close_and_reopen_a_new_ticket_never_shares_a_number_with_a_served_one() {
+    // Rigel F1: serve #3, close, reopen, a new #3 is taken and must be servable
+    let d = setup().await;
+    let (code, host) = queue(&d, json!({})).await;
+    for _ in 0..3 {
+        let (_, k) = joined(&d, &code).await;
+        assert_eq!(take(&d, &code, &k, json!({})).await.status, StatusCode::OK);
+    }
+    assert_eq!(host_act(&d, &code, &host, "serve", json!({ "ticket": 3 })).await.status, StatusCode::OK);
+    host_act(&d, &code, &host, "close", json!({})).await;
+    let r = host_act(&d, &code, &host, "reopen", json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let mut keys = Vec::new();
+    for n in 1..=3 {
+        let (_, k) = joined(&d, &code).await;
+        let r = take(&d, &code, &k, json!({})).await;
+        assert_eq!(r.body["view"]["my_ticket"]["number"], n, "{}", r.body);
+        keys.push(k);
+    }
+    let r = host_act(&d, &code, &host, "serve", json!({ "ticket": 3 })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(state_of(&d, &code, &keys[2]).await.body["view"]["my_ticket"]["state"], "served");
+    host_act(&d, &code, &host, "call_next", json!({})).await;
+    let r = host_act(&d, &code, &host, "call_next", json!({ "served": 1 })).await;
+    assert_eq!((r.status, &r.body["view"]["now_serving"]), (StatusCode::OK, &json!(2)), "{}", r.body);
+    assert_eq!(state_of(&d, &code, &keys[0]).await.body["view"]["my_ticket"]["state"], "served");
+}
+
+#[tokio::test]
 async fn a_called_ticket_is_skipped_after_call_minutes_and_can_be_recalled() {
     let d = setup().await;
     let (code, host) = queue(&d, json!({ "call_minutes": 3 })).await;
@@ -242,7 +271,9 @@ async fn a_called_ticket_is_skipped_after_call_minutes_and_can_be_recalled() {
     let hv = host_get(&d, &code, &host, "").await;
     assert_eq!(hv["view"]["summary"]["skipped_today"], 1, "{hv}");
     assert!(hv["view"]["tickets"][0]["recall_until"].is_string(), "{hv}");
-    // Inside 10 minutes: called again
+    // An unknown number is 404; inside 10 minutes the skipped ticket is called again
+    let r = host_act(&d, &code, &host, "recall", json!({ "ticket": 9 })).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND, "{}", r.body);
     let r = host_act(&d, &code, &host, "recall", json!({ "ticket": 1 })).await;
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
     assert_eq!(state_of(&d, &code, &ka).await.body["view"]["my_ticket"]["state"], "called");
@@ -312,6 +343,8 @@ async fn the_fourth_take_in_an_hour_from_one_key_or_the_31st_from_one_address_is
     }
     let r = take(&d, &code, &ka, json!({})).await;
     assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("slow_down")), "{}", r.body);
+    assert_eq!(r.body["limit"], "phone", "{}", r.body);
+    assert!(r.body["message"].as_str().unwrap().starts_with("This phone has taken 3 tickets"), "{}", r.body);
     // One shop Wi-Fi: 30 customers fine, the 31st waits (joins come from other addresses so the
     // sign-in limit isn't what stops them)
     let shop = "203.0.113.9";
@@ -323,6 +356,9 @@ async fn the_fourth_take_in_an_hour_from_one_key_or_the_31st_from_one_address_is
     let (_, k) = joined(&d, &code).await;
     let r = act_from(&d, Some(shop), &code, &k, "take", json!({})).await;
     assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::TOO_MANY_REQUESTS, Some("slow_down")), "{}", r.body);
+    // This phone has taken none: the line blames the network, not the phone
+    assert_eq!(r.body["limit"], "network", "{}", r.body);
+    assert_eq!(r.body["message"], "Lots of tickets have come from this network in the last hour. Wait a bit, or ask at the counter.");
     assert_eq!(act_from(&d, None, &code, &k, "take", json!({})).await.status, StatusCode::OK, "another address");
 }
 
