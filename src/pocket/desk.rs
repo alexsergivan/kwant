@@ -102,7 +102,7 @@ pub const NOTE_CANCELLED: &str = "booking_cancelled";
 pub const NOTE_CONFIRMED: &str = "booking_confirmed";
 pub const NOTE_DECLINED: &str = "booking_declined";
 
-/// Why a guest waits for the host: they asked for a time, or cancelled a confirmed one.
+/// The Needs-you `ask` for a guest's booking request (and the reason a wait had before round 2).
 pub const WAIT_BOOKING: &str = "booking";
 /// pa13b: who booked a confirmed seat: the guest asked and the host confirmed, or the host.
 pub const BY_GUEST: &str = "guest";
@@ -375,21 +375,16 @@ struct Msg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Waiting {
-    /// `handoff`, `daily_cap`, or pa13b's `booking`.
+    /// `handoff` or `daily_cap`. (`booking` only in state written before pa13b round 2: a
+    /// request is read from the guest's booking now, F1.)
     reason: String,
     why: String,
     at: DateTime<Utc>,
-    /// pa13b: the card's quote for a booking request (the guest's note).
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    quote: Option<String>,
-    /// pa13b: the slot a booking wait is about.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    slot: Option<String>,
 }
 
 impl Waiting {
     fn new(reason: &str, why: String, at: DateTime<Utc>) -> Self {
-        Self { reason: reason.into(), why, at, quote: None, slot: None }
+        Self { reason: reason.into(), why, at }
     }
 
     fn booking(&self) -> bool {
@@ -599,9 +594,42 @@ impl G {
         self.msgs.iter().filter(|m| m.from == GUEST && self.read_at.is_none_or(|r| m.at > r)).count()
     }
 
-    fn handoff_reason(&self) -> Option<&str> {
-        self.waiting.as_ref().map(|w| w.why.as_str())
+    /// pa13b: this guest's request the host hasn't answered (F1: the Needs-you item comes from
+    /// here, so a hand-off, reply or resolve can't hide it).
+    fn requested(&self) -> Option<&Booking> {
+        self.booking.as_ref().filter(|b| b.state == REQUESTED)
     }
+
+    /// A hand-off or a capped message waits for the host (a wait from before F1 that only
+    /// mirrored a booking request doesn't count: [`G::requested`] does).
+    fn handoff(&self) -> Option<&Waiting> {
+        self.waiting.as_ref().filter(|w| !w.booking())
+    }
+
+    /// Drops a wait from before F1 that only mirrored a booking request.
+    fn drop_booking_wait(&mut self) {
+        if self.waiting.as_ref().is_some_and(Waiting::booking) {
+            self.waiting = None;
+        }
+    }
+
+    /// Waits for the host: a hand-off, a capped message or a booking request.
+    fn waits(&self) -> bool {
+        self.handoff().is_some() || self.requested().is_some()
+    }
+
+    /// The hand-off's reason, else "{name} asks for a time" for a request.
+    fn handoff_reason(&self, name: &str) -> Option<String> {
+        match self.handoff() {
+            Some(w) => Some(w.why.clone()),
+            None => self.requested().map(|_| asks_for_time(name)),
+        }
+    }
+}
+
+/// pa13b: the host's line for a guest's booking request.
+pub fn asks_for_time(name: &str) -> String {
+    cut(&format!("{name} asks for a time"), REASON_MAX)
 }
 
 fn messages(g: Option<&G>, with_client_ids: bool) -> Vec<Value> {
@@ -651,8 +679,8 @@ impl Desk {
             "id": p.id,
             "name": p.name,
             "creature": p.avatar,
-            "waiting": g.is_some_and(|g| g.waiting.is_some()),
-            "handoff_reason": g.and_then(G::handoff_reason),
+            "waiting": g.is_some_and(G::waits),
+            "handoff_reason": g.and_then(|g| g.handoff_reason(&p.name)),
             "last": last,
             "unread": g.map_or(0, G::unread),
             "msgs": g.map_or(0, |g| g.msgs.iter().filter(|m| m.from != NOTE).count()),
@@ -760,7 +788,7 @@ impl Desk {
         });
         v["starters"] = json!(starters(ctx.spec));
         v["messages"] = json!(messages(g, true));
-        v["waiting_for_host"] = json!(g.is_some_and(|g| g.waiting.is_some()));
+        v["waiting_for_host"] = json!(g.is_some_and(G::waits));
         v["bot_typing"] = json!(g.is_some_and(|g| g.busy));
         v["limits"] = json!({ "per_hour": PER_HOUR, "left_this_hour": left, "next_at": next_at, "max_chars": MAX_CHARS });
         if is_booking(ctx.spec) {
@@ -794,7 +822,13 @@ impl Desk {
         if note.as_ref().is_some_and(|n| n.chars().count() > BOOKING_NOTE_MAX) {
             return Err(coded(413, "too_long", format!("A note can have up to {BOOKING_NOTE_MAX} characters.")));
         }
-        if s.guests.get(pid).and_then(|g| g.booking.as_ref()).is_some_and(Booking::holds) {
+        // F2: the same check as a slot label (no line breaks, tabs or other control characters)
+        if note.as_ref().is_some_and(|n| n.chars().any(char::is_control)) {
+            return Err(KitError::BadInput(format!("a note is text of up to {BOOKING_NOTE_MAX} characters, on one line.")));
+        }
+        // F5: a request for a time that has started no longer holds the guest back
+        let started = |b: &Booking| b.state == REQUESTED && s.slots(ctx.spec).iter().any(|x| x.id == b.slot && x.past(now));
+        if s.guests.get(pid).and_then(|g| g.booking.as_ref()).is_some_and(|b| b.holds() && !started(b)) {
             let mine = Self::my_booking(ctx.spec, s, s.guests.get(pid));
             let when = s.slots(ctx.spec).into_iter().find(|x| Some(x.id.as_str()) == mine["slot"].as_str()).map_or_else(|| "a time".into(), |x| x.when());
             return Err(KitError::Coded {
@@ -822,13 +856,12 @@ impl Desk {
                 extra: json!({ "slots": Self::guest_slots(ctx.spec, s, now) }),
             });
         }
-        let name = ctx.player(pid).map_or_else(|| "A guest".to_string(), |p| p.name.clone());
         let g = s.guests.entry(pid.to_string()).or_default();
         g.reqs.push(now);
         g.last_at = Some(now);
-        g.booking = Some(Booking { slot: slot.id.clone(), state: REQUESTED.into(), note: note.clone(), text: None, at: now, by: None });
-        // The latest ask is what the host's card shows
-        g.waiting = Some(Waiting { quote: note, slot: Some(slot.id.clone()), ..Waiting::new(WAIT_BOOKING, cut(&format!("{name} asks for a time"), REASON_MAX), now) });
+        // F1: the host's Needs-you item comes from this booking, not from `waiting`
+        g.booking = Some(Booking { slot: slot.id.clone(), state: REQUESTED.into(), note, text: None, at: now, by: None });
+        g.drop_booking_wait();
         s.push_booking(pid, NOTE_REQUESTED, &slot, now);
         Ok(())
     }
@@ -850,9 +883,7 @@ impl Desk {
         }
         g.booking = None;
         g.last_at = Some(now);
-        if g.waiting.as_ref().is_some_and(Waiting::booking) {
-            g.waiting = None;
-        }
+        g.drop_booking_wait();
         s.push_booking(pid, NOTE_CANCELLED, &slot, now);
         Ok(())
     }
@@ -879,7 +910,8 @@ impl Desk {
             Some(b) if b.slot == id && b.state == CONFIRMED => false,
             _ => return Err(coded(409, "no_request", "That guest hasn't asked for that time.")),
         };
-        g.waiting = None;
+        // F1: a hand-off waiting next to the request stays for the host to answer
+        g.drop_booking_wait();
         g.read_at = Some(now);
         if fresh {
             s.push_booking(&pid, NOTE_CONFIRMED, &slot, now);
@@ -909,7 +941,7 @@ impl Desk {
             }
             _ => return Err(coded(409, "no_request", "That guest hasn't asked for that time.")),
         }
-        g.waiting = None;
+        g.drop_booking_wait();
         g.read_at = Some(now);
         s.push_booking(&pid, NOTE_DECLINED, &slot, now);
         if let Some(t) = text {
@@ -1157,7 +1189,7 @@ impl Kit for Desk {
         let s = load(state);
         let (replies, msgs) = s.today(ctx.now);
         let g = guide(ctx.spec);
-        let waiting = ctx.players.iter().filter(|p| s.guests.get(&p.id).is_some_and(|g| g.waiting.is_some())).count();
+        let waiting = ctx.players.iter().filter(|p| s.guests.get(&p.id).is_some_and(G::waits)).count();
         let mut out = json!({
             "counts": { "guests": ctx.players.len(), "waiting": waiting, "replies_today": replies, "daily_cap": cap_now(ctx.spec, &s), "messages_today": msgs },
             "cap_resets_at": next_midnight(ctx.now),
@@ -1285,8 +1317,8 @@ impl Kit for Desk {
                 "name": p.name,
                 "creature": p.avatar,
                 "delete_on": g.and_then(|g| g.delete_on(&s.slots(ctx.spec))),
-                "waiting": g.is_some_and(|g| g.waiting.is_some()),
-                "handoff_reason": g.and_then(G::handoff_reason),
+                "waiting": g.is_some_and(G::waits),
+                "handoff_reason": g.and_then(|g| g.handoff_reason(&p.name)),
                 "booking": g.and_then(|g| g.booking.as_ref()).map(|b| json!({ "slot": b.slot, "state": b.state, "note": b.note, "text": b.text, "at": b.at, "by": b.by() })),
             },
             "messages": messages(g, false),
@@ -1316,26 +1348,28 @@ pub struct WaitingGuest {
     pub ask: &'static str,
 }
 
-/// For the Needs-you list: each guest waiting for the host. A booking request's quote is the
-/// guest's note (empty without one), never their chat.
+/// For the Needs-you list: each guest waiting for the host, one item each (its id is the
+/// guest's). F1: a booking request comes from `booking.state == requested`, so a hand-off,
+/// reply or resolve can't hide it; while one is open it is the item (`why` empty: the caller
+/// writes [`asks_for_time`] with the guest's name), and a hand-off next to it shows once the
+/// host confirms or declines. A request's quote is the guest's note (empty without one), never
+/// their chat.
 pub fn waiting_guests(spec: &Value, state: &Value) -> Vec<WaitingGuest> {
     let s = load(state);
     let slots = s.slots(spec);
     s.guests
         .iter()
         .filter_map(|(id, g)| {
-            let w = g.waiting.as_ref()?;
-            let quote = if w.booking() {
-                w.quote.as_deref().map(|q| cut(q, 200)).unwrap_or_default()
-            } else {
-                g.msgs.iter().rev().find(|m| m.from == GUEST).map(|m| cut(&m.text, 200)).unwrap_or_default()
-            };
-            let booking = w.slot.as_ref().filter(|_| w.booking()).map(|sid| {
-                let slot = slots.iter().find(|x| &x.id == sid);
-                json!({ "slot": sid, "label": slot.map_or_else(|| sid.clone(), Slot::label), "start": slot.map(|x| x.start.clone()) })
-            });
-            let ask = if w.booking() { WAIT_BOOKING } else { HANDOFF };
-            Some(WaitingGuest { guest: id.clone(), why: w.why.clone(), quote, at: w.at, thread: g.thread_id.clone(), booking, ask })
+            let thread = g.thread_id.clone();
+            if let Some(b) = g.requested() {
+                let slot = slots.iter().find(|x| x.id == b.slot);
+                let booking = json!({ "slot": b.slot, "label": slot.map_or_else(|| b.slot.clone(), Slot::label), "start": slot.map(|x| x.start.clone()) });
+                let quote = b.note.as_deref().map(|q| cut(q, 200)).unwrap_or_default();
+                return Some(WaitingGuest { guest: id.clone(), why: String::new(), quote, at: b.at, thread, booking: Some(booking), ask: WAIT_BOOKING });
+            }
+            let w = g.handoff()?;
+            let quote = g.msgs.iter().rev().find(|m| m.from == GUEST).map(|m| cut(&m.text, 200)).unwrap_or_default();
+            Some(WaitingGuest { guest: id.clone(), why: w.why.clone(), quote, at: w.at, thread, booking: None, ask: HANDOFF })
         })
         .collect()
 }
@@ -1365,16 +1399,24 @@ pub fn booking_facts(spec: &Value, state: &Value, guest: &str, now: DateTime<Utc
     }
     let host = spec_str(spec, "host_name");
     if !host.is_empty() {
-        out.push_str(&format!("Call the host {host} every time, not he or she.\n"));
+        out.push_str(&format!("Call the host {host} every time, never he, she or they.\n"));
     }
     if let Some(b) = s.guests.get(guest).and_then(|g| g.booking.as_ref()) {
-        let label = s.slots(spec).into_iter().find(|x| x.id == b.slot).map_or_else(|| b.slot.clone(), |x| x.label());
-        let what = match b.state.as_str() {
-            REQUESTED => "requested, waiting for the host to confirm",
-            CONFIRMED => "confirmed by the host",
-            _ => "declined by the host",
+        // The time always, and the host's label after it (a removed slot shows its id)
+        let when = match s.slots(spec).into_iter().find(|x| x.id == b.slot) {
+            Some(x) => match x.label.as_deref().filter(|l| !l.is_empty()) {
+                Some(l) => format!("{} ({l})", x.when()),
+                None => x.when(),
+            },
+            None => b.slot.clone(),
         };
-        out.push_str(&format!("This guest's booking: {label}, {what}\n"));
+        let who = if host.is_empty() { "the host" } else { host };
+        let what = match b.state.as_str() {
+            REQUESTED => format!("requested, waiting for {who} to confirm"),
+            CONFIRMED => format!("confirmed by {who}"),
+            _ => format!("declined by {who}"),
+        };
+        out.push_str(&format!("This guest's booking: {when}, {what}\n"));
     }
     Some(out)
 }
@@ -1518,11 +1560,17 @@ mod tests {
         assert!(!b.to_string().contains("ann"), "{b}");
         let facts = booking_facts(&spec, &st, "pl_ben", now).unwrap();
         assert!(facts.lines().filter(|l| l.starts_with("- ")).count() == 1 && !facts.contains("Morning cut") && !facts.contains("Gone by") && !facts.contains("ann"), "{facts}");
-        assert!(booking_facts(&spec, &st, "pl_ann", now).unwrap().contains("This guest's booking: Morning cut, requested"));
+        let s1_when = Slot { id: "s1".into(), start: at(5, 9), minutes: 60, label: None, seats: 1 }.when();
+        let mine = booking_facts(&spec, &st, "pl_ann", now).unwrap();
+        assert!(mine.contains(&format!("This guest's booking: {s1_when} (Morning cut), requested, waiting for the host to confirm\n")), "{mine}");
         assert!(booking_facts(&super::tests::spec(), &st, "pl_ann", now).is_none(), "a guide desk has none");
         // The Needs-you row quotes the note, not the chat
         let w = waiting_guests(&spec, &st);
-        assert_eq!((w[0].why.as_str(), w[0].quote.as_str(), w[0].booking.as_ref().unwrap()["slot"].as_str(), w[0].ask), ("ann asks for a time", "ann-note", Some("s1"), "booking"));
+        assert_eq!((w[0].why.as_str(), w[0].quote.as_str(), w[0].booking.as_ref().unwrap()["slot"].as_str(), w[0].ask), ("", "ann-note", Some("s1"), "booking"));
+        assert_eq!(asks_for_time("ann"), "ann asks for a time");
+        let h = Desk.view(&ctx, &st, &Viewer::Host);
+        let row = h["guests"].as_array().unwrap().iter().find(|r| r["id"] == "pl_ann").unwrap();
+        assert_eq!((row["handoff_reason"].as_str(), row["waiting"].as_bool()), (Some("ann asks for a time"), Some(true)));
         // The host's notification names the time
         assert_eq!(requested_when(&spec, &st, "pl_ann"), Some(Slot { id: "s1".into(), start: at(5, 9), minutes: 60, label: None, seats: 1 }.when()));
         // The host confirms; the seat stays taken when Ann's data goes, with no name
@@ -1581,6 +1629,115 @@ mod tests {
         assert!(Desk.idle_players(&ctx2, &st).iter().any(|p| p == "pl_ann"));
         // The host's decline line is capped at 1000 characters
         assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "decline", json!({ "guest": "pl_ann", "slot": "s1", "text": "x".repeat(DECLINE_TEXT_MAX + 1) }))), "too_long");
+    }
+
+    #[test]
+    fn a_hand_off_reply_or_resolve_never_hides_a_booking_request() {
+        // Rigel's F1: request, then a hand-off, then the host resolves or replies
+        let now = Utc::now();
+        let ps = players(now);
+        let spec = booking_spec();
+        let mut st = Desk.init(&spec);
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        let ann = Viewer::Guest("pl_ann".into());
+        let item = |st: &Value| waiting_guests(&spec, st).into_iter().map(|w| (w.guest, w.ask, w.booking.map(|b| b["slot"].clone()), w.quote)).collect::<Vec<_>>();
+        let booking_item = vec![("pl_ann".to_string(), WAIT_BOOKING, Some(json!("s1")), "after 5".to_string())];
+        assert_eq!(code(act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "s1", "note": "after 5" }))), "ok");
+        say(&mut st, &mut ctx, "pl_ann", "can I get a discount?").unwrap();
+        Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ann", "why": "Discount" })).unwrap();
+        assert_eq!(item(&st), booking_item, "the hand-off doesn't replace the request");
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "resolve", json!({ "guest": "pl_ann" }))), "ok");
+        assert_eq!(item(&st), booking_item, "resolve leaves the request");
+        Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ann", "why": "Discount" })).unwrap();
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "reply", json!({ "guest": "pl_ann", "text": "No discounts, sorry" }))), "ok");
+        assert_eq!(item(&st), booking_item, "reply leaves the request");
+        let h = Desk.view(&ctx, &st, &Viewer::Host);
+        let row = h["guests"].as_array().unwrap().iter().find(|r| r["id"] == "pl_ann").unwrap();
+        assert_eq!((row["waiting"].clone(), Desk.host_summary(&ctx, &st)["counts"]["waiting"].clone()), (json!(true), json!(1)));
+        assert_eq!(Desk.view(&ctx, &st, &ann)["waiting_for_host"], json!(true));
+        // Only the host's answer to the request ends it
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "confirm", json!({ "guest": "pl_ann", "slot": "s1" }))), "ok");
+        assert!(item(&st).is_empty());
+        // The other way round: a hand-off waits, the guest asks for a time, the host confirms:
+        // the hand-off's question is still there, unanswered
+        say(&mut st, &mut ctx, "pl_ben", "is there parking?").unwrap();
+        Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ben", "why": "Parking" })).unwrap();
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Guest("pl_ben".into()), "request", json!({ "slot": "s2" }))), "ok");
+        assert_eq!(item(&st)[0].1, WAIT_BOOKING);
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "decline", json!({ "guest": "pl_ben", "slot": "s2" }))), "ok");
+        let w = waiting_guests(&spec, &st);
+        assert_eq!((w.len(), w[0].ask, w[0].why.as_str(), w[0].quote.as_str()), (1, HANDOFF, "Parking", "is there parking?"));
+        // A wait written before round 2 that mirrored a request is read as the request
+        let mut old = load(&st);
+        old.guests.get_mut("pl_ben").unwrap().waiting = Some(Waiting::new(WAIT_BOOKING, "ben asks for a time".into(), now));
+        store(&mut st, &old);
+        assert!(waiting_guests(&spec, &st).is_empty(), "no request: nothing waits");
+    }
+
+    #[test]
+    fn a_note_with_a_control_character_is_refused() {
+        // F2: the same check as a slot label
+        let now = Utc::now();
+        let ps = players(now);
+        let spec = booking_spec();
+        let mut st = Desk.init(&spec);
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        let ann = Viewer::Guest("pl_ann".into());
+        for bad in ["two\nlines", "nul\u{0}", "tab\there", "esc\u{1b}[31m"] {
+            assert_eq!(code(act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "s1", "note": bad }))), "bad_action", "{bad:?}");
+        }
+        assert_eq!(Desk.view(&ctx, &st, &ann)["my_booking"], Value::Null);
+        // Trailing whitespace is trimmed, not refused; letters from any script are fine
+        assert_eq!(code(act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "s1", "note": "Ça va, 4 ljudi \n" }))), "ok");
+        assert_eq!(Desk.view(&ctx, &st, &ann)["my_booking"]["note"], json!("Ça va, 4 ljudi"));
+    }
+
+    #[test]
+    fn a_request_for_a_time_that_has_started_no_longer_blocks_another() {
+        // F5
+        let now = Utc::now();
+        let ps = players(now);
+        let spec = json!({ "title": "Chair", "mode": "booking", "slots": [
+            { "id": "soon", "start": at(1, 9), "minutes": 60 },
+            { "id": "later", "start": at(4, 9), "minutes": 60 },
+        ] });
+        let mut st = Desk.init(&spec);
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        let ann = Viewer::Guest("pl_ann".into());
+        assert_eq!(code(act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "soon" }))), "ok");
+        assert_eq!(code(act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "later" }))), "has_request", "still ahead: it holds");
+        ctx.now = now + Duration::days(2);
+        assert_eq!(code(act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "later" }))), "ok");
+        assert_eq!(Desk.view(&ctx, &st, &ann)["my_booking"]["slot"], json!("later"));
+        // A confirmed time that has started still counts: the guest writes to the host
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "confirm", json!({ "guest": "pl_ann", "slot": "later" }))), "ok");
+        ctx.now = now + Duration::days(5);
+        assert_eq!(code(act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "soon" }))), "has_request");
+    }
+
+    #[test]
+    fn the_bots_booking_line_has_the_time_and_the_hosts_name() {
+        // Mira's copy check, changes 2 and 3
+        let now = Utc::now();
+        let ps = players(now);
+        let mut spec = booking_spec();
+        spec["host_name"] = json!("Nika");
+        let mut st = Desk.init(&spec);
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        let when = |id: &str, d: i64, h: u32| Slot { id: id.into(), start: at(d, h), minutes: 30, label: None, seats: 1 }.when();
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Guest("pl_ann".into()), "request", json!({ "slot": "s1" }))), "ok");
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Guest("pl_ben".into()), "request", json!({ "slot": "s2" }))), "ok");
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "confirm", json!({ "guest": "pl_ben", "slot": "s2" }))), "ok");
+        let ann = booking_facts(&spec, &st, "pl_ann", now).unwrap();
+        assert!(ann.contains("Call the host Nika every time, never he, she or they.\n"), "{ann}");
+        assert!(ann.contains(&format!("This guest's booking: {} (Morning cut), requested, waiting for Nika to confirm\n", when("s1", 5, 9))), "{ann}");
+        let ben = booking_facts(&spec, &st, "pl_ben", now).unwrap();
+        assert!(ben.contains(&format!("This guest's booking: {}, confirmed by Nika\n", when("s2", 5, 11))), "{ben}");
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "decline", json!({ "guest": "pl_ben", "slot": "s2" }))), "ok");
+        assert!(booking_facts(&spec, &st, "pl_ben", now).unwrap().contains(", declined by Nika\n"));
+        for f in [&ann, &ben] {
+            assert!(!f.contains("the host to confirm") && !f.contains("by the host"), "{f}");
+        }
     }
 
     #[test]

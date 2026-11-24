@@ -68,7 +68,7 @@ const BOOKING_WORDS: NoteWords<'static> = NoteWords {
 /// pa13b: what a booking desk's bot never does (each under 80 characters, the rules' limit).
 pub const BOOKING_NEVER: [&str; 3] = [
     "Say booked, confirmed, reserved or you're in: only the host confirms a time",
-    "Ask for card or bank details: say the host will send payment details",
+    "Ask for card or bank details or take a payment: the host sends payment details",
     "Name a price that isn't in the facts, or offer a time not in the open times",
 ];
 
@@ -409,6 +409,7 @@ pub async fn needs_you(state: &AppState, kwants: &[Kwant]) -> Vec<(chrono::DateT
         for desk::WaitingGuest { guest, why, quote, at, thread, booking, ask } in desk::waiting_guests(&s.spec, &s.kit_state) {
             let thread = thread.filter(|_| live);
             let Some(p) = s.players.iter().find(|p| p.id == guest) else { continue };
+            let why = if ask == desk::WAIT_BOOKING { desk::asks_for_time(&p.name) } else { why };
             items.push((at, json!({
                 "kind": "pocket_desk",
                 "id": format!("desk:{code}:{guest}"),
@@ -465,6 +466,9 @@ mod tests {
         assert!(n.contains("The host's facts:\nOpen times") && n.contains("- Noon cut"), "{n}");
         let n = booking_note("Ann", &[], "Parking: the back lot", facts);
         assert!(n.contains("The host's facts:\nParking: the back lot\n\nOpen times"), "{n}");
+        // Mira's change 1: rule 2 reads as a thing the bot never does, like rules 1 and 3
+        assert_eq!(BOOKING_NEVER[1], "Ask for card or bank details or take a payment: the host sends payment details");
+        assert!(!n.contains("say the host will send"), "{n}");
         // The Guest Guide's note is unchanged
         assert!(!desk_note("Ann", &[], "g").contains("only the host confirms"));
     }
