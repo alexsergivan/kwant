@@ -51,6 +51,8 @@ export interface WallView {
   open: boolean;
   captions: boolean;
   best_set: boolean;
+  /** Who picked the best set when a check did it (pa14b: "snap"). Absent while the host picks by hand. */
+  best_by?: string;
   /** Approved photos on the wall (lobby `count` before a seat). */
   count?: number;
   limits: Limits;
@@ -125,6 +127,7 @@ export function wallFrom(json: unknown): { view: WallView; version?: number } | 
     open: !ended && kv.state === 'open',
     captions: kv.captions !== false,
     best_set: kv.best_set === true,
+    best_by: text(kv.best_by),
     count: count(kv.count),
     limits: {
       photo_cap_mb: count(lim?.photo_cap_mb) || undefined,

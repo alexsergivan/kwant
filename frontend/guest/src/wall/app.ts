@@ -339,7 +339,7 @@ export class WallApp {
     const k = active?.getAttribute?.('data-k');
     const sel = k && active?.type === 'text' && typeof active?.selectionStart === 'number' ? [active.selectionStart, active.selectionEnd ?? active.selectionStart] : null;
     const scrollY = typeof window !== 'undefined' ? window.scrollY : 0;
-    const page = h('main', { class: `g wl s-${scr}`, 'data-screen': scr }, this.bar(scr), this.body(scr), this.madeWith());
+    const page = h('main', { class: `g wall s-${scr}`, 'data-screen': scr }, this.bar(scr), this.body(scr), this.madeWith());
     this.root.replaceChildren(page, this.said);
     if (k) {
       const el = this.root.querySelector<HTMLInputElement>(`[data-k="${k}"]`);
@@ -435,6 +435,21 @@ export class WallApp {
     return el;
   }
 
+  /**
+   * Once the flagged field reads right, drop the problem in place: the alert and the field's invalid marks go, with
+   * no repaint, so focus and typing are untouched.
+   */
+  private settle(field: Problem['field'], ok: boolean): void {
+    if (!ok || !this.problem || this.problem.field !== field) return;
+    this.problem = null;
+    this.root.querySelector('[data-problem]')?.remove();
+    for (const el of this.root.querySelectorAll<HTMLElement>('[aria-invalid]')) {
+      el.removeAttribute('aria-invalid');
+      el.classList.remove('bad');
+      el.closest('.pinwrap')?.querySelectorAll('.pin.warn').forEach((b) => b.classList.remove('warn'));
+    }
+  }
+
   private fail(p: Problem): void {
     this.problem = p;
     this.paint(true);
@@ -447,8 +462,8 @@ export class WallApp {
     const d = this.jd;
     const host = v.host_name;
     const sub = [v.when ? day(v.when) : '', host ? `hosted by ${host}` : ''].filter(Boolean).join(' · ');
-    const name = this.nameInput('w-name', d.name, (s) => (d.name = s), 'name-why');
-    const pin = new PinInput('w-pin', 'Pick a 4-digit PIN', (p) => (d.pin = p), d.pin, this.problem?.field === 'pin', 'pin-why');
+    const name = this.nameInput('w-name', d.name, (s) => ((d.name = s), this.settle('name', !!s.trim())), 'name-why');
+    const pin = new PinInput('w-pin', 'Pick a 4-digit PIN', (p) => ((d.pin = p), this.settle('pin', p.length === 4)), d.pin, this.problem?.field === 'pin', 'pin-why');
     const lim = v.limits;
     const each = [lim.photo_cap_mb ? `up to ${lim.photo_cap_mb} MB each` : '', lim.per_guest_max ? `${lim.per_guest_max} each` : ''].filter(Boolean).join(', ');
     const n = this.early.length;
@@ -550,17 +565,18 @@ export class WallApp {
         'aria-invalid': this.problem?.field === 'code' ? 'true' : null,
       }) as HTMLInputElement;
       code.value = d.code;
-      code.addEventListener('input', () => (d.code = code.value));
-      const np = new PinInput('w-newpin', 'Pick a new 4-digit PIN', (p) => (d.newPin = p), d.newPin, warn);
+      const codeOk = (): boolean => d.code.trim().length === 4 && d.newPin.length === 4;
+      code.addEventListener('input', () => ((d.code = code.value), this.settle('code', codeOk())));
+      const np = new PinInput('w-newpin', 'Pick a new 4-digit PIN', (p) => ((d.newPin = p), this.settle('code', codeOk())), d.newPin, warn);
       pinPart = [
         h('div', null, h('label', { class: 'lbl', for: 'w-code' }, 'Reset code ', h('small', null, `4 letters from ${host}`)), code),
         h('div', null, h('label', { class: 'lbl', for: 'w-newpin' }, 'Pick a new 4-digit PIN'), np.el),
       ];
     } else {
-      const pin = new PinInput('w-bpin', 'Your PIN', (p) => (d.pin = p), d.pin, warn);
+      const pin = new PinInput('w-bpin', 'Your PIN', (p) => ((d.pin = p), this.settle('pin', p.length === 4)), d.pin, warn);
       pinPart = h('div', null, h('label', { class: 'lbl', for: 'w-bpin' }, 'Your PIN'), pin.el);
     }
-    const name = this.nameInput('w-bname', d.name, (s) => (d.name = s));
+    const name = this.nameInput('w-bname', d.name, (s) => ((d.name = s), this.settle('name', !!s.trim())));
     const btn = h('button', { class: 'gbtn', type: 'submit', 'data-rejoin': '', disabled: this.busy === 'rejoin', 'aria-busy': this.busy === 'rejoin' ? 'true' : null }, this.busy === 'rejoin' ? 'Opening…' : 'Open my photos');
     const form = h(
       'form',
@@ -755,7 +771,7 @@ export class WallApp {
         h(
           'div',
           { class: 'notice plain', role: 'alert', tabindex: -1, 'data-note': '' },
-          icon('info', 'pi'),
+          wIcon('photos'),
           h('span', null, h('b', null, n.title), n.sub ? [h('br'), h('span', { class: 'soft' }, n.sub)] : null, n.full ? h('span', { class: 'acts' }, this.button('Try again', () => this.retryHeld(), 'retry-held', 'gbtn ghost sm')) : null),
         ),
       );
@@ -868,7 +884,8 @@ export class WallApp {
         { class: 'hero' },
         snap(64, 'finished'),
         h('div', null, h('h1', { id: 'title', tabindex: -1 }, `The best ${list.length}`), h('div', { class: 'soft sub' }, `Picked by ${host}.${mineN ? ` ${mineN === 1 ? '1 of yours is' : `${mineN} of yours are`} in.` : ''}`)),
-        h('span', { class: 'kw-sticker kw-sticker-holo', 'data-sticker': 'holo' }, wIcon('eye'), h('span', null, 'Picked')),
+        // Holo only when a check earned it: Snap's pick (pa14b, `best_by: "snap"`). A host's own pick gets no sticker.
+        v.best_by === 'snap' ? h('span', { class: 'kw-sticker kw-sticker-holo', 'data-sticker': 'holo' }, wIcon('eye'), h('span', null, 'Picked')) : null,
       ),
       this.grid(v, list, false),
       this.button('See all the photos', () => this.setPick('all'), 'see-all'),

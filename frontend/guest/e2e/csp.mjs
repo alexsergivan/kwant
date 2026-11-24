@@ -348,6 +348,9 @@ for (const name of order) {
     await shot(page, file);
     await check(file, page, log);
     results.states[file] = { screen: await page.getAttribute('[data-screen]', 'data-screen') };
+    // The page root must stay a block: a stray grid (Santa's .wl once matched it) stretches the bar on short screens.
+    const barH = await page.evaluate(() => document.querySelector('.g > .bar')?.getBoundingClientRect().height ?? 0);
+    if (!barH || barH > 64) problems.push(`${file}: the header is ${Math.round(barH)} px tall (at most 64)`);
     if (!file.startsWith('wall-g6') && (await page.$('.kw-sticker-holo'))) problems.push(`${file}: holo off the Picked screen`);
     // CSSOM setProperty of a custom property (the upload bar's --p) is allowed under the CSP, and Chrome leaves an empty
     // style="" on inputs it may autofill; anything else is not.
@@ -358,7 +361,7 @@ for (const name of order) {
     const p = await newPage();
     const res = await p.page.goto(`${base}/p/${code}`);
     if (res.headers()['content-security-policy'] !== CSP) problems.push(`${code}: wrong CSP header`);
-    await p.page.waitForSelector(`main.wl[data-screen="${screen}"]`, { timeout: 25000 });
+    await p.page.waitForSelector(`main.wall[data-screen="${screen}"]`, { timeout: 25000 });
     await p.page.waitForTimeout(300);
     return p;
   };
@@ -376,7 +379,7 @@ for (const name of order) {
     await page.focus('#w-name');
     await wallShot(page, log, 'wall-g1-join-filled');
     await page.locator('form button[type=submit]').first().click();
-    await page.waitForSelector('main.wl[data-screen="wall"]', { timeout: 10000 });
+    await page.waitForSelector('main.wall[data-screen="wall"]', { timeout: 10000 });
     await page.waitForSelector('text=Thanks, Sam!', { timeout: 10000 });
     await wallShot(page, log, 'wall-g2-sent');
     await ctx.close();
@@ -414,7 +417,7 @@ for (const name of order) {
   {
     const { ctx, page, log } = await wgo('wall-join', 'join');
     await page.click("text=I've joined before");
-    await page.waitForSelector('main.wl[data-screen="rejoin"]');
+    await page.waitForSelector('main.wall[data-screen="rejoin"]');
     await wallShot(page, log, 'wall-g5-rejoin');
     await ctx.close();
   }
@@ -423,10 +426,10 @@ for (const name of order) {
     const { ctx, page, log } = await wgo('wall-best', 'closed');
     await wallShot(page, log, 'wall-g7-closed-seated');
     await page.click('text=See the best');
-    await page.waitForSelector('main.wl[data-screen="best"]');
+    await page.waitForSelector('main.wall[data-screen="best"]');
     await page.waitForTimeout(300);
     await wallShot(page, log, 'wall-g6-best');
-    if ((await page.$$('.kw-sticker-holo')).length !== 1) problems.push('wall-g6: not exactly one holo sticker');
+    if ((await page.$$('.kw-sticker-holo')).length !== 0) problems.push('wall-g6: a holo sticker on a host-picked best set');
     await ctx.close();
   }
   // G7 closed, never joined.
@@ -639,17 +642,17 @@ for (const name of order) {
   }
   // pa14 the Wall's big screen, TV1-TV4 at 1920 (pa14/guest-brief.md), from the fake wall box in its screen view.
   {
-    const tvShot = async (page, log, file, code) => {
+    const tvShot = async (page, log, file, code, srv = fake) => {
       await page.waitForTimeout(400);
       await screenCheck(file, page, log);
       await page.screenshot({ path: path.join(out, `${file}.png`) });
       results.screen[file] = { screen: await page.getAttribute('.tv[data-screen]', 'data-screen') };
-      const b = fake.box(code);
+      const b = srv.box(code);
       if (b.writes?.length) problems.push(`${file}: the screen called a host write: ${b.writes.join(', ')}`);
     };
     const tvgo = async (scene, screen, opts = {}) => {
       const p = await screenPage(opts);
-      await p.page.goto(`${origin}/p/screen-wall-${scene}#screen=tok-wall-${scene}`);
+      await p.page.goto(`${opts.base ?? origin}/p/screen-wall-${scene}#screen=tok-wall-${scene}`);
       await ready(p.page, screen);
       return p;
     };
@@ -680,9 +683,11 @@ for (const name of order) {
       await ctx.close();
     }
     // Ended and away, then the waiting screen letterboxed at 4:3.
-    for (const [scene, screen] of [['ended', 'ended'], ['away', 'away']]) {
-      const { ctx, page, log } = await tvgo(scene, screen);
-      await tvShot(page, log, `wall-tv-${scene}`, `screen-wall-${scene}`);
+    // Away is served the way pa1 serves it, with the public facts in the page, so the screen knows it is the wall's.
+    for (const [scene, screen, base] of [['ended', 'ended', origin], ['away', 'away', bootOrigin]]) {
+      const { ctx, page, log } = await tvgo(scene, screen, { base });
+      await tvShot(page, log, `wall-tv-${scene}`, `screen-wall-${scene}`, base === bootOrigin ? boot : fake);
+      if (!(await page.$(`.wtv[data-screen="${screen}"]`))) problems.push(`wall-tv-${scene}: not the wall's own ${screen} screen`);
       await ctx.close();
     }
     {

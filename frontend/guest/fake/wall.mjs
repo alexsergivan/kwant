@@ -53,6 +53,8 @@ export const wallScenes = {
   empty: { seat: true, info: facts, wall: [], mine: [], uploads: [OK] },
   // G6 the best: closed, best set, seated.
   best: { seat: true, info: { ...facts, state: 'closed', best_set: true }, wall: wallPhotos, mine: MINE.slice(2), uploads: [R.closed] },
+  // G6 once pa14b ships: Snap's check picked the best set (`best_by: "snap"`), so the Picked sticker is earned.
+  'best-snap': { seat: true, info: { ...facts, state: 'closed', best_set: true, best_by: 'snap' }, wall: wallPhotos, mine: MINE.slice(2), uploads: [R.closed] },
   // G7 closed, no seat (no best set).
   closed: { info: { ...facts, state: 'closed' }, wall: wallPhotos, mine: [], uploads: [R.closed] },
   // Uploads close mid-batch: G7 with "N photos didn't go up".
@@ -140,7 +142,8 @@ export class WallBox {
     const [what, query] = path.split('?');
     const err = (status, error, extra = {}) => ({ status, body: { error, message: extra.message ?? 'Fake wall box.', ...extra } });
     if (!this.s) return err(404, 'not_found');
-    if (what === 'info') return this.s.away && this.tv ? err(503, 'away') : { status: 200, body: this.env(false) };
+    // The public facts stay answerable while the host is away (pa1 serves them in the page), for the phone and the TV alike.
+    if (what === 'info') return { status: 200, body: this.env(false) };
     if (this.s.away) return err(503, 'away');
     if (this.tv) {
       if (what === 'host/signin') {

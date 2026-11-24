@@ -445,18 +445,54 @@ test('G8 page notes: the wall is full names the host; the guest max says the box
   x.app.stop();
 });
 
-test('G6 the best: one holo Picked sticker, only best photos, See all the photos', async () => {
+test('G6 the best, host picked (no pa14b yet): The best N, Picked by Mia, no holo sticker', async () => {
   const t = await open('wall-best');
+  const best = [...t.root.querySelectorAll('button, a')].find((b) => /See the best/.test(b.textContent));
+  if (t.screen() === 'closed') await click(best);
+  assert.equal(t.screen(), 'best');
+  assert.equal(t.$$('.kw-sticker-holo').length, 0, 'no check picked them, so no sticker');
+  assert.equal(t.$$('[data-wall] .ph').length, wallPhotos.filter((p) => p.best).length);
+  assert.match(t.text(), new RegExp(`The best ${wallPhotos.filter((p) => p.best).length}`));
+  assert.match(t.text(), /Picked by Mia\./);
+  await click([...t.root.querySelectorAll('button')].find((b) => /See all the photos/.test(b.textContent)));
+  assert.equal(t.screen(), 'wall');
+  t.app.stop();
+});
+
+test('G6 the best, Snap picked (best_by "snap"): exactly one holo Picked sticker, gone on See all', async () => {
+  const t = await open('wall-best-snap');
   const best = [...t.root.querySelectorAll('button, a')].find((b) => /See the best/.test(b.textContent));
   if (t.screen() === 'closed') await click(best);
   assert.equal(t.screen(), 'best');
   assert.equal(t.$$('.kw-sticker-holo').length, 1);
   assert.equal(t.$('[data-sticker=holo]').textContent.trim(), 'Picked');
-  assert.equal(t.$$('[data-wall] .ph').length, wallPhotos.filter((p) => p.best).length);
-  assert.match(t.text(), /Picked by Mia\./);
   await click([...t.root.querySelectorAll('button')].find((b) => /See all the photos/.test(b.textContent)));
   assert.equal(t.screen(), 'wall');
   assert.equal(t.$$('.kw-sticker-holo').length, 0, 'holo only on Picked');
+  t.app.stop();
+});
+
+test('G1 a fixed field drops its error in place: name, then PIN, no repaint', async () => {
+  const t = await open('wall-join');
+  await pick(t, [jpg('a.jpg'), jpg('b.jpg')]);
+  assert.match(t.$('[data-problem]').textContent, /Type your first name to send 2 photos\./);
+  const name = t.$('#w-name');
+  assert.equal(name.getAttribute('aria-invalid'), 'true');
+  await type(name, 'Sam');
+  assert.equal(t.$('[data-problem]'), null, 'the alert goes once the name reads right');
+  assert.equal(name.getAttribute('aria-invalid'), null);
+  assert.ok(!name.classList.contains('bad'));
+  assert.equal(t.$('#w-name'), name, 'same input, no repaint');
+  // The PIN's own error clears the same way, warn boxes included.
+  t.app.fail({ title: 'Pick a 4-digit PIN to send them.', field: 'pin' });
+  const pin = t.$('#w-pin');
+  assert.equal(pin.getAttribute('aria-invalid'), 'true');
+  await type(pin, '12');
+  assert.ok(t.$('[data-problem]'), 'still flagged at 2 digits');
+  await type(pin, '1234');
+  assert.equal(t.$('[data-problem]'), null);
+  assert.equal(pin.getAttribute('aria-invalid'), null);
+  assert.equal(t.$$('.pin.warn').length, 0);
   t.app.stop();
 });
 
