@@ -5,9 +5,10 @@ import { awayTarget, type AwayItem } from './away';
 import { parseAttachments } from './attachments';
 import type { ChatMessage } from './components/ChatView';
 import { retryTargets, type RetryTarget } from './interruptions';
+import { runAgainId } from './routineRunAgain';
 
 /** What resolves an item. Servers with Lin's 22i part send it as `action`; older ones get it inferred. */
-export type AskAction = 'retry' | 'continue' | 'ask_again' | 'answer' | 'decide' | 'browser';
+export type AskAction = 'retry' | 'continue' | 'ask_again' | 'answer' | 'decide' | 'browser' | 'run_again';
 
 const ACTIONS: ReadonlySet<string> = new Set(['retry', 'continue', 'ask_again', 'answer', 'decide', 'browser']);
 
@@ -24,7 +25,11 @@ export const onStrip = (item: Pick<AwayItem, 'kind'>): boolean => item.kind !== 
  * A stopped item resumes by Ask again (an approval that expired), Continue (a paused chain), the
  * browser step it waits on, or Retry (resend the person's message).
  */
-export function askAction(item: Pick<AwayItem, 'kind' | 'retry' | 'human_step_id'> & { action?: unknown; task_id?: string | null }): AskAction | null {
+export function askAction(
+  item: Pick<AwayItem, 'kind' | 'retry' | 'human_step_id'> & { action?: unknown; task_id?: string | null; status?: string; routine_id?: unknown },
+): AskAction | null {
+  // routine-run-again: a failed routine run that names its routine starts it again, whatever the server's `action`.
+  if (typeof item.status === 'string' && runAgainId({ kind: item.kind, status: item.status, routine_id: item.routine_id })) return 'run_again';
   // A failed hand-off or run retries only through its board task (#700, Ada): no task_id, no Retry,
   // whatever the server says; the person asks the bot again in the thread.
   if (isHandOff(item) && !item.task_id && (item.action === 'retry' || item.action === undefined)) return null;
@@ -58,13 +63,14 @@ export const ACTION_LABEL: Record<AskAction, string> = {
   answer: 'Go to the question',
   decide: 'Go to the approval',
   browser: 'Open the browser step',
+  run_again: 'Run again',
 };
 
 /** The pressed button's words while its request runs (only the actions that resolve the ask). */
-export const BUSY_LABEL: Partial<Record<AskAction, string>> = { retry: 'Retrying…', continue: 'Continuing…', ask_again: 'Asking…' };
+export const BUSY_LABEL: Partial<Record<AskAction, string>> = { retry: 'Retrying…', continue: 'Continuing…', ask_again: 'Asking…', run_again: 'Starting…' };
 
 /** Actions that resolve the ask (the strip waits on the server); the rest only take the person to it. */
-export const RESOLVES: ReadonlySet<AskAction> = new Set(['retry', 'continue', 'ask_again']);
+export const RESOLVES: ReadonlySet<AskAction> = new Set(['retry', 'continue', 'ask_again', 'run_again']);
 
 const failed = (item: Pick<AwayItem, 'status'>) => item.status === 'failed' || item.status === 'interrupted' || item.status === 'error';
 
@@ -96,6 +102,8 @@ export function askHint(item: Pick<AwayItem, 'kind' | 'status'>, action: AskActi
   if (!action && item.kind === 'routine_run' && failed(item)) return 'There’s no button for this one. Press Run now on it in Routines, or clear it once it’s handled.';
   if (!action && isHandOff(item) && failed(item)) return `There’s no button for this one. Ask ${bot} again here, or clear it once it’s handled.`;
   switch (action) {
+    case 'run_again':
+      return clearable ? 'Run it again here, or clear it once it’s handled.' : 'Run again starts the routine again now.';
     case 'retry':
       return failed(item) ? 'Retry runs it again from the start.' : `Retry sends your last message to ${bot} again.`;
     case 'continue':
@@ -112,6 +120,9 @@ export function askHint(item: Pick<AwayItem, 'kind' | 'status'>, action: AskActi
   return `There’s no button for this one. Write to ${bot}, or clear it once it’s handled.`;
 }
 
+/** Run again while the routine is still running: nothing new started, and that is not an error (Mira's design check). */
+export const RUN_AGAIN_SKIPPED = 'It’s already running, so nothing new started. Clear this once that run is done.';
+
 /** The action button's accessible name: its words plus whose ask it is (design.md §5). */
 export function actionName(action: AskAction, bot: string): string {
   switch (action) {
@@ -127,6 +138,8 @@ export function actionName(action: AskAction, bot: string): string {
       return `Go to ${bot}’s approval`;
     case 'browser':
       return `Open ${bot}’s browser step`;
+    case 'run_again':
+      return `Run ${bot}’s routine again`;
   }
 }
 
@@ -134,7 +147,7 @@ export function actionName(action: AskAction, bot: string): string {
 export function failLine(what: AskAction | 'dismiss', reason: string | null, bot: string): string {
   const why = (reason ?? '').trim().replace(/[.\s]+$/, '');
   if (what === 'dismiss') return why ? `Couldn’t clear it: ${why}.` : 'Couldn’t clear it.';
-  const verb = what === 'continue' ? 'continue' : what === 'ask_again' ? 'ask again' : 'retry';
+  const verb = what === 'continue' ? 'continue' : what === 'ask_again' ? 'ask again' : what === 'run_again' ? 'run it again' : 'retry';
   return why ? `Couldn’t ${verb}: ${why}. Try again, or write to ${bot}.` : `Couldn’t ${verb}. Try again, or write to ${bot}.`;
 }
 

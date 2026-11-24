@@ -98,7 +98,7 @@ function validPerson(v: unknown): SantaPerson | undefined {
   return { id: v.id, name: v.name, avatar: avatar ?? null, looked: looked ?? null, gift_ready: gift_ready ?? null, you: you === true, locked: locked === true };
 }
 
-function validSantaJoin(v: unknown): SantaInfo['join'] | undefined {
+export function validSantaJoin(v: unknown): SantaInfo['join'] | undefined {
   if (!isObj(v) || (v.mode !== 'anywhere' && v.mode !== 'wifi' && v.mode !== 'none')) return undefined;
   const url = (u: unknown) => (u === undefined || u === null ? null : isHttpUrl(u) ? u : undefined);
   const anywhere_url = url(v.anywhere_url);
@@ -293,7 +293,7 @@ const AllReady: React.FC<{ n: number }> = ({ n }) => (
 // How people join (state 1 and 1b) and the compact box after the draw
 
 type JoinMode = 'anywhere' | 'wifi';
-const portOf = (url: string | null) => {
+export const portOf = (url: string | null) => {
   try {
     return url ? new URL(url).port || null : null;
   } catch {
@@ -302,15 +302,15 @@ const portOf = (url: string | null) => {
 };
 
 /** The 5-step How-to for Tailscale Funnel, frontend copy (card-impl.md "How-to copy"). */
-export const howToSteps = (port: string | null): { text: string; cmd?: string }[] => [
+export const howToSteps = (port: string | null, bot = 'Santa', chat = 'the family chat'): { text: string; cmd?: string }[] => [
   { text: 'Install Tailscale on this Mac from tailscale.com and sign in. The personal plan is free.' },
   { text: 'In the Tailscale admin page, turn on HTTPS certificates and allow Funnel for this Mac.' },
   { text: 'Open Terminal and run:', cmd: `tailscale funnel --bg ${port ?? '<the port in the Wi-Fi link>'}` },
-  { text: 'Ask Santa to check the address again. This card then shows From anywhere and a link that stays the same.' },
-  { text: 'Send that link to the family chat. It keeps working whenever this Mac is on.' },
+  { text: `Ask ${bot} to check the address again. This card then shows From anywhere and a link that stays the same.` },
+  { text: `Send that link to ${chat}. It keeps working whenever this Mac is on.` },
 ];
 
-const HowTo: React.FC<{ port: string | null }> = ({ port }) => {
+export const HowTo: React.FC<{ port: string | null; bot?: string; chat?: string }> = ({ port, bot, chat }) => {
   const [open, setOpen] = useState(false);
   const id = useId();
   return (
@@ -321,7 +321,7 @@ const HowTo: React.FC<{ port: string | null }> = ({ port }) => {
       </button>
       {open && (
         <ol id={id} className="kw-fade-in flex list-decimal flex-col gap-1.5 pl-5 text-[15px] leading-[22px] text-zinc-200 marker:text-zinc-400 sm:text-[13px] sm:leading-5" data-how-to>
-          {howToSteps(port).map((st) => (
+          {howToSteps(port, bot, chat).map((st) => (
             <li key={st.text}>
               {st.text}
               {st.cmd && (
@@ -335,7 +335,7 @@ const HowTo: React.FC<{ port: string | null }> = ({ port }) => {
   );
 };
 
-const NoQuickLink: React.FC = () => (
+export const NoQuickLink: React.FC = () => (
   <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">A quick link isn't offered: it changes when the Mac restarts, and the link in your chat would break.</p>
 );
 
