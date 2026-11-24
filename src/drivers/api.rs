@@ -3097,3 +3097,7 @@ mod tests {
         assert_eq!(out.text, "⚠️ The model request failed: API returned 400: invalid_request_error: prompt is too long");
     }
 }
+
+#[cfg(test)]
+#[path = "api_mistral_tests.rs"]
+mod mistral_tests;
