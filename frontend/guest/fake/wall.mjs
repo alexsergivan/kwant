@@ -104,7 +104,7 @@ export class WallBox {
       code: this.code, kit: 'wall', title: this.info.title, state: this.ended() ? 'ended' : 'open', opens_at: null, closes_at: this.info.closes_at,
       ended_at: null, expires_at: '2026-12-21T00:00:00Z', players: 41, max_players: 300, needs_pin: true, retention: { kind: 'after_date', days: 30 },
     };
-    if (this.tv) return { api: 'pocket/1', version: this.version, viewer: 'screen', pocket, me: null, view: { title: this.info.title, state: this.info.state, best_set: this.info.best_set, count: this.wall.length, photos: this.wall } };
+    if (this.tv) return { api: 'pocket/1', version: this.version, viewer: 'screen', pocket, me: null, view: { title: this.info.title, state: this.info.state, best_set: this.info.best_set, count: this.wall.length, host_name: this.info.screen_host_name, photos: this.wall } };
     if (!seated) return { api: 'pocket/1', version: this.version, viewer: 'anyone', pocket, view: { ...this.info, count: this.wall.length } };
     return { api: 'pocket/1', version: this.version, viewer: 'guest', pocket, me: ME, view: { ...this.info, limits: limits(this.mine), wall: newest(this.wall), mine: newest(this.mine) } };
   }

@@ -666,6 +666,16 @@ test('TV2 a new photo jumps the line with a slide and a New from pill for 4 s; a
   t.app.stop();
 });
 
+test('TV3 names the host once the screen view carries host_name', async () => {
+  const t = tv('screen-wall-waiting');
+  t.box.set({ screen_host_name: 'Mia' });
+  await t.app.start();
+  await flush();
+  assert.equal(t.screen(), 'waiting');
+  assert.match(t.text(), /I'll put the first photos up as soon as Mia approves them\./);
+  t.app.stop();
+});
+
 test('TV3 before the first photo: the big QR, scan line, short link, Snap waiting', async () => {
   const t = tv('screen-wall-waiting');
   await t.app.start();

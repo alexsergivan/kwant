@@ -151,6 +151,8 @@ export interface TvView {
   open: boolean;
   best_set: boolean;
   count?: number;
+  /** The host's first name, once the screen view carries it (asked of Juno); else the screen says "the host". */
+  host_name?: string;
   /** Approved photos, oldest first (the slideshow loops). */
   photos: WallPhoto[];
 }
@@ -168,6 +170,7 @@ export function tvFrom(json: unknown): { view: TvView; version?: number } | unde
     open: !ended && v.state === 'open',
     best_set: v.best_set === true,
     count: count(v.count),
+    host_name: text(v.host_name),
     photos: list(v.photos).map(wallPhotoFrom).filter((p): p is WallPhoto => !!p),
   };
   const version = typeof j.version === 'number' && Number.isFinite(j.version) ? j.version : undefined;

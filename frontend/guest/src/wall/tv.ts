@@ -329,7 +329,7 @@ export class WallTV {
             h('p', { class: 'tvsoft' }, 'No app, no account. They show here once the host says yes.'),
             h('p', { class: 'wlink' }, this.link().replace(/^https?:\/\//, '')),
           ),
-          h('div', { class: 'tvhost wsnap' }, snap(160, 'thinking'), h('p', { class: 'b' }, "I'll put the first photos up as soon as they're approved.")),
+          h('div', { class: 'tvhost wsnap' }, snap(160, 'thinking'), h('p', { class: 'b' }, this.view?.host_name ? `I'll put the first photos up as soon as ${this.view.host_name} approves them.` : "I'll put the first photos up as soon as they're approved.")),
         ];
         break;
       case 'away':
