@@ -846,8 +846,10 @@ impl Kit for Queue {
         PLAYER_CEILING
     }
 
-    fn first_names_only(&self, spec: &Value) -> bool {
-        ask_name(spec)
+    /// The design's `first_names_only: true`: the page says only a first name is ever asked
+    /// for. The join itself takes no name ([`Kit::nameless_join`]); `take` checks the first name.
+    fn first_names_only(&self, _spec: &Value) -> bool {
+        true
     }
 
     fn nameless_join(&self) -> bool {
@@ -988,7 +990,7 @@ mod tests {
         assert!(Queue.validate_spec(&json!({ "title": "A", "ask_name": "yes" })).is_err());
         assert_eq!(Queue.rules(&json!({ "title": "A", "max_waiting": 200 })).max_players, 240);
         assert!(Queue.stable_address_only() && Queue.nameless_join() && Queue.ticks_unwatched());
-        assert!(!Queue.first_names_only(&spec()) && Queue.first_names_only(&json!({ "title": "A", "ask_name": true })));
+        assert!(Queue.first_names_only(&spec()));
     }
 
     #[test]
