@@ -1112,6 +1112,20 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
       setBusy(false);
     }
   };
+  // The host's own limit (set_cap): the read it answers with shows the new cap; a failure keeps the stepper open.
+  const saveCap = async () => {
+    setBusy(true);
+    try {
+      const next = deskFromRead(base, await pocketApi.deskSetCap(block.code, cap));
+      if (next) setFresh(next);
+      setRaising(false);
+      setDone({ kind: 'ok', text: `${d.bot.name} can write ${num(next?.desk.counts.daily_cap ?? cap)} replies a day now.` });
+    } catch (e) {
+      setDone({ kind: 'error', text: `Couldn't change the limit: ${e instanceof PocketApiError ? e.message : 'something went wrong.'} Try again.` });
+    } finally {
+      setBusy(false);
+    }
+  };
   const bot = d.bot.name;
   const where = [d.place, `guests ask ${bot}, the rest comes to you`].filter(Boolean).join(' · ');
   const conv = open && (stage === 'live' || stage === 'cap' || stage === 'stopped' || stage === 'ready');
@@ -1256,15 +1270,12 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
                   <CapStepper value={cap} onChange={setCap} label="New daily limit" />
                   <button
                     type="button"
-                    disabled={cap === d.counts.daily_cap}
-                    onClick={() => {
-                      ask(`Raise ${bot}'s daily limit for ${d.title} to ${cap} replies a day.`);
-                      setRaising(false);
-                    }}
+                    disabled={busy || cap === d.counts.daily_cap}
+                    onClick={() => void saveCap()}
                     className={HALF_BTN}
                     data-action="save-cap"
                   >
-                    Ask {bot} to change it
+                    {busy ? 'Saving…' : 'Save the limit'}
                   </button>
                   <span className={SMALL}>{deskCostLine(d, cap)}</span>
                 </div>
@@ -1463,14 +1474,32 @@ export const DeskNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
   );
 };
 
+/** True when an `/api/inbox` answer already carries the desk items (Lin's #1150 round 4 lists them in waiting_on_you). */
+const inboxHasDesk = (inbox: unknown): inbox is { items: unknown[] } =>
+  isObj(inbox) && Array.isArray(inbox.items) && inbox.items.some((it) => isObj(it) && it.kind === 'pocket_desk');
+
+/** The Inbox answer without its `pocket_desk` items: those draw as DeskNeedsRow, so the plain list must not draw them too. */
+export function withoutDeskItems<T extends { items: { kind?: string }[] }>(inbox: T): T;
+export function withoutDeskItems<T extends { items: { kind?: string }[] }>(inbox: T | null): T | null;
+export function withoutDeskItems<T extends { items: { kind?: string }[] }>(inbox: T | null): T | null {
+  if (!inbox || !inbox.items.some((i) => i.kind === 'pocket_desk')) return inbox;
+  return { ...inbox, items: inbox.items.filter((i) => i.kind !== 'pocket_desk') };
+}
+
 /**
- * The Inbox's desk items: read `/api/waiting` when the Inbox loads or refreshes (`reload` changes), never polled.
+ * The Inbox's desk items: taken from the `/api/inbox` answer (`reload`) when it lists them, else read from
+ * `/api/waiting` when the Inbox loads or refreshes (an older server). Never polled.
  * `initial` (tests, shots) skips the read; `skip` (the Inbox's noLoad) too.
  */
 export function useDeskItems(reload: unknown, skip = false, initial?: DeskItem[]): DeskItem[] {
   const [items, setItems] = useState<DeskItem[]>(initial ?? []);
   useEffect(() => {
-    if (initial || skip) return;
+    if (initial) return;
+    if (inboxHasDesk(reload)) {
+      setItems(validDeskItems(reload));
+      return;
+    }
+    if (skip) return;
     let gone = false;
     pocketApi
       .waiting()

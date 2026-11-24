@@ -241,6 +241,8 @@ export const pocketApi = {
   // pa13 front desk (Lin's src/pocket/desk.rs, #1150): the host's two actions; both answer with the same read as GET.
   /** The host's own answer to one guest, marked "host". Clears `waiting`. */
   deskReply: async (code: string, guest: string, text: string) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'reply', body: { guest, text } }),
+  /** The host's daily reply limit (10..200, whole numbers; #1150 round 4). Answers with the read; the new cap is summary.counts.daily_cap. */
+  deskSetCap: async (code: string, cap: number) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'set_cap', body: { cap } }),
   /** "No reply needed": clears `waiting`, sends nothing to the guest. */
   deskResolve: async (code: string, guest: string) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'resolve', body: { guest } }),
   /** One guest's conversation, host only: the read plus `conversation`. */

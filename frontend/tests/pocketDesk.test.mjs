@@ -82,6 +82,12 @@ function stub({ action = 'ok', waiting = m.DESK_WAITING, read = null } = {}) {
     if (view) return json({ pocket: { state: 'live' }, summary: raw('live').desk, join: null, conversation: m.DESK_CONVERSATIONS[view[1]] });
     if (u.endsWith('/action')) {
       if (action === 'fail') return json({ error: 'no_such_player', message: 'No such guest' }, 404);
+      const body = JSON.parse(init.body);
+      if (body.name === 'set_cap') {
+        const c = structuredClone(raw('cap').desk);
+        c.counts = { ...c.counts, daily_cap: body.body.cap };
+        return json({ pocket: { state: 'live' }, summary: c, join: null });
+      }
       const s = structuredClone(raw('live').desk);
       s.guests = s.guests.map((x) => (x.id === 'g-emma' ? { ...x, waiting: false, handoff_reason: null } : x));
       s.counts = { ...s.counts, waiting: 0 };
@@ -379,6 +385,18 @@ test('Inbox: one Needs-you row per waiting guest, with the Allow card inline and
   assert.ok(!v.host.querySelector('[data-all-clear]'));
 });
 
+test('Inbox: a pocket_desk item in /api/inbox draws once, as the desk row, and /api/waiting is not read', async () => {
+  stub();
+  const [w] = m.DESK_WAITING.items;
+  const item = { ...w, id: `desk:${w.pocket_code}:${w.guest_id}`, title: `${w.guest_name} needs you`, summary: `${w.pocket_title} · Guest Guide`, status: 'waiting', timestamp: w.asked_at, group: 'waiting_on_you', sort_key: [0], unread: true, link: { thread_id: null, channel_id: null, direct_kwant_id: null } };
+  m.inboxStore.patch({ data: { items: [item], counts: { waiting_on_you: 1 }, since: new Date().toISOString(), now: new Date().toISOString() }, loading: false, error: null });
+  const v = await mount(h(m.InboxNew, { onOpen: () => {}, noLoad: true, wide: false }));
+  assert.equal(v.host.querySelectorAll('[data-desk-item]').length, 1);
+  assert.equal((v.host.textContent.match(/Emma needs you/g) ?? []).length, 1, 'no plain row as well');
+  assert.match(v.host.querySelector('#inbox-needs').textContent, /· 1/);
+  assert.ok(!calls.some(([, u]) => u.startsWith('/api/waiting')));
+});
+
 test('answering in the Inbox closes the card’s waiting row, and the other way round', async () => {
   stub();
   m.deskAnswers.reset(1500);
@@ -417,7 +435,7 @@ test('stopped: totals, deletion date, Delete chats now confirms; Done row line',
   assert.match(row.host.textContent, /Sea-view flat · Guest Guide stopped/);
 });
 
-test('cap reached: the warn callout, only waiting guests, Raise the limit asks through chat', async () => {
+test('cap reached: the warn callout, only waiting guests, Raise the limit saves through set_cap', async () => {
   stub();
   const asked = [];
   const v = await deskCard('cap', { ask: (t) => asked.push(t) });
@@ -426,5 +444,24 @@ test('cap reached: the warn callout, only waiting guests, Raise the limit asks t
   await click(act(v, 'raise'));
   await click(v.host.querySelector('[data-raise] [data-step="up"]'));
   await click(act(v, 'save-cap'));
-  assert.equal(asked.at(-1), "Raise Bell's daily limit for Sea-view flat to 60 replies a day.");
+  await settle();
+  const sent = calls.filter(([meth, u]) => meth === 'POST' && u.endsWith('/action'));
+  assert.deepEqual(sent.at(-1)[2], { name: 'set_cap', body: { cap: 60 } });
+  assert.equal(asked.length, 0, 'no chat round-trip');
+  assert.ok(!v.host.querySelector('[data-raise]'), 'the stepper closes');
+  assert.ok(!v.host.querySelector('[data-callout="cap"]'), '50 of 60: not at the limit any more');
+  assert.match(v.host.textContent, /50 of 60 replies Bell can write today/);
+  assert.match(v.host.querySelector('[data-done="ok"]').textContent, /Bell can write 60 replies a day now\./);
+});
+
+test('a failed set_cap keeps the stepper open with the error', async () => {
+  stub({ action: 'fail' });
+  const v = await deskCard('cap');
+  await click(act(v, 'raise'));
+  await click(v.host.querySelector('[data-raise] [data-step="up"]'));
+  await click(act(v, 'save-cap'));
+  await settle();
+  assert.ok(v.host.querySelector('[data-raise]'));
+  assert.ok(v.host.querySelector('[data-callout="cap"]'));
+  assert.match(v.host.querySelector('[data-done="error"]').textContent, /Couldn't change the limit: No such guest Try again\./);
 });
