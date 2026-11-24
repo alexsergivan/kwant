@@ -51,3 +51,59 @@ export function measureText16(text: string, family: string): number {
   ctx.font = `16px ${family || 'Inter, system-ui, sans-serif'}`;
   return ctx.measureText(text).width;
 }
+
+// ------------------------------------------------------------------ composer-diet (0.9.50, Mira's simplify rank 1)
+
+/** Set at the person's first sent message; after that the keyboard hint line under the field stays away. */
+export const HINT_KEY = 'kwnt:composer-hint-done';
+
+/** True once the person has sent a message from this browser (b). Storage that can't be read counts as not yet. */
+export function hintLearned(store: Pick<Storage, 'getItem'> | null = safeStore()): boolean {
+  try {
+    return store?.getItem(HINT_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+/** Record the first send (b). Private mode: the hint shows again next time, which is harmless. */
+export function markHintLearned(store: Pick<Storage, 'setItem'> | null = safeStore()): void {
+  try {
+    store?.setItem(HINT_KEY, '1');
+  } catch {
+    /* ignore */
+  }
+}
+
+/** The "@ mention · Enter send…" line: never on a touch phone, and only until the first sent message (b). */
+export function hintLineShows(s: { phone: boolean; touch: boolean; learned: boolean }): boolean {
+  return !(s.phone && s.touch) && !s.learned;
+}
+
+/**
+ * Suggested chips (c): only in a near-empty chat, off the home screen, when something can run, and never while a
+ * reply streams: they'd suggest a new task while one is running.
+ */
+export function suggestedShows(s: { messages: number; suggestions: number; showHome: boolean; canRun: boolean | null | undefined; streaming: boolean }): boolean {
+  return s.messages <= 1 && s.suggestions > 0 && !s.showHome && s.canRun !== false && !s.streaming;
+}
+
+/**
+ * The Answers chip's words (a): "Answers: <who>" and, in a team chat whose lead is known, "· <lead> leads".
+ * `name` is the accessible name, so a screen reader hears who answers and that the button opens the list.
+ */
+export function answersChip(s: { who: string; lead?: string | null }): { lead: string | null; name: string } {
+  const lead = s.lead?.trim() || null;
+  return {
+    lead,
+    name: `Answers: ${s.who}${lead ? `, ${lead} leads` : ''}. Choose who answers`,
+  };
+}
+
+function safeStore(): Storage | null {
+  try {
+    return typeof localStorage === 'undefined' ? null : localStorage;
+  } catch {
+    return null;
+  }
+}
