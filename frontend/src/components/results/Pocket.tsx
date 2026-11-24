@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   Globe,
   Hourglass,
+  Info,
   ListChecks,
   Loader2,
   Lock,
@@ -372,7 +373,7 @@ export const NEEDS_STABLE =
 const noQuick = (join: PocketBlock['join'], mode: PocketJoinMode) => mode === 'anywhere' && join?.quick_tunnel === false;
 const StableOnly: React.FC = () => (
   <p className="flex items-start gap-2 text-[13px] leading-5 text-zinc-300 sm:text-meta" data-needs-stable>
-    <Lock size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
+    <Info size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
     <span>{NEEDS_STABLE}</span>
   </p>
 );
