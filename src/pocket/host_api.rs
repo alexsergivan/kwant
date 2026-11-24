@@ -21,13 +21,17 @@
 //!   through a quick tunnel (pa6, Pocket API v1.2). 409 `no_quick_tunnel` for a long-lived kit,
 //!   `pocket_ended`, `guest_port_closed`. It starts in the background: `join.tunnel.state`
 //!   goes `starting` → `on` or `failed`
+//! - `GET    /api/pockets/:code/wall.zip`  the Wall's approved photos as one zip (pa14; `?all=1`
+//!   adds the ones still waiting). 404 `not_a_wall` for any other kit
+//! - `GET    /api/pockets/:code/photo/:id` one Wall photo for the person's card, waiting ones too
+//!   (hidden ones 404 `no_such_photo`), as the guest port's host sees it. 404 for any other kit
 //! - `DELETE /api/pockets/:code`           204, final
 
 use super::kits::Viewer;
 use super::{keys, PResult, PocketError, Snapshot};
 use crate::server::AppState;
 use axum::extract::{Path, Query, State};
-use axum::http::StatusCode;
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Json, Router};
@@ -45,6 +49,45 @@ pub fn router() -> Router<AppState> {
         .route("/api/pockets/:code/action", post(action))
         .route("/api/pockets/:code/remove", post(remove))
         .route("/api/pockets/:code/reset-pin", post(reset_pin))
+        .route("/api/pockets/:code/wall.zip", get(wall_zip))
+        .route("/api/pockets/:code/photo/:id", get(photo))
+}
+
+/// pa14: one Wall photo for the person's card (person-only like every `/api/pockets` path). The
+/// same answer the host gets on the guest port, plus the headers an attachment gets here: guest
+/// bytes on the main origin never run as a page or get sniffed into one.
+async fn photo(State(state): State<AppState>, Path((code, id)): Path<(String, String)>, headers: HeaderMap) -> PResult<Response> {
+    let s = found(&state, &code).await?;
+    let mut res = super::wall::photo_response(&state, &s, &id, &Viewer::Host, &headers).await?;
+    let h = res.headers_mut();
+    h.insert(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
+    h.insert(header::CONTENT_SECURITY_POLICY, HeaderValue::from_static("default-src 'none'; sandbox"));
+    h.insert("cross-origin-resource-policy", HeaderValue::from_static("same-origin"));
+    Ok(res)
+}
+
+#[derive(Debug, Default, serde::Deserialize)]
+pub struct ZipQuery {
+    #[serde(default)]
+    pub all: Option<String>,
+    #[serde(default)]
+    pub best: Option<String>,
+}
+
+/// pa14: the Wall's photos for the person (person-only like every `/api/pockets` path): approved,
+/// `?all=1` with the waiting ones, `?best=1` the best ones only.
+async fn wall_zip(State(state): State<AppState>, Path(code): Path<String>, Query(q): Query<ZipQuery>) -> PResult<Response> {
+    use super::wall::ZipPick;
+    found(&state, &code).await?;
+    let yes = |v: &Option<String>| matches!(v.as_deref(), Some("1" | "true"));
+    let pick = if yes(&q.best) {
+        ZipPick::Best
+    } else if yes(&q.all) {
+        ZipPick::All
+    } else {
+        ZipPick::Approved
+    };
+    super::wall::zip_response(&state, &code, pick).await
 }
 
 fn off() -> PocketError {

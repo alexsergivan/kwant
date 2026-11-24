@@ -20,10 +20,12 @@ pub mod keys;
 pub mod kits;
 pub mod limits;
 pub mod listener;
+pub mod photo;
 pub mod quiz_kit;
 pub mod santa;
 pub mod schedule;
 pub mod tunnel;
+pub mod wall;
 pub mod words;
 
 use crate::config::Config;
@@ -112,6 +114,8 @@ pub struct Hub {
     pub tunnel: tunnel::Tunnels,
     /// macOS: `caffeinate` held while a tunnel or an open pocket runs.
     pub awake: tunnel::KeepAwake,
+    /// Tests only: the free disk space the Wall's upload check sees (pa14), instead of the disk's.
+    fake_free_disk: Mutex<Option<u64>>,
 }
 
 impl Hub {
@@ -127,6 +131,15 @@ impl Hub {
         if let Some(tx) = self.channels.lock().unwrap_or_else(|e| e.into_inner()).get(code) {
             let _ = tx.send(s);
         }
+    }
+
+    /// Tests only: make the Wall's free-disk check see `bytes` (`None`: the real disk again).
+    pub fn set_fake_free_disk(&self, bytes: Option<u64>) {
+        *self.fake_free_disk.lock().unwrap_or_else(|e| e.into_inner()) = bytes;
+    }
+
+    fn fake_free_disk(&self) -> Option<u64> {
+        *self.fake_free_disk.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn touch(&self, code: &str) {
@@ -463,6 +476,8 @@ pub async fn delete(state: &AppState, code: &str) -> PResult<bool> {
         let threads = snapshot(state, code).await?.and_then(|s| s.kit().map(|k| k.owned_threads(&s.kit_state))).unwrap_or_default();
         let gone = state.db.pocket_delete(code).await?;
         drop_threads(state, &threads).await;
+        // pa14: the Wall's photo files go with the pocket
+        wall::remove_files(state, code).await;
         gone
     };
     state.pocket.tunnel.release(code);
@@ -692,7 +707,12 @@ async fn save(state: &AppState, code: &str, kit_state: &Value, ctx: KitCtx<'_>, 
         ctx.events.into_iter().map(|e| (e.player_id, e.kind, serde_json::to_string(&e.payload).unwrap_or_else(|_| "{}".into()))).collect();
     let text = serde_json::to_string(kit_state).map_err(|_| PocketError::internal())?;
     state.db.pocket_save_state(code, &text, &events, now).await?;
-    changed(state, code).await
+    changed(state, code).await?;
+    // pa14: a photo the save hid loses its file now
+    if let Some(s) = snapshot(state, code).await?.filter(|s| s.row.kit == wall::ID) {
+        wall::prune(state, &s).await;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]

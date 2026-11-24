@@ -37,11 +37,40 @@ export async function runAgain(
 export function routineOfNotice(n: Pick<NotifyEvent, 'kwant_id' | 'title'>, routines: Routine[]): string | null {
   const m = /^Routine "([\s\S]*)" failed$/.exec((n.title ?? '').trim());
   if (!m) return null;
-  const hits = routines.filter((r) => r.kwant_id === n.kwant_id && r.name === m[1]);
+  const hits = namedOnBot(n.kwant_id, m[1], routines);
   if (hits.length < 2) return hits[0]?.id ?? null;
   const failed = (r: Routine) => (r.last_status === 'error' || r.last_status === 'incomplete' ? 1 : 0);
-  const ran = (r: Routine) => (r.last_run_at ? Date.parse(r.last_run_at) || 0 : 0);
   return [...hits].sort((a, b) => failed(b) - failed(a) || ran(b) - ran(a))[0].id;
+}
+
+const ran = (r: Routine) => (r.last_run_at ? Date.parse(r.last_run_at) || 0 : 0);
+/** The matching rule a notice and a chat row share: that bot's routines with that exact name. */
+const namedOnBot = (kwantId: string | null | undefined, name: string, routines: Routine[]) =>
+  routines.filter((r) => r.kwant_id === kwantId && r.name === name);
+
+/** Where a routine's chat row is: a bot's chat (its id), or a channel when no single bot is known. */
+export interface RoutinePlace {
+  kwantId?: string | null;
+  channelId?: string | null;
+}
+
+/**
+ * routine-row-opens-history: the routine a chat row ("Routine · <name>") is about. The message carries no routine id,
+ * so: the chat's bot plus the name (as routineOfNotice); two of that bot's routines with one name, the one that ran
+ * last. In a channel, the name among that channel's routines, only when exactly one matches. Null otherwise.
+ */
+export function routineByName(place: RoutinePlace, name: string, routines: Routine[]): string | null {
+  if (!name) return null;
+  if (place.kwantId) {
+    const hits = namedOnBot(place.kwantId, name, routines);
+    if (hits.length < 2) return hits[0]?.id ?? null;
+    return [...hits].sort((a, b) => ran(b) - ran(a))[0].id;
+  }
+  if (place.channelId) {
+    const hits = routines.filter((r) => r.channel_id === place.channelId && r.name === name);
+    return hits.length === 1 ? hits[0].id : null;
+  }
+  return null;
 }
 
 /** What the toast's Open routine does: Routines opens at once, then focuses the routine once it is found. */
@@ -58,6 +87,19 @@ export async function openFailedRoutine(n: Pick<NotifyEvent, 'kwant_id' | 'title
   let id: string | null = null;
   try {
     id = routineOfNotice(n, await deps.routines());
+  } catch {
+    // The list didn't load: Routines stays open, unfocused.
+  }
+  if (id) deps.focusRoutine(id);
+  return id;
+}
+
+/** The chat row's History: Routines opens at once, then that routine with its History open, once it is found. */
+export async function openRoutineHistory(place: RoutinePlace, name: string, deps: OpenRoutineDeps): Promise<string | null> {
+  deps.openRoutines();
+  let id: string | null = null;
+  try {
+    id = routineByName(place, name, await deps.routines());
   } catch {
     // The list didn't load: Routines stays open, unfocused.
   }

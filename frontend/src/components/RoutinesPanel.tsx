@@ -60,7 +60,8 @@ const MONTH_DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 export interface RoutineFocus {
   id: string;
   /** `run` (routine-run-again): a failed run's toast; the row comes into view with its History open. */
-  mode: 'edit' | 'pause' | 'run';
+  /** `history` (routine-row-opens-history): a chat row's History; the same, focusing History, never Run now. */
+  mode: 'edit' | 'pause' | 'run' | 'history';
   /** Changes each time a card asks, so the same routine can be opened twice. */
   nonce: number;
 }
@@ -571,6 +572,8 @@ export const RoutineRow: React.FC<{
   focusPause?: number;
   /** routine-run-again: opened from a failed run's toast: scrolls here, opens History and focuses Run now. */
   focusRun?: number;
+  /** routine-row-opens-history: opened from a chat row's History: the same, but focuses the History toggle. */
+  focusHistory?: number;
   onEdit: () => void;
   /** 0.9.5 F: History rows link to each run's result message. */
   onOpenRunResult?: (t: MessageTarget) => void;
@@ -580,7 +583,7 @@ export const RoutineRow: React.FC<{
   onChanged: () => void;
   /** Tests: start in the Undo window. */
   initialPending?: boolean;
-}> = ({ routine, kwantName, placeLabel, tick, focusPause, focusRun, onEdit, onOpenRunResult, waits = NO_WAITS, onOpenRunCard, onChanged, initialPending = false }) => {
+}> = ({ routine, kwantName, placeLabel, tick, focusPause, focusRun, focusHistory, onEdit, onOpenRunResult, waits = NO_WAITS, onOpenRunCard, onChanged, initialPending = false }) => {
   const rowRef = useRef<HTMLLIElement>(null);
   const switchRef = useRef<HTMLInputElement>(null);
   const [highlight, setHighlight] = useState(false);
@@ -592,13 +595,16 @@ export const RoutineRow: React.FC<{
   }, [focusPause]);
   const [open, setOpen] = useState(false);
   const runRef = useRef<HTMLButtonElement>(null);
+  const historyRef = useRef<HTMLButtonElement>(null);
+  const focusAt = focusRun ?? focusHistory;
   useEffect(() => {
-    if (!focusRun) return;
+    if (!focusAt) return;
     setOpen(true);
     setHighlight(true);
     rowRef.current?.scrollIntoView?.({ block: 'center', behavior: motionOk() ? 'smooth' : 'auto' });
-    runRef.current?.focus({ preventScroll: true });
-  }, [focusRun]);
+    // Looking back lands on History, never on a button that starts a run.
+    (focusRun ? runRef : historyRef).current?.focus({ preventScroll: true });
+  }, [focusAt]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -700,7 +706,7 @@ export const RoutineRow: React.FC<{
         <button ref={runRef} type="button" onClick={runNow} disabled={busy} data-routine-run={routine.id} className={`${rowSmallBtn} ${rowBtn} border-sky-500/40 bg-sky-500/10 text-sky-200 hover:bg-sky-500/20`}>
           <Play size={11} aria-hidden="true" /> Run now
         </button>
-        <button type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls={historyId} className={`${rowQuietBtn} ${rowBtn}`}>
+        <button ref={historyRef} type="button" onClick={() => setOpen((v) => !v)} aria-expanded={open} aria-controls={historyId} className={`${rowQuietBtn} ${rowBtn}`}>
           <span className="hidden sm:inline-flex" aria-hidden="true">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span> <History size={11} aria-hidden="true" /> History
         </button>
         <button type="button" onClick={onEdit} className={`${rowQuietBtn} ${rowBtn}`} data-routine-edit={routine.id}>
@@ -886,6 +892,7 @@ export const RoutinesPanel: React.FC<{
                 tick={tick}
                 focusPause={focus?.mode === 'pause' && focus.id === r.id ? focus.nonce : undefined}
                 focusRun={focus?.mode === 'run' && focus.id === r.id ? focus.nonce : undefined}
+                focusHistory={focus?.mode === 'history' && focus.id === r.id ? focus.nonce : undefined}
                 onEdit={() => setEditing(r)}
                 onOpenRunResult={onOpenRunResult}
                 waits={waits}

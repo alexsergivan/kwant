@@ -1,7 +1,7 @@
 // pa5 guest page in a real Chrome under exactly pa1's pocket CSP (guest/fake/views.mjs CSP), from the fake guest port.
 // Fails on: any securitypolicyviolation or CSP console error, a page error, any request that is not same-origin,
 // a missing or different CSP header, sideways scrolling at 390 px, or a visible tap target under 44 px.
-// Also walks Secret Santa's G1-G11 (pa10a) from the fake santa box, and gather's G1-G11 (pa10b) from the fake gather box. Writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
+// Also walks Secret Santa's G1-G11 (pa10a) from the fake santa box, gather's G1-G11 (pa10b) from the fake gather box, and the Wall's G1-G8 and TV1-TV4 (pa14) from the fake wall box. Writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
 // Usage: PW_CORE=<playwright-core/index.mjs> CHROMIUM=<chrome> node guest/e2e/csp.mjs <out dir>
 // Needs the built page in frontend/dist/pocket (npm run build:guest).
 import fs from 'node:fs';
@@ -42,7 +42,8 @@ async function newPage({ throttle } = {}) {
   page.on('pageerror', (e) => log.push(`pageerror: ${e.message}`));
   page.on('request', (r) => {
     const u = r.url();
-    if (!u.startsWith(`http://127.0.0.1:`) && !u.startsWith('ws://127.0.0.1:') && !u.startsWith('data:')) log.push(`third-party request: ${u}`);
+    // blob: of this origin is the Wall's own preview of a photo the guest picked (URL.createObjectURL), never a fetch out.
+    if (!u.startsWith(`http://127.0.0.1:`) && !u.startsWith('ws://127.0.0.1:') && !u.startsWith('data:') && !u.startsWith('blob:http://127.0.0.1:')) log.push(`third-party request: ${u}`);
   });
   if (throttle) {
     const cdp = await ctx.newCDPSession(page);
@@ -306,6 +307,169 @@ for (const name of order) {
     if (anim !== 'none') problems.push(`santa reduced motion: match card animates (${anim})`);
     await check('santa-reduced-motion', page, log);
     await ctx.close();
+  }
+}
+
+// pa14 the Wall's guest page, G1-G8 (pa14/guest-brief.md), from the fake wall box (fake/wall.mjs) in Juno's wall.rs
+// shapes. Same checks as the quiz screens; shots named wall-g<N>-<what>. Uploads are real files through a real XHR.
+{
+  // Real small JPEGs drawn in Chrome (no image tools on the runner), one colour each, so the previews show.
+  const jpegBytes = [];
+  {
+    const p = await newPage();
+    for (const [i, c] of ['#c07a5a', '#5a7ac0', '#7ac05a', '#c05a9a', '#c0b05a'].entries()) {
+      const b64 = await p.page.evaluate(([c, i]) => {
+        const k = document.createElement('canvas');
+        k.width = 120;
+        k.height = 160;
+        const g = k.getContext('2d');
+        g.fillStyle = c;
+        g.fillRect(0, 0, 120, 160);
+        g.fillStyle = '#f4f1ff';
+        g.beginPath();
+        g.arc(40 + i * 10, 50, 22, 0, 7);
+        g.fill();
+        return k.toDataURL('image/jpeg', 0.8).split(',')[1];
+      }, [c, i]);
+      jpegBytes.push(Buffer.from(b64, 'base64'));
+    }
+    await p.ctx.close();
+  }
+  let jn = 0;
+  const jpeg = (name) => ({ name, mimeType: 'image/jpeg', buffer: jpegBytes[jn++ % jpegBytes.length] });
+  const heic = (name) => ({ name, mimeType: 'image/heic', buffer: Buffer.from('fake heic'.padEnd(400, '.')) });
+  const wallShot = async (page, log, file) => {
+    await page.evaluate(() => document.querySelector('.toast')?.remove());
+    // The wall's photos load lazily: scroll through once so a full-page shot has them all, then back to where it was.
+    const y = await page.evaluate(() => window.scrollY);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForTimeout(400);
+    await page.evaluate((y) => window.scrollTo(0, y), y);
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-wall] img, [data-mine] img')].every((i) => i.complete), null, { timeout: 5000 }).catch(() => {});
+    await shot(page, file);
+    await check(file, page, log);
+    results.states[file] = { screen: await page.getAttribute('[data-screen]', 'data-screen') };
+    // The page root must stay a block: a stray grid (Santa's .wl once matched it) stretches the bar on short screens.
+    const barH = await page.evaluate(() => document.querySelector('.g > .bar')?.getBoundingClientRect().height ?? 0);
+    if (!barH || barH > 64) problems.push(`${file}: the header is ${Math.round(barH)} px tall (at most 64)`);
+    if (!file.startsWith('wall-g6') && (await page.$('.kw-sticker-holo'))) problems.push(`${file}: holo off the Picked screen`);
+    // CSSOM setProperty of a custom property (the upload bar's --p) is allowed under the CSP, and Chrome leaves an empty
+    // style="" on inputs it may autofill; anything else is not.
+    const style = await page.evaluate(() => [...document.querySelectorAll('[style]')].map((e) => `${e.tagName.toLowerCase()}.${e.className} "${e.getAttribute('style')}"`).filter((x) => !/""$/.test(x) && !/"(\s*--[\w-]+:\s*[\d.]+;?)+\s*"$/.test(x)));
+    for (const x of style) problems.push(`${file}: a style that is not a CSSOM custom property: ${x}`);
+  };
+  const wgo = async (code, screen, { base = origin } = {}) => {
+    const p = await newPage();
+    const res = await p.page.goto(`${base}/p/${code}`);
+    if (res.headers()['content-security-policy'] !== CSP) problems.push(`${code}: wrong CSP header`);
+    await p.page.waitForSelector(`main.wall[data-screen="${screen}"]`, { timeout: 25000 });
+    await p.page.waitForTimeout(300);
+    return p;
+  };
+  const files = (page) => page.locator('input[type=file]').first();
+
+  // G1 join (keep line, limits), files picked before joining wait, then join sends them (G2) and the thanks shows.
+  {
+    const { ctx, page, log } = await wgo('wall-join', 'join');
+    await wallShot(page, log, 'wall-g1-join');
+    await files(page).setInputFiles([jpeg('a.jpg'), jpeg('b.jpg')]);
+    await page.waitForSelector('text=They send once you join');
+    await page.fill('#w-name', 'Sam');
+    await page.click('#w-pin');
+    await page.keyboard.type('1234');
+    await page.focus('#w-name');
+    await wallShot(page, log, 'wall-g1-join-filled');
+    await page.locator('form button[type=submit]').first().click();
+    await page.waitForSelector('main.wall[data-screen="wall"]', { timeout: 10000 });
+    await page.waitForSelector('text=Thanks, Sam!', { timeout: 10000 });
+    await wallShot(page, log, 'wall-g2-sent');
+    await ctx.close();
+  }
+  // G2 and G4: one at a time, refused rows in place with a fix, the rest go up.
+  {
+    const { ctx, page, log } = await wgo('wall-refuse', 'wall');
+    // The page refuses the HEIC itself, before sending, so the box's own "heic" answer would land on the next file.
+    fake.push('wall-refuse', (b) => (b.s = { ...b.s, uploads: b.s.uploads.filter((u) => u.error !== 'heic') }));
+    await files(page).setInputFiles([jpeg('ok-1.jpg'), heic('IMG_0042.heic'), jpeg('big.jpg'), jpeg('ok-2.jpg'), jpeg('ok-3.jpg')]);
+    await page.waitForSelector('.sending', { timeout: 5000 });
+    await page.waitForTimeout(400);
+    await wallShot(page, log, 'wall-g2-sending');
+    await page.waitForSelector('[data-refused]', { timeout: 20000 });
+    await page.waitForTimeout(3500);
+    await wallShot(page, log, 'wall-g4-refused');
+    const txt = await page.textContent('main');
+    if (/\d+(\.\d+)? ?(KB|MB) (of|sent)|\d%/.test(txt)) problems.push('wall-g4: a size or percentage shows');
+    await ctx.close();
+  }
+  // G4 with Try again: the box answers 400 broken_photo; the row's Try again resends and it goes up.
+  {
+    const { ctx, page, log } = await wgo('wall-broken', 'wall');
+    await files(page).setInputFiles([jpeg('ok-1.jpg')]);
+    await page.waitForSelector('li[data-state="refused"] button.retry', { timeout: 20000 });
+    await page.waitForTimeout(300);
+    await wallShot(page, log, 'wall-g4-try-again');
+    await page.click('li[data-state="refused"] button.retry');
+    await page.waitForFunction(() => !document.querySelector('li[data-state="refused"]'), null, { timeout: 20000 });
+    await ctx.close();
+  }
+  // G3 the live wall: yours first, newest first, 12 then Show more; a new approved photo waits behind the pill.
+  {
+    const { ctx, page, log } = await wgo('wall-live', 'wall');
+    await wallShot(page, log, 'wall-g3-live');
+    const n = await page.$$eval('[data-wall] .ph', (x) => x.length);
+    if (n !== 12) problems.push(`wall-g3: ${n} tiles, not 12`);
+    if (/\b15 photos\b/.test(await page.textContent('main'))) problems.push('wall-g3: shows a count of others');
+    fake.push('wall-live', (b) => b.approve({ id: 'new1', by_name: 'Zoe', caption: 'Cake time', caption_removed: false, at: '2026-11-28T21:40:00Z', w: 1200, h: 1600, rotate: 0, best: false }));
+    await page.waitForSelector('.newpill', { timeout: 8000 }).catch(() => problems.push('wall-g3: no new-photo pill after a push'));
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await wallShot(page, log, 'wall-g3-new-pill');
+    await ctx.close();
+  }
+  // G5 back: the rejoin form.
+  {
+    const { ctx, page, log } = await wgo('wall-join', 'join');
+    await page.click("text=I've joined before");
+    await page.waitForSelector('main.wall[data-screen="rejoin"]');
+    await wallShot(page, log, 'wall-g5-rejoin');
+    await ctx.close();
+  }
+  // G7 closed with a seat, then G6 the best: one holo Picked sticker.
+  {
+    const { ctx, page, log } = await wgo('wall-best', 'closed');
+    await wallShot(page, log, 'wall-g7-closed-seated');
+    await page.click('text=See the best');
+    await page.waitForSelector('main.wall[data-screen="best"]');
+    await page.waitForTimeout(300);
+    await wallShot(page, log, 'wall-g6-best');
+    if ((await page.$$('.kw-sticker-holo')).length !== 0) problems.push('wall-g6: a holo sticker on a host-picked best set');
+    await ctx.close();
+  }
+  // G7 closed, never joined.
+  {
+    const { ctx, page, log } = await wgo('wall-closed', 'closed');
+    await wallShot(page, log, 'wall-g7-closed');
+    await ctx.close();
+  }
+  // G8 page notes: the wall is full, the guest max.
+  for (const [code, file] of [['wall-full', 'wall-g8-full'], ['wall-max', 'wall-g8-max']]) {
+    const { ctx, page, log } = await wgo(code, 'wall');
+    await files(page).setInputFiles([jpeg('a.jpg')]);
+    await page.waitForSelector('[data-note]', { timeout: 10000 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await wallShot(page, log, file);
+    await ctx.close();
+  }
+  // Empty wall, ended, away (served with the boot facts, as pa1 does).
+  for (const [code, file, base] of [['wall-empty', 'wall-empty', origin], ['wall-ended', 'wall-ended', origin], ['wall-away', 'wall-away', bootOrigin]]) {
+    const p = await newPage();
+    await p.page.goto(`${base}/p/${code}`);
+    const ok = await p.page.waitForSelector('[data-screen]:not([data-screen="loading"])', { timeout: 25000 }).catch(() => null);
+    if (!ok) problems.push(`${file}: never left loading`);
+    else {
+      await p.page.waitForTimeout(code === 'wall-away' ? 6000 : 300);
+      await wallShot(p.page, p.log, file);
+    }
+    await p.ctx.close();
   }
 }
 
@@ -611,6 +775,64 @@ for (const name of order) {
       });
       for (const x of bad) problems.push(`screen-limits ${name}: ${x}`);
       await page.screenshot({ path: path.join(out, `screen-limits-${name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.png`) });
+      await ctx.close();
+    }
+  }
+  // pa14 the Wall's big screen, TV1-TV4 at 1920 (pa14/guest-brief.md), from the fake wall box in its screen view.
+  {
+    const tvShot = async (page, log, file, code, srv = fake) => {
+      await page.waitForTimeout(400);
+      await screenCheck(file, page, log);
+      await page.screenshot({ path: path.join(out, `${file}.png`) });
+      results.screen[file] = { screen: await page.getAttribute('.tv[data-screen]', 'data-screen') };
+      const b = srv.box(code);
+      if (b.writes?.length) problems.push(`${file}: the screen called a host write: ${b.writes.join(', ')}`);
+    };
+    const tvgo = async (scene, screen, opts = {}) => {
+      const p = await screenPage(opts);
+      await p.page.goto(`${opts.base ?? origin}/p/screen-wall-${scene}#screen=tok-wall-${scene}`);
+      await ready(p.page, screen);
+      return p;
+    };
+    // TV1 slides, then TV2 a new photo arrives (pill and move), from a push.
+    {
+      const { ctx, page, log } = await tvgo('slides', 'slides');
+      await tvShot(page, log, 'wall-tv1-slides', 'screen-wall-slides');
+      fake.push('screen-wall-slides', (b) => b.approve({ id: 'tvnew1', by_name: 'Zoe', caption: 'Cake time', caption_removed: false, at: '2026-11-28T21:40:00Z', w: 1200, h: 1600, rotate: 0, best: false }));
+      await page.waitForSelector('.wnew', { timeout: 8000 }).catch(() => problems.push('wall-tv2: no "New from" pill after a push'));
+      await page.waitForTimeout(250);
+      await tvShot(page, log, 'wall-tv2-arrival', 'screen-wall-slides');
+      const said = await page.evaluate(() => [...document.querySelectorAll('[aria-live]')].map((e) => e.textContent).join(' | '));
+      if (!/New photo from Zoe/.test(said)) problems.push(`wall-tv2: live region says "${said}"`);
+      await ctx.close();
+    }
+    // TV3 waiting: no photos yet, the big code.
+    {
+      const { ctx, page, log } = await tvgo('waiting', 'waiting');
+      await tvShot(page, log, 'wall-tv3-waiting', 'screen-wall-waiting');
+      await ctx.close();
+    }
+    // TV4 reduced motion: the still grid, one slot changes every 8 s, no animation.
+    {
+      const { ctx, page, log } = await tvgo('slides', 'still', { reduced: true });
+      await tvShot(page, log, 'wall-tv4-still', 'screen-wall-slides');
+      const anim = await page.evaluate(() => [...document.querySelectorAll('.wtv *')].map((e) => getComputedStyle(e).animationName).filter((a) => a !== 'none'));
+      if (anim.length) problems.push(`wall-tv4: animates under reduced motion (${anim.join(' ')})`);
+      await ctx.close();
+    }
+    // Ended and away, then the waiting screen letterboxed at 4:3.
+    // Away is served the way pa1 serves it, with the public facts in the page, so the screen knows it is the wall's.
+    for (const [scene, screen, base] of [['ended', 'ended', origin], ['away', 'away', bootOrigin]]) {
+      const { ctx, page, log } = await tvgo(scene, screen, { base });
+      await tvShot(page, log, `wall-tv-${scene}`, `screen-wall-${scene}`, base === bootOrigin ? boot : fake);
+      if (!(await page.$(`.wtv[data-screen="${screen}"]`))) problems.push(`wall-tv-${scene}: not the wall's own ${screen} screen`);
+      await ctx.close();
+    }
+    {
+      const { ctx, page, log } = await tvgo('waiting', 'waiting', { width: 1024, height: 768 });
+      await page.waitForTimeout(300);
+      await screenCheck('wall-tv-letterbox-1024x768', page, log, { width: 1024, height: 768 });
+      await page.screenshot({ path: path.join(out, 'wall-tv-letterbox-1024x768-waiting.png') });
       await ctx.close();
     }
   }
