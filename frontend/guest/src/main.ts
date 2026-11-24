@@ -1,5 +1,5 @@
 // Entry for /p/<code>. Reads the optional v1 state the server put in the page, picks the screens by the pocket's kit
-// (Secret Santa and the Wall load their own chunks; everything else is the quiz, exactly as before), then joins the live pocket.
+// (Secret Santa, gather and the Wall load their own chunks; everything else is the quiz, exactly as before), then joins the live pocket.
 import './guest.css';
 import { codeFrom, Env } from './api';
 import { GuestApp } from './app';
@@ -86,6 +86,9 @@ async function main(): Promise<void> {
       const { WallApp } = await import('./wall/wall');
       const blobs = { create: (f: Blob) => URL.createObjectURL(f), revoke: (u: string) => URL.revokeObjectURL(u) };
       app = new WallApp(root, { ...env, XHR: w.XMLHttpRequest, blobs }, code);
+    } else if (k === 'gather') {
+      const { GatherApp } = await import('./gather/app');
+      app = new GatherApp(root, env, code);
     } else app = new GuestApp(root, env, code);
   }
   void app.start(b);

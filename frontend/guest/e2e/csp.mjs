@@ -1,7 +1,7 @@
 // pa5 guest page in a real Chrome under exactly pa1's pocket CSP (guest/fake/views.mjs CSP), from the fake guest port.
 // Fails on: any securitypolicyviolation or CSP console error, a page error, any request that is not same-origin,
 // a missing or different CSP header, sideways scrolling at 390 px, or a visible tap target under 44 px.
-// Also walks Secret Santa's G1-G11 (pa10a) from the fake santa box, and the Wall's G1-G8 and TV1-TV4 (pa14) from the fake wall box. Writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
+// Also walks Secret Santa's G1-G11 (pa10a) from the fake santa box, gather's G1-G11 (pa10b) from the fake gather box, and the Wall's G1-G8 and TV1-TV4 (pa14) from the fake wall box. Writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
 // Usage: PW_CORE=<playwright-core/index.mjs> CHROMIUM=<chrome> node guest/e2e/csp.mjs <out dir>
 // Needs the built page in frontend/dist/pocket (npm run build:guest).
 import fs from 'node:fs';
@@ -9,6 +9,7 @@ import path from 'node:path';
 import { startFake } from '../fake/server.mjs';
 import { CSP, order } from '../fake/views.mjs';
 import { santaScenarios } from '../fake/santa.mjs';
+import { gatherScenarios } from '../fake/gather.mjs';
 
 const pw = await import(process.env.PW_CORE || 'playwright-core');
 const out = path.resolve(process.argv[2] || 'guest-shots');
@@ -469,6 +470,132 @@ for (const name of order) {
       await wallShot(p.page, p.log, file);
     }
     await p.ctx.close();
+  }
+}
+
+// pa10b gather (Sign-up, RSVP and Vote), G1-G11 (pa10b/guest-brief.md), from the fake gather box (fake/gather.mjs) in
+// Lin's gather.rs names-so-far. Same checks as above; shots named gather-g<N>-<what>. The gather chunk loads lazily from
+// the kit in the public facts, so the walk fails if the quiz or Santa screens show instead.
+{
+  const gaShot = async (page, log, file) => {
+    await page.evaluate(() => document.querySelector('.toast')?.remove());
+    // Counted before the shot: Playwright's screenshot hides the caret by writing an empty style on inputs.
+    const style = await page.evaluate(() => document.querySelectorAll('[style]').length);
+    if (style) problems.push(`${file}: ${style} style attributes`);
+    await shot(page, file);
+    await check(file, page, log);
+    results.states[file] = { screen: await page.getAttribute('[data-screen]', 'data-screen') };
+  };
+  const holo = (page) => page.evaluate(() => document.querySelectorAll('.kw-sticker-holo').length);
+  const go = async (code, screen, { base = origin, reduced = false } = {}) => {
+    const p = await newPage();
+    if (reduced) await p.page.emulateMedia({ reducedMotion: 'reduce' });
+    if (typeof gatherScenarios[code]?.state === 'object') {
+      await p.ctx.addCookies([{ name: `kp_${code}`, value: 'fake', domain: '127.0.0.1', path: `/api/pocket/${code}`, httpOnly: true, sameSite: 'Strict' }]);
+    }
+    const res = await p.page.goto(`${base}/p/${code}`);
+    if (res.headers()['content-security-policy'] !== CSP) problems.push(`${code}: wrong CSP header`);
+    await p.page.waitForSelector(`main.ga[data-screen="${screen}"]`, { timeout: 20000 });
+    return p;
+  };
+
+  // G1 RSVP, filled (Yes, +1, vegetarian), then G2 You're in
+  {
+    const { ctx, page, log } = await go('gather-rsvp', 'join');
+    await gaShot(page, log, 'gather-g1-rsvp');
+    await page.fill('#g-name', 'Ana');
+    await page.click('label.opt:has(input[value="yes"])');
+    await page.click('[data-k="plus-more"]');
+    await page.click('.tchips label:has([data-k="food-vegetarian"])');
+    await page.fill('#g-pin', '1234');
+    await gaShot(page, log, 'gather-g1-rsvp-filled');
+    await page.click('button[data-send]');
+    await page.waitForSelector('main.ga[data-screen="in"]', { timeout: 10000 });
+    await gaShot(page, log, 'gather-g2-in');
+    if (await holo(page)) problems.push('gather-g2: holo on You\'re in');
+    await ctx.close();
+  }
+  // G2 with the host's paid tick, and with counts only
+  for (const [code, file] of [['gather-rsvp-in', 'gather-g2-in-paid'], ['gather-rsvp-counts', 'gather-g2-in-counts']]) {
+    const { ctx, page, log } = await go(code, 'in');
+    await gaShot(page, log, file);
+    await ctx.close();
+  }
+  // G3 sign-up pick (the full slot picked: Join the waiting list)
+  {
+    const { ctx, page, log } = await go('gather-signup', 'join');
+    await gaShot(page, log, 'gather-g3-signup');
+    await page.click('label.gslot:has(input[value="2"])');
+    const b = await page.textContent('button[data-send]');
+    if (b !== 'Join the waiting list') problems.push(`gather-g3: full slot button says "${b}"`);
+    await gaShot(page, log, 'gather-g3-signup-full');
+    await ctx.close();
+  }
+  // Sign-up in, G4 waiting, G5 moved up (ink New, never holo)
+  for (const [code, screen, file] of [['gather-signup-in', 'in', 'gather-signup-in'], ['gather-waiting', 'waiting', 'gather-g4-waiting'], ['gather-moved', 'moved', 'gather-g5-moved']]) {
+    const { ctx, page, log } = await go(code, screen);
+    await gaShot(page, log, file);
+    if (await holo(page)) problems.push(`${file}: holo`);
+    if (code === 'gather-moved' && !(await page.$('[data-sticker="ink"]'))) problems.push('gather-g5: no ink New');
+    await ctx.close();
+  }
+  // G6 one pick
+  {
+    const { ctx, page, log } = await go('gather-vote', 'join');
+    await page.click('label.ans:has(input[value="0"])');
+    await gaShot(page, log, 'gather-g6-one-pick');
+    await ctx.close();
+  }
+  // G7 ranked: three ranked, one left out; moving keeps focus on the moved row
+  {
+    const { ctx, page, log } = await go('gather-ranked', 'join');
+    await gaShot(page, log, 'gather-g7-ranked-empty');
+    for (const o of [0, 1, 2]) await page.click(`[data-k="add-${o}"]`);
+    await page.focus('[data-k="up-1"]');
+    await page.keyboard.press('Enter');
+    const f = await page.evaluate(() => document.activeElement?.getAttribute('data-k'));
+    if (f !== 'up-1') problems.push(`gather-g7: focus went to ${f} after a move`);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForTimeout(300);
+    await gaShot(page, log, 'gather-g7-ranked');
+    await ctx.close();
+  }
+  // G8 voted with the live count, G9 result (the one holo) and tie, G11 closed
+  for (const [code, screen, file] of [['gather-voted', 'voted', 'gather-g8-voted'], ['gather-result', 'result', 'gather-g9-result'], ['gather-tie', 'result', 'gather-g9-tie'], ['gather-closed', 'closed', 'gather-g11-closed']]) {
+    const { ctx, page, log } = await go(code, screen);
+    await page.waitForTimeout(300);
+    await gaShot(page, log, file);
+    const n = await holo(page);
+    if (n !== (code === 'gather-result' ? 1 : 0)) problems.push(`${file}: ${n} holo stickers`);
+    await ctx.close();
+  }
+  // G10 rejoin with a wrong PIN
+  {
+    const { ctx, page, log } = await go('gather-wrongpin', 'join');
+    await page.click('button[data-to-rejoin]');
+    await page.waitForSelector('main.ga[data-screen="rejoin"]');
+    await gaShot(page, log, 'gather-g10-rejoin');
+    await page.fill('#g-bname', 'Mia');
+    await page.fill('#g-bpin', '0000');
+    await page.click('button[data-rejoin]');
+    await page.waitForSelector('[data-problem]');
+    await gaShot(page, log, 'gather-g10-wrong-pin');
+    await ctx.close();
+  }
+  // Host asleep (served with the boot facts, as pa1 does)
+  {
+    const { ctx, page, log } = await go('gather-away', 'away', { base: bootOrigin });
+    await gaShot(page, log, 'gather-away');
+    await ctx.close();
+  }
+  // Reduced motion: no pick settle, no bar transition, no holo drift
+  {
+    const { ctx, page, log } = await go('gather-result', 'result', { reduced: true });
+    const r = await page.evaluate(() => ({ bar: getComputedStyle(document.querySelector('.vb .tr i')).transitionDuration, holo: getComputedStyle(document.querySelector('.kw-sticker-holo'), '::before').animationName }));
+    if (r.bar !== '0s') problems.push(`gather reduced motion: bar transition ${r.bar}`);
+    if (r.holo !== 'none') problems.push(`gather reduced motion: holo drifts (${r.holo})`);
+    await check('gather-reduced-motion', page, log);
+    await ctx.close();
   }
 }
 

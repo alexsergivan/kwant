@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { join, extname } from 'node:path';
 import { FakeBox, CSP, KIWI_SVG } from './views.mjs';
 import { SantaBox } from './santa.mjs';
+import { GatherBox } from './gather.mjs';
 import { RemoteBox } from './remote.mjs';
 import { ScreenBox } from './screen.mjs';
 import { WallBox } from './wall.mjs';
@@ -21,10 +22,11 @@ export function startFake({ port = 8731, dist = DIST, actionDelayMs = 400, boot 
   const sockets = new Map(); // code -> Set<socket>
   const log = [];
   const box = (code) => {
-    // Codes starting with santa- are Secret Santa pockets (santa.mjs), screen- the big screen (screen.mjs), remote- the
-    // host remote (remote.mjs), wall- and screen-wall- the Wall and its big screen (wall.mjs); the rest are quiz scenarios.
+    // Codes starting with santa- are Secret Santa pockets (santa.mjs), gather- the pa10b gather kit (gather.mjs), screen- the
+    // big screen (screen.mjs), remote- the host remote (remote.mjs), wall- and screen-wall- the Wall and its big screen
+    // (wall.mjs); the rest are quiz scenarios.
     if (!boxes.has(code))
-      boxes.set(code, code.startsWith('wall-') || code.startsWith('screen-wall-') ? new WallBox(code) : code.startsWith('santa-') ? new SantaBox(code) : code.startsWith('screen-') ? new ScreenBox(code) : code.startsWith('remote-') ? new RemoteBox(code) : new FakeBox(code));
+      boxes.set(code, code.startsWith('wall-') || code.startsWith('screen-wall-') ? new WallBox(code) : code.startsWith('santa-') ? new SantaBox(code) : code.startsWith('gather-') ? new GatherBox(code) : code.startsWith('screen-') ? new ScreenBox(code) : code.startsWith('remote-') ? new RemoteBox(code) : new FakeBox(code));
     return boxes.get(code);
   };
 
