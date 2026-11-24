@@ -145,7 +145,7 @@ type Accessory =
   | 'antenna' | 'spikes' | 'ears' | 'horns' | 'sprout' | 'crown' | 'visor'
   | 'beret' | 'glasses' | 'goggles' | 'tie' | 'quill' | 'bulb'
   | 'mortarboard' | 'star' | 'bowtie' | 'cap' | 'sunhat' | 'toque' | 'headband'
-  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'host' | 'knithat' | 'none';
+  | 'partyhat' | 'hardhat' | 'flower' | 'house' | 'host' | 'knithat' | 'camera' | 'clipboard' | 'none';
 
 export interface Creature {
   body: string;
@@ -213,6 +213,8 @@ export const AVATAR_STYLES: Array<{ id: string; label: string }> = [
   { id: 'home', label: 'Home' },
   { id: 'quizmaster', label: 'Quizmaster' },
   { id: 'santa', label: 'Santa' },
+  { id: 'snap', label: 'Photo wall' },
+  { id: 'tally', label: 'Sign-up' },
   { id: 'default', label: 'Droid' },
 ];
 
@@ -249,6 +251,13 @@ const ROLE_CREATURES: Record<string, [keyof typeof PALETTES, Accessory]> = {
    * only: no name rule, so agents already named with "santa" keep the creature they have.
    */
   santa: ['green', 'knithat'],
+  /** Pocket apps (pa14): a pink creature holding a white instant-style camera low on its left. Picked style only. */
+  snap: ['pink', 'camera'],
+  /**
+   * Pocket apps (pa10b): Tally, an orange creature with a pencil behind its head and a clipboard with two ticks.
+   * Picked style only, like santa.
+   */
+  tally: ['orange', 'clipboard'],
 };
 
 /** Style ids (picked or saved), as opposed to a title or name passed as a hint. */
@@ -327,8 +336,29 @@ const KNIT_SHADE = '#a8323a';
 const KNIT_SHINE = '#ff8f8f';
 const KNIT_CUFF_SHADE = '#d2cbec';
 
+// Snap's camera: sprite art from pa14/src/snap-sprite.ts (`// @overlay camera`), held at x4-11 / y14-19 so it
+// overlaps the body edge and never covers an eye or the smile.
+const CAM_BODY = '#f5f2ff';
+const CAM_SIDE = '#d2cbec';
+const CAM_SHUTTER = '#e5484d';
+const CAM_LENS_RIM = '#8f86b8';
+const CAM_GLINT = '#5ce1ff';
+// Tally's pencil and clipboard: sprite art from pa10b/src/tally-sprite.ts.
+const PENCIL_ERASER = '#ff8fa3';
+const PENCIL_YELLOW = '#ffd23f';
+const PENCIL_SHINE = '#fff1b8';
+const PENCIL_WOOD = '#ffe2b8';
+const BOARD_BROWN = '#9a5a2e';
+const BOARD_SHADE = '#6e3d1c';
+const CLIP_SILVER = '#d2cbec';
+const CLIP_SHADE = '#8f86b8';
+const TICK_GREEN = '#3ccf6e';
+
 function renderAccessory(c: Creature) {
   switch (c.accessory) {
+    case 'clipboard':
+      // Tally's pencil, one row behind the head (pink eraser left, lead right).
+      return [px(4, 6, 1, 1, PENCIL_ERASER), px(5, 6, 7, 1, PENCIL_YELLOW), px(6, 6, 3, 1, PENCIL_SHINE), px(12, 6, 1, 1, PENCIL_WOOD), px(13, 6, 1, 1, INK)];
     case 'knithat':
       return [
         px(9, 5, 9, 1, KNIT_RED), px(10, 4, 7, 1, KNIT_RED), px(11, 3, 5, 1, KNIT_RED), px(8, 2, 6, 1, KNIT_RED), px(6, 3, 5, 1, KNIT_RED),
@@ -419,6 +449,12 @@ function renderAccessory(c: Creature) {
 // Accessories worn in front of the body (on the face or chest)
 function renderOverlay(c: Creature) {
   switch (c.accessory) {
+    case 'clipboard':
+      // Tally's clipboard at the lower right: a white sheet, a silver clip and two green ticks.
+      return [
+        px(15, 14, 6, 6, BOARD_BROWN), px(20, 14, 1, 6, BOARD_SHADE), px(16, 15, 4, 4, '#ffffff'), px(17, 13, 2, 2, CLIP_SILVER), px(17, 13, 2, 1, CLIP_SHADE),
+        px(16, 16, 1, 1, TICK_GREEN), px(17, 16, 3, 1, CLIP_SHADE), px(16, 18, 1, 1, TICK_GREEN), px(17, 18, 2, 1, CLIP_SHADE),
+      ];
     case 'glasses':
       return [
         px(9, 9, 4, 1, c.accent), px(13, 9, 4, 1, c.accent), px(9, 10, 1, 2, c.accent), px(16, 10, 1, 2, c.accent),
@@ -428,6 +464,11 @@ function renderOverlay(c: Creature) {
       return [
         px(7, 8, 12, 1, INK), px(9, 7, 3, 2, c.accent), px(14, 7, 3, 2, c.accent),
         px(9, 7, 1, 1, '#ffffff'), px(14, 7, 1, 1, '#ffffff'),
+      ];
+    case 'camera':
+      return [
+        px(5, 14, 1, 1, CAM_SHUTTER), px(7, 14, 2, 1, CAM_SIDE), px(4, 15, 8, 5, CAM_BODY), px(11, 15, 1, 5, CAM_SIDE), px(4, 19, 8, 1, CAM_SIDE),
+        px(6, 16, 3, 3, INK), px(7, 17, 1, 1, CAM_GLINT), px(6, 16, 1, 1, CAM_LENS_RIM), px(10, 16, 1, 1, INK),
       ];
     case 'knithat':
       // Santa's red-and-white striped scarf.

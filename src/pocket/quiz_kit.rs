@@ -26,7 +26,7 @@ pub const CLASS_NOTICE: &str = "First names or nicknames only. Everything about 
 
 /// pa11: `settings.class: true` makes a class quiz. Read straight from the JSON so a spec that
 /// doesn't validate (never saved) can't make it one by accident.
-fn is_class(spec: &Value) -> bool {
+pub fn is_class(spec: &Value) -> bool {
     spec["settings"]["class"].as_bool() == Some(true)
 }
 

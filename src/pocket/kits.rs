@@ -237,13 +237,15 @@ pub fn kit(id: &str) -> Option<&'static dyn Kit> {
         "test" if test_kit_allowed() => Some(&TestKit),
         crate::kits::quiz::KIT_ID => Some(&super::quiz_kit::QuizPocket),
         super::santa::ID => Some(&super::santa::Santa),
+        super::gather::ID => Some(&super::gather::Gather),
+        super::wall::ID => Some(&super::wall::Wall),
         _ => None,
     }
 }
 
 /// Every kit id this build can make a pocket with.
 pub fn kit_ids() -> Vec<&'static str> {
-    ["test", crate::kits::quiz::KIT_ID, super::santa::ID].into_iter().filter(|id| kit(id).is_some()).collect()
+    ["test", crate::kits::quiz::KIT_ID, super::santa::ID, super::gather::ID, super::wall::ID].into_iter().filter(|id| kit(id).is_some()).collect()
 }
 
 fn test_kit_allowed() -> bool {

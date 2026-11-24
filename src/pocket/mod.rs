@@ -12,16 +12,19 @@
 //! each of whom then draws its own view from the snapshot.
 
 pub mod address;
+pub mod gather;
 pub mod guest;
 pub mod host_api;
 pub mod keys;
 pub mod kits;
 pub mod limits;
 pub mod listener;
+pub mod photo;
 pub mod quiz_kit;
 pub mod santa;
 pub mod schedule;
 pub mod tunnel;
+pub mod wall;
 pub mod words;
 
 use crate::config::Config;
@@ -110,6 +113,8 @@ pub struct Hub {
     pub tunnel: tunnel::Tunnels,
     /// macOS: `caffeinate` held while a tunnel or an open pocket runs.
     pub awake: tunnel::KeepAwake,
+    /// Tests only: the free disk space the Wall's upload check sees (pa14), instead of the disk's.
+    fake_free_disk: Mutex<Option<u64>>,
 }
 
 impl Hub {
@@ -125,6 +130,15 @@ impl Hub {
         if let Some(tx) = self.channels.lock().unwrap_or_else(|e| e.into_inner()).get(code) {
             let _ = tx.send(s);
         }
+    }
+
+    /// Tests only: make the Wall's free-disk check see `bytes` (`None`: the real disk again).
+    pub fn set_fake_free_disk(&self, bytes: Option<u64>) {
+        *self.fake_free_disk.lock().unwrap_or_else(|e| e.into_inner()) = bytes;
+    }
+
+    fn fake_free_disk(&self) -> Option<u64> {
+        *self.fake_free_disk.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn touch(&self, code: &str) {
@@ -378,6 +392,20 @@ pub async fn create(state: &AppState, req: CreateRequest) -> PResult<(Arc<Snapsh
     Err(PocketError::internal())
 }
 
+/// How long a pocket that keeps nothing after it ends (`Retention::AtEnd`, a class quiz) may stay
+/// open with no closing time before the minute tick ends it for the host (pa11 qa F1): a lesson
+/// is long over by then, and a quiz nobody pressed End on must not keep its players for good.
+pub const AT_END_MAX_OPEN: chrono::Duration = chrono::Duration::hours(12);
+
+/// `true` for an open `AtEnd` pocket with no closing time that opened [`AT_END_MAX_OPEN`] or more
+/// before `now`. A pocket with a closing time is ended at that time instead.
+pub fn abandoned(s: &Snapshot, now: DateTime<Utc>) -> bool {
+    s.row.state == OPEN
+        && s.row.closes_at.is_none()
+        && s.rules().is_some_and(|r| matches!(r.retention, kits::Retention::AtEnd))
+        && s.row.opens_at.unwrap_or(s.row.created_at).max(s.row.created_at) + AT_END_MAX_OPEN <= now
+}
+
 /// Ends an open pocket and sets when its data goes (from the kit's retention).
 pub async fn end(state: &AppState, code: &str) -> PResult<Arc<Snapshot>> {
     let lock = state.pocket.lock_for(code);
@@ -419,7 +447,10 @@ pub async fn delete(state: &AppState, code: &str) -> PResult<bool> {
     let lock = state.pocket.lock_for(code);
     let gone = {
         let _g = lock.lock().await;
-        state.db.pocket_delete(code).await?
+        let gone = state.db.pocket_delete(code).await?;
+        // pa14: the Wall's photo files go with the pocket
+        wall::remove_files(state, code).await;
+        gone
     };
     state.pocket.tunnel.release(code);
     state.pocket.signal(code, Signal::Deleted);
@@ -636,7 +667,12 @@ async fn save(state: &AppState, code: &str, kit_state: &Value, ctx: KitCtx<'_>, 
         ctx.events.into_iter().map(|e| (e.player_id, e.kind, serde_json::to_string(&e.payload).unwrap_or_else(|_| "{}".into()))).collect();
     let text = serde_json::to_string(kit_state).map_err(|_| PocketError::internal())?;
     state.db.pocket_save_state(code, &text, &events, now).await?;
-    changed(state, code).await
+    changed(state, code).await?;
+    // pa14: a photo the save hid loses its file now
+    if let Some(s) = snapshot(state, code).await?.filter(|s| s.row.kit == wall::ID) {
+        wall::prune(state, &s).await;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]

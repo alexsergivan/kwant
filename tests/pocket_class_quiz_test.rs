@@ -249,3 +249,50 @@ async fn the_class_line_is_there_before_anyone_types() {
     assert!(info.body["pocket"]["notice"].is_null(), "{}", info.body);
     assert_eq!(info.body["pocket"]["first_names_only"], false);
 }
+
+// ---- QA round 1 (Rigel, qa.md F1 and F2) ----
+
+/// F1: the teacher closes the laptop. No End, the quiz never reaches its final phase, and still
+/// everything about the players goes (12 h after it opened; Rigel's probe, #1148).
+#[tokio::test]
+async fn a_class_quiz_nobody_ends_is_ended_and_deleted() {
+    let t = setup().await;
+    let p = make(&t, quiz_spec(json!({ "class": true }))).await;
+    let code = code_of(&p);
+    joined(&t, &code, "Mia").await;
+    joined(&t, &code, "Leo").await;
+    // Not before the 12 hours
+    let early = Utc::now() + Duration::hours(11);
+    assert_eq!(schedule::run_once(&t.state, early).await.ended, 0);
+    assert_eq!(pocket::sweep(&t.state, early).await, pocket::Swept::default());
+    assert_eq!(t.state.db.pocket_row_counts(&code).await.unwrap()[1], 2, "still running at 11 h");
+    let later = Utc::now() + Duration::days(30);
+    assert_eq!(schedule::run_once(&t.state, later).await.ended, 1);
+    assert_eq!(pocket::sweep(&t.state, later).await.deleted, 1);
+    assert_eq!(t.state.db.pocket_row_counts(&code).await.unwrap(), [0, 0, 0, 0], "30 days on, nothing about the players is left");
+    assert_eq!(send(&t.main, "GET", &format!("/api/pockets/{code}"), None, None).await.status, StatusCode::NOT_FOUND);
+}
+
+/// F1's other side: the backstop is for pockets that keep nothing. A normal quiz nobody ends stays
+/// open, as before.
+#[tokio::test]
+async fn a_normal_quiz_nobody_ends_is_left_alone() {
+    let t = setup().await;
+    let code = code_of(&make(&t, quiz_spec(json!({}))).await);
+    joined(&t, &code, "Mia Rose Jones").await;
+    let later = Utc::now() + Duration::days(30);
+    assert_eq!(schedule::run_once(&t.state, later).await.ended, 0);
+    assert_eq!(pocket::sweep(&t.state, later).await, pocket::Swept::default());
+    assert_eq!(person_get(&t, &code).await["pocket"]["state"], "open");
+}
+
+/// F2: phone numbers in other digits and the small at sign are refused like their ASCII forms.
+#[tokio::test]
+async fn phone_numbers_in_other_digits_and_a_small_at_sign_are_refused() {
+    let t = setup().await;
+    let code = code_of(&make(&t, quiz_spec(json!({ "class": true }))).await);
+    for bad in ["０７７００９００１２３", "٠٧٧٠٠٩٠٠١٢٣", "mia﹫school.org"] {
+        let r = join(&t, &code, bad).await;
+        assert_eq!(r.body["error"].as_str(), Some("name_first_only"), "{bad:?} got through: {} {}", r.status, r.body);
+    }
+}

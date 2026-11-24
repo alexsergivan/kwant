@@ -68,10 +68,15 @@ const PHONE_DIGITS: usize = 6;
 /// one or two words, no `@` (an email), and fewer than 6 digits (a phone number). It can't tell
 /// a first name plus surname from a two-word nickname, so two words are fine; the page asks for a
 /// first name or nickname, and the host removes the rest with one tap.
+///
+/// The name is NFKC-folded first, so full-width digits and the compatibility at signs (`＠`, the
+/// small `﹫`) count as their plain forms, and a digit is any Unicode digit (Arabic-Indic,
+/// Devanagari and the rest), not ASCII only (pa11 qa F2).
 pub fn first_name_only(shown: &str) -> Result<(), NameError> {
-    let words = shown.split_whitespace().count();
-    let digits = shown.chars().filter(char::is_ascii_digit).count();
-    if words > 2 || shown.contains(['@', '\u{FF20}']) || digits >= PHONE_DIGITS {
+    let folded: String = shown.nfkc().collect();
+    let words = folded.split_whitespace().count();
+    let digits = folded.chars().filter(|c| c.is_numeric()).count();
+    if words > 2 || folded.contains('@') || digits >= PHONE_DIGITS {
         return Err(NameError::NotFirstName);
     }
     Ok(())
@@ -199,6 +204,17 @@ mod tests {
             assert_eq!(first_name_only(bad), Err(NameError::NotFirstName), "{bad}");
         }
         assert_eq!(NameError::NotFirstName.code(), "name_first_only");
+    }
+
+    #[test]
+    fn other_digits_and_at_signs_count_too() {
+        // qa F2: full-width and Arabic-Indic phone numbers, the small at sign, a 3-word NBSP name
+        for bad in ["０７７００９００１２３", "٠٧٧٠٠٩٠٠١٢٣", "०७७००९००१२", "mia﹫school.org", "Mia\u{A0}Rose\u{A0}Jones"] {
+            assert_eq!(first_name_only(bad), Err(NameError::NotFirstName), "{bad}");
+        }
+        for ok in ["12345", "Kid２０１２", "Žofia", "李小龙", "Mary Ann"] {
+            assert_eq!(first_name_only(ok), Ok(()), "{ok}");
+        }
     }
 
     #[test]

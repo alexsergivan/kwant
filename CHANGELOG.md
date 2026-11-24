@@ -8,6 +8,15 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.48] - 2026-11-24
+
+kwant 0.9.48: a History button on a routine's row in a chat that opens its History in Routines, "Answered later" on a routine run you answered after it stopped to ask and a Run again button on a failed routine's Needs-you card and Inbox row, and Open routine on its notice.
+
+### Added
+- A routine's row in a chat now has a History button next to Show, which opens Routines on that routine with its History open; on a phone it shows as an icon (#1128)
+- A routine run that stopped to ask you something now reads "Answered later" in Routines once you answer, on the card, in the chat or in Telegram; a dismissed question leaves it as it was (#1125)
+- A failed routine run now has "Run again" on its Needs-you card and its Inbox row, which starts the routine right there, and the "Routine failed" notice has "Open routine", which opens Routines on it (#1121)
+
 ## [Mac 0.9.47] - 2026-11-24
 
 kwant 0.9.47: a "Sign in again" that opens the connection that needs it, suggested-connection cards that show their real state, a Connect sheet that names the app, not its code name, a failed routine that tells you once and labels its automatic retries, a routine whose question nobody answered that says it needs you instead of OK, routine runs in the Inbox that carry their routine's id, a failed routine's Inbox row that shows the bot's own words instead of the raw tool error, a routine's chat card that shows the routine as it is now, not as it was made, Routines with a plain Paused pill for a paused routine and full-size tap targets on a phone and Inbox routine rows without stray ** marks, which open the thread the routine posts in.
