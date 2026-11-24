@@ -26,7 +26,7 @@
 .gconfirm p { margin: 0; }
 .buzz .br .gb44 { flex-shrink: 0; }
 /* At 390 the stub must never clip: the side fact wraps under smaller numbers. */
-@media (max-width: 380px) { .tk .stub { gap: 10px; padding: 0 14px; } .tk .stub .t b { font-size: 52px; } .tk .word { font-size: 38px; line-height: 44px; } }
+@media (max-width: 380px) { .tk .stub { gap: 10px; padding: 0 14px; } .tk .stub .t b { font-size: 52px; } .tk .word:not(.sm) { font-size: 38px; line-height: 44px; } }
 
 /* ---------- guest page: the ticket ---------- */
 .tk { --cut: 132px; position: relative; border-radius: 20px; background: linear-gradient(180deg, color-mix(in srgb, var(--sky-500) 20%, var(--kw-surface-raised)) 0, var(--kw-surface-raised) 100%);
@@ -55,6 +55,12 @@
 .tk.dim .stub .t b { color: var(--zinc-300); }
 .tk.dim .perf { border-color: var(--kw-hairline-strong); }
 .tk .word { font-size: 44px; line-height: 50px; font-weight: 800; letter-spacing: -.02em; color: var(--zinc-50); }
+/* Skipped, served and left: the smaller headline (Mira's check, fix 3), with the mockup's gaps under each headline. */
+.tk .word.sm, .tk .word.sm.served { font-size: 34px; line-height: 40px; }
+.tk .word.served { margin-top: 12px; }
+.tk .tmain .post.p4 { margin-top: 4px; }
+.tk .tmain .post.p6 { margin-top: 6px; }
+.tk .tmain .post.p8 { margin-top: 8px; }
 .cd { margin-top: 14px; display: grid; gap: 8px; }
 .cd .row { display: flex; justify-content: space-between; align-items: baseline; font-size: 15px; font-weight: 600; color: white; }
 .cd .row b { font-size: 34px; line-height: 38px; font-weight: 800; font-variant-numeric: tabular-nums; }

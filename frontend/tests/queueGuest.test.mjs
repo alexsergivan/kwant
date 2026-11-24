@@ -12,7 +12,7 @@ const m = await loadBundled(`
   export { queueFrom, ticketFrom, phaseOf, live } from './guest/src/queue/view';
   export { ordinal, untilText, minutesFor, eta, wouldBe, refusalCopy, tabTitle, facts } from './guest/src/queue/copy';
   export { detect, Buzz, VIBRATE } from './guest/src/queue/buzz';
-  export { queueTvFrom } from './guest/src/queue/tv';
+  export { queueTvFrom, hm } from './guest/src/queue/tv';
 `);
 
 const box = (scene) => new QueueBox(`queue-${scene}--1`);
@@ -113,6 +113,12 @@ test('screen: its own parser keeps numbers only, never a name or a ticket', () =
   const big = m.queueTvFrom({ ...env, view: { ...env.view, next: [1, 2, 3, 4, 5, 6, 7, 'x', { name: 'Mia' }] } });
   assert.deepEqual(big.view.next, [1, 2, 3, 4, 5]);
   assert.equal(m.queueTvFrom(null), undefined);
+});
+
+test('screen: the clock reads 12-hour, like the phone and the hours', () => {
+  assert.match(m.hm('2026-11-24T23:05:00Z'), /^\d{1,2}:05 (AM|PM)$/);
+  assert.equal(m.hm('junk'), '');
+  assert.equal(m.hm(undefined), '');
 });
 
 test('source: tokens only, no HTML from data, no style attributes, no React or app.css in the guest', () => {

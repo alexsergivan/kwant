@@ -376,6 +376,8 @@ export class QueueApp {
   }
 
   private bold(l: Line): Kid[] {
+    // An empty lead is a plain note (regular weight all through): Welcome back, the turn note.
+    if (!l[0]) return [l[1]];
     return [h('b', null, l[0]), l[1] ? ` ${l[1]}` : null];
   }
 
@@ -494,7 +496,8 @@ export class QueueApp {
     const serving: [string, string] = ['Now serving', v.now_serving ? `#${v.now_serving}` : '—'];
     const at = (iso?: string): string => (iso ? clock(iso) : '');
     const kids: Kid[] = [this.offline()];
-    if (this.welcome && live(p)) kids.push(this.note('check', [backLine(t), ''], 'ok'));
+    // Mira's ruling: only while plainly waiting in an open queue; never above You're next, Your turn or the paused note.
+    if (this.welcome && p === 'waiting' && v.state === 'open') kids.push(this.note('check', ['', backLine(t)], 'ok'));
     const paused = v.state === 'paused' && p === 'waiting';
     if (paused) kids.push(this.note('pause', pausedNote(v), 'warn'));
     const dim = this.confirm ? 'dim' : null;
@@ -519,7 +522,7 @@ export class QueueApp {
       }
       case 'next': {
         const [go, again] = nextLines(v);
-        kids.push(this.ticket(t, dim ?? 'next', serving, h('div', { class: 'word' }, "You're next"), h('div', { class: 'post' }, go, h('br'), again)));
+        kids.push(this.ticket(t, dim ?? 'next', serving, h('div', { class: 'word' }, "You're next"), h('div', { class: 'post p6' }, go, h('br'), again)));
         if (!this.confirm) kids.push(this.note('phone', this.onLine(), ''));
         kids.push(this.leaveBit(t, false));
         break;
@@ -532,7 +535,7 @@ export class QueueApp {
             dim ?? 'turn',
             ['Called', at(t.called_at)],
             h('div', { class: 'word' }, 'Your turn!'),
-            h('div', { class: 'post' }, turnLine(v)),
+            h('div', { class: 'post p4' }, turnLine(v)),
             h(
               'div',
               { class: 'cd', role: 'timer', 'aria-label': leftLabel(s), 'data-cd': '' },
@@ -541,13 +544,13 @@ export class QueueApp {
             ),
           ),
         );
-        kids.push(this.note('clock', [turnNote(v), ''], '', null));
+        kids.push(this.note('clock', ['', turnNote(v)], '', null));
         kids.push(this.leaveBit(t, true));
         break;
       }
       case 'skipped': {
         const sk = skippedLines(t, v);
-        kids.push(this.ticket(t, 'dim', ['Called', at(t.called_at)], h('div', { class: 'word' }, 'You missed your turn'), h('div', { class: 'post' }, sk.lead)));
+        kids.push(this.ticket(t, 'dim', ['Called', at(t.called_at)], h('div', { class: 'word sm' }, 'You missed your turn'), h('div', { class: 'post p8' }, sk.lead)));
         kids.push(...this.takeBtn('Take a new ticket'));
         if (!this.blocked()) kids.push(h('p', { class: 'ginfo' }, qIcon('clock'), h('span', null, sk.after)));
         break;
@@ -559,13 +562,13 @@ export class QueueApp {
             'dim',
             ['Served', at(t.done_at)],
             h('div', { class: 'gstat' }, h('span', { class: 'gchip ok' }, qIcon('check'), t.done_at ? `Served at ${clock(t.done_at)}` : 'Served')),
-            h('div', { class: 'word' }, 'Thanks for waiting!'),
-            h('div', { class: 'post' }, 'Your ticket is deleted now.'),
+            h('div', { class: 'word sm served' }, 'Thanks for waiting!'),
+            h('div', { class: 'post p6' }, 'Your ticket is deleted now.'),
           ),
         );
         break;
       case 'left':
-        kids.push(this.ticket(t, 'dim', ['Left', at(t.done_at)], h('div', { class: 'word' }, 'You left the queue.')));
+        kids.push(this.ticket(t, 'dim', ['Left', at(t.done_at)], h('div', { class: 'word sm' }, 'You left the queue.')));
         kids.push(...this.takeBtn('Take a new ticket'));
         break;
       case 'closed':

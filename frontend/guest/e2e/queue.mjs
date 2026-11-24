@@ -181,6 +181,7 @@ const text = (page) => page.evaluate(() => document.body.innerText);
 {
   const { ctx, page, log } = await go('iphone', 'waiting', { ua: IPHONE, ios: true });
   await want(page, '.gnote.ok', 'g03 Welcome back');
+  if (await page.$('.gnote.ok b')) problems.push('g03: Welcome back is bold');
   const t = await text(page);
   if (!/can't vibrate/.test(t)) problems.push('g03: no "iPhone can\'t vibrate" row');
   if (!/screen locks/.test(t)) problems.push('g03: not the iPhone honest line');
@@ -202,6 +203,9 @@ for (const [scene, screen, file, sel] of [
   const { ctx, page, log } = await go(scene, screen);
   await want(page, sel, file);
   await shot(page, log, file);
+  // Welcome back only while plainly waiting in an open queue (Mira's ruling), and plain notes carry no bold.
+  if (await page.$('.gnote.ok')) problems.push(`${file}: Welcome back shows on ${scene}`);
+  if (scene === 'turn' && (await page.$$eval('.gnote:not(.warn) b', (x) => x.length))) problems.push('g05: the turn note is bold');
   if (scene === 'turn') {
     const a = await page.textContent('[data-cd] b');
     await page.waitForTimeout(2100);
@@ -285,6 +289,8 @@ for (const [scene, screen] of [['take', 'take'], ['ticket', 'waiting'], ['turn',
       return [...tv.querySelectorAll('*')].filter((el) => !el.closest('svg') && [...el.childNodes].some((n) => n.nodeType === 3 && n.textContent.trim()) && parseFloat(getComputedStyle(el).fontSize) < 32).map((el) => el.textContent.trim().slice(0, 30)).concat(s ? [] : ['no scale']);
     });
     for (const x of small) problems.push(`${file}: text under 32 px: ${x}`);
+    const wide = await page.evaluate(() => [...document.querySelectorAll('.joinq b, .joinq i')].filter((e) => e.scrollWidth > e.clientWidth + 0.5 || e.getClientRects().length > 1).map((e) => e.textContent));
+    for (const x of wide) problems.push(`${file}: join box line overflows or wraps: ${x}`);
     if (/\b(Mia|Ben|Ana)\b/.test(await text(page))) problems.push(`${file}: a name on the big screen`);
     await page.screenshot({ path: path.join(out, `${file}.png`) });
     results.screen[file] = await page.getAttribute('.tv[data-screen]', 'data-screen');

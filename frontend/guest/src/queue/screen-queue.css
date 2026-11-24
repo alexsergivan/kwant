@@ -9,17 +9,23 @@
 .qtv .nowbox em { font-style: normal; font-size: 44px; line-height: 54px; color: var(--zinc-200); padding: 0 48px; overflow-wrap: anywhere; }
 .qtv .nowbox.paused { border-color: color-mix(in srgb, var(--kw-warn) 60%, transparent); background: color-mix(in srgb, var(--kw-warn) 6%, var(--kw-surface-raised)); }
 .qtv .nowbox.paused b { font-size: 96px; line-height: 112px; padding: 0 56px; letter-spacing: -.02em; overflow-wrap: anywhere; }
-.qtv .nowbox.closed { left: 72px; right: 72px; width: auto; }
+.qtv .nowbox.paused small { color: var(--kw-warn); }
+/* Closed is plain, like the host card's chip: hairline border, raised surface, quiet eyebrow. */
+.qtv .nowbox.closed { left: 72px; right: 72px; width: auto; border-color: var(--kw-hairline-strong); background: var(--kw-surface-raised); }
+.qtv .nowbox.closed small { color: var(--zinc-300); }
+.qtv .nowbox.closed b { padding: 0 56px; letter-spacing: -.02em; overflow-wrap: anywhere; }
 .qtv .nowbox.closed b { font-size: 72px; line-height: 88px; font-weight: 700; }
 .qtv .side2 { position: absolute; right: 72px; top: 150px; width: 620px; display: grid; gap: 28px; }
 .qtv .nextn { display: grid; gap: 16px; }
 .qtv .nextn .lab { font-size: 40px; font-weight: 700; color: var(--zinc-200); }
 .qtv .nextn .row { display: flex; gap: 18px; }
 .qtv .nextn .row li { flex: 1; height: 120px; border-radius: 24px; background: var(--kw-surface-main); border: 2px solid var(--kw-hairline-strong); display: grid; place-items: center; font-size: 64px; font-weight: 800; font-variant-numeric: tabular-nums; color: var(--zinc-50); }
-.qtv .joinq { display: flex; gap: 28px; align-items: center; border-radius: 28px; padding: 24px; background: var(--kw-surface-raised); border: 2px solid var(--sky-700); }
-.qtv .joinq .qr { width: 210px; height: 210px; flex-shrink: 0; border-radius: 18px; padding: 14px; background: var(--qr-paper); }
+.qtv .joinq { display: flex; gap: 24px; align-items: center; border-radius: 28px; padding: 24px; background: var(--kw-surface-raised); border: 2px solid var(--sky-700); }
+.qtv .joinq .qr { width: 184px; height: 184px; flex-shrink: 0; border-radius: 18px; padding: 14px; background: var(--qr-paper); }
 .qtv .qqr { display: block; width: 100%; height: 100%; }
 .qtv .qqr path { fill: var(--kw-surface-rail); }
 .qtv .joinq b { display: block; font-size: 44px; line-height: 52px; white-space: nowrap; font-weight: 800; }
 .qtv .joinq span { font-size: 32px; line-height: 42px; color: var(--zinc-200); }
+.qtv .joinq span i { display: block; font-style: normal; }
+.qtv .joinq span i.nw { white-space: nowrap; }
 @media (prefers-reduced-motion: reduce) { .qtv .nowbox b.swap { animation: none; } }

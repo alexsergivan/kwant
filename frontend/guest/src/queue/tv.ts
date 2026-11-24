@@ -66,10 +66,10 @@ export function untilText(hhmm: string): string {
   return `${h12}${mm ? `:${String(mm).padStart(2, '0')}` : ''} ${hh < 12 ? 'AM' : 'PM'}`;
 }
 
-/** The box's `now` as the wall clock reads it here, "10:41". */
-function hm(iso?: string): string {
+/** The box's `now` as the wall clock reads it here, 12-hour like the phone's clock(): "11:05 PM". */
+export function hm(iso?: string): string {
   const d = iso ? new Date(iso) : null;
-  return d && !Number.isNaN(d.getTime()) ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '';
 }
 
 export class QueueTV {
@@ -234,7 +234,7 @@ export class QueueTV {
           )
         : s === 'paused'
           ? h('section', { class: 'nowbox paused' }, h('small', null, 'Paused'), h('b', null, v.pause_text || "We'll be right back"), h('em', null, 'Everyone keeps their place'))
-          : h('section', { class: 'nowbox paused closed' }, h('small', null, 'Closed for today'), h('b', null, v.close_text || "Sorry, we've closed for today. Thanks for waiting, and see you next time!"));
+          : h('section', { class: 'nowbox closed' }, h('small', null, 'Closed for today'), h('b', null, v.close_text || "Sorry, we've closed for today. Thanks for waiting, and see you next time!"));
     const next = v.next.slice(0, 3);
     const side =
       s === 'closed'
@@ -255,12 +255,18 @@ export class QueueTV {
               { class: 'joinq' },
               h('span', { class: 'qr' }, this.qr()),
               s === 'paused'
-                ? h('div', null, h('b', null, 'See the queue'), h('span', null, 'Scan with your phone.', h('br'), "New tickets open when we're back."))
+                ? h('div', null, h('b', null, 'See the queue'), h('span', null, h('i', { class: 'nw' }, 'Scan with your phone.'), h('i', null, "New tickets open when we're back.")))
                 : h(
                     'div',
                     null,
                     h('b', null, 'Take a ticket'),
-                    h('span', null, 'Scan with your phone', h('br'), `${v.waiting.toLocaleString('en-US')} waiting${v.avg_minutes ? ` · ~${v.avg_minutes} min each` : ''}`),
+                    h(
+                      'span',
+                      null,
+                      h('i', { class: 'nw' }, 'Scan with your phone'),
+                      h('i', { class: 'nw' }, `${v.waiting.toLocaleString('en-US')} waiting`),
+                      v.avg_minutes ? h('i', { class: 'nw' }, `~${v.avg_minutes} min each`) : null,
+                    ),
                   ),
             ),
           );
