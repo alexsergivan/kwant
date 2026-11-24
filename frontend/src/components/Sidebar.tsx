@@ -887,7 +887,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }}
               aria-expanded={expanded}
               aria-label={expanded ? `Hide @${t.name} members` : `Show @${t.name} members`}
-              className="relative p-1.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700/60"
+              // The visible box stays p-0.5 (pixel-identical to today); the >=24x24px hit area (Finding 2)
+              // is an invisible pseudo-element halo, out of flow, so it can't push the row's own height
+              // or its siblings (an earlier p-1.5 did, cascading a few px down through every row below).
+              className="relative p-0.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700/60 before:absolute before:-inset-1.5 before:content-['']"
             >
               <ChevronDown size={12} className={`transition-transform duration-150 ${expanded ? '' : '-rotate-90'}`} />
             </button>
