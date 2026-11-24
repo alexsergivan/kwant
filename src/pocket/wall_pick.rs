@@ -488,7 +488,7 @@ async fn propose(state: &AppState, code: &str, args: &Value) -> (Value, bool) {
     let mut ctx = KitCtx::new(&s.spec, &s.players, now);
     let n = match wall::pick_propose(&mut ctx, &mut kit_state, &args["ids"]) {
         Ok(n) => n,
-        Err(super::kits::KitError::BadInput(m) | super::kits::KitError::NotNow(m)) => return text(m, true),
+        Err(super::kits::KitError::BadInput(m) | super::kits::KitError::NotNow(m) | super::kits::KitError::Coded { message: m, .. }) => return text(m, true),
     };
     if super::save(state, code, &kit_state, ctx, now).await.is_err() {
         return text("Couldn't save the pick. Try once more.", true);

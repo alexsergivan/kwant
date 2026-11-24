@@ -545,7 +545,9 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   /** Live: the game so far. */
   live: { players: number; teams: number; leader: { name: string; points: number } | null; now: string | null; palettes: string[] } | null;
   /** Ready and live: how friends join. A URL that isn't known yet is null. */
-  join: { mode: PocketJoinMode; wifi_url: string | null; anywhere_url: string | null } | null;
+  join: { mode: PocketJoinMode; wifi_url: string | null; anywhere_url: string | null; quick_tunnel?: boolean } | null;
+  /** pa11: the class quiz's own line (`pocket.notice`), shown as is. Absent on a normal quiz. */
+  notice?: string;
   /** Ended: "10:12 PM", the winner, the stats line, the deletion date ("Fri, Dec 4"). */
   ended: { at: string; winner: { name: string; points: number } | null; stats: string | null; deletes_on: string | null } | null;
   /** Bot calls and spend so far on the person's account. */

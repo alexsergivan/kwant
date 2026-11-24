@@ -35,6 +35,9 @@ pub const MIN_AUTO_ADVANCE_S: u32 = 3;
 pub const MAX_AUTO_ADVANCE_S: u32 = 120;
 /// The kit's player cap (pa1's default).
 pub const MAX_PLAYERS: u32 = 60;
+/// A class quiz's cap (pa11): more than 60 only on an address that stays the same, which the
+/// Pocket core checks (no quick link for such a pocket).
+pub const CLASS_MAX_PLAYERS: u32 = 120;
 
 /// Field names that mean sound; there are none in pocket.json (plan section 8 rule 8).
 const AUDIO_WORDS: &[&str] = &["audio", "sound", "music", "clip", "song", "mp3", "video"];
@@ -207,8 +210,10 @@ fn check_settings(spec: &QuizSpec, f: &mut Found) {
         }
     }
     if let Some(m) = s.max_players {
-        if !(1..=MAX_PLAYERS).contains(&m) {
-            f.add(at, format!("`max_players` is {m}; use 1 to {MAX_PLAYERS}"));
+        let most = s.player_ceiling();
+        if !(1..=most).contains(&m) {
+            let class = if s.class() { "" } else { " (a class quiz, `class: true`, takes up to 120)" };
+            f.add(at, format!("`max_players` is {m}; use 1 to {most}{class}"));
         }
     }
 }

@@ -514,6 +514,14 @@ fn host_viewer(q: &StateQuery) -> Viewer {
 /// session reads only `view=screen`.
 async fn host_state(State(state): State<AppState>, Path(code): Path<String>, headers: HeaderMap, Query(q): Query<StateQuery>) -> PResult<Response> {
     let (s, role) = host_as(&state, &code, &headers).await?;
+    // pa13a: one part of the host's view (a front desk guest's conversation), host only
+    if let Some(key) = q.view.as_deref().filter(|v| v.starts_with("guest:")) {
+        if role == super::HostRole::Screen {
+            return Err(screen_only());
+        }
+        state.pocket.touch(&code);
+        return Ok(Json(super::host_detail_json(&s, key, Utc::now())?).into_response());
+    }
     let viewer = host_viewer(&q);
     if role == super::HostRole::Screen && viewer != Viewer::BigScreen {
         return Err(screen_only());

@@ -15,6 +15,7 @@ import {
   CheckCircle2,
   Globe,
   Hourglass,
+  Info,
   ListChecks,
   Loader2,
   Lock,
@@ -102,7 +103,9 @@ function validJoin(v: unknown) {
   const wifi_url = url(v.wifi_url);
   const anywhere_url = url(v.anywhere_url);
   if (wifi_url === undefined || anywhere_url === undefined) return undefined;
-  return { mode: v.mode as PocketJoinMode, wifi_url, anywhere_url };
+  // pa11: `quick_tunnel: false` means the box won't offer a quick link for this pocket (a class quiz over 60).
+  if (v.quick_tunnel !== undefined && v.quick_tunnel !== null && typeof v.quick_tunnel !== 'boolean') return undefined;
+  return { mode: v.mode as PocketJoinMode, wifi_url, anywhere_url, ...(v.quick_tunnel === false ? { quick_tunnel: false } : {}) };
 }
 
 function validEnded(v: unknown) {
@@ -167,6 +170,7 @@ export function validPocket(raw: unknown): PocketBlock | null {
   const dry_run = opt(b.dry_run, validDryRun);
   const eta = optText(b.eta, 120);
   const opens_line = optText(b.opens_line, 200);
+  const notice = optText(b.notice, 300);
   const live = opt(b.live, validLive);
   const join = opt(b.join, validJoin);
   const ended = opt(b.ended, validEnded);
@@ -175,7 +179,7 @@ export function validPocket(raw: unknown): PocketBlock | null {
   // A bad draft id or yours count only drops that field (no Edit), never the whole card.
   const draft = typeof b.draft === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(b.draft) ? b.draft : null;
   const yours = isCount(b.yours) ? b.yours : null;
-  if ([when, progress, checks, dry_run, eta, opens_line, live, join, ended, budget, results].includes(undefined) || roundList.some((r) => !r)) return null;
+  if ([when, progress, checks, dry_run, eta, opens_line, notice, live, join, ended, budget, results].includes(undefined) || roundList.some((r) => !r)) return null;
   // A ready or live pocket passed its dry run; a stopped one didn't. Results only exist at the end.
   if (state === 'ready' && dry_run?.passed !== true) return null;
   if (state === 'dry_run_stopped' && dry_run?.passed === true) return null;
@@ -231,6 +235,7 @@ export function validPocket(raw: unknown): PocketBlock | null {
     santa,
     gather,
     ...(wall ? { wall } : {}),
+    ...(notice ? { notice } : {}),
   };
 }
 
@@ -381,6 +386,16 @@ const JOIN_TEXT: Record<PocketJoinMode, { label: string; body: string; limit: st
     limit: 'Uses a free Cloudflare quick link: a new address each time and no uptime promise. Fine for a quiz night of up to 60 players.',
   },
 };
+/** pa11: the box's own words for a 409 `needs_stable_address` (src/pocket/tunnel.rs `refusal`), shown where the quick link goes. */
+export const NEEDS_STABLE =
+  'A quick link takes up to 60 players, so this one needs an address that stays the same: your own https, Tailscale Funnel or Same Wi-Fi.';
+const noQuick = (join: PocketBlock['join'], mode: PocketJoinMode) => mode === 'anywhere' && join?.quick_tunnel === false;
+const StableOnly: React.FC = () => (
+  <p className="flex items-start gap-2 text-[13px] leading-5 text-zinc-300 sm:text-meta" data-needs-stable>
+    <Info size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
+    <span>{NEEDS_STABLE}</span>
+  </p>
+);
 /** The Photo wall's join copy (pa14 card-design-check 1). Quiz keeps JOIN_TEXT. */
 const WALL_JOIN_TEXT: Record<PocketJoinMode, { label: string; body: string; limit: string }> = {
   wifi: {
@@ -450,13 +465,13 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
           })}
         </div>
         <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">{copy.text[mode].body}</p>
-        <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">{copy.text[mode].limit}</p>
+        {noQuick(join, mode) ? <StableOnly /> : <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">{copy.text[mode].limit}</p>}
         {copy.hint && (
           <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-join-hint>
             {copy.hint}
           </p>
         )}
-        {url ? <LinkField url={url} /> : <NoLinkYet mode={mode} />}
+        {url ? <LinkField url={url} /> : noQuick(join, mode) ? null : <NoLinkYet mode={mode} />}
       </div>
     </div>
   );
@@ -477,7 +492,7 @@ const CompactJoin: React.FC<{ block: PocketBlock }> = ({ block }) => {
           <Icon size={14} className="shrink-0 text-sky-300" aria-hidden="true" />
           {JOIN_TEXT[shownMode].label} · late arrivals can still scan in
         </p>
-        {url ? <LinkField url={url} /> : <NoLinkYet mode={shownMode} />}
+        {url ? <LinkField url={url} /> : noQuick(join, shownMode) ? <StableOnly /> : <NoLinkYet mode={shownMode} />}
       </div>
     </div>
   );
@@ -1232,6 +1247,12 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, as
         </span>
       </header>
       <div className="relative flex flex-col gap-4">
+        {block.notice && block.state !== 'ended' ? (
+          <p className="flex items-start gap-2 rounded-xl border border-sky-800/70 bg-sky-500/[0.06] px-3 py-2.5 text-[15px] leading-[22px] text-zinc-100 sm:text-[13px] sm:leading-5" data-notice>
+            <Lock size={15} className={`${ICON} text-sky-300`} aria-hidden="true" />
+            <span className="min-w-0">{block.notice}</span>
+          </p>
+        ) : null}
         <Body block={block} mode={mode} setMode={setMode} closed={done?.kind === 'ok'} />
         {done ? (
           <p role="status" className={`flex items-start gap-2 text-[15px] sm:text-[13px] ${done.kind === 'ok' ? 'text-ok' : 'text-bad'}`} data-done={done.kind}>

@@ -108,6 +108,8 @@ pub fn card(s: &Snapshot) -> Value {
     c["created_at"] = json!(s.row.created_at);
     c["owner_kwant_id"] = json!(s.row.owner_kwant_id);
     c["path"] = json!(format!("/p/{}", s.row.code));
+    // pa13a: the person's own card counts a front desk's guests (guests never see it)
+    c["players"] = json!(s.players.len());
     c
 }
 
@@ -143,9 +145,20 @@ async fn found(state: &AppState, code: &str) -> PResult<std::sync::Arc<Snapshot>
     super::snapshot(state, code).await?.ok_or_else(PocketError::not_found)
 }
 
-async fn read(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
+#[derive(Debug, Default, serde::Deserialize)]
+struct ReadQuery {
+    /// pa13a: `guest:<id>`: adds that front desk guest's conversation as `conversation`.
+    #[serde(default)]
+    view: Option<String>,
+}
+
+async fn read(State(state): State<AppState>, Path(code): Path<String>, Query(q): Query<ReadQuery>) -> PResult<Json<Value>> {
     let s = found(&state, &code).await?;
-    read_json(&state, &s).await.map(Json)
+    let mut out = read_json(&state, &s).await?;
+    if let Some(key) = q.view.as_deref().filter(|v| v.starts_with("guest:")) {
+        out["conversation"] = super::host_detail_json(&s, key, chrono::Utc::now())?;
+    }
+    Ok(Json(out))
 }
 
 async fn read_json(state: &AppState, s: &Snapshot) -> PResult<Value> {
@@ -153,7 +166,17 @@ async fn read_json(state: &AppState, s: &Snapshot) -> PResult<Value> {
     let counts = state.db.pocket_counts(code).await?;
     let now = chrono::Utc::now();
     let ctx = super::kits::KitCtx::new(&s.spec, &s.players, now);
-    let summary = s.kit().map(|k| k.host_summary(&ctx, &s.kit_state));
+    let mut summary = s.kit().map(|k| k.host_summary(&ctx, &s.kit_state));
+    // pa13a: the front desk card names the answering bot and its model (for the cost line)
+    if s.kit().is_some_and(|k| k.answer_bot()) {
+        if let Some(sum) = summary.as_mut() {
+            let id = s.spec["answer_bot"].as_str().unwrap_or("");
+            if let Ok(Some(k)) = state.db.get_kwant(id).await {
+                sum["answer_bot"]["name"] = json!(k.name);
+                sum["answer_bot"]["model"] = if k.preferred_model.is_empty() { Value::Null } else { json!(k.preferred_model) };
+            }
+        }
+    }
     let host_view = s.kit().map(|k| k.view(&ctx, &s.kit_state, &Viewer::Host));
     let join = super::address::join(state, s).await;
     Ok(json!({ "pocket": card(s), "summary": summary, "removed": counts.removed, "host_view": host_view, "join": join }))

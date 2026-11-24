@@ -254,10 +254,30 @@ impl Database {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
-    /// Every pocket of one kit, open or ended (pa14b: walls whose best-30 pick may be due).
+    /// pa13a: codes of open pockets of one kit (the front desk's Needs-you items and restarts).
+    pub async fn pocket_codes_open_of_kit(&self, kit: &str) -> Result<Vec<String>, DbError> {
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT code FROM pocket_apps WHERE state = 'open' AND kit = ?").bind(kit).fetch_all(&self.pool).await?;
+        Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// Codes of every pocket of one kit, open or ended, oldest first. pa13a: a front desk guest's
+    /// data expires 7 days after their last message, also after the end. pa14b: walls whose
+    /// best-30 pick may be due.
     pub async fn pocket_codes_of_kit(&self, kit: &str) -> Result<Vec<String>, DbError> {
         let rows: Vec<(String,)> = sqlx::query_as("SELECT code FROM pocket_apps WHERE kit = ? ORDER BY created_at").bind(kit).fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(|r| r.0).collect())
+    }
+
+    /// pa13a: forgets one player for good (their data expired): their row, keys and events.
+    /// Unlike [`Self::pocket_player_remove`] nothing of them stays, not even the name.
+    pub async fn pocket_player_forget(&self, code: &str, id: &str) -> Result<bool, DbError> {
+        let mut tx = self.pool.begin().await?;
+        for table in ["pocket_events", "pocket_guest_keys"] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE pocket_code = ? AND player_id = ?")).bind(code).bind(id).execute(&mut *tx).await?;
+        }
+        let done = sqlx::query("DELETE FROM pocket_players WHERE pocket_code = ? AND id = ?").bind(code).bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(done.rows_affected() > 0)
     }
 
     pub async fn pocket_counts(&self, code: &str) -> Result<PocketCounts, DbError> {

@@ -11,6 +11,10 @@ use serde_json::{json, Value};
 
 /// Players a pocket takes unless its kit asks for fewer (quick tunnels cap requests in flight).
 pub const DEFAULT_MAX_PLAYERS: usize = 60;
+/// The most a kit may raise [`Kit::player_ceiling`] to (a class quiz, pa11). A pocket over
+/// [`DEFAULT_MAX_PLAYERS`] is never offered a quick tunnel: it needs an address that stays the
+/// same (own https, Funnel or Same Wi-Fi).
+pub const STABLE_MAX_PLAYERS: usize = 120;
 
 /// How long a kit keeps guest data (plan section 8 rule 11). The sweeper deletes the pocket, its
 /// players, keys and events once `expires_at` passes; deleting is final.
@@ -23,13 +27,16 @@ pub enum Retention {
     AfterDate { fields: &'static [&'static str], days: i64 },
     /// At the end (a class quiz keeps nothing).
     AtEnd,
+    /// pa13a front desk: each guest's data goes `days` after that guest's last message (the kit's
+    /// [`Kit::idle_players`], swept once a minute); the pocket itself `days` after it ends.
+    AfterLastMessage { days: i64 },
 }
 
 impl Retention {
     /// When the data goes, if that is known yet: at creation `ended_at` is `None`.
     pub fn expires_at(&self, spec: &Value, ended_at: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
         match *self {
-            Retention::AfterEnd { days } => ended_at.map(|t| t + Duration::days(days)),
+            Retention::AfterEnd { days } | Retention::AfterLastMessage { days } => ended_at.map(|t| t + Duration::days(days)),
             Retention::AtEnd => ended_at,
             Retention::AfterDate { fields, days } => match fields.iter().find_map(|f| spec_date(spec.get(*f)?)) {
                 Some(date) => Some(date + Duration::days(days)),
@@ -44,6 +51,7 @@ impl Retention {
             Retention::AfterEnd { days } => json!({ "kind": "after_end", "days": days }),
             Retention::AfterDate { fields, days } => json!({ "kind": "after_date", "fields": fields, "days": days }),
             Retention::AtEnd => json!({ "kind": "at_end" }),
+            Retention::AfterLastMessage { days } => json!({ "kind": "after_last_message", "days": days }),
         }
     }
 }
@@ -63,7 +71,8 @@ pub struct KitRules {
     pub retention: Retention,
     /// Joining picks a 4-digit PIN and rejoining needs it (Secret Santa).
     pub needs_pin: bool,
-    /// At most [`DEFAULT_MAX_PLAYERS`]; the core clamps a bigger number.
+    /// At most [`Kit::player_ceiling`] ([`DEFAULT_MAX_PLAYERS`] unless the kit raises it); the
+    /// core clamps a bigger number.
     pub max_players: usize,
     /// Action names a guest may send; anything else is a 400.
     pub guest_actions: &'static [&'static str],
@@ -128,11 +137,13 @@ pub struct KitEvent {
     pub payload: Value,
 }
 
-/// Why a kit refused an action: a 400 (bad body) or a 409 (not now).
+/// Why a kit refused an action: a 400 (bad body), a 409 (not now), or (pa13a) its own status
+/// and stable code, with fields merged into the error body (`retry_at`).
 #[derive(Debug, Clone, PartialEq)]
 pub enum KitError {
     BadInput(String),
     NotNow(String),
+    Coded { status: u16, code: &'static str, message: String, extra: Value },
 }
 
 pub trait Kit: Send + Sync + 'static {
@@ -181,6 +192,22 @@ pub trait Kit: Send + Sync + 'static {
     fn stable_address_only(&self) -> bool {
         false
     }
+    /// The most players this spec may take (pa11): [`DEFAULT_MAX_PLAYERS`], or up to
+    /// [`STABLE_MAX_PLAYERS`] for a kit that allows more (a class quiz). The core clamps
+    /// `rules().max_players` to it, and a pocket over 60 gets no quick tunnel.
+    fn player_ceiling(&self, _spec: &Value) -> usize {
+        DEFAULT_MAX_PLAYERS
+    }
+    /// `true` when joining takes a first name or nickname only (pa11 class quiz, plan rule 9):
+    /// [`super::words::first_name_only`] refuses longer names and email or phone shapes.
+    fn first_names_only(&self, _spec: &Value) -> bool {
+        false
+    }
+    /// A plain line the guest page and the person's card show before anyone types (plan rules 9
+    /// and 11), beside the retention line. `None` (the default): nothing beyond retention.
+    fn notice(&self, _spec: &Value) -> Option<&'static str> {
+        None
+    }
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value;
     /// What anyone with the link sees before joining (`info`, and the page's boot without a
     /// seat, as `view`): for example the Quiz's teams with counts, rounds and start time.
@@ -212,6 +239,37 @@ pub trait Kit: Send + Sync + 'static {
     fn judge(&self, _ctx: &mut KitCtx, _state: &mut Value, _body: &Value) -> Result<(), KitError> {
         Err(KitError::NotNow("this kit has no judge".into()))
     }
+    /// pa13a: `true` when guests mustn't learn about each other at all, not even how many there
+    /// are (the front desk): the public facts then carry no player count.
+    fn private_guests(&self) -> bool {
+        false
+    }
+    /// pa13a: `true` when a bot answers guests (the front desk): the core then refuses a spec
+    /// without one (400 `needs_bot`) and fills `spec.answer_bot` and `spec.bot` at creation.
+    fn answer_bot(&self) -> bool {
+        false
+    }
+    /// pa13a: a step of the server's own work on the pocket (the front desk's bot turns), sent
+    /// only by the server through `pocket::server_event`, never by a guest or host route. Its
+    /// answer goes back to the server only.
+    fn server_event(&self, _ctx: &mut KitCtx, _state: &mut Value, _name: &str, _body: &Value) -> Result<Value, KitError> {
+        Err(KitError::NotNow("this kit takes no server events".into()))
+    }
+    /// pa13a: kwant threads the kit's state points at (a front desk guest's conversation with the
+    /// bot). They are deleted with the guest or the pocket.
+    fn owned_threads(&self, _state: &Value) -> Vec<String> {
+        Vec::new()
+    }
+    /// pa13a: players whose data has expired by `ctx.now` (a front desk guest 7 days after their
+    /// last message). The sweeper deletes each: their row, keys, events, threads and kit state.
+    fn idle_players(&self, _ctx: &KitCtx, _state: &Value) -> Vec<String> {
+        Vec::new()
+    }
+    /// pa13a: one part of the host's view by key (`guest:<id>`: a front desk conversation),
+    /// for `host/state?view=<key>` and the card. `None`: no such part.
+    fn host_detail(&self, _ctx: &KitCtx, _state: &Value, _key: &str) -> Option<Value> {
+        None
+    }
 }
 
 /// The kit registered under `id`. `test` exists only in debug builds or with
@@ -223,13 +281,14 @@ pub fn kit(id: &str) -> Option<&'static dyn Kit> {
         super::santa::ID => Some(&super::santa::Santa),
         super::gather::ID => Some(&super::gather::Gather),
         super::wall::ID => Some(&super::wall::Wall),
+        super::desk::ID => Some(&super::desk::Desk),
         _ => None,
     }
 }
 
 /// Every kit id this build can make a pocket with.
 pub fn kit_ids() -> Vec<&'static str> {
-    ["test", crate::kits::quiz::KIT_ID, super::santa::ID, super::gather::ID, super::wall::ID].into_iter().filter(|id| kit(id).is_some()).collect()
+    ["test", crate::kits::quiz::KIT_ID, super::santa::ID, super::gather::ID, super::wall::ID, super::desk::ID].into_iter().filter(|id| kit(id).is_some()).collect()
 }
 
 fn test_kit_allowed() -> bool {

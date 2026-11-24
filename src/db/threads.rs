@@ -417,6 +417,49 @@ impl Database {
         self.get_thread(id).await
     }
 
+    /// Deletes one thread and everything in it (pa13a: a front desk guest's conversation with the
+    /// bot, when the guest's data expires or the pocket goes). Same order as deleting a bot:
+    /// files, messages, delegations, its waits closed, its questions, then the thread.
+    pub async fn delete_thread_with_messages(&self, id: &str) -> Result<bool, DbError> {
+        let mut tx = self.pool.begin().await?;
+        for sql in [
+            "DELETE FROM attachments WHERE thread_id = ?1",
+            "DELETE FROM messages WHERE thread_id = ?1",
+            "DELETE FROM delegations WHERE thread_id = ?1",
+            "UPDATE waiting_on_person SET status = 'closed' WHERE status != 'closed' AND thread_id = ?1",
+            "DELETE FROM questions WHERE thread_id = ?1",
+        ] {
+            sqlx::query(sql).bind(id).execute(&mut *tx).await?;
+        }
+        let done = sqlx::query("DELETE FROM threads WHERE id = ?1").bind(id).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    /// pa13a: where `thread_id`'s messages end now (a row mark for [`Self::reply_cost_after`]).
+    pub async fn thread_mark(&self, thread_id: &str) -> Result<i64, DbError> {
+        Ok(sqlx::query_scalar("SELECT COALESCE(MAX(rowid), 0) FROM messages WHERE thread_id = ?").bind(thread_id).fetch_one(&self.pool).await?)
+    }
+
+    /// pa13a: what the bot's replies saved in `thread_id` after `mark` cost, summed over the
+    /// replies whose engine said (`meta.usage.cost_usd`); `None` when none did. (Row order, not
+    /// `created_at`, which has whole seconds only.)
+    ///
+    /// No `sender_id` filter: a bot's reply row carries its *name* there (not its id), and the
+    /// thread (a guest's private desk chat) plus the row mark already pick out this turn's reply.
+    pub async fn reply_cost_after(&self, thread_id: &str, mark: i64) -> Result<Option<f64>, DbError> {
+        let cost: Option<f64> = sqlx::query_scalar(
+            "SELECT SUM(CAST(json_extract(meta, '$.usage.cost_usd') AS REAL)) FROM messages \
+             WHERE thread_id = ? AND rowid > ? AND sender_role = 'kwant' \
+               AND meta IS NOT NULL AND json_valid(meta) AND json_type(meta, '$.usage.cost_usd') IN ('real', 'integer')",
+        )
+        .bind(thread_id)
+        .bind(mark)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(cost)
+    }
+
     /// Moves the thread up the list when something happens in it.
     pub async fn touch_thread(&self, id: &str) -> Result<(), DbError> {
         sqlx::query("UPDATE threads SET updated_at = ? WHERE id = ?")
