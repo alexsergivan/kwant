@@ -18,9 +18,10 @@
 //! pa13b Booking Desk (`spec.mode: "booking"`): the same kit with a list of time slots. A guest's
 //! `request` holds one seat as `requested`; only the host's `confirm` makes it `confirmed`
 //! (no guest action, no bot word and no bot tool can). A guest sees each future slot as open or
-//! not, and only their own booking; the host sees who asked for what. A held seat is freed by the
-//! guest's `cancel`, the host's `decline` and the day-7 delete; a confirmed seat stays taken after
-//! its guest's data is deleted, with no name (`confirmed_gone`).
+//! not, and only their own booking; the host sees who asked for what. A requested seat is freed
+//! by the guest's `cancel`, the host's `decline` and the day-7 delete. A confirmed seat is the
+//! host's to undo (`decline`); its guest's chat stays until the day after the slot, and after
+//! that the seat stays taken with no name (`guest` and `name` null on the host's view).
 
 use super::kits::{Kit, KitCtx, KitError, KitRules, Player, Retention, Viewer, DEFAULT_MAX_PLAYERS};
 use chrono::{DateTime, Duration, NaiveDate, NaiveDateTime, Utc};
@@ -85,7 +86,7 @@ pub const SLOT_SEATS_MAX: u64 = 60;
 /// How a slot's `start` is written: the box's local time.
 pub const SLOT_START_FORMAT: &str = "%Y-%m-%dT%H:%M";
 /// Characters of a guest's note on a request.
-pub const BOOKING_NOTE_MAX: usize = 300;
+pub const BOOKING_NOTE_MAX: usize = 200;
 /// Requests a guest may make in any hour (each one tells the host).
 pub const REQ_PER_HOUR: usize = 6;
 /// Open times the bot's note lists, soonest first.
@@ -103,7 +104,13 @@ pub const NOTE_DECLINED: &str = "booking_declined";
 
 /// Why a guest waits for the host: they asked for a time, or cancelled a confirmed one.
 pub const WAIT_BOOKING: &str = "booking";
-pub const WAIT_CANCELLED: &str = "cancelled";
+/// pa13b: who booked a confirmed seat: the guest asked and the host confirmed, or the host.
+pub const BY_GUEST: &str = "guest";
+pub const BY_HOST: &str = "host";
+/// pa13b: the host's one-line "what" for the join line ("your cut").
+pub const WHAT_MAX: usize = 40;
+/// pa13b: the host's line on a decline.
+pub const DECLINE_TEXT_MAX: usize = 1000;
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct St {
@@ -130,9 +137,17 @@ struct St {
     /// pa13b: the host's `set_slots`; `None` uses the spec's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     slots: Option<Vec<Slot>>,
-    /// pa13b: confirmed seats whose guest's data was deleted (slot id to seats); no names.
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    gone: BTreeMap<String, u32>,
+    /// pa13b: confirmed seats whose guest's data was deleted; no names.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    gone: Vec<Gone>,
+}
+
+/// pa13b: a confirmed seat kept after its guest's data went: the seat stays taken, nameless.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Gone {
+    slot: String,
+    at: DateTime<Utc>,
+    by: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -180,12 +195,19 @@ struct Booking {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     text: Option<String>,
     at: DateTime<Utc>,
+    /// `host` for a seat the host booked; none for one the guest asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    by: Option<String>,
 }
 
 impl Booking {
     /// Holds a seat: requested or confirmed.
     fn holds(&self) -> bool {
         self.state == REQUESTED || self.state == CONFIRMED
+    }
+
+    fn by(&self) -> &str {
+        self.by.as_deref().unwrap_or(BY_GUEST)
     }
 }
 
@@ -220,11 +242,16 @@ impl Slot {
         self.starts_at().is_none_or(|t| t <= now)
     }
 
-    /// The host's label, else the time: "Tue Dec 8, 3 PM" or "Tue Dec 8, 3:30 PM".
+    /// The host's label, else the time ([`Slot::when`]).
     pub fn label(&self) -> String {
-        if let Some(l) = self.label.as_deref().filter(|l| !l.is_empty()) {
-            return l.to_string();
+        match self.label.as_deref().filter(|l| !l.is_empty()) {
+            Some(l) => l.to_string(),
+            None => self.when(),
         }
+    }
+
+    /// The time: "Tue Dec 8, 3 PM" or "Tue Dec 8, 3:30 PM".
+    pub fn when(&self) -> String {
         match self.local() {
             Some(t) if t.format("%M").to_string() == "00" => t.format("%a %b %-d, %-I %p").to_string(),
             Some(t) => t.format("%a %b %-d, %-I:%M %p").to_string(),
@@ -233,59 +260,85 @@ impl Slot {
     }
 }
 
-fn bad_slots(index: Option<usize>, message: impl Into<String>) -> KitError {
-    KitError::Coded { status: 400, code: "bad_slots", message: message.into(), extra: json!({ "index": index }) }
+/// 400 `bad_slots {index, why}`: `why` is one of `list`, `too_many`, `empty`, `id`, `minutes`,
+/// `label`, `seats`, `start`, `same_id` or `overlap`.
+fn bad_slots(index: Option<usize>, why: &str, message: impl Into<String>) -> KitError {
+    KitError::Coded { status: 400, code: "bad_slots", message: message.into(), extra: json!({ "index": index, "why": why }) }
 }
 
 /// Checks a slot list (the spec's or `set_slots`'): at most 200, each well formed, no two with
 /// the same id, and no two overlapping in time (`seats` is how many guests share one).
 /// The error is 400 `bad_slots` with the index of the first bad slot (null for the list).
+/// A slot sent without an id gets one here: `s1`, `s2`, … skipping the ids in use.
 pub fn parse_slots(v: Option<&Value>, allow_empty: bool) -> Result<Vec<Slot>, KitError> {
+    parse_slots_avoiding(v, allow_empty, &[])
+}
+
+/// [`parse_slots`], never handing out an id in `avoid` (a slot that was there before).
+fn parse_slots_avoiding(v: Option<&Value>, allow_empty: bool, avoid: &[String]) -> Result<Vec<Slot>, KitError> {
     let Some(list) = v.and_then(Value::as_array) else {
-        return Err(bad_slots(None, "List the times guests can ask for in slots."));
+        return Err(bad_slots(None, "list", "List the times guests can ask for in slots."));
     };
     if list.len() > MAX_SLOTS {
-        return Err(bad_slots(None, format!("A booking desk can list up to {MAX_SLOTS} times.")));
+        return Err(bad_slots(None, "too_many", format!("A booking desk can list up to {MAX_SLOTS} times.")));
     }
     if list.is_empty() && !allow_empty {
-        return Err(bad_slots(None, "List at least one time guests can ask for."));
+        return Err(bad_slots(None, "empty", "List at least one time guests can ask for."));
     }
     let mut out: Vec<(Slot, DateTime<Utc>)> = Vec::with_capacity(list.len());
     for (i, item) in list.iter().enumerate() {
-        let bad = |m: &str| bad_slots(Some(i), format!("Slot {}: {m}", i + 1));
-        let id = item.get("id").and_then(Value::as_str).map(str::trim).unwrap_or("");
-        if id.is_empty() || id.chars().count() > SLOT_ID_MAX || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-') {
-            return Err(bad(&format!("give it an id of up to {SLOT_ID_MAX} letters, digits, - or _.")));
+        let bad = |why: &str, m: &str| bad_slots(Some(i), why, format!("Slot {}: {m}", i + 1));
+        let id = match item.get("id") {
+            None | Some(Value::Null) => "",
+            Some(Value::String(id)) => id.trim(),
+            Some(_) => "\u{0}",
+        };
+        if !id.is_empty() && (id.chars().count() > SLOT_ID_MAX || !id.chars().all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-')) {
+            return Err(bad("id", &format!("an id has up to {SLOT_ID_MAX} letters, digits, - or _.")));
         }
         let start = item.get("start").and_then(Value::as_str).map(str::trim).unwrap_or("");
         let minutes = item.get("minutes").and_then(Value::as_i64).unwrap_or(0);
         if !(SLOT_MINUTES_MIN..=SLOT_MINUTES_MAX).contains(&minutes) {
-            return Err(bad(&format!("minutes must be a whole number from {SLOT_MINUTES_MIN} to {SLOT_MINUTES_MAX}.")));
+            return Err(bad("minutes", &format!("minutes must be a whole number from {SLOT_MINUTES_MIN} to {SLOT_MINUTES_MAX}.")));
         }
         let label = match item.get("label") {
             None | Some(Value::Null) => None,
             Some(Value::String(l)) if l.trim().chars().count() <= SLOT_LABEL_MAX && !l.chars().any(char::is_control) => Some(l.trim().to_string()).filter(|l| !l.is_empty()),
-            _ => return Err(bad(&format!("a label is text of up to {SLOT_LABEL_MAX} characters."))),
+            _ => return Err(bad("label", &format!("a label is text of up to {SLOT_LABEL_MAX} characters."))),
         };
         let seats = match item.get("seats") {
             None | Some(Value::Null) => 1,
             Some(n) => match n.as_u64().filter(|n| (1..=SLOT_SEATS_MAX).contains(n)) {
                 Some(n) => n as u32,
-                None => return Err(bad(&format!("seats must be a whole number from 1 to {SLOT_SEATS_MAX}."))),
+                None => return Err(bad("seats", &format!("seats must be a whole number from 1 to {SLOT_SEATS_MAX}."))),
             },
         };
         let slot = Slot { id: id.to_string(), start: start.to_string(), minutes, label, seats };
         let Some(at) = slot.starts_at() else {
-            return Err(bad("start must be a local time written YYYY-MM-DDTHH:MM."));
+            return Err(bad("start", "start must be a local time written YYYY-MM-DDTHH:MM."));
         };
-        if out.iter().any(|(o, _)| o.id == slot.id) {
-            return Err(bad(&format!("the id {id:?} is used twice.")));
+        if !id.is_empty() && out.iter().any(|(o, _)| o.id == slot.id) {
+            return Err(bad("same_id", &format!("the id {id:?} is used twice.")));
         }
         let end = at + Duration::minutes(minutes);
         if let Some((o, _)) = out.iter().find(|(o, oat)| at < *oat + Duration::minutes(o.minutes) && *oat < end) {
-            return Err(bad(&format!("it overlaps {}.", o.id)));
+            return Err(bad("overlap", &format!("it overlaps {}.", o.label())));
         }
         out.push((slot, at));
+    }
+    // The server's ids for new slots: the same list always gets the same ids
+    let mut used: Vec<String> = out.iter().map(|(x, _)| x.id.clone()).filter(|id| !id.is_empty()).chain(avoid.iter().cloned()).collect();
+    let mut n = 0;
+    for (x, _) in out.iter_mut().filter(|(x, _)| x.id.is_empty()) {
+        let id = loop {
+            n += 1;
+            let id = format!("s{n}");
+            if !used.contains(&id) {
+                break id;
+            }
+        };
+        used.push(id.clone());
+        x.id = id;
     }
     Ok(out.into_iter().map(|(s, _)| s).collect())
 }
@@ -313,11 +366,16 @@ struct Msg {
     client_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     note: Option<String>,
+    /// pa13b: a booking note's slot and its start (the page writes the words).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    slot: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    start: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Waiting {
-    /// `handoff`, `daily_cap`, or pa13b's `booking` and `cancelled`.
+    /// `handoff`, `daily_cap`, or pa13b's `booking`.
     reason: String,
     why: String,
     at: DateTime<Utc>,
@@ -335,7 +393,7 @@ impl Waiting {
     }
 
     fn booking(&self) -> bool {
-        self.reason == WAIT_BOOKING || self.reason == WAIT_CANCELLED
+        self.reason == WAIT_BOOKING
     }
 }
 
@@ -436,7 +494,7 @@ impl St {
         self.next += 1;
         let id = format!("m{}", self.next);
         let g = self.guests.entry(pid.to_string()).or_default();
-        g.msgs.push(Msg { id, from: from.into(), text, at, client_id, note: note.map(str::to_string) });
+        g.msgs.push(Msg { id, from: from.into(), text, at, client_id, note: note.map(str::to_string), slot: None, start: None });
         if g.msgs.len() > KEEP_MESSAGES {
             let extra = g.msgs.len() - KEEP_MESSAGES;
             g.msgs.drain(..extra);
@@ -456,6 +514,15 @@ impl St {
         (self.priced_turns > 0).then(|| (self.spent_usd / self.priced_turns as f64 * 1e6).round() / 1e6)
     }
 
+    /// pa13b: a booking note (`from: "note"`, no text) with its slot and start.
+    fn push_booking(&mut self, pid: &str, note: &str, slot: &Slot, at: DateTime<Utc>) {
+        self.push(pid, NOTE, String::new(), at, None, Some(note));
+        if let Some(m) = self.guests.get_mut(pid).and_then(|g| g.msgs.last_mut()) {
+            m.slot = Some(slot.id.clone());
+            m.start = Some(slot.start.clone());
+        }
+    }
+
     /// pa13b: the slots in force: the host's `set_slots`, else the spec's.
     fn slots(&self, spec: &Value) -> Vec<Slot> {
         self.slots.clone().unwrap_or_else(|| parse_slots(spec.get("slots"), true).unwrap_or_default())
@@ -470,9 +537,14 @@ impl St {
         out
     }
 
+    /// Confirmed seats of `slot` whose guest's data went.
+    fn gone_in(&self, slot: &str) -> u32 {
+        self.gone.iter().filter(|g| g.slot == slot).count() as u32
+    }
+
     /// Seats of `slot` nobody holds (a deleted guest's confirmed seat stays taken).
     fn open_seats(&self, slot: &Slot) -> u32 {
-        let held = self.held().get(&slot.id).copied().unwrap_or(0) + self.gone.get(&slot.id).copied().unwrap_or(0);
+        let held = self.held().get(&slot.id).copied().unwrap_or(0) + self.gone_in(&slot.id);
         slot.seats.saturating_sub(held)
     }
 
@@ -511,8 +583,16 @@ impl G {
         (left, next)
     }
 
-    fn delete_on(&self) -> Option<String> {
-        self.last_at.map(|t| (local_day(t) + Duration::days(KEEP_DAYS)).to_string())
+    /// pa13b: the day after this guest's confirmed slot: their chat stays until then.
+    fn booked_until(&self, slots: &[Slot]) -> Option<NaiveDate> {
+        let b = self.booking.as_ref().filter(|b| b.state == CONFIRMED)?;
+        slots.iter().find(|x| x.id == b.slot)?.local().map(|t| t.date() + Duration::days(1))
+    }
+
+    /// 7 days after the guest's last message, or the day after their booking if that's later.
+    fn delete_on(&self, slots: &[Slot]) -> Option<String> {
+        let last = self.last_at.map(|t| local_day(t) + Duration::days(KEEP_DAYS));
+        last.max(self.booked_until(slots)).map(|d| d.to_string())
     }
 
     fn unread(&self) -> usize {
@@ -564,7 +644,7 @@ fn host_text(body: &Value) -> Result<String, KitError> {
 pub struct Desk;
 
 impl Desk {
-    fn guest_row(s: &St, p: &Player) -> Value {
+    fn guest_row(s: &St, slots: &[Slot], p: &Player) -> Value {
         let g = s.guests.get(&p.id);
         let last = g.and_then(|g| g.msgs.iter().rev().find(|m| m.from != NOTE)).map(|m| json!({ "from": m.from, "text": cut(&m.text, LAST_MAX), "at": m.at }));
         json!({
@@ -576,19 +656,20 @@ impl Desk {
             "last": last,
             "unread": g.map_or(0, G::unread),
             "msgs": g.map_or(0, |g| g.msgs.iter().filter(|m| m.from != NOTE).count()),
-            "delete_on": g.and_then(G::delete_on),
+            "delete_on": g.and_then(|g| g.delete_on(slots)),
             "booking": g.and_then(|g| g.booking.as_ref()).map(|b| json!({ "slot": b.slot, "state": b.state })),
         })
     }
 
     /// The host's guest list, newest activity first.
     fn guest_list(ctx: &KitCtx, s: &St) -> Vec<Value> {
+        let slots = s.slots(ctx.spec);
         let mut rows: Vec<(DateTime<Utc>, Value)> = ctx
             .players
             .iter()
             .map(|p| {
                 let at = s.guests.get(&p.id).and_then(|g| g.msgs.last().map(|m| m.at)).unwrap_or(p.joined_at);
-                (at, Self::guest_row(s, p))
+                (at, Self::guest_row(s, &slots, p))
             })
             .collect();
         rows.sort_by_key(|a| std::cmp::Reverse(a.0));
@@ -604,36 +685,40 @@ impl Desk {
             "bot": bot_face(spec),
             "keep_days": KEEP_DAYS,
             "mode": if is_booking(spec) { MODE_BOOKING } else { MODE_GUIDE },
+            "what": Some(spec_str(spec, "what")).filter(|w| !w.is_empty()),
         })
     }
 
-    /// pa13b: a guest's booking as they see it: never anyone else's.
+    /// pa13b: a guest's booking as they see it, never anyone else's: `null` unless it holds a
+    /// seat (a declined or cancelled one is a thread note).
     fn my_booking(spec: &Value, s: &St, g: Option<&G>) -> Value {
-        let Some(b) = g.and_then(|g| g.booking.as_ref()) else { return Value::Null };
+        let Some(b) = g.and_then(|g| g.booking.as_ref()).filter(|b| b.holds()) else { return Value::Null };
         let slot = s.slots(spec).into_iter().find(|x| x.id == b.slot);
         let mut v = json!({
             "slot": b.slot,
-            "label": slot.as_ref().map_or_else(|| b.slot.clone(), Slot::label),
             "start": slot.as_ref().map(|x| x.start.clone()),
+            "minutes": slot.as_ref().map(|x| x.minutes),
+            "label": slot.as_ref().and_then(|x| x.label.clone()),
             "state": b.state,
+            "at": b.at,
+            "note": b.note,
         });
-        if let Some(n) = &b.note {
-            v["note"] = json!(n);
-        }
-        if let Some(t) = &b.text {
-            v["text"] = json!(t);
+        if b.by() == BY_HOST {
+            v["by"] = json!(BY_HOST);
         }
         v
     }
 
-    /// pa13b: the future slots as a guest sees them: open or not, no counts, no names.
+    /// pa13b: the future slots as a guest sees them: open or not, no counts, no names. `label`
+    /// is the host's (null without one: the page formats `start`).
     fn guest_slots(spec: &Value, s: &St, now: DateTime<Utc>) -> Vec<Value> {
-        s.slots(spec).iter().filter(|x| !x.past(now)).map(|x| json!({ "id": x.id, "start": x.start, "minutes": x.minutes, "label": x.label(), "open": s.is_open(x, now) })).collect()
+        s.slots(spec).iter().filter(|x| !x.past(now)).map(|x| json!({ "id": x.id, "start": x.start, "minutes": x.minutes, "label": x.label, "open": s.is_open(x, now) })).collect()
     }
 
-    /// pa13b: every slot as the host sees it, with who asked and who is confirmed.
+    /// pa13b: every slot as the host sees it, with who asked and who is booked. A booking whose
+    /// guest's data went stays, with `guest` and `name` null.
     fn host_slots(ctx: &KitCtx, s: &St) -> Vec<Value> {
-        let name = |pid: &str| ctx.player(pid).map(|p| p.name.clone()).unwrap_or_default();
+        let name = |pid: &str| ctx.player(pid).map(|p| p.name.clone());
         s.slots(ctx.spec)
             .iter()
             .map(|x| {
@@ -641,23 +726,22 @@ impl Desk {
                 let mut confirmed = Vec::new();
                 for (pid, b) in s.guests.iter().filter_map(|(pid, g)| Some((pid, g.booking.as_ref()?))).filter(|(_, b)| b.slot == x.id) {
                     match b.state.as_str() {
-                        REQUESTED => requested.push(json!({ "id": pid, "name": name(pid), "note": b.note, "at": b.at })),
-                        CONFIRMED => confirmed.push(json!({ "id": pid, "name": name(pid), "at": b.at })),
+                        REQUESTED => requested.push(json!({ "guest": pid, "name": name(pid), "note": b.note, "at": b.at })),
+                        CONFIRMED => confirmed.push(json!({ "guest": pid, "name": name(pid), "at": b.at, "by": b.by() })),
                         _ => {}
                     }
                 }
+                confirmed.extend(s.gone.iter().filter(|g| g.slot == x.id).map(|g| json!({ "guest": null, "name": null, "at": g.at, "by": g.by })));
                 json!({
                     "id": x.id,
                     "start": x.start,
                     "minutes": x.minutes,
-                    "label": x.label(),
-                    "custom_label": x.label,
+                    "label": x.label,
                     "seats": x.seats,
                     "past": x.past(ctx.now),
                     "open_seats": s.open_seats(x),
                     "requested": requested,
                     "confirmed": confirmed,
-                    "confirmed_gone": s.gone.get(&x.id).copied().unwrap_or(0),
                 })
             })
             .collect()
@@ -672,7 +756,7 @@ impl Desk {
             "id": me,
             "name": player.map(|p| p.name.as_str()),
             "creature": player.map(|p| p.avatar.as_str()),
-            "delete_on": g.and_then(G::delete_on),
+            "delete_on": g.and_then(|g| g.delete_on(&s.slots(ctx.spec))),
         });
         v["starters"] = json!(starters(ctx.spec));
         v["messages"] = json!(messages(g, true));
@@ -691,11 +775,17 @@ impl Desk {
         body.get("slot").and_then(Value::as_str).map(str::trim).unwrap_or("")
     }
 
+    /// The host's name for the guest-facing errors ("The host" without one).
+    fn host_name(spec: &Value) -> String {
+        Some(spec_str(spec, "host_name").to_string()).filter(|h| !h.is_empty()).unwrap_or_else(|| "The host".into())
+    }
+
     /// pa13b: a guest holds one seat of a slot as `requested`; the host is asked.
     fn request(ctx: &mut KitCtx, s: &mut St, pid: &str, body: &Value) -> Result<(), KitError> {
         let now = ctx.now;
         let id = Self::slot_id(body);
-        let slot = s.slots(ctx.spec).into_iter().find(|x| x.id == id).ok_or_else(|| coded(404, "no_such_slot", "That time isn't on this page."))?;
+        let host = Self::host_name(ctx.spec);
+        let slot = s.slots(ctx.spec).into_iter().find(|x| x.id == id).ok_or_else(|| coded(404, "no_such_slot", format!("{host} changed the times. Pick again.")))?;
         let note = match body.get("note") {
             None | Some(Value::Null) => None,
             Some(Value::String(n)) => Some(n.trim().to_string()).filter(|n| !n.is_empty()),
@@ -704,54 +794,79 @@ impl Desk {
         if note.as_ref().is_some_and(|n| n.chars().count() > BOOKING_NOTE_MAX) {
             return Err(coded(413, "too_long", format!("A note can have up to {BOOKING_NOTE_MAX} characters.")));
         }
-        let g = s.guests.entry(pid.to_string()).or_default();
-        if let Some(b) = g.booking.as_ref().filter(|b| b.holds()) {
-            return Err(KitError::Coded { status: 409, code: "has_request", message: "You already asked for a time. Cancel it first to ask for another.".into(), extra: json!({ "slot": b.slot }) });
+        if s.guests.get(pid).and_then(|g| g.booking.as_ref()).is_some_and(Booking::holds) {
+            let mine = Self::my_booking(ctx.spec, s, s.guests.get(pid));
+            let when = s.slots(ctx.spec).into_iter().find(|x| Some(x.id.as_str()) == mine["slot"].as_str()).map_or_else(|| "a time".into(), |x| x.when());
+            return Err(KitError::Coded {
+                status: 409,
+                code: "has_request",
+                message: format!("You already asked for {when}. Cancel it first to pick another time."),
+                extra: json!({ "slot": mine["slot"], "my_booking": mine }),
+            });
         }
+        let g = s.guests.entry(pid.to_string()).or_default();
         g.reqs.retain(|t| *t > now - Duration::hours(1));
         if g.reqs.len() >= REQ_PER_HOUR {
             let retry_at = g.reqs.iter().min().map_or(now + Duration::hours(1), |t| *t + Duration::hours(1));
             return Err(KitError::Coded { status: 429, code: "slow_down", message: "That's a lot of requests this hour. You can ask again soon.".into(), extra: json!({ "retry_at": retry_at }) });
         }
         if slot.past(now) {
-            return Err(coded(409, "slot_past", "That time has passed."));
+            return Err(coded(410, "slot_past", "That time has passed. Pick another time."));
         }
         if s.open_seats(&slot) == 0 {
-            return Err(coded(409, "slot_taken", "Someone else has that time. Pick another one."));
+            let time = slot.local().map_or_else(|| slot.when(), |t| if t.format("%M").to_string() == "00" { t.format("%-I %p").to_string() } else { t.format("%-I:%M %p").to_string() });
+            return Err(KitError::Coded {
+                status: 409,
+                code: "slot_taken",
+                message: format!("Someone just took {time}. Pick another time."),
+                extra: json!({ "slots": Self::guest_slots(ctx.spec, s, now) }),
+            });
         }
+        let name = ctx.player(pid).map_or_else(|| "A guest".to_string(), |p| p.name.clone());
         let g = s.guests.entry(pid.to_string()).or_default();
         g.reqs.push(now);
         g.last_at = Some(now);
-        g.booking = Some(Booking { slot: slot.id.clone(), state: REQUESTED.into(), note: note.clone(), text: None, at: now });
+        g.booking = Some(Booking { slot: slot.id.clone(), state: REQUESTED.into(), note: note.clone(), text: None, at: now, by: None });
         // The latest ask is what the host's card shows
-        g.waiting = Some(Waiting { quote: note, slot: Some(slot.id.clone()), ..Waiting::new(WAIT_BOOKING, cut(&format!("Booking request: {}", slot.label()), REASON_MAX), now) });
-        s.push(pid, NOTE, String::new(), now, None, Some(NOTE_REQUESTED));
+        g.waiting = Some(Waiting { quote: note, slot: Some(slot.id.clone()), ..Waiting::new(WAIT_BOOKING, cut(&format!("{name} asks for a time"), REASON_MAX), now) });
+        s.push_booking(pid, NOTE_REQUESTED, &slot, now);
         Ok(())
     }
 
-    /// pa13b: a guest frees their seat. Cancelling a confirmed time tells the host.
+    /// pa13b: a guest frees the seat they asked for. A confirmed time isn't theirs to cancel:
+    /// they write to the host (409 `is_confirmed`).
     fn cancel(ctx: &mut KitCtx, s: &mut St, pid: &str, body: &Value) -> Result<(), KitError> {
         let now = ctx.now;
         let id = Self::slot_id(body).to_string();
-        let label = s.slots(ctx.spec).into_iter().find(|x| x.id == id).map_or_else(|| id.clone(), |x| x.label());
+        let host = Self::host_name(ctx.spec);
+        let slot = s.slots(ctx.spec).into_iter().find(|x| x.id == id).unwrap_or_else(|| Slot { id: id.clone(), start: String::new(), minutes: 0, label: None, seats: 1 });
         let g = s.guests.entry(pid.to_string()).or_default();
-        let Some(b) = g.booking.take_if(|b| b.holds() && b.slot == id) else {
-            return Err(coded(409, "no_request", "You haven't asked for that time."));
-        };
+        match g.booking.as_ref() {
+            Some(b) if b.slot == id && b.state == REQUESTED => {}
+            Some(b) if b.slot == id && b.state == CONFIRMED => {
+                return Err(coded(409, "is_confirmed", format!("{host} has confirmed that time. To change it, write here.")));
+            }
+            _ => return Err(coded(409, "no_request", "You haven't asked for that time.")),
+        }
+        g.booking = None;
         g.last_at = Some(now);
-        if b.state == CONFIRMED {
-            g.waiting = Some(Waiting { slot: Some(id), ..Waiting::new(WAIT_CANCELLED, cut(&format!("Cancelled: {label}"), REASON_MAX), now) });
-        } else if g.waiting.as_ref().is_some_and(|w| w.reason == WAIT_BOOKING) {
+        if g.waiting.as_ref().is_some_and(Waiting::booking) {
             g.waiting = None;
         }
-        s.push(pid, NOTE, String::new(), now, None, Some(NOTE_CANCELLED));
+        s.push_booking(pid, NOTE_CANCELLED, &slot, now);
         Ok(())
+    }
+
+    /// The slot a host action names, as it is now (a removed one keeps its id).
+    fn slot_named(spec: &Value, s: &St, id: &str) -> Slot {
+        s.slots(spec).into_iter().find(|x| x.id == id).unwrap_or_else(|| Slot { id: id.to_string(), start: String::new(), minutes: 0, label: None, seats: 1 })
     }
 
     /// pa13b: the host's answer to a request: the only way a booking becomes `confirmed`.
     fn confirm(ctx: &mut KitCtx, s: &mut St, body: &Value) -> Result<(), KitError> {
         let pid = guest_from(ctx, body)?.id.clone();
         let id = Self::slot_id(body).to_string();
+        let slot = Self::slot_named(ctx.spec, s, &id);
         let now = ctx.now;
         let g = s.guests.entry(pid.clone()).or_default();
         let fresh = match g.booking.as_mut() {
@@ -767,7 +882,7 @@ impl Desk {
         g.waiting = None;
         g.read_at = Some(now);
         if fresh {
-            s.push(&pid, NOTE, String::new(), now, None, Some(NOTE_CONFIRMED));
+            s.push_booking(&pid, NOTE_CONFIRMED, &slot, now);
         }
         Ok(())
     }
@@ -776,8 +891,12 @@ impl Desk {
     fn decline(ctx: &mut KitCtx, s: &mut St, body: &Value) -> Result<(), KitError> {
         let pid = guest_from(ctx, body)?.id.clone();
         let id = Self::slot_id(body).to_string();
+        let slot = Self::slot_named(ctx.spec, s, &id);
         let text = match body.get("text").and_then(Value::as_str).map(str::trim) {
             None | Some("") => None,
+            Some(t) if t.chars().count() > DECLINE_TEXT_MAX => {
+                return Err(coded(413, "too_long", format!("A line to the guest can have up to {DECLINE_TEXT_MAX} characters.")));
+            }
             Some(_) => Some(host_text(body)?),
         };
         let now = ctx.now;
@@ -792,7 +911,7 @@ impl Desk {
         }
         g.waiting = None;
         g.read_at = Some(now);
-        s.push(&pid, NOTE, String::new(), now, None, Some(NOTE_DECLINED));
+        s.push_booking(&pid, NOTE_DECLINED, &slot, now);
         if let Some(t) = text {
             s.push(&pid, HOST, t, now, None, None);
         }
@@ -800,23 +919,33 @@ impl Desk {
     }
 
     /// pa13b: the host's new slot list. A slot a guest holds now must stay, at the same time and
-    /// length, with at least as many seats (409 `slot_in_use`).
+    /// length, with at least as many seats (409 `slot_in_use {slot, start, name}`); so must a
+    /// future slot with a booking whose guest's data went (`name` null). New slots get new ids.
     fn set_slots(ctx: &mut KitCtx, s: &mut St, body: &Value) -> Result<(), KitError> {
-        let new = parse_slots(body.get("slots"), true)?;
         let old = s.slots(ctx.spec);
-        for (id, n) in s.held() {
+        let avoid: Vec<String> = old.iter().map(|x| x.id.clone()).chain(s.held().into_keys()).chain(s.gone.iter().map(|g| g.slot.clone())).collect();
+        let new = parse_slots_avoiding(body.get("slots"), true, &avoid)?;
+        let mut in_use: Vec<(String, u32, Option<String>)> = s.held().into_iter().map(|(id, n)| (id, n, None)).collect();
+        for (id, n, name) in in_use.iter_mut() {
+            *n += s.gone_in(id);
+            *name = s.guests.iter().find(|(_, g)| g.booking.as_ref().is_some_and(|b| b.holds() && &b.slot == id)).and_then(|(pid, _)| ctx.player(pid)).map(|p| p.name.clone());
+        }
+        let nameless: Vec<(String, u32, Option<String>)> =
+            old.iter().filter(|x| !x.past(ctx.now) && s.gone_in(&x.id) > 0 && !in_use.iter().any(|(id, _, _)| id == &x.id)).map(|x| (x.id.clone(), s.gone_in(&x.id), None)).collect();
+        in_use.extend(nameless);
+        for (id, n, name) in in_use {
             let before = old.iter().find(|x| x.id == id);
             let kept = new.iter().find(|x| x.id == id).is_some_and(|x| before.is_none_or(|o| o.local() == x.local() && o.minutes == x.minutes) && x.seats >= n);
             if !kept {
                 return Err(KitError::Coded {
                     status: 409,
                     code: "slot_in_use",
-                    message: "A guest has asked for that time: keep it as it is, or decline them first.".into(),
-                    extra: json!({ "slot": id }),
+                    message: "Someone has asked for or booked that time: keep it as it is, or decline them first.".into(),
+                    extra: json!({ "slot": id, "start": before.map(|x| x.start.clone()), "name": name }),
                 });
             }
         }
-        s.gone.retain(|id, _| new.iter().any(|x| &x.id == id));
+        s.gone.retain(|g| new.iter().any(|x| x.id == g.slot));
         s.slots = Some(new);
         Ok(())
     }
@@ -883,7 +1012,7 @@ impl Kit for Desk {
         if title.is_empty() || title.chars().count() > 80 {
             return Err("Give the front desk a title of up to 80 characters.".into());
         }
-        for (field, max) in [("place", 60), ("host_name", 40)] {
+        for (field, max) in [("place", 60), ("host_name", 40), ("what", WHAT_MAX)] {
             match spec.get(field) {
                 None | Some(Value::Null) => {}
                 Some(Value::String(s)) if s.trim().chars().count() <= max => {}
@@ -955,7 +1084,8 @@ impl Kit for Desk {
         let mut s = load(state);
         // pa13b: a held seat is freed with its guest; a confirmed one stays taken, with no name
         if let Some(b) = s.guests.remove(player_id).and_then(|g| g.booking).filter(|b| b.state == CONFIRMED) {
-            *s.gone.entry(b.slot).or_insert(0) += 1;
+            let by = b.by().to_string();
+            s.gone.push(Gone { slot: b.slot, at: b.at, by });
         }
         store(state, &s);
     }
@@ -1041,10 +1171,15 @@ impl Kit for Desk {
             "guests": Self::guest_list(ctx, &s),
         });
         if is_booking(ctx.spec) {
-            let count = |st: &str| ctx.players.iter().filter(|p| s.guests.get(&p.id).and_then(|g| g.booking.as_ref()).is_some_and(|b| b.state == st)).count();
+            let slots = s.slots(ctx.spec);
+            let future = |id: &str| slots.iter().any(|x| x.id == id && !x.past(ctx.now));
+            let bookings: Vec<&Booking> = s.guests.values().filter_map(|g| g.booking.as_ref()).collect();
+            let booked: Vec<&str> = bookings.iter().filter(|b| b.state == CONFIRMED).map(|b| b.slot.as_str()).chain(s.gone.iter().map(|g| g.slot.as_str())).collect();
             out["mode"] = json!(MODE_BOOKING);
-            out["counts"]["requested"] = json!(count(REQUESTED));
-            out["counts"]["confirmed"] = json!(count(CONFIRMED));
+            out["open_left"] = json!(slots.iter().filter(|x| !x.past(ctx.now)).map(|x| s.open_seats(x)).sum::<u32>());
+            out["requests"] = json!(bookings.iter().filter(|b| b.state == REQUESTED).count());
+            out["booked_upcoming"] = json!(booked.iter().filter(|id| future(id)).count());
+            out["booked_total"] = json!(booked.len());
             out["slots"] = json!(Self::host_slots(ctx, &s));
         }
         out
@@ -1125,11 +1260,15 @@ impl Kit for Desk {
 
     fn idle_players(&self, ctx: &KitCtx, state: &Value) -> Vec<String> {
         let s = load(state);
+        let slots = s.slots(ctx.spec);
         ctx.players
             .iter()
             .filter(|p| {
-                let last = s.guests.get(&p.id).and_then(|g| g.last_at).unwrap_or(p.joined_at);
-                last + Duration::days(KEEP_DAYS) <= ctx.now
+                let g = s.guests.get(&p.id);
+                let last = g.and_then(|g| g.last_at).unwrap_or(p.joined_at);
+                // pa13b: a booked guest's chat stays until the day after their slot
+                let booked = g.and_then(|g| g.booked_until(&slots)).is_some_and(|d| local_day(ctx.now) < d);
+                last + Duration::days(KEEP_DAYS) <= ctx.now && !booked
             })
             .map(|p| p.id.clone())
             .collect()
@@ -1145,10 +1284,10 @@ impl Kit for Desk {
                 "id": p.id,
                 "name": p.name,
                 "creature": p.avatar,
-                "delete_on": g.and_then(G::delete_on),
+                "delete_on": g.and_then(|g| g.delete_on(&s.slots(ctx.spec))),
                 "waiting": g.is_some_and(|g| g.waiting.is_some()),
                 "handoff_reason": g.and_then(G::handoff_reason),
-                "booking": g.and_then(|g| g.booking.as_ref()).map(|b| json!({ "slot": b.slot, "state": b.state, "note": b.note, "text": b.text, "at": b.at })),
+                "booking": g.and_then(|g| g.booking.as_ref()).map(|b| json!({ "slot": b.slot, "state": b.state, "note": b.note, "text": b.text, "at": b.at, "by": b.by() })),
             },
             "messages": messages(g, false),
         }))
@@ -1171,8 +1310,10 @@ pub struct WaitingGuest {
     /// Since when the guest has waited.
     pub at: DateTime<Utc>,
     pub thread: Option<String>,
-    /// pa13b: the slot a booking request or cancel is about: `{slot, label, start}`.
+    /// pa13b: the slot a booking request is about: `{slot, label, start}`.
     pub booking: Option<Value>,
+    /// pa13b: `booking` for a request, `handoff` for anything else.
+    pub ask: &'static str,
 }
 
 /// For the Needs-you list: each guest waiting for the host. A booking request's quote is the
@@ -1193,7 +1334,8 @@ pub fn waiting_guests(spec: &Value, state: &Value) -> Vec<WaitingGuest> {
                 let slot = slots.iter().find(|x| &x.id == sid);
                 json!({ "slot": sid, "label": slot.map_or_else(|| sid.clone(), Slot::label), "start": slot.map(|x| x.start.clone()) })
             });
-            Some(WaitingGuest { guest: id.clone(), why: w.why.clone(), quote, at: w.at, thread: g.thread_id.clone(), booking })
+            let ask = if w.booking() { WAIT_BOOKING } else { HANDOFF };
+            Some(WaitingGuest { guest: id.clone(), why: w.why.clone(), quote, at: w.at, thread: g.thread_id.clone(), booking, ask })
         })
         .collect()
 }
@@ -1208,15 +1350,22 @@ pub fn booking_facts(spec: &Value, state: &Value, guest: &str, now: DateTime<Utc
     let s = load(state);
     let mut open: Vec<Slot> = s.slots(spec).into_iter().filter(|x| s.is_open(x, now)).collect();
     open.sort_by_key(|x| x.starts_at());
-    let mut out = String::from("Open times (the guest asks for one with the Request button on their page):\n");
+    let mut out = String::from("Open times (the guest taps one on their page to ask for it):\n");
     if open.is_empty() {
         out.push_str("- none right now\n");
     }
     for x in open.iter().take(BOT_SLOTS_MAX) {
-        out.push_str(&format!("- {}\n", x.label()));
+        match x.label.as_deref() {
+            Some(l) => out.push_str(&format!("- {l}: {}\n", x.when())),
+            None => out.push_str(&format!("- {}\n", x.when())),
+        }
     }
     if open.len() > BOT_SLOTS_MAX {
         out.push_str(&format!("- and {} more on the guest's page\n", open.len() - BOT_SLOTS_MAX));
+    }
+    let host = spec_str(spec, "host_name");
+    if !host.is_empty() {
+        out.push_str(&format!("Call the host {host} every time, not he or she.\n"));
     }
     if let Some(b) = s.guests.get(guest).and_then(|g| g.booking.as_ref()) {
         let label = s.slots(spec).into_iter().find(|x| x.id == b.slot).map_or_else(|| b.slot.clone(), |x| x.label());
@@ -1230,12 +1379,12 @@ pub fn booking_facts(spec: &Value, state: &Value, guest: &str, now: DateTime<Utc
     Some(out)
 }
 
-/// pa13b: `true` when this guest just cancelled a time the host had confirmed (the host is told).
-pub fn cancelled_confirmed(state: &Value, guest: &str) -> bool {
-    load(state).guests.get(guest).is_some_and(|g| {
-        let last = g.msgs.last().filter(|m| m.note.as_deref() == Some(NOTE_CANCELLED)).map(|m| m.at);
-        g.waiting.as_ref().is_some_and(|w| w.reason == WAIT_CANCELLED && Some(w.at) == last)
-    })
+/// pa13b: the time this guest asked for, written out ("Wed Dec 2, 10 AM"), for the host's
+/// notification.
+pub fn requested_when(spec: &Value, state: &Value, guest: &str) -> Option<String> {
+    let s = load(state);
+    let b = s.guests.get(guest)?.booking.as_ref().filter(|b| b.state == REQUESTED)?;
+    s.slots(spec).into_iter().find(|x| x.id == b.slot).map(|x| x.when())
 }
 
 /// `true` when this guest's wait for the host began with their message at `at` (a `say` that
@@ -1298,7 +1447,14 @@ mod tests {
     #[test]
     fn slots_are_checked_with_the_first_bad_index() {
         let idx = |v: Value| match parse_slots(Some(&v), false) {
-            Err(KitError::Coded { code: "bad_slots", extra, .. }) => extra["index"].as_u64().map(|i| i as i64).unwrap_or(-1),
+            Err(KitError::Coded { code: "bad_slots", extra, .. }) => {
+                assert!(extra["why"].is_string(), "{extra}");
+                extra["index"].as_u64().map(|i| i as i64).unwrap_or(-1)
+            }
+            other => panic!("{other:?}"),
+        };
+        let why = |v: Value| match parse_slots(Some(&v), false) {
+            Err(KitError::Coded { extra, .. }) => extra["why"].as_str().unwrap_or("").to_string(),
             other => panic!("{other:?}"),
         };
         let ok = json!({ "id": "a", "start": at(3, 9), "minutes": 60 });
@@ -1312,6 +1468,15 @@ mod tests {
         assert_eq!(idx(json!([{ "id": "a", "start": at(3, 9), "minutes": 60, "label": "two\nlines" }])), 0);
         assert_eq!(idx(json!([])), -1);
         assert_eq!(idx(json!("s1")), -1);
+        assert_eq!(idx(json!([{ "id": 7, "start": at(3, 9), "minutes": 60 }])), 0, "an id is text");
+        assert_eq!(why(json!([ok, { "id": "b", "start": at(3, 9), "minutes": 30 }])), "overlap");
+        assert_eq!(why(json!([{ "id": "a", "start": "tomorrow", "minutes": 60 }])), "start");
+        assert_eq!(why(json!([])), "empty");
+        // New slots get the server's ids, never one in use, and the same list gets the same ids
+        let v = json!([{ "start": at(3, 9), "minutes": 60 }, { "id": "s1", "start": at(3, 11), "minutes": 30 }, { "start": at(3, 12), "minutes": 30 }]);
+        let ids = |l: Vec<Slot>| l.into_iter().map(|x| x.id).collect::<Vec<_>>();
+        assert_eq!(ids(parse_slots(Some(&v), false).unwrap()), ["s2", "s1", "s3"]);
+        assert_eq!(ids(parse_slots_avoiding(Some(&v), false, &["s2".into()]).unwrap()), ["s3", "s1", "s4"]);
         // Back to back is fine; seats default to 1
         let v = json!([ok, { "id": "b", "start": at(3, 10), "minutes": 30 }]);
         let slots = parse_slots(Some(&v), false).unwrap();
@@ -1357,7 +1522,9 @@ mod tests {
         assert!(booking_facts(&super::tests::spec(), &st, "pl_ann", now).is_none(), "a guide desk has none");
         // The Needs-you row quotes the note, not the chat
         let w = waiting_guests(&spec, &st);
-        assert_eq!((w[0].why.as_str(), w[0].quote.as_str(), w[0].booking.as_ref().unwrap()["slot"].as_str()), ("Booking request: Morning cut", "ann-note", Some("s1")));
+        assert_eq!((w[0].why.as_str(), w[0].quote.as_str(), w[0].booking.as_ref().unwrap()["slot"].as_str(), w[0].ask), ("ann asks for a time", "ann-note", Some("s1"), "booking"));
+        // The host's notification names the time
+        assert_eq!(requested_when(&spec, &st, "pl_ann"), Some(Slot { id: "s1".into(), start: at(5, 9), minutes: 60, label: None, seats: 1 }.when()));
         // The host confirms; the seat stays taken when Ann's data goes, with no name
         assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "confirm", json!({ "guest": "pl_ann", "slot": "s1" }))), "ok");
         assert!(waiting_guests(&spec, &st).is_empty());
@@ -1365,14 +1532,55 @@ mod tests {
         assert!(!st.to_string().contains("pl_ann") && !st.to_string().contains("ann-note"), "{st}");
         assert_eq!(code(act(&mut st, &mut ctx, &ben, "request", json!({ "slot": "s1" }))), "slot_taken");
         let h = Desk.view(&ctx, &st, &Viewer::Host);
-        assert_eq!(h["slots"][0]["confirmed_gone"], 1);
+        assert_eq!((h["slots"][0]["confirmed"][0]["name"].clone(), h["slots"][0]["confirmed"][0]["guest"].clone(), h["slots"][0]["confirmed"][0]["by"].clone()), (Value::Null, Value::Null, json!("guest")));
+        assert_eq!(Desk.host_summary(&ctx, &st)["booked_total"], 1);
         // Ben holds a seat of s2, then is declined: the seat is free again
         assert_eq!(code(act(&mut st, &mut ctx, &ben, "request", json!({ "slot": "s2" }))), "ok");
         assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "set_slots", json!({ "slots": [] }))), "slot_in_use");
         assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "decline", json!({ "guest": "pl_ben", "slot": "s2", "text": "Booked by phone" }))), "ok");
-        assert_eq!(Desk.view(&ctx, &st, &ben)["my_booking"]["text"], "Booked by phone");
-        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "set_slots", json!({ "slots": [] }))), "ok");
-        assert!(load(&st).gone.is_empty(), "a removed slot's anonymous seats go with it");
+        let b = Desk.view(&ctx, &st, &ben);
+        assert_eq!(b["my_booking"], Value::Null, "a declined booking is a note: {b}");
+        let m = b["messages"].as_array().unwrap();
+        assert_eq!((m[m.len() - 2]["note"].as_str(), m[m.len() - 2]["slot"].as_str(), m[m.len() - 1]["text"].as_str()), (Some(NOTE_DECLINED), Some("s2"), Some("Booked by phone")));
+        // s1 keeps its nameless booking: it can't go while it's ahead; s2 and old can
+        let r = act(&mut st, &mut ctx, &Viewer::Host, "set_slots", json!({ "slots": [] }));
+        assert!(matches!(&r, Err(KitError::Coded { code: "slot_in_use", extra, .. }) if extra["slot"] == "s1" && extra["name"].is_null()), "{r:?}");
+        let s1 = json!({ "id": "s1", "start": at(5, 9), "minutes": 60 });
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "set_slots", json!({ "slots": [s1] }))), "ok");
+        assert_eq!(load(&st).gone.len(), 1);
+    }
+
+    #[test]
+    fn a_guest_cancels_a_request_but_not_a_confirmed_time_and_a_booked_chat_stays_until_the_day_after() {
+        let now = Utc::now();
+        let ps = players(now);
+        let spec = booking_spec();
+        let mut st = Desk.init(&spec);
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        let ann = Viewer::Guest("pl_ann".into());
+        assert_eq!(code(act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "s1" }))), "ok");
+        let r = act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "s2" }));
+        assert!(matches!(&r, Err(KitError::Coded { code: "has_request", extra, .. }) if extra["my_booking"]["slot"] == "s1"), "{r:?}");
+        let r = act(&mut st, &mut ctx, &Viewer::Guest("pl_ben".into()), "request", json!({ "slot": "s1" }));
+        assert!(matches!(&r, Err(KitError::Coded { code: "slot_taken", extra, .. }) if extra["slots"].is_array()), "{r:?}");
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "confirm", json!({ "guest": "pl_ann", "slot": "s1" }))), "ok");
+        assert_eq!(code(act(&mut st, &mut ctx, &ann, "cancel", json!({ "slot": "s1" }))), "is_confirmed");
+        let v = Desk.view(&ctx, &st, &ann);
+        assert_eq!((v["my_booking"]["state"].as_str(), v["my_booking"]["minutes"].as_i64(), v["my_booking"].get("by")), (Some("confirmed"), Some(60), None));
+        // Ann's chat stays past day 7, until the day after her slot (day 5 + 1 = day 6 is sooner
+        // than day 7, so day 7 rules); a slot at day 10 would keep it to day 11
+        let day = |d: i64| (local_day(now) + Duration::days(d)).to_string();
+        assert_eq!(v["me"]["delete_on"], json!(day(7)));
+        let later = json!({ "title": "Chair", "mode": "booking", "slots": [{ "id": "s1", "start": at(10, 9), "minutes": 60 }] });
+        let mut ctx2 = KitCtx::new(&later, &ps, now);
+        assert_eq!(Desk.view(&ctx2, &st, &ann)["me"]["delete_on"], json!(day(11)));
+        ctx2.now = now + Duration::days(8);
+        assert!(Desk.idle_players(&ctx2, &st).iter().all(|p| p != "pl_ann"), "booked: stays");
+        assert!(Desk.idle_players(&ctx2, &st).iter().any(|p| p == "pl_ben"), "not booked: goes");
+        ctx2.now = now + Duration::days(12);
+        assert!(Desk.idle_players(&ctx2, &st).iter().any(|p| p == "pl_ann"));
+        // The host's decline line is capped at 1000 characters
+        assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "decline", json!({ "guest": "pl_ann", "slot": "s1", "text": "x".repeat(DECLINE_TEXT_MAX + 1) }))), "too_long");
     }
 
     #[test]

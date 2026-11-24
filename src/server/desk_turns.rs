@@ -13,10 +13,11 @@
 //! Nothing a guest wrote, their name or a reply goes into a log line or an event beyond the
 //! host's own view (the thread is the host's).
 //!
-//! pa13b Booking Desk: the note lists the open times (labels only) and this guest's own booking,
-//! and adds never rules: the bot never says a time is booked or confirmed (only the host's
-//! `confirm` does that, and no bot tool can), never takes money or card details, and never offers
-//! a time that isn't open. A guest's request tells the host, without the guest's note.
+//! pa13b Booking Desk: the note lists the open times (labels and starts only) and this guest's
+//! own booking, and adds never rules: the bot never says a time is booked or confirmed (only the
+//! host's `confirm` does that, and no bot tool can), never asks for card or bank details, never
+//! names a price that isn't in the facts and never offers a time that isn't open. A guest's
+//! request tells the host with the time, without the guest's note.
 
 use std::collections::HashSet;
 use std::path::PathBuf;
@@ -66,9 +67,9 @@ const BOOKING_WORDS: NoteWords<'static> = NoteWords {
 
 /// pa13b: what a booking desk's bot never does (each under 80 characters, the rules' limit).
 pub const BOOKING_NEVER: [&str; 3] = [
-    "Say a time is booked or confirmed: only the host confirms, after a Request",
-    "Take money, a deposit or card details: say the host will send payment details",
-    "Offer a time that isn't in the open times below",
+    "Say booked, confirmed, reserved or you're in: only the host confirms a time",
+    "Ask for card or bank details: say the host will send payment details",
+    "Name a price that isn't in the facts, or offer a time not in the open times",
 ];
 
 /// pa13b: a booking desk's note: the Guest Guide's rules and the booking ones, then the host's
@@ -274,22 +275,19 @@ async fn hand_off(state: &AppState, code: &str, guest: &str, why: &str, note: &s
 }
 
 /// What the host is told.
-#[derive(Clone, Copy)]
 enum Tell {
     /// A guest waits for a reply.
     Waiting,
-    /// pa13b: a guest asked for a time.
-    Asked,
-    /// pa13b: a guest cancelled a time the host had confirmed.
-    Cancelled,
+    /// pa13b: a guest asked for a time (written out; none when the slot is gone).
+    Asked(Option<String>),
 }
 
 impl Tell {
-    fn words(self, name: &str, title: &str) -> (String, String) {
+    fn words(&self, name: &str, title: &str) -> (String, String) {
         match self {
             Tell::Waiting => (format!("{name} needs you"), format!("A guest on {title} is waiting for your reply.")),
-            Tell::Asked => (format!("{name} asked for a time"), format!("A guest on {title} asked to book a time. Only you can confirm it.")),
-            Tell::Cancelled => (format!("{name} cancelled a booking"), format!("A guest on {title} cancelled a time you had confirmed.")),
+            Tell::Asked(Some(when)) => (format!("{name} asked for {when} · {title}"), "Only you can confirm it.".into()),
+            Tell::Asked(None) => (format!("{name} asked for a time · {title}"), "Only you can confirm it.".into()),
         }
     }
 }
@@ -309,6 +307,10 @@ async fn tell_host(state: &AppState, code: &str, guest: &str, what: Tell) {
     let (kwant_id, kwant_name, thread_id) = match state.db.get_kwant(bot).await {
         Ok(Some(k)) => (k.id, k.name, desk::thread_of(&s.kit_state, guest)),
         _ => (s.row.owner_kwant_id.clone().filter(|o| !o.is_empty()).unwrap_or_else(|| bot.to_string()), desk::bot_label(&s.spec), None),
+    };
+    let what = match what {
+        Tell::Asked(_) => Tell::Asked(desk::requested_when(&s.spec, &s.kit_state, guest)),
+        w => w,
     };
     let (title, body) = what.words(&player.name, &s.row.title);
     super::continuity::notify(
@@ -351,13 +353,7 @@ pub async fn after_act(state: &AppState, code: &str, actor: &Viewer, name: &str,
             }
         }
         // pa13b: a request asks the host (one notification per request, never the note)
-        (Viewer::Guest(guest), "request") => tell_host(state, code, guest, Tell::Asked).await,
-        (Viewer::Guest(guest), "cancel") => {
-            let Ok(Some(s)) = pocket::snapshot(state, code).await else { return };
-            if desk::cancelled_confirmed(&s.kit_state, guest) {
-                tell_host(state, code, guest, Tell::Cancelled).await;
-            }
-        }
+        (Viewer::Guest(guest), "request") => tell_host(state, code, guest, Tell::Asked(None)).await,
         // The host's line on a decline goes into the bot's thread too, like a reply
         (Viewer::Host, "decline") => {
             let guest = body["guest"].as_str().unwrap_or("");
@@ -410,7 +406,7 @@ pub async fn needs_you(state: &AppState, kwants: &[Kwant]) -> Vec<(chrono::DateT
             }
         };
         let mode = if desk::is_booking(&s.spec) { desk::MODE_BOOKING } else { desk::MODE_GUIDE };
-        for desk::WaitingGuest { guest, why, quote, at, thread, booking } in desk::waiting_guests(&s.spec, &s.kit_state) {
+        for desk::WaitingGuest { guest, why, quote, at, thread, booking, ask } in desk::waiting_guests(&s.spec, &s.kit_state) {
             let thread = thread.filter(|_| live);
             let Some(p) = s.players.iter().find(|p| p.id == guest) else { continue };
             items.push((at, json!({
@@ -431,6 +427,9 @@ pub async fn needs_you(state: &AppState, kwants: &[Kwant]) -> Vec<(chrono::DateT
                 "follow_up_at": null,
                 "reminded_at": null,
                 "mode": mode,
+                "ask": ask,
+                "slot": booking.as_ref().map(|b| b["slot"].clone()),
+                "slot_start": booking.as_ref().map(|b| b["start"].clone()),
                 "booking": booking,
             })));
         }
@@ -454,7 +453,7 @@ mod tests {
 
     #[test]
     fn the_booking_note_adds_the_booking_rules_and_facts() {
-        let facts = "Open times (the guest asks for one with the Request button on their page):\n- Noon cut\n";
+        let facts = "Open times (the guest taps one on their page to ask for it):\n- Noon cut: Thu Dec 3, 12 PM\n";
         let n = booking_note("Ann", &["Share prices".into()], "", facts);
         assert!(n.starts_with(crate::drivers::CUSTOMER_NOTE));
         assert!(n.contains("writing on the host's booking page"), "{n}");
@@ -473,8 +472,8 @@ mod tests {
     #[test]
     fn the_host_is_told_without_the_guests_words() {
         assert_eq!(Tell::Waiting.words("Ann", "Flat"), ("Ann needs you".into(), "A guest on Flat is waiting for your reply.".into()));
-        assert_eq!(Tell::Asked.words("Ann", "Chair").0, "Ann asked for a time");
-        assert_eq!(Tell::Cancelled.words("Ann", "Chair").0, "Ann cancelled a booking");
+        assert_eq!(Tell::Asked(Some("Wed Dec 2, 10 AM".into())).words("Ann", "Studio Nika"), ("Ann asked for Wed Dec 2, 10 AM · Studio Nika".into(), "Only you can confirm it.".into()));
+        assert_eq!(Tell::Asked(None).words("Ann", "Chair").0, "Ann asked for a time · Chair");
     }
 
     #[test]

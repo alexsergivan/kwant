@@ -382,7 +382,29 @@ async fn a_booking_desk_needs_good_slots_and_no_guide() {
             (StatusCode::BAD_REQUEST, Some("bad_slots"), Some(index)),
             "{why}: {v}"
         );
+        assert!(v["why"].is_string(), "{why}: {v}");
     }
+    // A slot sent without an id gets the server's
+    let (s, v) = make(json!({ "title": "Chair", "mode": "booking", "what": "your cut", "slots": [{ "start": at(3, 9), "minutes": 30 }] })).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    let code = v["pocket"]["code"].as_str().unwrap().to_string();
+    let (_, key) = joined(&d, &code, "Ann").await;
+    let st = state_of(&d, &code, &key).await;
+    assert_eq!(
+        (
+            st["view"]["slots"][0]["id"].as_str(),
+            st["view"]["slots"][0]["label"].clone(),
+            st["view"]["what"].as_str()
+        ),
+        (Some("s1"), Value::Null, Some("your cut")),
+        "{st}"
+    );
+    let (s, v) = make(json!({ "title": "Chair", "mode": "booking", "what": "x".repeat(41), "slots": two_slots() })).await;
+    assert_eq!(
+        (s, v["error"].as_str()),
+        (StatusCode::BAD_REQUEST, Some("bad_spec")),
+        "{v}"
+    );
     let many: Vec<Value> = (0..201).map(|i| json!({ "id": format!("s{i}"), "start": at(2 + i / 10, 8 + (i % 10) as u32), "minutes": 30 })).collect();
     let (s, v) = make(json!({ "title": "Chair", "mode": "booking", "slots": many })).await;
     assert_eq!(
@@ -461,7 +483,7 @@ async fn only_the_hosts_confirm_makes_a_booking_confirmed() {
     );
     let hs = host_slot(&d, &code, &host, "s1").await;
     assert_eq!(hs["confirmed"], json!([]), "{hs}");
-    assert_eq!(hs["requested"][0]["id"], ann.as_str(), "{hs}");
+    assert_eq!(hs["requested"][0]["guest"], ann.as_str(), "{hs}");
 
     // The guest turn's note says the bot never confirms and lists the guest's own request
     let prompt = invocations_with(&b64(fake)).pop().expect("Ann's turn");
@@ -564,7 +586,16 @@ async fn only_the_hosts_confirm_makes_a_booking_confirmed() {
     )
     .await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!(v["summary"]["counts"]["confirmed"], 1, "{v}");
+    assert_eq!(
+        (
+            v["summary"]["booked_total"].as_u64(),
+            v["summary"]["booked_upcoming"].as_u64(),
+            v["summary"]["requests"].as_u64(),
+            v["summary"]["open_left"].as_u64()
+        ),
+        (Some(1), Some(1), Some(0), Some(1)),
+        "{v}"
+    );
 }
 
 // ---- Privacy ----
@@ -722,11 +753,14 @@ async fn a_held_seat_is_freed_by_cancel_decline_and_the_7_day_delete_but_a_confi
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
     let b = state_of(&d, &code, &ben_key).await;
     assert_eq!(
-        (
-            b["view"]["my_booking"]["state"].as_str(),
-            b["view"]["my_booking"]["text"].as_str()
-        ),
-        (Some("declined"), Some("Sorry, that one went by phone.")),
+        b["view"]["my_booking"],
+        Value::Null,
+        "a decline is a note: {b}"
+    );
+    assert!(
+        msgs(&b).iter().any(|m| m["note"] == "booking_declined"
+            && m["slot"] == "s1"
+            && m["start"] == at(10, 9)),
         "{b}"
     );
     assert!(
@@ -768,24 +802,33 @@ async fn a_held_seat_is_freed_by_cancel_decline_and_the_7_day_delete_but_a_confi
         StatusCode::OK
     );
 
-    // 7 days on, every guest's data goes: Ann's held seat is free; Cat's confirmed seat stays
-    // taken, with no name left
+    // A confirmed time isn't Cat's to cancel: she writes to the host
+    let r = gact(&d, &code, &cat_key, "cancel", json!({ "slot": "s2" })).await;
+    assert_eq!(
+        (r.status, r.body["error"].as_str()),
+        (StatusCode::CONFLICT, Some("is_confirmed")),
+        "{}",
+        r.body
+    );
+
+    // 7 days on, Ann's data goes and her held seat with it; Cat's chat stays until the day
+    // after her booking (day 10)
     pocket::sweep(
         &d.env.state,
         Utc::now() + Duration::days(7) + Duration::hours(1),
     )
     .await;
-    assert!(
-        d.env
-            .state
-            .db
-            .pocket_players(&code)
-            .await
-            .unwrap()
-            .iter()
-            .all(|p| p.id != ann && p.id != cat),
-        "the guests are gone"
-    );
+    let left: Vec<String> = d
+        .env
+        .state
+        .db
+        .pocket_players(&code)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    assert!(!left.contains(&ann) && left.contains(&cat), "{left:?}");
     let (_, eve_key) = joined(&d, &code, "Eve").await;
     let e = state_of(&d, &code, &eve_key).await;
     assert!(open(&e, "s1"), "Ann's request went with her data: {e}");
@@ -797,10 +840,33 @@ async fn a_held_seat_is_freed_by_cancel_decline_and_the_7_day_delete_but_a_confi
         "{}",
         r.body
     );
+    assert!(
+        r.body["slots"].is_array(),
+        "fresh slots come back: {}",
+        r.body
+    );
+
+    // The day after her booking, Cat's data goes; the host still sees the booking, nameless
+    pocket::sweep(&d.env.state, Utc::now() + Duration::days(12)).await;
+    let left: Vec<String> = d
+        .env
+        .state
+        .db
+        .pocket_players(&code)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    assert!(!left.contains(&cat), "{left:?}");
     let hs = host_slot(&d, &code, &host, "s2").await;
     assert_eq!(
-        (hs["confirmed"].clone(), hs["confirmed_gone"].clone()),
-        (json!([]), json!(1)),
+        (
+            hs["confirmed"][0]["guest"].clone(),
+            hs["confirmed"][0]["name"].clone(),
+            hs["confirmed"][0]["by"].clone()
+        ),
+        (Value::Null, Value::Null, json!("guest")),
         "{hs}"
     );
     let row = d.env.state.db.pocket_get(&code).await.unwrap().unwrap();
@@ -826,7 +892,7 @@ async fn past_slots_are_never_open_and_set_slots_keeps_slots_in_use() {
     let r = gact(&d, &code, &key, "request", json!({ "slot": "old" })).await;
     assert_eq!(
         (r.status, r.body["error"].as_str()),
-        (StatusCode::CONFLICT, Some("slot_past")),
+        (StatusCode::GONE, Some("slot_past")),
         "{}",
         r.body
     );
@@ -855,11 +921,22 @@ async fn past_slots_are_never_open_and_set_slots_keeps_slots_in_use() {
     ] {
         let r = host_act(&d, &code, &host, "set_slots", json!({ "slots": slots })).await;
         assert_eq!(
-            (r.status, r.body["error"].as_str(), r.body["slot"].as_str()),
-            (StatusCode::CONFLICT, Some("slot_in_use"), Some("s1")),
+            (
+                r.status,
+                r.body["error"].as_str(),
+                r.body["slot"].as_str(),
+                r.body["name"].as_str()
+            ),
+            (
+                StatusCode::CONFLICT,
+                Some("slot_in_use"),
+                Some("s1"),
+                Some("Ann")
+            ),
             "{why}: {}",
             r.body
         );
+        assert_eq!(r.body["start"], at(10, 9), "{}", r.body);
     }
     let r = host_act(&d, &code, &host, "set_slots", json!({ "slots": [keep_old, { "id": "s1", "start": at(10, 9), "minutes": 60, "seats": 0 }] })).await;
     assert_eq!(
@@ -912,7 +989,16 @@ async fn a_request_makes_one_needs_you_item_and_a_notification_without_the_guest
 
     let items = desk_items(&d).await;
     assert_eq!(items.len(), 1, "{items:?}");
-    assert_eq!(items[0]["text"], "Booking request: Morning cut");
+    assert_eq!(items[0]["text"], "Ann asks for a time");
+    assert_eq!(
+        (
+            items[0]["ask"].as_str(),
+            items[0]["slot"].as_str(),
+            items[0]["slot_start"].clone()
+        ),
+        (Some("booking"), Some("s1"), json!(at(10, 9))),
+        "{items:?}"
+    );
     assert_eq!(items[0]["quote"], NOTE);
     assert_eq!(items[0]["guest_id"], ann.as_str());
     assert_eq!(items[0]["booking"]["slot"], "s1", "{items:?}");
@@ -936,6 +1022,10 @@ async fn a_request_makes_one_needs_you_item_and_a_notification_without_the_guest
         } = e.unscoped()
         {
             if kind == "question_asked" && title.contains("Ann") {
+                assert!(
+                    title.contains("asked for ") && !title.contains("Morning cut"),
+                    "the push names the time: {title}"
+                );
                 assert!(
                     !body.contains(NOTE) && !title.contains(NOTE),
                     "{title} / {body}"
@@ -982,20 +1072,13 @@ async fn a_request_makes_one_needs_you_item_and_a_notification_without_the_guest
         StatusCode::OK
     );
     assert!(desk_items(&d).await.is_empty());
-    // A guest who cancels a confirmed time tells the host
+    // A guest can't cancel a confirmed time (no item, no notice): they write to the host
     let r = gact(&d, &code, &ann_key, "cancel", json!({ "slot": "s1" })).await;
-    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
-    let items = desk_items(&d).await;
     assert_eq!(
-        (items.len(), items[0]["text"].as_str()),
-        (1, Some("Cancelled: Morning cut")),
-        "{items:?}"
-    );
-    assert_eq!(
-        host_act(&d, &code, &host, "resolve", json!({ "guest": ann }))
-            .await
-            .status,
-        StatusCode::OK
+        (r.status, r.body["error"].as_str()),
+        (StatusCode::CONFLICT, Some("is_confirmed")),
+        "{}",
+        r.body
     );
     assert!(desk_items(&d).await.is_empty());
 }
