@@ -188,8 +188,11 @@ export function validPocket(raw: unknown): PocketBlock | null {
   // Santa joins live in `santa.join` (no quick tunnel); a quiz-style top-level join never rides along.
   if (santa && b.join !== undefined && b.join !== null) return null;
   // Gather (pa10b): the same rules for Sign-up, RSVP and Vote, plus no person may ever carry a ballot.
-  const gather = b.gather === undefined || b.gather === null ? null : validGather(b.gather);
-  if (gather === undefined || (b.kit === 'gather') !== !!gather || (gather && findBallotPair(raw))) return null;
+  // validGather scans `gather` for ballots itself; the rest of the block is scanned without it (the block's own
+  // `name` would make every key below it person-shaped, and `gather.ballot` is the vote's options, not a vote).
+  const gather = b.gather === undefined || b.gather === null ? null : validGather(b.gather, b.name as string);
+  const { gather: _g, ...rest } = isObj(raw) ? (raw as Record<string, unknown>) : {};
+  if (gather === undefined || (b.kit === 'gather') !== !!gather || (gather && findBallotPair(rest))) return null;
   if (gather && (santa || results)) return null;
   if (gather && state !== (gather.phase === 'closed' ? 'ended' : 'live')) return null;
   if (gather && b.join !== undefined && b.join !== null) return null;

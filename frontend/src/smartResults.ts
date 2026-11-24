@@ -356,27 +356,28 @@ export type GatherFace = 'signup' | 'rsvp' | 'vote';
 /** open (taking answers), closed (final), tie (a vote's final round tied: the host picks or re-runs for 24 h). */
 export type GatherPhase = 'open' | 'closed' | 'tie';
 export type GatherAnswer = 'yes' | 'maybe' | 'no';
-/** One RSVP row in People and paid (host view only). Never a ballot: the validator rejects one under a person. */
+/** One row in People and paid (host view only), every player, answered or not. Never a ballot. */
 export interface GatherPerson {
   id: string;
   name: string;
   avatar: string | null;
-  you: boolean;
   answer: GatherAnswer | null;
   plus_ones: number;
-  /** "vegetarian"; null: no food needs. */
+  /** "vegetarian, no mushrooms" (food keys in words, then food_other); null: none. */
   food: string | null;
-  /** Host-only paid tick; null on rows that aren't Yes. */
+  /** The host's paid tick (`paid_at` set); null on rows that aren't Yes. */
   paid: boolean | null;
 }
 export interface GatherSlot {
+  /** The slot's index as text. */
   id: string;
   name: string;
   cap: number;
   /** Who's in, with their note ("lentil stew"), in join order. */
-  who: Array<{ name: string; note: string | null }>;
+  who: Array<{ name: string; avatar: string | null; note: string | null }>;
   /** First names on this slot's FIFO waiting list, first in line first. */
   waiting: string[];
+  waiting_count: number;
 }
 /** A count line: an option and its votes (1st choices while open, the final round once closed). */
 export interface GatherCount {
@@ -387,87 +388,93 @@ export interface GatherCount {
 export interface GatherRound {
   counts: GatherCount[];
   out: string[];
-  /** "its vote goes to Casa Lupa"; display text from the box, or null. */
-  moved: string | null;
+  /** Ballots with no choice left. */
+  exhausted: number;
 }
-export type GatherNudgeWhy = 'maybe' | 'not_paid' | 'moved_up' | 'not_answered' | 'not_voted';
+/** Lin's draft kinds. A vote's missing member is not_answered. */
+export type GatherKind = 'maybe' | 'not_paid' | 'moved_up' | 'not_answered';
 /** A Chaser draft for one person (host view only). Nothing sends: the host copies or shares it. */
 export interface GatherNudge {
-  /** The person's id, for `copied`. */
-  id: string;
+  /** The draft's `to`, lowercased: the card's row key. */
+  key: string;
+  /** The draft's `to` as the host typed it; `copied` sends it back. */
   name: string;
+  /** Null for a listed member who never joined. */
+  player_id: string | null;
   avatar: string | null;
-  why: GatherNudgeWhy;
+  why: GatherKind;
+  /** With `{link}` filled with the join link the card shows. */
   text: string;
-  /** "9:12 PM" or "yesterday": when the host last copied it; null: never. */
+  /** "9:12 PM" or "Mon 9:12 PM": when the host last copied it; null: never. */
   copied_at: string | null;
   /** Inside the 48 h window: "Thu 6:40 PM", the next time a copy is allowed; null: copy now. */
   until: string | null;
 }
 /**
- * The gather kit's host facts on a Pocket card (pa10b/card-impl.md "Shape I read"). Counts, first names, the host's
- * own paid ticks and display dates. Who voted is a list of names apart from the counts: no person ever carries a ballot.
+ * The gather card's view. On the wire, block.gather is Lin's `host_view` plus the pocket's `title` and
+ * `expires_at` (pa10b/server-shape.md); validGather turns it into this, with times in the person's own zone.
+ * Who voted is a list of names apart from the counts: no person ever carries a ballot.
  */
 export interface GatherInfo {
   face: GatherFace;
   phase: GatherPhase;
   /** "End-of-season dinner" */
   title: string;
-  /** "Sat, Dec 12 · 7:30 PM · The Old Mill · €35 each, paid to Oleks" */
+  /** "Sat, Dec 12 · 7:30 PM" */
   when: string | null;
-  /** "Thu, Dec 10 at 8 PM" */
-  closes_at: string;
-  /** "Thu 8 PM" once closed */
-  closed_at: string | null;
+  /** "The Old Mill" */
+  place: string | null;
+  /** "€35 each, paid to Oleks" */
+  price: string | null;
+  /** "Thu, Dec 10 at 8:00 PM"; null: no closing time. */
+  closes_at: string | null;
   /** "Sat, Dec 12"; null: no event (a vote). */
   event_at: string | null;
-  /** "Sat, Dec 19" */
+  /** "Sat, Dec 19" (pocket.expires_at) */
   deletes_on: string;
-  /** "the dinner" / "the potluck" / null (then: "it closes"): what the 7 days count from. */
-  kept_after: string | null;
-  /** The club or group name for the eyebrow ("Riverside Run Club"). */
-  club: string | null;
   /** The host's first name ("Oleks"), for "Tie: Oleks picks". */
   host_name: string | null;
-  /** RSVP: the venue, for "Tell The Old Mill: …". */
-  place: string | null;
   /** Members see names and Yes / Maybe / No (RSVP) or the live count after voting (vote). */
   show_names: boolean;
-  /** RSVP counts. */
+  /** Members on the host's list; null without a list. */
+  members: number | null;
+  /** Listed members who haven't answered or voted. */
+  not_answered: string[];
   rsvp: {
     yes: number;
     maybe: number;
     no: number;
     plus_ones: number;
+    /** yes + plus-ones */
+    coming: number;
     maybe_names: string[];
     no_names: string[];
     /** Members on the host's list who never answered; null without a list. */
     never: number | null;
     /** "3 vegetarian, 1 vegan, 1 nut allergy, 1 gluten-free"; null: none. */
     food: string | null;
-    /** Host-only. Null when the RSVP doesn't collect money. */
-    paid: { paid: number; of: number; not_yet: string[] } | null;
+    /** Host-only. Null when the RSVP has no price. */
+    paid: { ticked: number; of: number; not_yet: string[] } | null;
   } | null;
   /** Sign-up slots in the host's order. */
   slots: GatherSlot[];
-  /** Sign-up: the last move up from a waiting list (state 6). */
-  moved_up: { name: string; slot: string; left: string; at: string; note: string | null } | null;
-  /** Vote. */
+  /** Sign-up: the newest move up from a waiting list the host hasn't seen (state 6); `more` others. */
+  moved_up: { name: string; slot: string; at: string; note: string | null; more: number } | null;
   vote: {
     kind: 'one_pick' | 'ranked';
     voted: number;
-    /** Members on the host's list; null without a list. */
     members: number | null;
     /** Who voted, first names and creatures only (never what they picked). */
     voters: Array<{ name: string; avatar: string | null }>;
-    /** Open: 1st choices; closed or tie: the final round. */
+    /** The places in play (after a revote, only the tied ones). */
+    options: Array<{ option: number; name: string }>;
+    /** Open: 1st choices; closed or tie: the final round. Every place in play. */
     counts: GatherCount[];
     rounds: GatherRound[];
     winner: string | null;
-    /** The tied names in a tie. */
-    tied: string[];
-    /** "they tied on 1st choices too" (display text) */
-    tie_note: string | null;
+    outcome: 'winner' | 'tie' | 'picked' | 'no_votes' | null;
+    /** The tied places, with the option index `pick` sends. */
+    tied: Array<GatherCount & { option: number }>;
   } | null;
   people: GatherPerson[];
   nudges: GatherNudge[];

@@ -34,7 +34,7 @@ import {
   Wifi,
   Zap,
 } from 'lucide-react';
-import type { GatherAnswer, GatherCount, GatherFace, GatherInfo, GatherNudge, GatherNudgeWhy, GatherPerson, GatherPhase, GatherRound, GatherSlot, PocketBlock } from '../../smartResults';
+import type { GatherAnswer, GatherCount, GatherFace, GatherInfo, GatherKind, GatherNudge, GatherPerson, GatherPhase, GatherRound, GatherSlot, PocketBlock } from '../../smartResults';
 import { isIndex, isObj, isText, optText } from '../../smartResults';
 import { Sticker } from '../Sticker';
 import { ModernAvatar } from '../ModernAvatar';
@@ -45,34 +45,73 @@ import { Bar, Callout, GHOST, HALF, ICON, LATER_CLS, LaterButton, LinkField, PRI
 import { GuestCreature, HowTo, NoQuickLink, portOf, validSantaJoin } from './PocketSanta';
 
 // ---------------------------------------------------------------------------------------------------
-// Validator
+// Times: the server sends RFC 3339; the card shows them in the person's own time zone. Text that isn't a
+// timestamp (a bot that already wrote "Thu 8 PM") shows as it is.
+
+const ISO = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/;
+const parse = (s: string): Date | null => {
+  if (!ISO.test(s)) return null;
+  const d = new Date(s);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+const sameDay = (a: Date, b: Date) => a.toDateString() === b.toDateString();
+/** "Fri 9:12 PM" in the person's own time zone. */
+const dayTime = (d: Date) => d.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }).replace(',', '');
+const clock = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+const dateOnly = (d: Date) => d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+/** "Thu, Dec 10 at 8:00 PM" */
+export const showDateTime = (s: string) => {
+  const d = parse(s);
+  return d ? `${dateOnly(d)} at ${clock(d)}` : s;
+};
+/** "Sat, Dec 19" */
+export const showDate = (s: string) => {
+  const d = parse(s);
+  return d ? dateOnly(d) : s;
+};
+/** "9:12 PM" today, else "Mon 9:12 PM". */
+export const showWhen = (s: string, now = new Date()) => {
+  const d = parse(s);
+  return d ? (sameDay(d, now) ? clock(d) : dayTime(d)) : s;
+};
+
+// ---------------------------------------------------------------------------------------------------
+// Validator: block.gather is Lin's `host_view` (pa10b/server-shape.md) plus `title` and `expires_at` from the
+// pocket, copied by the bot as they are. It comes out as the card's view (smartResults GatherInfo).
 
 export const GATHER_FACES: GatherFace[] = ['signup', 'rsvp', 'vote'];
 export const GATHER_PHASES: GatherPhase[] = ['open', 'closed', 'tie'];
 const ANSWERS: GatherAnswer[] = ['yes', 'maybe', 'no'];
-const WHYS: GatherNudgeWhy[] = ['maybe', 'not_paid', 'moved_up', 'not_answered', 'not_voted'];
+const KINDS: GatherKind[] = ['maybe', 'not_paid', 'moved_up', 'not_answered'];
+const OUTCOMES = ['winner', 'tie', 'picked', 'no_votes'] as const;
 const MAX_PEOPLE = 200;
 const MAX_SLOTS = 20;
 const MAX_OPTIONS = 12;
 const isCount = (v: unknown): v is number => isIndex(v) && v <= 100_000;
-const optCount = (v: unknown) => (v === undefined || v === null ? null : isCount(v) ? v : undefined);
 const firstName = (v: unknown): v is string => isText(v, 40);
-const names = (v: unknown, max = MAX_PEOPLE): string[] | undefined => {
-  const list = v ?? [];
-  return Array.isArray(list) && list.length <= max && list.every(firstName) ? (list as string[]) : undefined;
-};
+const optTime = (v: unknown) => optText(v, 60);
 const creature = (v: unknown) => (v === undefined || v === null || v === '' ? null : typeof v === 'string' && /^[a-z0-9_-]{1,32}$/.test(v) ? v : undefined);
+const arr = (v: unknown, max: number): unknown[] | undefined => {
+  const list = v ?? [];
+  return Array.isArray(list) && list.length <= max ? list : undefined;
+};
+
+/** The food keys the RSVP offers (Lin's FOOD), in words. Unknown keys read with spaces. */
+const FOOD_WORDS: Record<string, string> = { gluten_free: 'gluten-free', dairy_free: 'dairy-free', nut_allergy: 'nut allergy' };
+const foodWord = (k: string) => FOOD_WORDS[k] ?? k.replace(/_/g, ' ');
+const isFoodKey = (v: unknown): v is string => typeof v === 'string' && /^[a-z_]{1,24}$/.test(v);
 
 /**
  * Keys that would put what someone picked on the host's card. A ballot is secret: the host sees who voted and the
  * totals, never a person's ballot (design "For Juno" #4). Any of these keys on a person-shaped object (one with a
  * name or an id), or anywhere under a list of people, rejects the whole block. `ballots` and `rankings` are rejected
- * anywhere: the host card never carries ballots at all.
+ * anywhere: the host card never carries ballots at all (the count is `result.ballots_counted`). The vote's own
+ * `ballot` (kind, options, in_play) sits on the host view's root, which is not a person.
  */
 export const BALLOT_KEYS = ['ballot', 'ballots', 'ranking', 'rankings', 'ranked', 'picks', 'pick', 'picked', 'choice', 'choices', 'my_vote', 'voted_for', 'preference', 'preferences'] as const;
 const BALLOT_SET = new Set<string>(BALLOT_KEYS);
 const ANYWHERE = new Set(['ballots', 'rankings']);
-const PERSON_LISTS = new Set(['people', 'person', 'voters', 'voter', 'members', 'member', 'nudges', 'who', 'waiting', 'guests', 'guest']);
+const PERSON_LISTS = new Set(['people', 'person', 'voters', 'voter', 'members', 'member', 'nudges', 'drafts', 'who', 'waiting_people', 'guests', 'guest', 'not_answered', 'moved_up', 'me']);
 
 /** The first path where a person and a ballot meet, or null. Walks arrays and objects; depth-capped. */
 export function findBallotPair(v: unknown, path = '', depth = 0, person = false): string | null {
@@ -86,7 +125,7 @@ export function findBallotPair(v: unknown, path = '', depth = 0, person = false)
   }
   const o = v as Record<string, unknown>;
   const keys = Object.keys(o).map((k) => k.toLowerCase());
-  const personShaped = person || keys.includes('name') || keys.includes('person_id') || keys.includes('player_id');
+  const personShaped = person || keys.includes('name') || keys.includes('to') || keys.includes('person_id') || keys.includes('player_id');
   for (const [k, x] of Object.entries(o)) {
     const lk = k.toLowerCase();
     if (ANYWHERE.has(lk) || (personShaped && BALLOT_SET.has(lk))) return `${path}.${k}`;
@@ -101,166 +140,262 @@ function validPerson(v: unknown): GatherPerson | undefined {
   const avatar = creature(v.avatar);
   const answer = v.answer === undefined || v.answer === null ? null : ANSWERS.includes(v.answer as GatherAnswer) ? (v.answer as GatherAnswer) : undefined;
   const plus = v.plus_ones === undefined || v.plus_ones === null ? 0 : isIndex(v.plus_ones) && v.plus_ones <= 5 ? v.plus_ones : undefined;
-  const food = optText(v.food, 80);
-  const paid = v.paid === undefined || v.paid === null ? null : typeof v.paid === 'boolean' ? v.paid : undefined;
-  if (avatar === undefined || answer === undefined || plus === undefined || food === undefined || paid === undefined) return undefined;
-  if (v.you !== undefined && v.you !== null && typeof v.you !== 'boolean') return undefined;
+  const food = arr(v.food, 10);
+  const other = optText(v.food_other, 80);
+  const paidAt = optTime(v.paid_at);
+  if (avatar === undefined || answer === undefined || plus === undefined || !food || !food.every(isFoodKey) || other === undefined || paidAt === undefined) return undefined;
+  const words = [...(food as string[]).map(foodWord), ...(other ? [other] : [])];
   // A paid tick only means something on a Yes row.
-  return { id: v.id, name: v.name, avatar, you: v.you === true, answer, plus_ones: plus, food: food ?? null, paid: answer === 'yes' ? paid : null };
+  return { id: v.id, name: v.name, avatar, answer, plus_ones: plus, food: words.length ? words.join(', ') : null, paid: answer === 'yes' ? paidAt !== null : null };
 }
 
-function validSlot(v: unknown): GatherSlot | undefined {
-  if (!isObj(v) || !isText(v.id, 64) || !isText(v.name, 60) || !isIndex(v.cap) || v.cap < 1 || v.cap > 99) return undefined;
-  const who = v.who ?? [];
-  if (!Array.isArray(who) || who.length > v.cap) return undefined;
-  const list: GatherSlot['who'] = [];
-  for (const w of who) {
+function validSlot(v: unknown, i: number): GatherSlot | undefined {
+  if (!isObj(v) || v.slot !== i || !isText(v.name, 60) || !isIndex(v.cap) || v.cap < 1 || v.cap > 99) return undefined;
+  const people = arr(v.people, v.cap);
+  const waitingPeople = arr(v.waiting_people, 50);
+  const waiting = v.waiting === undefined || v.waiting === null ? (waitingPeople?.length ?? 0) : isCount(v.waiting) ? v.waiting : undefined;
+  if (!people || !waitingPeople || waiting === undefined) return undefined;
+  const who: GatherSlot['who'] = [];
+  for (const w of people) {
     if (!isObj(w) || !firstName(w.name)) return undefined;
     const note = optText(w.note, 40);
-    if (note === undefined) return undefined;
-    list.push({ name: w.name, note: note ?? null });
+    const avatar = creature(w.avatar);
+    if (note === undefined || avatar === undefined) return undefined;
+    who.push({ name: w.name, avatar, note: note ?? null });
   }
-  const waiting = names(v.waiting, 50);
-  if (!waiting) return undefined;
-  return { id: v.id, name: v.name, cap: v.cap, who: list, waiting };
+  const names: string[] = [];
+  for (const w of waitingPeople) {
+    if (!isObj(w) || !firstName(w.name)) return undefined;
+    names.push(w.name);
+  }
+  return { id: String(i), name: v.name, cap: v.cap, who, waiting: names, waiting_count: Math.max(waiting, names.length) };
 }
 
-function validCounts(v: unknown): GatherCount[] | undefined {
-  const list = v ?? [];
-  if (!Array.isArray(list) || list.length > MAX_OPTIONS) return undefined;
-  const out: GatherCount[] = [];
+/** `[{option, name?, votes}]`, named from the ballot's options. */
+function validCounts(v: unknown, names: string[]): Array<GatherCount & { option: number }> | undefined {
+  const list = arr(v, MAX_OPTIONS);
+  if (!list) return undefined;
+  const out: Array<GatherCount & { option: number }> = [];
   for (const c of list) {
-    if (!isObj(c) || !isText(c.name, 60) || !isCount(c.votes)) return undefined;
-    out.push({ name: c.name, votes: c.votes });
+    if (!isObj(c) || !isIndex(c.option) || c.option >= names.length || !isCount(c.votes)) return undefined;
+    out.push({ option: c.option, name: names[c.option], votes: c.votes });
   }
   return out;
 }
 
-function validRound(v: unknown): GatherRound | undefined {
+function validRound(v: unknown, names: string[]): GatherRound | undefined {
   if (!isObj(v)) return undefined;
-  const counts = validCounts(v.counts);
-  const out = v.out ?? [];
-  const moved = optText(v.moved, 160);
-  if (!counts || counts.length === 0 || !Array.isArray(out) || !out.every((o) => isText(o, 60)) || moved === undefined) return undefined;
-  return { counts, out: out as string[], moved: moved ?? null };
+  const counts = validCounts(v.counts, names);
+  const dropped = arr(v.dropped, MAX_OPTIONS);
+  const exhausted = v.exhausted === undefined || v.exhausted === null ? 0 : isCount(v.exhausted) ? v.exhausted : undefined;
+  if (!counts || counts.length === 0 || !dropped || exhausted === undefined) return undefined;
+  const out: string[] = [];
+  for (const d of dropped) {
+    if (!isObj(d) || !isIndex(d.option) || d.option >= names.length) return undefined;
+    out.push(names[d.option]);
+  }
+  return { counts: counts.map(({ name, votes }) => ({ name, votes })), out, exhausted };
 }
 
-function validRsvp(v: unknown): GatherInfo['rsvp'] | undefined {
-  if (!isObj(v) || !isCount(v.yes) || !isCount(v.maybe) || !isCount(v.no)) return undefined;
-  const plus = v.plus_ones === undefined || v.plus_ones === null ? 0 : isCount(v.plus_ones) ? v.plus_ones : undefined;
-  const maybe_names = names(v.maybe_names);
-  const no_names = names(v.no_names);
-  const never = optCount(v.never);
-  const food = optText(v.food, 200);
+function validRsvp(v: Record<string, unknown>, people: GatherPerson[], notAnswered: string[], members: number | null): GatherInfo['rsvp'] | undefined {
+  const c = v.counts;
+  if (!isObj(c) || !isCount(c.yes) || !isCount(c.maybe) || !isCount(c.no)) return undefined;
+  const plus = c.plus_ones === undefined || c.plus_ones === null ? 0 : isCount(c.plus_ones) ? c.plus_ones : undefined;
+  if (plus === undefined) return undefined;
+  const coming = c.coming === undefined || c.coming === null ? c.yes + plus : isCount(c.coming) ? c.coming : undefined;
+  let food: string | null | undefined = null;
+  if (v.food !== undefined && v.food !== null) {
+    const f = v.food;
+    const other = isObj(f) ? arr(f.other, 50) : undefined;
+    const counts = isObj(f) ? f.counts ?? {} : undefined;
+    if (!isObj(counts) || !other || !other.every((o) => isText(o, 80)) || !Object.entries(counts).every(([k, n]) => isFoodKey(k) && isCount(n))) food = undefined;
+    else {
+      const parts = Object.entries(counts as Record<string, number>)
+        .filter(([, n]) => n > 0)
+        .sort((a, b) => b[1] - a[1])
+        .map(([k, n]) => `${n} ${foodWord(k)}`);
+      const all = [...parts, ...(other as string[])];
+      food = all.length ? all.join(', ') : null;
+    }
+  }
   let paid: NonNullable<GatherInfo['rsvp']>['paid'] | undefined = null;
   if (v.paid !== undefined && v.paid !== null) {
     const p = v.paid;
-    const not_yet = isObj(p) ? names(p.not_yet) : undefined;
-    paid = isObj(p) && isCount(p.paid) && isCount(p.of) && p.paid <= p.of && not_yet ? { paid: p.paid, of: p.of, not_yet } : undefined;
+    const notYet = isObj(p) ? arr(p.not_yet, MAX_PEOPLE) : undefined;
+    paid = isObj(p) && isCount(p.ticked) && isCount(p.of) && p.ticked <= p.of && notYet && notYet.every(firstName) ? { ticked: p.ticked, of: p.of, not_yet: notYet as string[] } : undefined;
   }
-  if (plus === undefined || !maybe_names || !no_names || never === undefined || food === undefined || paid === undefined) return undefined;
-  return { yes: v.yes, maybe: v.maybe, no: v.no, plus_ones: plus, maybe_names, no_names, never, food: food ?? null, paid };
+  if (coming === undefined || food === undefined || paid === undefined) return undefined;
+  const by = (a: GatherAnswer) => people.filter((p) => p.answer === a).map((p) => p.name);
+  return { yes: c.yes, maybe: c.maybe, no: c.no, plus_ones: plus, coming, maybe_names: by('maybe'), no_names: by('no'), never: members ? notAnswered.length : null, food, paid };
 }
 
-function validVote(v: unknown, phase: GatherPhase): GatherInfo['vote'] | undefined {
-  if (!isObj(v) || (v.kind !== 'one_pick' && v.kind !== 'ranked') || !isCount(v.voted)) return undefined;
-  const members = optCount(v.members);
-  const voters = v.voters ?? [];
-  if (members === undefined || (members !== null && v.voted > members) || !Array.isArray(voters) || voters.length > MAX_PEOPLE) return undefined;
-  const vs: Array<{ name: string; avatar: string | null }> = [];
-  for (const p of voters) {
-    // Who voted is a name and a creature: nothing else rides along (the ballot scan rejects the rest).
+function validVote(v: Record<string, unknown>, phase: GatherPhase, members: number | null): GatherInfo['vote'] | undefined {
+  const b = v.ballot;
+  if (!isObj(b) || (b.kind !== 'one_pick' && b.kind !== 'ranked') || !isCount(v.voted)) return undefined;
+  const opts = arr(b.options, MAX_OPTIONS);
+  if (!opts || opts.length < 2) return undefined;
+  const names: string[] = [];
+  for (const [i, o] of opts.entries()) {
+    if (!isObj(o) || o.option !== i || !isText(o.name, 60)) return undefined;
+    names.push(o.name);
+  }
+  const inPlayRaw = arr(b.in_play, MAX_OPTIONS);
+  if (!inPlayRaw || !inPlayRaw.every((i) => isIndex(i) && i < names.length)) return undefined;
+  const inPlay = inPlayRaw.length ? (inPlayRaw as number[]) : names.map((_, i) => i);
+  if (members !== null && v.voted > members) return undefined;
+  const votersRaw = arr(v.voters, MAX_PEOPLE);
+  if (!votersRaw) return undefined;
+  const voters: Array<{ name: string; avatar: string | null }> = [];
+  for (const p of votersRaw) {
+    // Who voted is a name, a creature and a time: nothing else rides along (the ballot scan rejects the rest).
     if (!isObj(p) || !firstName(p.name)) return undefined;
     const avatar = creature(p.avatar);
     if (avatar === undefined) return undefined;
-    vs.push({ name: p.name, avatar });
+    voters.push({ name: p.name, avatar });
   }
-  const counts = validCounts(v.counts);
-  const rounds = v.rounds ?? [];
-  if (!counts || !Array.isArray(rounds) || rounds.length > MAX_OPTIONS) return undefined;
-  const roundList = rounds.map(validRound);
-  if (roundList.some((r) => !r)) return undefined;
-  const winner = optText(v.winner, 60);
-  const tied = v.tied ?? [];
-  const tie_note = optText(v.tie_note, 160);
-  if (winner === undefined || !Array.isArray(tied) || tied.length > MAX_OPTIONS || !tied.every((t) => isText(t, 60)) || tie_note === undefined) return undefined;
+  const options = inPlay.map((i) => ({ option: i, name: names[i] }));
+  if (phase === 'open') {
+    const live = v.live === undefined || v.live === null ? [] : validCounts(v.live, names);
+    if (!live) return undefined;
+    // Every place in play shows, 0 if nobody put it first yet.
+    const counts = options.map((o) => ({ name: o.name, votes: live.find((c) => c.option === o.option)?.votes ?? 0 }));
+    return { kind: b.kind, voted: v.voted, members, voters, options, counts, rounds: [], winner: null, outcome: null, tied: [] };
+  }
+  const r = v.result;
+  if (!isObj(r) || !OUTCOMES.includes(r.outcome as (typeof OUTCOMES)[number])) return undefined;
+  const roundsRaw = arr(r.rounds, MAX_OPTIONS + 1);
+  if (!roundsRaw) return undefined;
+  const rounds = roundsRaw.map((x) => validRound(x, names));
+  if (rounds.some((x) => !x)) return undefined;
+  const winner = r.winner === undefined || r.winner === null ? null : isObj(r.winner) && isIndex(r.winner.option) && r.winner.option < names.length ? names[r.winner.option] : undefined;
+  const tied = validCounts(r.tied, names);
+  if (winner === undefined || !tied) return undefined;
+  const outcome = r.outcome as (typeof OUTCOMES)[number];
   // A winner only exists once it's closed; a tie names at least two places and no winner.
-  if (winner && phase !== 'closed') return undefined;
-  if (phase === 'tie' && (winner || tied.length < 2)) return undefined;
-  if (winner && !counts.some((c) => c.name === winner)) return undefined;
-  return { kind: v.kind, voted: v.voted, members, voters: vs, counts, rounds: roundList as GatherRound[], winner: winner ?? null, tied: tied as string[], tie_note: tie_note ?? null };
+  if (phase === 'tie' && (outcome !== 'tie' || winner || tied.length < 2)) return undefined;
+  if (phase === 'closed' && (outcome === 'tie' || ((outcome === 'winner' || outcome === 'picked') && !winner))) return undefined;
+  const last = (rounds[rounds.length - 1] as GatherRound | undefined)?.counts ?? [];
+  // The final round's count, with every place in play (0 once it dropped out).
+  const counts = options.map((o) => ({ name: o.name, votes: last.find((c) => c.name === o.name)?.votes ?? 0 }));
+  return { kind: b.kind, voted: v.voted, members, voters, options, counts, rounds: rounds as GatherRound[], winner, outcome, tied };
 }
 
-function validNudge(v: unknown): GatherNudge | undefined {
-  if (!isObj(v) || !isText(v.id, 64) || !firstName(v.name) || !WHYS.includes(v.why as GatherNudgeWhy) || !isText(v.text, 400)) return undefined;
-  const avatar = creature(v.avatar);
-  const copied_at = optText(v.copied_at, 40);
-  const until = optText(v.until, 40);
-  if (avatar === undefined || copied_at === undefined || until === undefined) return undefined;
-  return { id: v.id, name: v.name, avatar, why: v.why as GatherNudgeWhy, text: v.text, copied_at: copied_at ?? null, until: until ?? null };
+/** The join link the card shows, for a draft's `{link}`; with none, the draft reads without it. */
+const fillLink = (text: string, url: string | null) => (url ? text.split('{link}').join(url) : text.replace(/[\s:]*\{link\}/g, ''));
+
+function validNudge(v: unknown, people: Array<{ id: string; avatar: string | null }>, url: string | null, now: Date): GatherNudge | undefined {
+  if (!isObj(v) || !firstName(v.to) || !KINDS.includes(v.kind as GatherKind) || !isText(v.text, 400)) return undefined;
+  const pid = v.player_id === undefined || v.player_id === null ? null : isText(v.player_id, 64) ? v.player_id : undefined;
+  const copied = optTime(v.copied_at);
+  const next = optTime(v.next_copy_at);
+  if (pid === undefined || copied === undefined || next === undefined || (v.can_copy !== undefined && typeof v.can_copy !== 'boolean')) return undefined;
+  const capped = v.can_copy === false || !!next;
+  return {
+    key: v.to.toLowerCase(),
+    name: v.to,
+    player_id: pid,
+    avatar: (pid && people.find((p) => p.id === pid)?.avatar) || null,
+    why: v.kind as GatherKind,
+    text: fillLink(v.text, url),
+    copied_at: copied ? showWhen(copied, now) : null,
+    until: capped ? (next ? showWhen(next, now) : 'later') : null,
+  };
 }
 
 /**
- * The `gather` part of a Pocket block (pa10b/card-impl.md "Shape I read"). Missing optional fields fall back; a wrong
- * type, a face without its part, a winner before the close, or a person carrying a ballot rejects the whole block
- * (the reply shows as markdown).
+ * The `gather` part of a Pocket block: Lin's host view plus the pocket's `title` and `expires_at`
+ * (pa10b/server-shape.md). Missing optional fields fall back; a wrong type, a face without its part, a winner
+ * before the close, or a person carrying a ballot rejects the whole block (the reply shows as markdown).
  */
-export function validGather(v: unknown): GatherInfo | undefined {
+export function validGather(v: unknown, fallbackTitle?: string, now = new Date()): GatherInfo | undefined {
   if (!isObj(v) || !GATHER_FACES.includes(v.face as GatherFace) || !GATHER_PHASES.includes(v.phase as GatherPhase)) return undefined;
   if (findBallotPair(v)) return undefined;
   const face = v.face as GatherFace;
   const phase = v.phase as GatherPhase;
   if (phase === 'tie' && face !== 'vote') return undefined;
-  if (!isText(v.title, 80) || !isText(v.closes_at, 60) || !isText(v.deletes_on, 40)) return undefined;
+  const title = v.title === undefined || v.title === null ? fallbackTitle : v.title;
+  if (!isText(title, 80) || !isText(v.expires_at, 60)) return undefined;
   const when = optText(v.when, 160);
-  const closed_at = optText(v.closed_at, 40);
-  const event_at = optText(v.event_at, 40);
-  const kept_after = optText(v.kept_after, 40);
-  const club = optText(v.club, 60);
-  const host_name = v.host_name === undefined || v.host_name === null ? null : firstName(v.host_name) ? v.host_name : undefined;
   const place = optText(v.place, 60);
-  if ([when, closed_at, event_at, kept_after, club, host_name, place].includes(undefined)) return undefined;
+  const price = optText(v.price, 60);
+  const closes = optTime(v.closes_at);
+  const event = optTime(v.event_at);
+  const host_name = v.host_name === undefined || v.host_name === null ? null : firstName(v.host_name) ? v.host_name : undefined;
+  if ([when, place, price, closes, event, host_name].includes(undefined)) return undefined;
   if (v.show_names !== undefined && v.show_names !== null && typeof v.show_names !== 'boolean') return undefined;
-  const rsvp = v.rsvp === undefined || v.rsvp === null ? null : validRsvp(v.rsvp);
-  const slotsRaw = v.slots ?? [];
-  if (!Array.isArray(slotsRaw) || slotsRaw.length > MAX_SLOTS) return undefined;
-  const slots = slotsRaw.map(validSlot);
-  let moved_up: GatherInfo['moved_up'] | undefined = null;
-  if (v.moved_up !== undefined && v.moved_up !== null) {
-    const m = v.moved_up;
-    const note = isObj(m) ? optText(m.note, 400) : undefined;
-    moved_up = isObj(m) && firstName(m.name) && isText(m.slot, 60) && firstName(m.left) && isText(m.at, 40) && note !== undefined ? { name: m.name, slot: m.slot, left: m.left, at: m.at, note: note ?? null } : undefined;
-  }
-  const vote = v.vote === undefined || v.vote === null ? null : validVote(v.vote, phase);
-  const peopleRaw = v.people ?? [];
-  const nudgesRaw = v.nudges ?? [];
-  if (!Array.isArray(peopleRaw) || peopleRaw.length > MAX_PEOPLE || !Array.isArray(nudgesRaw) || nudgesRaw.length > MAX_PEOPLE) return undefined;
-  const people = peopleRaw.map(validPerson);
-  const nudges = nudgesRaw.map(validNudge);
+  const membersN = v.members === undefined || v.members === null ? 0 : isCount(v.members) ? v.members : undefined;
+  const notAnswered = arr(v.not_answered, MAX_PEOPLE);
+  if (membersN === undefined || !notAnswered || !notAnswered.every(firstName)) return undefined;
+  const members = membersN > 0 ? membersN : null;
   const join = v.join === undefined || v.join === null ? null : validSantaJoin(v.join);
-  if (rsvp === undefined || slots.some((s) => !s) || moved_up === undefined || vote === undefined || people.some((p) => !p) || nudges.some((n) => !n) || join === undefined) return undefined;
-  // Each face carries its own part: RSVP its counts, Sign-up at least one slot, Vote its count.
+  if (join === undefined) return undefined;
+  const url = join?.anywhere_url ?? join?.wifi_url ?? null;
+
+  const peopleRaw = arr(v.people, MAX_PEOPLE);
+  if (!peopleRaw) return undefined;
+  const people = peopleRaw.map(validPerson);
+  if (people.some((p) => !p)) return undefined;
+
+  let rsvp: GatherInfo['rsvp'] | undefined = null;
+  let slots: GatherSlot[] = [];
+  let moved_up: GatherInfo['moved_up'] = null;
+  let vote: GatherInfo['vote'] | undefined = null;
+  const avatars: Array<{ id: string; avatar: string | null }> = [...(people as GatherPerson[])];
+  if (face === 'rsvp') rsvp = validRsvp(v, people as GatherPerson[], notAnswered as string[], members);
+  if (face === 'signup') {
+    const raw = arr(v.slots, MAX_SLOTS);
+    if (!raw || raw.length === 0) return undefined;
+    const list = raw.map(validSlot);
+    if (list.some((s) => !s)) return undefined;
+    slots = list as GatherSlot[];
+    for (const s of raw as Array<Record<string, unknown>>) for (const p of [...((s.people as unknown[]) ?? []), ...((s.waiting_people as unknown[]) ?? [])]) if (isObj(p) && isText(p.id, 64)) avatars.push({ id: p.id, avatar: creature(p.avatar) ?? null });
+    const moves = arr(v.moved_up, MAX_PEOPLE);
+    if (!moves) return undefined;
+    const fresh: Array<{ name: string; slot: string; at: string }> = [];
+    for (const m of moves) {
+      if (!isObj(m) || !firstName(m.name) || !isIndex(m.slot) || m.slot >= slots.length || (m.seen !== undefined && typeof m.seen !== 'boolean')) return undefined;
+      const at = optTime(m.at);
+      if (at === undefined) return undefined;
+      if (m.seen !== true) fresh.push({ name: m.name, slot: slots[m.slot].name, at: at ? showWhen(at, now) : '' });
+    }
+    if (fresh.length) {
+      const last = fresh[fresh.length - 1];
+      moved_up = { ...last, note: null, more: fresh.length - 1 };
+    }
+  }
+  if (face === 'vote') {
+    vote = validVote(v, phase, members);
+    for (const p of (v.voters as unknown[]) ?? []) if (isObj(p) && isText(p.id, 64)) avatars.push({ id: p.id, avatar: creature(p.avatar) ?? null });
+  }
+  if (rsvp === undefined || vote === undefined) return undefined;
   if (face === 'rsvp' && !rsvp) return undefined;
-  if (face === 'signup' && slots.length === 0) return undefined;
   if (face === 'vote' && !vote) return undefined;
+
+  const draftsRaw = arr(v.drafts, MAX_PEOPLE);
+  if (!draftsRaw) return undefined;
+  const nudges = draftsRaw.map((d) => validNudge(d, avatars, url, now));
+  if (nudges.some((n) => !n)) return undefined;
+  // State 6's "A note for Hana is ready" is Hana's moved-up draft.
+  if (moved_up) moved_up.note = (nudges as GatherNudge[]).find((n) => n.why === 'moved_up' && n.key === moved_up!.name.toLowerCase())?.text ?? null;
+
   return {
     face,
     phase,
-    title: v.title,
-    when: when ?? null,
-    closes_at: v.closes_at,
-    closed_at: closed_at ?? null,
-    event_at: event_at ?? null,
-    deletes_on: v.deletes_on,
-    kept_after: kept_after ?? null,
-    club: club ?? null,
-    host_name: host_name ?? null,
+    title,
+    when: when ? showDateTime(when) : null,
     place: place ?? null,
+    price: price ?? null,
+    closes_at: closes ? showDateTime(closes) : null,
+    event_at: event ? showDate(event) : null,
+    deletes_on: showDate(v.expires_at),
+    host_name: host_name ?? null,
     show_names: v.show_names !== false,
-    rsvp: face === 'rsvp' ? rsvp : null,
-    slots: face === 'signup' ? (slots as GatherSlot[]) : [],
-    moved_up: face === 'signup' ? moved_up : null,
-    vote: face === 'vote' ? vote : null,
+    members,
+    not_answered: notAnswered as string[],
+    rsvp,
+    slots,
+    moved_up,
+    vote,
     people: people as GatherPerson[],
     nudges: nudges as GatherNudge[],
     join,
@@ -306,18 +441,17 @@ export function gatherBudgetLine(b: Pick<PocketBlock, 'budget'>): string {
   return `About ${num(calls)} bot ${calls === 1 ? 'call' : 'calls'} to set this up, about ${usd(spent)}.${tail}`;
 }
 
-export const keptLine = (g: Pick<GatherInfo, 'deletes_on' | 'kept_after'>) => `Kept until ${g.deletes_on} (7 days after ${g.kept_after ?? 'it closes'}), then deleted.`;
+/** The server keeps it 7 days after the event, or after it closes when there's no event. */
+export const keptLine = (g: Pick<GatherInfo, 'deletes_on' | 'event_at'>) => `Kept until ${g.deletes_on} (7 days after ${g.event_at ? 'the event' : 'it closes'}), then deleted.`;
 
-/** "Fri 9:12 PM" in the person's own time zone. */
-const dayTime = (d: Date) => d.toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }).replace(',', '');
-const clock = (d: Date) => d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+/** The line under the title: when · place · price. */
+export const whereLine = (g: Pick<GatherInfo, 'when' | 'place' | 'price'>) => [g.when, g.place, g.price].filter(Boolean).join(' · ');
 
-/** The list the host sends the restaurant: names, plus-ones and food needs. Never paid (design §4). */
+/** The list the host sends the restaurant: names, plus-ones and food needs. Never the price or paid (design §4). */
 export function restaurantList(g: GatherInfo): string {
   const yes = g.people.filter((p) => p.answer === 'yes');
   const guests = yes.reduce((n, p) => n + p.plus_ones, 0);
-  // The restaurant gets the date and place, never the money part of the line ("€35 each, paid to Oleks").
-  const when = (g.when ?? '').split(' · ').filter((x) => x && !/paid|€|\$|£/i.test(x)).join(' · ');
+  const when = [g.when, g.place].filter(Boolean).join(' · ');
   const head = `${g.title}${when ? ` · ${when}` : ''}\n${num(yes.length + guests)} coming${guests ? ` (${num(yes.length)} + ${num(guests)} ${guests === 1 ? 'guest' : 'guests'})` : ''}`;
   const rows = yes.map((p) => `- ${p.name}${p.plus_ones ? ` +${p.plus_ones}` : ''}${p.food ? `: ${p.food}` : ''}`);
   const food = g.rsvp?.food ? `\nFood needs: ${g.rsvp.food}` : '';
@@ -335,24 +469,24 @@ export function resultLine(g: GatherInfo): string {
   if (!v?.winner) return g.title;
   const final = v.counts.find((c) => c.name === v.winner)?.votes ?? 0;
   const total = v.counts.reduce((n, c) => n + c.votes, 0);
-  return `${g.title}: ${v.winner} wins with ${final} of ${total}${v.kind === 'ranked' && v.rounds.length > 1 ? ' in the final round' : ''}.`;
+  return `${g.title}: ${v.winner} ${v.outcome === 'picked' ? `was picked after a tie at ${final} of ${total}` : `wins with ${final} of ${total}`}${v.outcome !== 'picked' && v.kind === 'ranked' && v.rounds.length > 1 ? ' in the final round' : ''}.`;
 }
 
 /** The Done row's outcome line: counts and the winner, no names or food needs (design "For Juno" #8). */
 export function gatherDoneLine(g: GatherInfo): string {
-  const when = g.closed_at ? `${g.closed_at} · ` : '';
   if (g.face === 'vote') {
     const v = g.vote!;
     const top = [...v.counts].sort((a, b) => b.votes - a.votes);
-    if (v.winner) return `${when}${v.winner} won${top.length > 1 ? `, ${top[0].votes} to ${top[1].votes}${v.kind === 'ranked' && v.rounds.length > 1 ? ' in the final round' : ''}` : ''}`;
-    return `${when}${num(v.voted)} voted`;
+    if (v.winner && v.outcome === 'picked') return `${v.winner}, picked after a tie`;
+    if (v.winner) return `${v.winner} won${top.length > 1 ? `, ${top[0].votes} to ${top[1].votes}${v.kind === 'ranked' && v.rounds.length > 1 ? ' in the final round' : ''}` : ''}`;
+    return `${num(v.voted)} voted`;
   }
   if (g.face === 'rsvp') {
     const r = g.rsvp!;
-    return `${when}${num(r.yes + r.plus_ones)} coming${r.paid ? ` · ${num(r.paid.paid)} of ${num(r.paid.of)} paid` : ''}`;
+    return `${num(r.coming)} coming${r.paid ? ` · ${num(r.paid.ticked)} of ${num(r.paid.of)} paid` : ''}`;
   }
   const n = g.slots.reduce((a, s) => a + s.who.length, 0);
-  return `${when}${people(n)} in ${g.slots.length} ${g.slots.length === 1 ? 'slot' : 'slots'}`;
+  return `${people(n)} in ${g.slots.length} ${g.slots.length === 1 ? 'slot' : 'slots'}`;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -379,7 +513,7 @@ const GatherChip: React.FC<{ g: GatherInfo }> = ({ g }) => {
     return (
       <span className="kw-chip kw-chip-ok">
         <Check size={12} aria-hidden="true" />
-        {g.closed_at ? `Closed ${g.closed_at}` : 'Closed'}
+        Closed
       </span>
     );
   if (g.face === 'vote') {
@@ -421,7 +555,7 @@ export const CountTiles: React.FC<{ r: NonNullable<GatherInfo['rsvp']> }> = ({ r
       </div>
     </div>
   );
-  const coming = r.yes + r.plus_ones;
+  const coming = r.coming;
   return (
     <div className="grid grid-cols-3 gap-2" role="group" aria-label="Answers">
       {tile('Yes', r.yes, r.plus_ones ? `+${num(r.plus_ones)} plus-ones · ${num(coming)} coming` : `${num(coming)} coming`, `${num(coming)} coming`)}
@@ -436,13 +570,13 @@ export const PaidSummary: React.FC<{ paid: NonNullable<NonNullable<GatherInfo['r
   <>
     <Row icon={<Wallet size={15} aria-hidden="true" />} aside={<OnlyYou />}>
       <strong className="font-semibold text-zinc-50 tabular-nums">
-        Paid {num(paid.paid)} of {num(paid.of)}
+        Paid {num(paid.ticked)} of {num(paid.of)}
       </strong>
       {paid.not_yet.length > 0 ? ` · not yet: ${list(paid.not_yet)}` : ' · everyone paid'}
     </Row>
     {bar && paid.of > 0 && (
       <li className="list-none">
-        <Bar value={paid.paid / paid.of} label={`${num(paid.paid)} of ${num(paid.of)} paid`} />
+        <Bar value={paid.ticked / paid.of} label={`${num(paid.ticked)} of ${num(paid.of)} paid`} />
       </li>
     )}
   </>
@@ -483,9 +617,9 @@ export const SlotList: React.FC<{ slots: GatherSlot[] }> = ({ slots }) => (
             )}
           </span>
           <span className="col-span-2 min-w-0 text-zinc-300 sm:col-span-1">{s.who.length ? s.who.map((w) => (w.note ? `${w.name} (${w.note})` : w.name)).join(', ') : 'Nobody yet'}</span>
-          {s.waiting.length > 0 && (
+          {s.waiting_count > 0 && (
             <span className="col-span-2 text-[13px] text-zinc-400 sm:col-start-3 sm:text-[12.5px]" data-waiting>
-              Waiting list: {s.waiting.map((n, i) => `${i + 1} ${n}`).join(', ')} · moves up on its own
+              Waiting list: {s.waiting.length ? s.waiting.map((n, i) => `${i + 1} ${n}`).join(', ') : people(s.waiting_count)} · moves up on its own
             </span>
           )}
         </li>
@@ -525,7 +659,8 @@ const Rounds: React.FC<{ rounds: GatherRound[] }> = ({ rounds }) =>
     <ol className="list-decimal pl-5 text-[13px] leading-[19px] text-zinc-400 marker:text-zinc-500 sm:text-[12.5px]" aria-label="How it was counted" data-rounds>
       {rounds.map((r, i) => (
         <li key={i}>
-          Round {i + 1}: {r.counts.map((c) => `${c.name} ${c.votes}`).join(' · ')}.{r.out.length ? ` ${r.out.join(' and ')} ${r.out.length === 1 ? 'drops' : 'drop'} out${r.moved ? `; ${r.moved}` : ''}.` : ''}
+          Round {i + 1}: {r.counts.map((c) => `${c.name} ${c.votes}`).join(' · ')}.{r.out.length ? ` ${r.out.join(' and ')} ${r.out.length === 1 ? 'drops' : 'drop'} out; ${r.out.length === 1 ? 'its votes move' : 'their votes move'} to each voter's next choice.` : ''}
+          {r.exhausted ? ` ${num(r.exhausted)} ${r.exhausted === 1 ? 'ballot had' : 'ballots had'} no choice left.` : ''}
         </li>
       ))}
     </ol>
@@ -673,7 +808,7 @@ export const PeoplePaidPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = 
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [all, setAll] = useState(false);
-  const total = g.rsvp ? g.rsvp.yes + g.rsvp.maybe + g.rsvp.no : g.people.length;
+  const total = g.people.length;
   const shown = all ? g.people : g.people.slice(0, SHOW_FIRST);
   const tick = async (p: GatherPerson) => {
     const was = paid[p.id] ?? p.paid === true;
@@ -716,7 +851,6 @@ export const PeoplePaidPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = 
                 <span className="flex min-w-0 flex-1 flex-col py-1.5">
                   <span className="truncate text-[15px] font-semibold text-zinc-100 sm:text-body">
                     {p.name}
-                    {p.you && <span className="font-normal text-zinc-400"> · you</span>}
                   </span>
                   <span className="truncate text-[13px] text-zinc-400 sm:text-2xs">{p.food ?? 'no food needs'}</span>
                 </span>
@@ -759,13 +893,21 @@ export const PeoplePaidPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = 
 // ---------------------------------------------------------------------------------------------------
 // Nudges (state 3): the Chaser. Nothing sends by itself.
 
-const GROUP: Record<GatherNudgeWhy, { title: string; aside: string; why: string }> = {
+const GROUP: Record<GatherKind, { title: string; aside: string; why: string }> = {
   maybe: { title: 'Said maybe', aside: 'to each person', why: 'maybe' },
   not_paid: { title: 'Not paid yet', aside: 'only to the person, never the group', why: 'not paid' },
   moved_up: { title: 'Moved up', aside: 'to each person', why: 'moved up' },
   not_answered: { title: "Haven't answered", aside: 'to each person', why: 'no answer' },
-  not_voted: { title: "Haven't voted", aside: 'to each person', why: 'not voted' },
 };
+const NOT_VOTED = { title: "Haven't voted", why: 'not voted' };
+
+/** A draft's next copy time from a host view (the action's answer or a fresh GET), shown in the person's zone. */
+function nextCopyFrom(view: unknown, to: string): string | null {
+  const v = isObj(view) && isObj(view.host_view) ? view.host_view : view;
+  const drafts = isObj(v) && Array.isArray(v.drafts) ? v.drafts : [];
+  const d = drafts.find((x) => isObj(x) && typeof x.to === 'string' && x.to.toLowerCase() === to.toLowerCase());
+  return isObj(d) && typeof d.next_copy_at === 'string' && d.next_copy_at.length <= 60 ? showWhen(d.next_copy_at) : null;
+}
 
 type Local = { at: string; until: string; capped: boolean } | 'skipped';
 const canShare = () => typeof navigator !== 'undefined' && typeof navigator.share === 'function';
@@ -778,19 +920,20 @@ export const NudgesPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = ({ b
   const focusAfter = useFocusAfterRender();
   const panelRef = useRef<HTMLElement | null>(null);
   const share = canShare();
-  const textOf = (n: GatherNudge) => texts[n.id] ?? n.text;
+  const textOf = (n: GatherNudge) => texts[n.key] ?? n.text;
   const record = async (n: GatherNudge) => {
     const now = new Date();
+    const in48 = dayTime(new Date(now.getTime() + 48 * 3600_000));
     try {
-      const r = (await pocketApi.copied(block.code, n.id)) as { until?: unknown } | null;
-      const until = r && typeof r.until === 'string' && r.until ? r.until : dayTime(new Date(now.getTime() + 48 * 3600_000));
-      setLocal((m) => ({ ...m, [n.id]: { at: clock(now), until, capped: false } }));
+      const r = await pocketApi.copied(block.code, n.name);
+      setLocal((m) => ({ ...m, [n.key]: { at: clock(now), until: nextCopyFrom(r, n.name) ?? in48, capped: false } }));
     } catch (e) {
       if (e instanceof PocketApiError && e.status === 409) {
-        // Copied inside the 48 h window: the box says until when.
-        setLocal((m) => ({ ...m, [n.id]: { at: n.copied_at ?? clock(now), until: e.until ?? 'later', capped: true } }));
+        // Copied inside the 48 h window: the box's view says until when.
+        const until = await pocketApi.read(block.code).then((v) => nextCopyFrom(v, n.name), () => null);
+        setLocal((m) => ({ ...m, [n.key]: { at: n.copied_at ?? clock(now), until: until ?? 'later', capped: true } }));
       } else {
-        setLocal((m) => ({ ...m, [n.id]: { at: clock(now), until: dayTime(new Date(now.getTime() + 48 * 3600_000)), capped: false } }));
+        setLocal((m) => ({ ...m, [n.key]: { at: clock(now), until: in48, capped: false } }));
         setNote({ kind: 'error', text: `Copied, but your box didn't note it: ${e instanceof PocketApiError ? e.message : 'something went wrong.'}` });
       }
     }
@@ -816,12 +959,14 @@ export const NudgesPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = ({ b
     await record(n);
   };
   const skip = (n: GatherNudge) => {
-    setLocal((m) => ({ ...m, [n.id]: 'skipped' }));
+    setLocal((m) => ({ ...m, [n.key]: 'skipped' }));
     setNote({ kind: 'ok', text: `Skipped ${n.name}. Nothing goes to them.` });
     focusAfter(() => panelRef.current?.querySelector<HTMLElement>('[data-nudge-open] [data-action="copy-nudge"], [data-action="copy-nudge"]'));
   };
-  const groups = (Object.keys(GROUP) as GatherNudgeWhy[]).map((why) => ({ why, rows: g.nudges.filter((n) => n.why === why) })).filter((x) => x.rows.length > 0);
-  const live = g.nudges.filter((n) => local[n.id] !== 'skipped').length;
+  const groups = (Object.keys(GROUP) as GatherKind[]).map((why) => ({ why, rows: g.nudges.filter((n) => n.why === why) })).filter((x) => x.rows.length > 0);
+  const live = g.nudges.filter((n) => local[n.key] !== 'skipped').length;
+  // A vote's missing members read "Haven't voted".
+  const words = (why: GatherKind) => (why === 'not_answered' && g.face === 'vote' ? { ...GROUP[why], ...NOT_VOTED } : GROUP[why]);
   const btn = 'kw-btn-ghost min-h-[44px] sm:min-h-[32px] whitespace-nowrap text-[14px] px-2.5 sm:px-3 sm:text-meta';
   const primary = 'kw-btn-primary kw-hover-deepen min-h-[44px] sm:min-h-[32px] whitespace-nowrap text-[14px] px-2.5 sm:px-3 sm:text-meta';
   return (
@@ -840,29 +985,30 @@ export const NudgesPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = ({ b
         <p className="px-3.5 py-3 text-[15px] text-zinc-400 sm:text-[13px]">No nudges needed right now. Everyone has answered{g.face === 'rsvp' ? ' and paid' : ''}.</p>
       ) : (
         groups.map(({ why, rows }) => {
-          const shownRows = rows.filter((n) => local[n.id] !== 'skipped');
+          const shownRows = rows.filter((n) => local[n.key] !== 'skipped');
           // The first row in each group that can be copied now is open with its draft.
-          const openId = shownRows.find((n) => !n.until && !local[n.id])?.id ?? null;
+          const openId = shownRows.find((n) => !n.until && !local[n.key])?.key ?? null;
+          const w = words(why);
           return (
-            <div key={why} role="group" aria-label={`${GROUP[why].title} · ${shownRows.length}`}>
+            <div key={why} role="group" aria-label={`${w.title} · ${shownRows.length}`}>
               <div className="flex justify-between gap-2 border-b border-hairline bg-sky-500/[0.06] px-3.5 py-2 text-[13px] font-bold text-zinc-300 sm:text-2xs">
                 <span>
-                  {GROUP[why].title} · {num(shownRows.length)}
+                  {w.title} · {num(shownRows.length)}
                 </span>
-                <span className="font-medium text-zinc-400">{GROUP[why].aside}</span>
+                <span className="font-medium text-zinc-400">{w.aside}</span>
               </div>
               <ul>
                 {shownRows.map((n) => {
-                  const l = local[n.id];
+                  const l = local[n.key];
                   const done = l && l !== 'skipped' ? l : null;
                   const capped = !!n.until && !done;
-                  const open = n.id === openId;
+                  const open = n.key === openId;
                   return (
-                    <li key={n.id} className="grid grid-cols-[28px_minmax(0,1fr)] gap-x-2.5 gap-y-1 border-b border-hairline px-3.5 py-2.5 last:border-b-0" data-nudge={n.name} data-nudge-open={open || undefined}>
+                    <li key={n.key} className="grid grid-cols-[28px_minmax(0,1fr)] gap-x-2.5 gap-y-1 border-b border-hairline px-3.5 py-2.5 last:border-b-0" data-nudge={n.name} data-nudge-open={open || undefined}>
                       <GuestCreature avatar={n.avatar} size={26} />
                       <div className="flex min-h-[28px] flex-wrap items-center gap-2 text-[15px] font-semibold text-zinc-100 sm:text-[13.5px]">
                         {n.name}
-                        <span className="text-[13px] font-medium text-zinc-400 sm:text-2xs">{GROUP[why].why}</span>
+                        <span className="text-[13px] font-medium text-zinc-400 sm:text-2xs">{w.why}</span>
                         {done ? (
                           <span className="kw-chip" data-chip="copied">
                             <Check size={12} aria-hidden="true" />
@@ -882,13 +1028,13 @@ export const NudgesPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = ({ b
                         )}
                       </div>
                       {open &&
-                        (editing === n.id ? (
+                        (editing === n.key ? (
                           <textarea
                             autoFocus
                             aria-label={`${n.name}'s note`}
                             maxLength={400}
                             value={textOf(n)}
-                            onChange={(e) => setTexts((m) => ({ ...m, [n.id]: e.target.value }))}
+                            onChange={(e) => setTexts((m) => ({ ...m, [n.key]: e.target.value }))}
                             className="col-start-2 min-h-[88px] rounded-lg border border-hairline-strong bg-surface-raised px-2.5 py-2 text-[15px] leading-[22px] text-zinc-100 kw-focus sm:text-[13px] sm:leading-[19px]"
                           />
                         ) : (
@@ -916,9 +1062,9 @@ export const NudgesPanel: React.FC<{ block: PocketBlock; g: GatherInfo }> = ({ b
                               Share…
                             </button>
                           )}
-                          <button type="button" onClick={() => setEditing(editing === n.id ? null : n.id)} aria-pressed={editing === n.id} className={btn} data-action="edit-nudge">
+                          <button type="button" onClick={() => setEditing(editing === n.key ? null : n.key)} aria-pressed={editing === n.key} className={btn} data-action="edit-nudge">
                             <Pencil size={14} aria-hidden="true" />
-                            {editing === n.id ? 'Done' : 'Edit'}
+                            {editing === n.key ? 'Done' : 'Edit'}
                           </button>
                           <button type="button" onClick={() => skip(n)} className={btn} data-action="skip-nudge">
                             Skip
@@ -994,7 +1140,7 @@ const RsvpRows: React.FC<{ g: GatherInfo; nudges: number }> = ({ g, nudges }) =>
           </Row>
         )}
         {r.paid && <PaidSummary paid={r.paid} />}
-        <Row icon={<Clock size={15} aria-hidden="true" />}>Closes {g.closes_at}. Members can change their answer until then.</Row>
+        {g.closes_at && <Row icon={<Clock size={15} aria-hidden="true" />}>Closes {g.closes_at}. Members can change their answer until then.</Row>}
         {nudges > 0 && (
           <Row icon={<BellRing size={15} aria-hidden="true" />}>
             <strong className="font-semibold text-zinc-50 tabular-nums">
@@ -1018,7 +1164,8 @@ const SignupRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
           <li className="flex items-start gap-2 text-[15px] leading-[22px] text-ok sm:text-[13px] sm:leading-5">
             <ArrowUp size={15} className={ICON} aria-hidden="true" />
             <span className="min-w-0 flex-1">
-              {m.left} left {m.slot} at {m.at}. <strong className="font-semibold">{m.name} moved up</strong> from the waiting list on their own; {m.name}'s page already says so.
+              A spot opened in {m.slot}{m.at ? ` at ${m.at}` : ''}. <strong className="font-semibold">{m.name} moved up</strong> from the waiting list on their own; {m.name}'s page already says so.
+              {m.more > 0 ? ` ${num(m.more)} more moved up too; the slots below show who.` : ''}
             </span>
             <Sticker tone="ink" size="sm" ariaLabel={`New: ${m.name} moved up`}>
               New
@@ -1033,7 +1180,7 @@ const SignupRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
       )}
       <SlotList slots={g.slots} />
       <ul className="flex flex-col gap-2">
-        <Row icon={<Clock size={15} aria-hidden="true" />}>Sign-ups close {g.closes_at}.</Row>
+        {g.closes_at && <Row icon={<Clock size={15} aria-hidden="true" />}>Sign-ups close {g.closes_at}.</Row>}
         <KeptRow g={g} />
       </ul>
     </>
@@ -1076,23 +1223,22 @@ const VoteRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
             </Row>
           )}
           <Row icon={<EyeOff size={15} aria-hidden="true" />}>You see who voted, never what they picked.{g.show_names ? ' Members see the live count after they vote.' : ''}</Row>
-          <Row icon={<Clock size={15} aria-hidden="true" />}>Closes {g.closes_at}.</Row>
+          {g.closes_at && <Row icon={<Clock size={15} aria-hidden="true" />}>Closes {g.closes_at}.</Row>}
           <KeptRow g={g} />
         </ul>
       </>
     );
   if (g.phase === 'tie') {
-    const tied = v.counts.filter((c) => v.tied.includes(c.name));
+    const tied = v.tied.map(({ name, votes }) => ({ name, votes }));
     return (
       <>
         <ul className="flex flex-col gap-2">
           <Row tone="warn" icon={<AlertTriangle size={15} aria-hidden="true" />}>
-            {v.tied.join(' and ')} have <strong className="font-semibold text-zinc-50 tabular-nums">{tied[0]?.votes ?? 0} each</strong>
-            {v.kind === 'ranked' && v.rounds.length > 1 ? ' in the final round' : ''}
-            {v.tie_note ? `, and ${v.tie_note}` : ''}.
+            {list(tied.map((t) => t.name)).replace(/, ([^,]*)$/, ' and $1')} have <strong className="font-semibold text-zinc-50 tabular-nums">{tied[0]?.votes ?? 0} each</strong>
+            {v.kind === 'ranked' && v.rounds.length > 1 ? ' in the final round' : ''}.
           </Row>
         </ul>
-        <VoteBars counts={tied} total={tied.reduce((n, c) => n + c.votes, 0)} lead={v.tied} />
+        <VoteBars counts={tied} total={tied.reduce((n, c) => n + c.votes, 0)} lead={tied.map((t) => t.name)} />
         <ul className="flex flex-col gap-2">
           <Row icon={<Info size={15} aria-hidden="true" />}>Members see "Tie: {g.host_name ?? 'the host'} picks" until you choose. No winner is shown yet.</Row>
         </ul>
@@ -1109,11 +1255,11 @@ const VoteRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
           <li className="flex flex-wrap items-center gap-2 text-[15px] leading-[22px] text-ok sm:text-[13px] sm:leading-5" data-winner>
             <Trophy size={15} className="shrink-0" aria-hidden="true" />
             <span className="min-w-0">
-              <strong className="font-semibold">{winner}</strong> wins with{' '}
+              <strong className="font-semibold">{winner}</strong> {v.outcome === 'picked' ? 'is your pick after a tie at' : 'wins with'}{' '}
               <strong className="font-semibold tabular-nums">
                 {won} of {total}
               </strong>
-              {v.kind === 'ranked' && v.rounds.length > 1 ? ' in the final round' : ''}
+              {v.outcome !== 'picked' && v.kind === 'ranked' && v.rounds.length > 1 ? ' in the final round' : ''}
             </span>
             {earnedPicked(g) && (
               <Sticker tone="holo" size="sm" ariaLabel={`Picked: ${winner} won the count`}>
@@ -1151,7 +1297,7 @@ const RsvpResult: React.FC<{ g: GatherInfo }> = ({ g }) => {
         <li className="flex items-start gap-2 text-[15px] leading-[22px] text-ok sm:text-[13px] sm:leading-5">
           <CheckCircle2 size={15} className={ICON} aria-hidden="true" />
           <span>
-            <strong className="font-semibold tabular-nums">{num(r.yes + guests)} coming</strong>
+            <strong className="font-semibold tabular-nums">{num(r.coming)} coming</strong>
             {guests ? ` (${num(r.yes)} members + ${num(guests)} plus-ones)` : ''} · {num(r.no)} no{r.never !== null ? ` · ${num(r.never)} never answered` : ''}
           </span>
         </li>
@@ -1205,7 +1351,7 @@ export function signupSummary(g: GatherInfo): string {
       : open.length === g.slots.length
         ? `No slot is full yet.`
         : `Every slot is full except ${open.map((s) => `${s.name} (${s.who.length} of ${s.cap})`).join(', ')}.`;
-  const waiting = g.slots.filter((s) => s.waiting.length).map((s) => `${list(s.waiting)} stayed on the ${s.name} waiting list.`);
+  const waiting = g.slots.filter((s) => s.waiting_count).map((s) => (s.waiting.length ? `${list(s.waiting)} stayed on the ${s.name} waiting list.` : `${people(s.waiting_count)} stayed on the ${s.name} waiting list.`));
   return [head, ...waiting].join(' ');
 }
 
@@ -1362,7 +1508,7 @@ const GatherActions: React.FC<{
   setPanel: (p: Panel) => void;
   ask: (t: string) => void;
   onConfirm: (k: ConfirmKind) => void;
-  onPick: (name: string) => void;
+  onPick: (t: { option: number; name: string }) => void;
   onRevote: () => void;
   busy: boolean;
 }> = ({ block, g, panel, setPanel, ask, onConfirm, onPick, onRevote, busy }) => {
@@ -1383,8 +1529,8 @@ const GatherActions: React.FC<{
     return (
       <div className={GRID}>
         {g.vote!.tied.map((t) => (
-          <button key={t} type="button" disabled={busy} onClick={() => onPick(t)} className={`${PRIMARY} ${FULL}`} data-action="pick">
-            Pick {t}
+          <button key={t.option} type="button" disabled={busy} onClick={() => onPick(t)} className={`${PRIMARY} ${FULL}`} data-action="pick">
+            Pick {t.name}
           </button>
         ))}
         <button type="button" disabled={busy} onClick={onRevote} className={`${GHOST} ${FULL} sm:ml-auto`} data-action="revote">
@@ -1412,7 +1558,7 @@ const GatherActions: React.FC<{
       return (
         <div className={GRID}>
           <CopyButton primary text={restaurantList(g)} label="Copy list for the restaurant" done="List copied" action="copy-list" />
-          {unpaid && <CopyButton text={unpaid.text} label={`Nudge ${unpaid.name}`} done="Copied, not sent" icon={<BellRing size={14} aria-hidden="true" />} action="nudge-one" onCopied={() => void pocketApi.copied(block.code, unpaid.id).catch(() => undefined)} />}
+          {unpaid && <CopyButton text={unpaid.text} label={`Nudge ${unpaid.name}`} done="Copied, not sent" icon={<BellRing size={14} aria-hidden="true" />} action="nudge-one" onCopied={() => void pocketApi.copied(block.code, unpaid.name).catch(() => undefined)} />}
           {later(<Trash2 size={14} aria-hidden="true" />, GATHER_LATER.deleteAnswers, 'Delete answers now')}
         </div>
       );
@@ -1496,15 +1642,16 @@ export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void
       setDone({ kind: 'ok', text: ok, final });
       setConfirm(null);
     } catch (e) {
-      const until = e instanceof PocketApiError && e.status === 409 && e.until ? ` Try again from ${e.until}.` : ' Try again.';
-      setDone({ kind: 'error', text: `Couldn't do that: ${e instanceof PocketApiError ? e.message : 'something went wrong.'}${until}`, final: false });
+      setDone({ kind: 'error', text: `Couldn't do that: ${e instanceof PocketApiError ? e.message : 'something went wrong.'} Try again.`, final: false });
     } finally {
       setBusy(false);
     }
   };
   const act = (k: ConfirmKind) =>
-    run(() => pocketApi.end(block.code), k === 'close' ? 'Voting is closed. The final count shows here in a moment.' : `${g.title} is stopped. Members see that it's closed.`, true);
-  const pick = (name: string) => run(() => pocketApi.pick(block.code, name), `You picked ${name}. Members see it now.`, true);
+    k === 'close'
+      ? run(() => pocketApi.closeNow(block.code), 'Voting is closed. The final count shows here in a moment.', true)
+      : run(() => pocketApi.end(block.code), `${g.title} is stopped. Members see that it's closed.`, true);
+  const pick = (t: { option: number; name: string }) => run(() => pocketApi.pick(block.code, t.option), `You picked ${t.name}. Members see it now.`, true);
   const revote = () => run(() => pocketApi.revote24h(block.code), 'Voting is open again for 24 hours. Members can change their ranking.', true);
   const close = () => {
     const k = confirm;
@@ -1534,10 +1681,9 @@ export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void
         <div className="min-w-0 flex-1">
           <div className="text-2xs font-semibold text-sky-300">
             Pocket app · {FACE_LABEL[g.face]}
-            {g.club ? ` · ${g.club}` : ''}
           </div>
           <h3 className="text-[20px] font-bold leading-[26px] text-zinc-50 sm:text-[19px]">{g.title}</h3>
-          {(g.when ?? block.when) && <p className="text-[15px] text-zinc-300 sm:text-[13px]">{g.when ?? block.when}</p>}
+          {(whereLine(g) || block.when) && <p className="text-[15px] text-zinc-300 sm:text-[13px]">{whereLine(g) || block.when}</p>}
           <span className="mt-1.5 block sm:hidden">
             <GatherChip g={g} />
           </span>
