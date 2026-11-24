@@ -86,8 +86,8 @@ test('a: no lead known, or an @mention typed: plain "Answers: <who>" without "le
 });
 
 test('a: the chip keeps a 2 px sky-400 focus ring with a 2 px offset, 44 px to tap on a phone, and no motion under reduced motion', () => {
-  const block = chat.slice(chat.indexOf('data-answers-chip'), chat.indexOf('</button>', chat.indexOf('data-answers-chip')));
-  const cls = chat.slice(chat.lastIndexOf('className={`kw-chip', chat.indexOf('data-answers-chip')), chat.indexOf('data-answers-chip'));
+  const block = chat.slice(chat.indexOf('data-answers-chip=""'), chat.indexOf('</button>', chat.indexOf('data-answers-chip=""')));
+  const cls = chat.slice(chat.lastIndexOf('className={`kw-chip', chat.indexOf('data-answers-chip=""')), chat.indexOf('data-answers-chip=""'));
   assert.match(cls, /focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400/);
   assert.match(cls, /\$\{phone \? 'kws-hit h-8' : ''\}/, 'drawn 32 px on a phone, kws-hit makes it 48 to the touch');
   assert.match(block, /transition-transform duration-150 motion-reduce:transition-none/);
@@ -241,4 +241,81 @@ test('a: the chip\'s 14 px lead face rests (no working ring running into "leads"
   const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
   const lead = src.slice(src.indexOf('data-answer-lead'), src.indexOf('data-answer-lead') + 400);
   assert.match(lead, /size=\{14\} kwantId=\{lead\.id\} mood="idle"/);
+});
+
+test('a: F1b, the chip\'s "@" goes on a tap outside and when typed words close the list; typed names and the @ button stay', async () => {
+  localStorage.clear();
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const outside = document.createElement('button');
+  document.body.appendChild(outside);
+  const root = m.createRoot(host);
+  m.flushSync(() => root.render(h(m.ChatView, propsOf())));
+  const field = () => host.querySelector('textarea[data-composer]');
+  const chip = () => host.querySelector('[data-answers-chip]');
+  const PE = window.PointerEvent ?? window.MouseEvent;
+  const tapOutside = () => outside.dispatchEvent(new PE('pointerdown', { bubbles: true }));
+  const setField = (v) => {
+    const el = field();
+    Object.getOwnPropertyDescriptor(window.HTMLTextAreaElement.prototype, 'value').set.call(el, v);
+    el.setSelectionRange(v.length, v.length);
+    el.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+  const is = async (want, why) => assert.ok(await until(() => field().value === want), `${why}: want ${JSON.stringify(want)}, got ${JSON.stringify(field().value)}`);
+
+  // "" → chip → tap outside → "", list closed.
+  chip().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await listOpen(host);
+  tapOutside();
+  await listClosed(host);
+  await is('', 'tap outside');
+  // "hello" → chip → tap outside → "hello".
+  setField('hello');
+  await is('hello', 'typed');
+  chip().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await listOpen(host);
+  await is('hello @', 'chip');
+  tapOutside();
+  await listClosed(host);
+  await is('hello', 'tap outside keeps the words');
+  // "" → chip → type "Back up" → "Back up" (Back matches Backtester; the space closes the list).
+  setField('');
+  await is('', 'cleared');
+  chip().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await listOpen(host);
+  setField('@Back');
+  setField('@Back up');
+  await listClosed(host);
+  await is('Back up', 'words that are not a name drop only the chip\'s @');
+  // "" → chip → type "zzz" (nobody) → "zzz".
+  setField('');
+  chip().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await listOpen(host);
+  setField('@zzz');
+  await listClosed(host);
+  await is('zzz', 'no match');
+  // "" → chip → type a whole name and a space → the mention stays.
+  setField('');
+  chip().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await listOpen(host);
+  setField('@Quant ');
+  await listClosed(host);
+  await is('@Quant ', 'a typed name is kept');
+  // "" → chip → "Qu" → Escape → "@Qu" kept.
+  setField('');
+  chip().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await listOpen(host);
+  setField('@Qu');
+  field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await listClosed(host);
+  await is('@Qu', 'Escape after typing keeps the typed name');
+  // A hand-typed "@" → tap outside: unchanged from today (list stays, "@" stays).
+  setField('@');
+  await listOpen(host);
+  tapOutside();
+  await new Promise((r) => setTimeout(r, 50));
+  await is('@', 'hand-typed @ untouched');
+  root.unmount();
+  host.remove();
+  outside.remove();
 });

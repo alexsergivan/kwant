@@ -349,7 +349,7 @@ test('ChatView keeps one phone flag after the rebase on #307: useMedia(PHONE_QUE
 test('composer-diet a: the Ask row is gone on a phone too; the Answers chip draws 32 px and taps 44+ (kws-hit)', () => {
   const src = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
   assert.doesNotMatch(src, /aria-label="Ask a member"/);
-  const at = src.indexOf('data-answers-chip');
+  const at = src.indexOf('data-answers-chip=""');
   assert.match(src.slice(src.lastIndexOf('<button', at), at), /\$\{phone \? 'kws-hit h-8' : ''\}/);
   assert.match(src.slice(at, at + 120), /data-compact=\{phone \? '' : undefined\}/, 'out of the 44 px min-height rule; kws-hit carries the touch area');
 });

@@ -973,6 +973,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionStartIndex, setMentionStartIndex] = useState<number>(-1);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // composer-diet a: the "@" the Answers chip typed, and how its list closed (see answersChipTap).
+  const chipUndo = useRef<{ before: string; after: string } | null>(null);
+  const chipClose = useRef<'pick' | 'dismiss' | null>(null);
 
   const checkMention = (text: string, cursorPos: number | null) => {
     if (cursorPos === null || cursorPos === undefined) {
@@ -1025,6 +1028,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const textBefore = inputVal.slice(0, mentionStartIndex);
     const textAfter = inputVal.slice(cursorPos);
     markNewSeen('mention');
+    chipClose.current = 'pick';
     const mentionText = `@${item.name} `;
     const newVal = `${textBefore}${mentionText}${textAfter}`;
     setInputVal(newVal);
@@ -1800,6 +1804,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       }
       if (e.key === 'Escape') {
         e.preventDefault();
+        chipClose.current = 'dismiss';
         setMentionQuery(null);
         return;
       }
@@ -2695,19 +2700,37 @@ export const ChatView: React.FC<ChatViewProps> = ({
     requestAnimationFrame(() => checkMention(next, next.length));
     return next;
   };
-  // composer-diet a (Mira F1): the Answers chip opens the list by typing "@"; closed with no pick and nothing typed,
-  // that "@" goes again, so the next message never starts with a stray "@". A second tap closes the list (Rigel F2).
-  const chipUndo = useRef<{ before: string; after: string } | null>(null);
+  // composer-diet a (Mira F1, F1b): the Answers chip opens the list by typing "@"; that "@" is the chip's, not the
+  // person's. How the list closes decides what happens to it:
+  //   a pick keeps "@Name "; Escape, a second tap or a tap outside take the "@" back when nothing was typed after it
+  //   (a typed "@Qu" stays: the person wrote a name); closing by typing words that aren't a name drops only the "@".
+  // The @ button and a hand-typed "@" never set chipUndo, so they keep today's behaviour (Rigel F2: second tap closes).
   const answersChipTap = () => {
     markNewSeen('mention');
     if (isMentionOpen && chipUndo.current) {
+      chipClose.current = 'dismiss';
       setMentionQuery(null);
       setMentionStartIndex(-1);
       return;
     }
     const before = inputVal;
+    chipClose.current = null;
     chipUndo.current = { before, after: insertAt() };
   };
+  // F1b: a tap outside the list (and the chip and the field) closes a list the chip opened. Layout effect: listening
+  // from the same frame the list appears, so a quick tap away is never missed.
+  useLayoutEffect(() => {
+    if (!isMentionOpen || !chipUndo.current) return;
+    const away = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (t?.closest?.('#kw-mention-list, [data-answers-chip], textarea[data-composer]')) return;
+      chipClose.current = 'dismiss';
+      setMentionQuery(null);
+      setMentionStartIndex(-1);
+    };
+    document.addEventListener('pointerdown', away, true);
+    return () => document.removeEventListener('pointerdown', away, true);
+  }, [isMentionOpen]);
   const mentionWasOpen = useRef(false);
   useEffect(() => {
     if (isMentionOpen) {
@@ -2717,8 +2740,22 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!mentionWasOpen.current) return;
     mentionWasOpen.current = false;
     const undo = chipUndo.current;
+    const how = chipClose.current;
     chipUndo.current = null;
-    if (undo && inputVal === undo.after) setInputVal(undo.before);
+    chipClose.current = null;
+    if (!undo || how === 'pick') return;
+    if (inputVal === undo.after) {
+      setInputVal(undo.before);
+      return;
+    }
+    if (how === 'dismiss' || !inputVal.startsWith(undo.after)) return;
+    // Closed by typing: keep a typed name ("@Quant "), else drop only the chip's "@" and keep every word.
+    const rest = inputVal.slice(undo.after.length);
+    const word = rest.match(/^[a-zA-Z0-9_-]*/)?.[0].toLowerCase() ?? '';
+    if (word && mentionItems.some((i) => i.name.toLowerCase() === word)) return;
+    const next = undo.after.slice(0, -1) + rest;
+    setInputVal(next);
+    afterRender(() => textareaRef.current?.setSelectionRange(next.length, next.length));
   }, [isMentionOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 18f: once the reply has words the steps fold (desktop: the saved reply's row; phone: the compact row as is) and
