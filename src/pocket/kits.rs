@@ -176,6 +176,12 @@ pub trait Kit: Send + Sync + 'static {
     fn tick(&self, _ctx: &mut KitCtx, _state: &mut Value) -> bool {
         false
     }
+    /// Host actions that still work after the pocket ended, while its data is kept (pa14b: the
+    /// Wall's `set_best`, so the host can show the best 30 picked the morning after; pa10c: Gather's
+    /// `delete_answers`, "Delete answers now"). None by default.
+    fn host_actions_after_end(&self) -> &'static [&'static str] {
+        &[]
+    }
     /// `true` when the kit's timers must run even while nobody watches (a draw or a reveal
     /// weeks away): the sweeper then ticks its open pockets once a minute.
     fn ticks_unwatched(&self) -> bool {
@@ -259,11 +265,6 @@ pub trait Kit: Send + Sync + 'static {
     /// last message). The sweeper deletes each: their row, keys, events, threads and kit state.
     fn idle_players(&self, _ctx: &KitCtx, _state: &Value) -> Vec<String> {
         Vec::new()
-    }
-    /// pa10c: a host action that still works after the pocket ended (its data stays until the
-    /// deletion date), such as Gather's "Delete answers now".
-    fn acts_after_end(&self, _name: &str) -> bool {
-        false
     }
     /// pa10c: `true` once the host deleted everyone's answers: the core then deletes every
     /// player (removed ones too), their guest keys and their events, keeping the pocket.

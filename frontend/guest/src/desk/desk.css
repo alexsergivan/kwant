@@ -1,0 +1,88 @@
+/* ===================== pa13 front desk (Guest Guide): the guest chat page (guest/src/desk). From pa13/pocket.css ".gc*",
+   Mira Nov 24. Kit variables only (the token block is guest.css). Ships beside the desk chunk, so other kits never load it. */
+
+/* The chat is one screen tall: the bar, the thread (it scrolls), quick questions and the composer pinned at the bottom. */
+.g.gc { height: 100vh; height: 100dvh; min-height: 0; }
+.gc .chat { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.gc .tw { flex: 1; min-height: 0; position: relative; display: flex; flex-direction: column; }
+.gc .thread { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 14px 12px 10px; display: flex; flex-direction: column; gap: 12px; }
+/* Short threads sit at the bottom, next to the composer, like the mockup. */
+.gc .thread > :first-child { margin-top: auto; }
+.gc .thread:focus-visible { outline-offset: -3px; }
+
+.gm { display: flex; gap: 8px; align-items: flex-end; max-width: 100%; }
+.gm .av { flex-shrink: 0; width: 28px; }
+.gm .col { min-width: 0; display: flex; flex-direction: column; gap: 4px; max-width: min(300px, calc(100% - 36px)); }
+.gm .who { font-size: 12px; line-height: 16px; color: var(--zinc-400); display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.gm .who b { color: var(--zinc-200); font-weight: 600; }
+.gm .b { padding: 10px 14px; font-size: 16px; line-height: 23px; color: var(--zinc-50); border-radius: 4px 18px 18px 18px; background: var(--kw-surface-raised); border: 1px solid var(--kw-hairline-strong); overflow-wrap: anywhere; white-space: pre-wrap; }
+.gm.me { justify-content: flex-end; }
+.gm.me .col { align-items: flex-end; max-width: min(300px, 85%); }
+.gm.me .b { border-radius: 18px 4px 18px 18px; background: var(--sky-800); border-color: var(--sky-700); }
+.gm.me .t { font-size: 12px; color: var(--zinc-400); display: flex; gap: 4px; align-items: center; }
+.gm.me.sending .b { opacity: .72; }
+.gm.me .b { transition: opacity 120ms var(--kw-ease); }
+.gm.me.failed .b { background: transparent; border: 1px dashed color-mix(in srgb, var(--kw-bad) 70%, transparent); }
+.gm.host .b { background: var(--kw-surface-main); border: 2px solid var(--sky-300); }
+.hostav { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--sky-300); color: var(--kw-surface-rail); font-weight: 800; font-size: 14px; line-height: 1; }
+.hostav svg.pi { width: 14px; height: 14px; }
+.hosttag { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 700; color: var(--kw-surface-rail); background: var(--sky-300); }
+.bottag { display: inline-flex; align-items: center; height: 18px; padding: 0 7px; border-radius: 999px; font-size: 11px; font-weight: 700; color: var(--zinc-300); border: 1px solid var(--kw-hairline-strong); }
+.gnote { align-self: stretch; display: flex; gap: 8px; align-items: flex-start; padding: 10px 12px; border-radius: 12px; font-size: 14px; line-height: 20px; color: var(--zinc-200); background: var(--kw-surface-main); border: 1px solid var(--kw-hairline-strong); }
+.gnote svg.pi { width: 14px; height: 14px; margin-top: 3px; color: var(--zinc-400); }
+.gnote b { color: var(--zinc-50); }
+.gnote.warn { border-color: color-mix(in srgb, var(--kw-warn) 40%, transparent); }
+.gnote.warn svg.pi { color: var(--kw-warn); }
+.gday { align-self: center; font-size: 12px; color: var(--zinc-400); font-weight: 600; }
+.typing { display: inline-flex; gap: 5px; align-items: center; height: 23px; }
+.typing i { width: 7px; height: 7px; border-radius: 2px; background: var(--zinc-300); animation: pa13-dot 1.2s steps(1) infinite; opacity: .35; }
+.typing i:nth-child(2) { animation-delay: .2s; }
+.typing i:nth-child(3) { animation-delay: .4s; }
+@keyframes pa13-dot { 0% { opacity: .35; } 33% { opacity: 1; } 66% { opacity: .35; } }
+.waitpill { align-self: center; display: inline-flex; gap: 8px; align-items: center; min-height: 32px; padding: 0 12px; border-radius: 999px; font-size: 13px; font-weight: 600; color: var(--zinc-100); border: 1px solid var(--kw-hairline-strong); background: var(--kw-surface-raised); margin: 0; }
+.waitpill svg.pi { width: 13px; height: 13px; }
+/* "New message": the card's pill, floating over the end of the thread while the guest reads further up. */
+.newpill { position: absolute; left: 50%; bottom: 10px; transform: translateX(-50%); min-height: 44px; padding: 0 16px; cursor: pointer; }
+.newpill[hidden] { display: none; }
+
+.gstart { display: flex; flex-wrap: wrap; gap: 8px; padding: 0 12px 10px; }
+.gstart button { display: inline-flex; align-items: center; min-height: 44px; padding: 0 16px; border-radius: 999px; border: 1px solid var(--sky-700); background: color-mix(in srgb, var(--sky-500) 12%, var(--kw-surface-main)); font-size: 15px; font-weight: 600; color: var(--sky-200); cursor: pointer; }
+.gcomp { border-top: 1px solid var(--kw-hairline); padding: 10px 12px calc(12px + env(safe-area-inset-bottom)); display: grid; gap: 8px; background: var(--kw-surface-rail); }
+.gcomp .row { display: grid; grid-template-columns: minmax(0, 1fr) 48px; gap: 8px; align-items: end; }
+.gcomp .in { display: block; width: 100%; min-height: 48px; max-height: 140px; field-sizing: content; resize: none; border-radius: 16px; background: var(--kw-surface-main); border: 2px solid var(--zinc-700); padding: 11px 14px; font: inherit; font-size: 16px; line-height: 22px; color: var(--zinc-50); outline: none; }
+.gcomp .in::placeholder { color: var(--zinc-500); }
+.gcomp .in:focus { border-color: var(--sky-400); }
+.gcomp .in.over { border-color: color-mix(in srgb, var(--kw-warn) 70%, transparent); }
+.gcomp .in.off, .gcomp .in:disabled { border-style: dashed; color: var(--zinc-400); background: transparent; }
+.gcomp .send { width: 48px; height: 48px; border-radius: 16px; background: var(--sky-600); border: 1px solid var(--sky-500); color: white; display: grid; place-items: center; cursor: pointer; }
+.gcomp .send svg.pi { width: 18px; height: 18px; }
+.gcomp .send.off, .gcomp .send:disabled { background: var(--zinc-800); border-color: var(--zinc-700); color: var(--zinc-500); cursor: default; }
+.gcomp .hint { display: flex; justify-content: space-between; gap: 8px; font-size: 13px; line-height: 18px; color: var(--zinc-400); }
+.gcomp .hint[hidden] { display: none; }
+.gcomp .hint b { color: var(--zinc-100); }
+.gcomp .hint .over { white-space: nowrap; color: var(--kw-warn); font-weight: 700; font-variant-numeric: tabular-nums; }
+.gretry { display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border-radius: 12px; border: 1px solid var(--kw-hairline-strong); background: var(--kw-surface-raised); font-size: 14px; font-weight: 600; color: var(--zinc-50); cursor: pointer; }
+.gretry svg.pi { width: 14px; height: 14px; }
+.offbar { display: flex; gap: 10px; align-items: center; padding: 8px 12px 8px 16px; background: color-mix(in srgb, var(--kw-warn) 10%, var(--kw-surface-rail)); border-bottom: 1px solid color-mix(in srgb, var(--kw-warn) 30%, transparent); font-size: 14px; line-height: 20px; color: var(--zinc-100); }
+.offbar svg.pi { color: var(--kw-warn); width: 14px; height: 14px; }
+.offbar .grow { flex: 1; min-width: 0; }
+
+/* G1 / G11 */
+.dk .say .b { font-size: 15px; line-height: 22px; border-radius: 12px; }
+.dk .sub2 { font-size: 15px; line-height: 21px; margin: 4px 0 0; }
+.ginfos { display: grid; gap: 8px; }
+.ginfo { font-size: 14px; line-height: 20px; color: var(--zinc-300); display: flex; gap: 8px; align-items: flex-start; margin: 0; }
+.ginfo svg.pi { margin-top: 3px; color: var(--zinc-400); width: 13px; height: 13px; }
+.dk .gbtn svg.pi { width: 18px; height: 18px; margin-right: 8px; }
+.dk[data-screen="ended"] .keep { text-align: left; margin-top: 8px; }
+
+/* Motion: a new bubble fades in and moves 8 px up (160 ms); notes and the pill fade in (120 ms). Static when reduced. */
+.gm.new { animation: pa13-in 160ms var(--kw-ease) both; }
+.gnote.new, .waitpill { animation: pa13-fade 120ms var(--kw-ease) both; }
+@keyframes pa13-in { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+@keyframes pa13-fade { from { opacity: 0; } to { opacity: 1; } }
+@media (prefers-reduced-motion: reduce) {
+  .gm.new, .gnote.new, .waitpill { animation: none; }
+  .typing i { animation: none; opacity: .7; }
+  .gm.me .b { transition: none; }
+}

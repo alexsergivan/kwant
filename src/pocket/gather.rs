@@ -1416,8 +1416,8 @@ impl Kit for Gather {
 
     /// pa10c: a decided vote or a past event ends the pocket, and its data stays until the
     /// deletion date; "Delete answers now" still works then.
-    fn acts_after_end(&self, name: &str) -> bool {
-        name == "delete_answers"
+    fn host_actions_after_end(&self) -> &'static [&'static str] {
+        &["delete_answers"]
     }
 
     fn forgets_everyone(&self, state: &Value) -> bool {

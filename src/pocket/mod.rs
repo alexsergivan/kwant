@@ -26,6 +26,7 @@ pub mod santa;
 pub mod schedule;
 pub mod tunnel;
 pub mod wall;
+pub mod wall_pick;
 pub mod words;
 
 use crate::config::Config;
@@ -121,6 +122,9 @@ pub struct Hub {
     pub awake: tunnel::KeepAwake,
     /// Tests only: the free disk space the Wall's upload check sees (pa14), instead of the disk's.
     fake_free_disk: Mutex<Option<u64>>,
+    /// pa14b: the walls whose best-30 pick runs in this process now, with the bot running it.
+    /// A pick the state says runs but that isn't here was cut off by a restart.
+    picks: Mutex<HashMap<String, String>>,
 }
 
 impl Hub {
@@ -882,15 +886,17 @@ pub async fn act(state: &AppState, code: &str, actor: &Viewer, name: &str, body:
     if !allowed.contains(&name) {
         return Err(PocketError::new(StatusCode::BAD_REQUEST, "unknown_action", "That action isn't one this pocket knows.").with(json!({ "actions": allowed })));
     }
-    // pa10c: an ended pocket keeps its data until the deletion date, and the host may still
-    // delete the answers sooner
-    if s.row.state == ENDED && !(matches!(actor, Viewer::Host) && kit.acts_after_end(name)) {
+    // pa14b, pa10c: a few host actions still work while an ended pocket's data is kept (the
+    // wall's `set_best`, so the host can show the next morning's best 30; Gather's
+    // `delete_answers`, so the host may delete the answers before the deletion date)
+    if s.row.state == ENDED && !(*actor == Viewer::Host && kit.host_actions_after_end().contains(&name)) {
         return Err(PocketError::new(StatusCode::GONE, "ended", "This pocket app has ended."));
     }
     let now = Utc::now();
     let mut kit_state = s.kit_state.clone();
     let mut ctx = KitCtx::new(&s.spec, &s.players, now);
     kit.act(&mut ctx, &mut kit_state, actor, name, body).map_err(kit_refusal)?;
+    let snap_shown = ctx.events.iter().any(|e| e.kind == wall::SNAP_SHOWN_EVENT);
     save(state, code, &kit_state, ctx, now).await?;
     // pa10c: answers deleted: every player goes (removed ones too, names and all), with their
     // guest keys and events. After the save, so a failure here is repaired by the host's retry.
@@ -903,6 +909,9 @@ pub async fn act(state: &AppState, code: &str, actor: &Viewer, name: &str, body:
             state.db.pocket_bump(code).await?;
             changed(state, code).await?;
         }
+    }
+    if snap_shown {
+        wall_pick::say_shown(state, code).await;
     }
     // pa3b: a guest's quiz answer may be a near miss; the live judge looks at it off this request
     if matches!(actor, Viewer::Guest(_)) && name == "answer" {

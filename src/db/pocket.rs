@@ -260,10 +260,11 @@ impl Database {
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
-    /// pa13a: codes of every pocket of one kit, open or ended (a front desk guest's data expires
-    /// 7 days after their last message, also after the end).
+    /// Codes of every pocket of one kit, open or ended, oldest first. pa13a: a front desk guest's
+    /// data expires 7 days after their last message, also after the end. pa14b: walls whose
+    /// best-30 pick may be due.
     pub async fn pocket_codes_of_kit(&self, kit: &str) -> Result<Vec<String>, DbError> {
-        let rows: Vec<(String,)> = sqlx::query_as("SELECT code FROM pocket_apps WHERE kit = ?").bind(kit).fetch_all(&self.pool).await?;
+        let rows: Vec<(String,)> = sqlx::query_as("SELECT code FROM pocket_apps WHERE kit = ? ORDER BY created_at").bind(kit).fetch_all(&self.pool).await?;
         Ok(rows.into_iter().map(|r| r.0).collect())
     }
 
