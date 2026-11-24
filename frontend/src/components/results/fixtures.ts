@@ -875,6 +875,186 @@ export const DESK_WAITING = {
   ],
 };
 
+// Booking Desk (pa13b): Studio Nika's haircuts in Ljubljana, after Mira's pa13b-design.md sample. "Today" is
+// Tue Dec 1 2026, 11:40 AM (the shots and tests set bookingClock to it). Names, notes and times are made up.
+export const BOOKING_TODAY = new Date(2026, 11, 1, 11, 40);
+const BK_FUNNEL = 'https://nika-mac.tail3f9a.ts.net/p/studio';
+const bkAt = (day: number, h: number, m: number) => new Date(2026, 11, day, h, m).toISOString();
+const bkPerson = (guest: string, name: string | null, at: string | null, note: string | null = null, by: 'guest' | 'host' = 'guest') => ({ guest, name, note, at, by });
+type BkPeople = Record<string, { requested?: ReturnType<typeof bkPerson>[]; confirmed?: ReturnType<typeof bkPerson>[] }>;
+/** Tue–Fri 9, 10, 11, 12, 2, 3, 4 (no 1 PM), Sat 9–12: 32 one-hour times. */
+const bkSlots = (people: BkPeople = {}) => {
+  const out: Record<string, unknown>[] = [];
+  for (const day of [1, 2, 3, 4, 5]) {
+    const hours = day === 5 ? [9, 10, 11, 12] : [9, 10, 11, 12, 14, 15, 16];
+    for (const h of hours) {
+      const start = `2026-12-0${day}T${String(h).padStart(2, '0')}:00`;
+      const who = people[start] ?? {};
+      out.push({ id: `s-120${day}-${h}`, start, minutes: 60, label: null, seats: 1, requested: who.requested ?? [], confirmed: who.confirmed ?? [] });
+    }
+  }
+  return out;
+};
+const BK_BOOKED: BkPeople = {
+  '2026-12-01T09:00': { confirmed: [bkPerson('g-mia', 'Mia', bkAt(27, 10, 2))] },
+  '2026-12-01T12:00': { confirmed: [bkPerson('g-yuki', 'Yuki', bkAt(29, 16, 20))] },
+  '2026-12-03T09:00': { confirmed: [bkPerson('g-luca', 'Luca', bkAt(30, 9, 5))] },
+  '2026-12-05T10:00': { confirmed: [bkPerson('g-ana', 'Ana', bkAt(30, 18, 44))] },
+};
+const BK_REQUESTED: BkPeople = {
+  ...BK_BOOKED,
+  '2026-12-02T10:00': { requested: [bkPerson('g-emma', 'Emma', bkAt(1, 10, 32), 'Short trim, same as last time. Thanks!')] },
+  '2026-12-04T15:00': { requested: [bkPerson('g-tom', 'Tom', bkAt(1, 11, 5))] },
+};
+const bkGuest = (id: string, name: string, creature: string, over: Record<string, unknown> = {}) => ({
+  id,
+  name,
+  creature,
+  waiting: false,
+  handoff_reason: null,
+  last: null,
+  unread: 0,
+  msgs: 2,
+  delete_on: '2026-12-09',
+  ...over,
+});
+const BK_GUESTS = [
+  bkGuest('g-tom', 'Tom', 'visor', { last: { from: 'bot', text: 'Fri 3 PM is held for you. Nika will confirm it here.', at: bkAt(1, 11, 5) } }),
+  bkGuest('g-emma', 'Emma', 'beret', { last: { from: 'bot', text: 'Wed 10 AM is held for you. Nika will confirm it here.', at: bkAt(1, 10, 32) } }),
+  bkGuest('g-ana', 'Ana', 'spikes', { last: { from: 'note', text: '', at: bkAt(30, 19, 2) } }),
+  bkGuest('g-luca', 'Luca', 'bulb', { last: { from: 'bot', text: 'See you Thursday at 9!', at: bkAt(30, 9, 30) } }),
+  bkGuest('g-yuki', 'Yuki', 'ears', { last: { from: 'guest', text: 'Thanks!', at: bkAt(29, 17, 1) } }),
+];
+const BK_BEN = bkGuest('g-ben', 'Ben', 'horns', {
+  waiting: true,
+  handoff_reason: 'Ben asks for a time you haven’t listed',
+  ask_slot_start: '2026-12-01T18:00',
+  last: { from: 'guest', text: 'Could you do Tuesday at 6 PM? I finish work at 5:30.', at: bkAt(1, 11, 21) },
+  unread: 1,
+  msgs: 3,
+});
+const bookingBase = {
+  title: 'Studio Nika',
+  place: 'Haircuts',
+  host_name: 'Nika',
+  mode: 'booking',
+  answer_bot: { id: 'kw-never-shown-02', name: 'Bell', sprite: 'desk', model: 'Claude Sonnet 4.6' },
+  counts: { guests: 5, waiting: 0, replies_today: 18, daily_cap: 50, messages_today: 24 },
+  cap_resets_at: bkAt(2, 0, 0),
+  cost_per_reply_usd: 0.02,
+  guide_chars: 412,
+  guide_facts: 6,
+  guide_preview: 'Studio Nika, Trubarjeva 12, 2nd floor (ring "Nika").\nCut 28 €, cut and wash 35 €. Pay at the salon, card or cash.',
+  guests: BK_GUESTS,
+  join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: BK_FUNNEL, wifi_url: null },
+};
+const bookingFixture = (reply: string, state: 'writing' | 'live' | 'ended', desk: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: 'pocket:studio' },
+    code: 'studio',
+    kit: 'desk',
+    name: 'Studio Nika',
+    when: null,
+    state,
+    santa: null,
+    desk: { ...bookingBase, ...desk },
+  });
+const BK_ZERO = { guests: 0, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 };
+export const BOOKING_FIXTURES = {
+  setup: bookingFixture('Here’s your booking desk. I made the week from your hours; take out any time you don’t want, then start.', 'writing', { guests: [], counts: BK_ZERO, slots: bkSlots() }),
+  setupEmpty: bookingFixture('Here’s your booking desk. Pick your days and hours, then “Fill these days”.', 'writing', { guests: [], counts: BK_ZERO, slots: [], guide_preview: null }),
+  open: bookingFixture('Studio Nika is open. 24 times are left this week.', 'live', { slots: bkSlots(BK_BOOKED) }),
+  requests: bookingFixture('Emma and Tom asked for a time. Only your Yes books it.', 'live', { slots: bkSlots(BK_REQUESTED) }),
+  manyRequests: bookingFixture('Five guests asked for a time.', 'live', {
+    slots: bkSlots({
+      ...BK_REQUESTED,
+      '2026-12-02T14:00': { requested: [bkPerson('g-sara', 'Sara', bkAt(1, 11, 10))] },
+      '2026-12-03T11:00': { requested: [bkPerson('g-ivo', 'Ivo', bkAt(1, 11, 15))] },
+      '2026-12-04T09:00': { requested: [bkPerson('g-lea', 'Lea', bkAt(1, 11, 30), 'Fringe only, please.')] },
+    }),
+  }),
+  odd: bookingFixture('Ben asks for Tuesday at 6 PM, a time you haven’t listed. It waits for you.', 'live', {
+    slots: bkSlots(BK_REQUESTED),
+    guests: [BK_BEN, ...BK_GUESTS],
+    counts: { guests: 6, waiting: 1, replies_today: 19, daily_cap: 50, messages_today: 27 },
+  }),
+  cap: bookingFixture('Bell wrote 50 replies today, its limit. Booking still works.', 'live', {
+    slots: bkSlots(BK_REQUESTED),
+    counts: { guests: 5, waiting: 0, replies_today: 50, daily_cap: 50, messages_today: 71 },
+  }),
+  ended: bookingFixture('Studio Nika is stopped. Three bookings are still coming up.', 'ended', {
+    slots: bkSlots(BK_BOOKED),
+    counts: { guests: 5, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 },
+    ended: { at: '2026-12-01', deletes_on: '2026-12-09', days: 6, bot_replies: 37, host_replies: 4, messages: 52 },
+  }),
+} satisfies Record<string, Fixture>;
+export const BOOKING_OPEN: Partial<Record<keyof typeof BOOKING_FIXTURES, string>> = { odd: 'g-ben' };
+export const BOOKING_CONVERSATIONS: Record<string, unknown> = {
+  'g-ben': {
+    api: 1,
+    version: 4,
+    guest: { id: 'g-ben', name: 'Ben', creature: 'horns', delete_on: '2026-12-08', waiting: true, handoff_reason: 'Ben asks for a time you haven’t listed' },
+    messages: [
+      { id: 'b1', from: 'guest', text: 'Hi! Do you have anything after work this week?', at: bkAt(1, 11, 19) },
+      { id: 'b2', from: 'bot', text: 'The latest time this week is 4 PM, Tuesday to Friday. Would one of those work?', at: bkAt(1, 11, 19) },
+      { id: 'b3', from: 'guest', text: 'Could you do Tuesday at 6 PM? I finish work at 5:30.', at: bkAt(1, 11, 21) },
+      { id: 'b4', from: 'bot', text: 'I can’t add a time myself, so I’ve asked Nika. Nika will reply here.', at: bkAt(1, 11, 21) },
+      { id: 'b5', from: 'note', text: '', note: 'handoff', at: bkAt(1, 11, 21) },
+    ],
+  },
+  'g-emma': {
+    api: 1,
+    version: 3,
+    guest: { id: 'g-emma', name: 'Emma', creature: 'beret', delete_on: '2026-12-09', waiting: false, handoff_reason: null },
+    messages: [
+      { id: 'q1', from: 'guest', text: 'Hi, is Wednesday morning free?', at: bkAt(1, 10, 30) },
+      { id: 'q2', from: 'bot', text: 'Wednesday has 9, 10 and 11 AM open. Tap one to ask for it.', at: bkAt(1, 10, 30) },
+      { id: 'q3', from: 'note', text: '', note: 'booking_requested', start: '2026-12-02T10:00', at: bkAt(1, 10, 32) },
+    ],
+  },
+};
+/** The Needs-you items on a booking desk: Emma's request (ask: booking) and Ben's odd request (ask: handoff). */
+export const BOOKING_WAITING = {
+  follow_up_hours: 24,
+  items: [
+    {
+      kind: 'pocket_desk',
+      ask: 'booking',
+      id: 'desk:studio:g-emma',
+      pocket_code: 'studio',
+      pocket_title: 'Studio Nika',
+      guest_id: 'g-emma',
+      guest_name: 'Emma',
+      text: 'Emma asks for a time',
+      quote: 'Short trim, same as last time. Thanks!',
+      slot: 's-1202-10',
+      slot_start: '2026-12-02T10:00',
+      host_name: 'Nika',
+      asked_at: bkAt(1, 10, 32),
+      kwant_id: 'kw-never-shown-02',
+      kwant_name: 'Bell',
+      thread_id: 't-studio',
+    },
+    {
+      kind: 'pocket_desk',
+      ask: 'handoff',
+      id: 'desk:studio:g-ben',
+      pocket_code: 'studio',
+      pocket_title: 'Studio Nika',
+      guest_id: 'g-ben',
+      guest_name: 'Ben',
+      text: 'Ben asks for a time you haven’t listed',
+      quote: 'Could you do Tuesday at 6 PM? I finish work at 5:30.',
+      ask_slot_start: '2026-12-01T18:00',
+      host_name: 'Nika',
+      asked_at: bkAt(1, 11, 21),
+      kwant_id: 'kw-never-shown-02',
+      kwant_name: 'Bell',
+      thread_id: 't-studio',
+    },
+  ],
+};
+
 export const FIXTURES = {
   comparison,
   chartLine,

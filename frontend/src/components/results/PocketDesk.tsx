@@ -33,13 +33,31 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { DeskFrom, DeskGuest, DeskInfo, DeskMessage, PocketBlock } from '../../smartResults';
+import type { DeskFrom, DeskGuest, DeskInfo, DeskMessage, DeskSlot, PocketBlock } from '../../smartResults';
 import { isIndex, isObj, isText, optText } from '../../smartResults';
 import { ModernAvatar } from '../ModernAvatar';
 import type { Mood } from '../../kwantMood';
 import { pocketApi, PocketApiError, type PocketRead } from '../../pocketApi';
 import { Bar, Callout, GHOST, HALF, ICON, LATER_CLS, LaterButton, LinkField, PRIMARY, Qr, Row, STOP } from './pocketParts';
 import { GuestCreature, HowTo, NoQuickLink, portOf, validSantaJoin } from './PocketSanta';
+import { bookingChip, bookingKey, FILL_DEFAULT, isSlotStart, requestsOf, slotsWire, slotWhen, todayKey, validBooking, weekOf, withBookingAnswers, type FillRule } from './deskBooking';
+import {
+  BOOKING_CAP_LINE,
+  BookingAllow,
+  BookingRequests,
+  BookingSetup,
+  BookingTiles,
+  bookingFootLine,
+  bookingKeepLine,
+  bookingNeverLine,
+  LiveWeek,
+  BookingNeedsRow,
+  OddAllow,
+  refusalLine,
+  stoppedLine,
+  TimesEditor,
+  UpcomingList,
+} from './PocketDeskBooking';
 
 // ---------------------------------------------------------------------------------------------------
 // Validation. A guest's words may hold anything a guest typed ("<b>hi</b>" included): they are kept as plain
@@ -51,7 +69,7 @@ export const DESK_CAP_STEP = 10;
 const MAX_GUESTS = 60;
 const MAX_MESSAGES = 200;
 const FROM: DeskFrom[] = ['guest', 'bot', 'host', 'note'];
-const NOTES = ['handoff', 'host_away', 'daily_cap'] as const;
+const NOTES = ['handoff', 'host_away', 'daily_cap', 'booking_requested', 'booking_confirmed', 'booked_by_host', 'booking_declined', 'booking_cancelled'] as const;
 const isCount = (v: unknown): v is number => isIndex(v) && v <= 1_000_000;
 const words = (v: unknown, max: number): v is string => typeof v === 'string' && v.length <= max;
 const optCount = (v: unknown) => (v === undefined || v === null ? null : isCount(v) ? v : undefined);
@@ -77,7 +95,10 @@ export function validDeskGuest(v: unknown): DeskGuest | undefined {
   const msgs = v.msgs === undefined || v.msgs === null ? 0 : isCount(v.msgs) ? v.msgs : undefined;
   const del = optDay(v.delete_on);
   if ([c, reason, last, unread, msgs, del].includes(undefined)) return undefined;
-  return { id: v.id, name: v.name, creature: c!, waiting: v.waiting, handoff_reason: v.waiting ? reason! : null, last: last!, unread: unread!, msgs: msgs!, delete_on: del! };
+  const g: DeskGuest = { id: v.id, name: v.name, creature: c!, waiting: v.waiting, handoff_reason: v.waiting ? reason! : null, last: last!, unread: unread!, msgs: msgs!, delete_on: del! };
+  // pa13b: a hand-off naming a time the host hasn't listed. A malformed time is dropped, not the guest.
+  if (v.waiting && isSlotStart(v.ask_slot_start)) g.ask_slot_start = v.ask_slot_start;
+  return g;
 }
 
 export function validDeskMessage(v: unknown): DeskMessage | undefined {
@@ -85,7 +106,9 @@ export function validDeskMessage(v: unknown): DeskMessage | undefined {
   const note = v.note === undefined || v.note === null ? null : NOTES.includes(v.note as (typeof NOTES)[number]) ? (v.note as DeskMessage['note']) : undefined;
   if (note === undefined) return undefined;
   // A note carries no words of its own (impl.md: `text: ""`); one without a known kind reads as a hand-off.
-  return { id: v.id, from: v.from as DeskFrom, text: v.from === 'note' ? '' : v.text, at: v.at, note: v.from === 'note' ? note ?? 'handoff' : null };
+  const m: DeskMessage = { id: v.id, from: v.from as DeskFrom, text: v.from === 'note' ? '' : v.text, at: v.at, note: v.from === 'note' ? note ?? 'handoff' : null };
+  if (m.note && m.note.startsWith('book') && isSlotStart(v.start)) m.start = v.start;
+  return m;
 }
 
 /** One guest's conversation (`read.conversation`); null when it's missing or malformed. */
@@ -139,7 +162,13 @@ export function validDesk(v: unknown, fallbackTitle?: string): DeskInfo | undefi
   if ([place, host, model, cost, chars, facts, preview, resets, join, startError, ended].includes(undefined)) return undefined;
   // More waiting than guests, or a list that disagrees with its own counts, is junk.
   if (counts.waiting! > counts.guests! && guests.length > 0) return undefined;
+  // pa13b: spec.mode "booking" (top level or under spec); anything else is the guide desk, unchanged.
+  const spec = isObj(v.spec) ? v.spec : {};
+  const booking = (v.mode ?? spec.mode) === 'booking' ? validBooking({ ...v, slots: v.slots ?? spec.slots }) : null;
+  if (booking === undefined) return undefined;
+  const extra = booking ? { mode: 'booking' as const, booking } : {};
   return {
+    ...extra,
     title,
     place: place!,
     host_name: host!,
@@ -162,12 +191,22 @@ export function deskFromRead(prev: DeskInfo, read: unknown): { desk: DeskInfo; e
   if (!isObj(read) || !isObj(read.summary)) return null;
   const s = read.summary as Record<string, unknown>;
   const pocket = isObj(read.pocket) ? read.pocket : {};
-  const desk = validDesk({ ...prevWire(prev), ...s, join: read.join === undefined ? prevWire(prev).join : read.join }, prev.title);
+  const slots = s.slots ?? read.slots;
+  const desk = validDesk({ ...prevWire(prev), ...s, ...(slots === undefined ? {} : { slots }), join: read.join === undefined ? prevWire(prev).join : read.join }, prev.title);
   if (!desk) return null;
   const ended = pocket.state === 'ended' || pocket.state === 'closed';
   return { desk, ended };
 }
-const prevWire = (d: DeskInfo) => ({ title: d.title, place: d.place, host_name: d.host_name, answer_bot: d.bot, guide_preview: d.guide_preview, join: d.join, ended: d.ended });
+const prevWire = (d: DeskInfo) => ({
+  title: d.title,
+  place: d.place,
+  host_name: d.host_name,
+  answer_bot: d.bot,
+  guide_preview: d.guide_preview,
+  join: d.join,
+  ended: d.ended,
+  ...(d.mode === 'booking' ? { mode: 'booking', slots: d.booking?.slots.map((x) => ({ ...x })) } : {}),
+});
 
 // ---------------------------------------------------------------------------------------------------
 // The Needs-you item (`GET /api/waiting`, kind pocket_desk): one per waiting guest.
@@ -186,6 +225,15 @@ export interface DeskItem {
   /** The spec's bot name ("Bell"), even after the bot was deleted. */
   kwant_name: string;
   thread_id: string | null;
+  /** pa13b, a booking desk: "booking" (a guest asked for a listed time) or "handoff" (the odd request). Absent on a guide desk. */
+  ask?: 'booking' | 'handoff';
+  /** pa13b, ask "booking": the slot's id and start. */
+  slot?: string | null;
+  slot_start?: string | null;
+  /** pa13b, ask "handoff": a time the guest named that isn't listed. */
+  ask_slot_start?: string | null;
+  /** The host's name, for "Nika confirmed your time." */
+  host_name?: string | null;
 }
 
 export function validDeskItems(body: unknown): DeskItem[] {
@@ -197,7 +245,15 @@ export function validDeskItems(body: unknown): DeskItem[] {
     const code = it.pocket_code;
     if (typeof code !== 'string' || !/^[A-Za-z0-9_-]{3,32}$/.test(code) || !guestId(it.guest_id) || !isText(it.guest_name, 40) || !isText(it.pocket_title, 80)) continue;
     if (!words(it.text, 200) || !isText(it.asked_at, 60) || !isText(it.kwant_name, 40)) continue;
-    const id = `desk:${code}:${it.guest_id}`;
+    // pa13b: a booking request is its own item (one per guest and time); a malformed one is skipped.
+    // Vega sends `ask` with `mode`; a guide desk's item stays a guide item even if it ever carries `ask`.
+    const bookingItem = it.mode === undefined || it.mode === null ? it.ask === 'booking' || it.ask === 'handoff' : it.mode === 'booking';
+    const ask = bookingItem ? (it.ask === 'booking' ? 'booking' : 'handoff') : undefined;
+    const nested = isObj(it.booking) ? it.booking : {};
+    const slotStart = isSlotStart(it.slot_start) ? it.slot_start : isSlotStart(nested.start) ? nested.start : null;
+    const slotId = typeof it.slot === 'string' ? it.slot : typeof nested.slot === 'string' ? nested.slot : null;
+    if (ask === 'booking' && !slotStart) continue;
+    const id = ask === 'booking' ? `desk:${code}:${it.guest_id}@${slotStart}` : `desk:${code}:${it.guest_id}`;
     // One item per waiting guest, never one per message.
     if (seen.has(id)) continue;
     seen.add(id);
@@ -212,6 +268,15 @@ export function validDeskItems(body: unknown): DeskItem[] {
       asked_at: it.asked_at,
       kwant_name: it.kwant_name,
       thread_id: typeof it.thread_id === 'string' && it.thread_id ? it.thread_id : null,
+      ...(ask
+        ? {
+            ask,
+            slot: slotId && /^[A-Za-z0-9_-]{1,64}$/.test(slotId) ? slotId : null,
+            slot_start: slotStart,
+            ask_slot_start: isSlotStart(it.ask_slot_start) ? it.ask_slot_start : null,
+            host_name: isText(it.host_name, 40) ? it.host_name : null,
+          }
+        : {}),
     });
   }
   return out;
@@ -228,11 +293,18 @@ export const DESK_FAILED = 'Couldn’t reach the box. Try again';
 
 export type DeskAnswer = {
   phase: 'holding' | 'sending' | 'sent' | 'failed';
-  kind: 'reply' | 'resolve';
-  /** The host's words (reply); null for "No reply needed". */
+  /** pa13a: reply, resolve. pa13b booking: confirm (Yes, book it), decline (Sorry, can't), book (the host books a time). */
+  kind: 'reply' | 'resolve' | 'confirm' | 'decline' | 'book';
+  /** The host's words (reply, the decline line); null for "No reply needed" or an empty decline. */
   text: string | null;
   /** Date.now() when the host answered: a hand-off asked after this is a new one. */
   at: number;
+  /** pa13b: the slot a confirm or decline is about. */
+  slot?: string | null;
+  /** pa13b: where `book` puts the guest. */
+  to?: { slot: string } | { new_slot: { start: string; minutes: number } } | null;
+  /** Failed: the server's error code and words (409 slot_taken, 400 bad_action...). */
+  error?: { code: string | null; text: string } | null;
 };
 
 const answers = new Map<string, DeskAnswer>();
@@ -262,13 +334,22 @@ async function send(k: string) {
   // A newer answer (or a reset) since this one left wins: a late reply never overwrites it.
   const still = () => answers.get(k) === sending;
   try {
-    const read = a.kind === 'reply' ? await pocketApi.deskReply(p.code, p.guest, a.text ?? '') : await pocketApi.deskResolve(p.code, p.guest);
+    const read =
+      a.kind === 'reply'
+        ? await pocketApi.deskReply(p.code, p.guest, a.text ?? '')
+        : a.kind === 'resolve'
+          ? await pocketApi.deskResolve(p.code, p.guest)
+          : a.kind === 'confirm'
+            ? await pocketApi.deskConfirm(p.code, p.guest, a.slot ?? '')
+            : a.kind === 'decline'
+              ? await pocketApi.deskDecline(p.code, p.guest, a.slot ?? '', a.text)
+              : await pocketApi.deskBook(p.code, p.guest, a.to!);
     if (!still()) return;
     answers.set(k, { ...a, phase: 'sent' });
     if (read) readListeners.forEach((f) => f(p.code, read));
-  } catch {
+  } catch (e) {
     if (!still()) return;
-    answers.set(k, { ...a, phase: 'failed' });
+    answers.set(k, { ...a, phase: 'failed', error: e instanceof PocketApiError ? { code: e.code, text: e.message } : null });
   }
   emit();
 }
@@ -287,10 +368,13 @@ export const deskAnswers = {
   },
   /** Yes / Sorry: held for 5 s with Undo, then sent. */
   hold(code: string, guest: string, text: string) {
-    const k = deskKey(code, guest);
+    deskAnswers.holdAs(deskKey(code, guest), code, guest, { kind: 'reply', text });
+  },
+  /** Any answer under its own key (pa13b: a booking's Yes is held under bookingKey). */
+  holdAs(k: string, code: string, guest: string, a: Omit<DeskAnswer, 'phase' | 'at'>) {
     deskAnswers.undo(k, false);
     pending.set(k, { code, guest });
-    answers.set(k, { phase: 'holding', kind: 'reply', text, at: Date.now() });
+    answers.set(k, { ...a, phase: 'holding', at: Date.now() });
     timers.set(
       k,
       setTimeout(() => {
@@ -302,11 +386,20 @@ export const deskAnswers = {
   },
   /** A written reply or "No reply needed": sent now. */
   now(code: string, guest: string, kind: 'reply' | 'resolve', text: string | null) {
-    const k = deskKey(code, guest);
+    return deskAnswers.nowAs(deskKey(code, guest), code, guest, { kind, text });
+  },
+  nowAs(k: string, code: string, guest: string, a: Omit<DeskAnswer, 'phase' | 'at'>) {
     deskAnswers.undo(k, false);
     pending.set(k, { code, guest });
-    answers.set(k, { phase: 'sending', kind, text, at: Date.now() });
+    answers.set(k, { ...a, phase: 'sending', at: Date.now() });
     return send(k);
+  },
+  /** Every answer for one pocket, oldest first (pa13b: the card's answered booking rows). */
+  forCode(code: string): { key: string; guest: string; a: DeskAnswer }[] {
+    return [...answers.entries()]
+      .filter(([k]) => pending.get(k)?.code === code)
+      .map(([key, a]) => ({ key, guest: pending.get(key)!.guest, a }))
+      .sort((x, y) => x.a.at - y.a.at);
   },
   undo(k: string, notify = true) {
     const t = timers.get(k);
@@ -390,6 +483,15 @@ export function deskMood(stage: DeskStage, d: DeskInfo): Mood {
   return stage === 'ready' ? 'idle' : 'working';
 }
 
+/** pa13b moods: finished when stopped, thinking at set-up, needs_you for a request or hand-off, working while a Yes is on its way. */
+export function bookingMood(stage: DeskStage, d: DeskInfo, code: string): Mood {
+  if (stage === 'stopped') return 'finished';
+  if (stage === 'setup' || stage === 'address') return 'thinking';
+  if ((d.booking?.requests ?? 0) > 0 || d.counts.waiting > 0) return 'needs_you';
+  if (deskAnswers.forCode(code).some(({ a }) => a.kind === 'confirm' && (a.phase === 'holding' || a.phase === 'sending'))) return 'working';
+  return 'idle';
+}
+
 /** Actions Lin's API doesn't have yet: focusable, say why, do nothing (card-impl.md "LATER"). */
 export const DESK_LATER = {
   paste: 'Pasting from a doc comes later. Paste the guide into the chat for now.',
@@ -459,7 +561,27 @@ const GRID = 'grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center';
 const FULL = 'col-span-2 sm:col-span-1';
 const HALF_BTN = `kw-btn-ghost ${HALF}`;
 
-const DeskChip: React.FC<{ stage: DeskStage; d: DeskInfo }> = ({ stage, d }) => {
+const DeskChip: React.FC<{ stage: DeskStage; d: DeskInfo; editing?: boolean; requests?: number }> = ({ stage, d, editing = false, requests }) => {
+  if (d.mode === 'booking' && d.booking) {
+    if (editing)
+      return (
+        <span className="kw-chip kw-chip-info" data-chip="editing">
+          <Pencil size={12} aria-hidden="true" />
+          Editing times
+        </span>
+      );
+    if (stage === 'live' || stage === 'ready') {
+      const handoffs = d.guests.filter((g) => g.waiting).length;
+      // The answered view (a held Yes is no longer a request), so the chip agrees with the tiles.
+      const text = bookingChip(requests ?? d.booking.requests, handoffs);
+      return (
+        <span className="kw-chip border-sky-400 bg-sky-600 font-semibold text-white" data-chip="live">
+          <span className="kw-status-dot bg-white" aria-hidden="true" />
+          {text}
+        </span>
+      );
+    }
+  }
   switch (stage) {
     case 'setup':
       return (
@@ -537,7 +659,7 @@ const Tiles: React.FC<{ d: DeskInfo; stage: DeskStage }> = ({ d, stage }) => {
   );
 };
 
-const CapBar: React.FC<{ d: DeskInfo; full: boolean }> = ({ d, full }) => {
+export const CapBar: React.FC<{ d: DeskInfo; full: boolean }> = ({ d, full }) => {
   const c = d.counts;
   const label = full
     ? `${num(c.replies_today)} of ${num(c.daily_cap)} replies ${d.bot.name} can write today · until ${resets(d)}, new messages wait for you`
@@ -588,8 +710,8 @@ const AddressRow: React.FC<{ d: DeskInfo; future?: boolean }> = ({ d, future }) 
 
 const KeepRows: React.FC<{ d: DeskInfo }> = ({ d }) => (
   <>
-    <Row icon={<Lock size={15} aria-hidden="true" />}>{DESK_KEEP}</Row>
-    <Row icon={<ShieldCheck size={15} aria-hidden="true" />}>{deskNeverLine(d)}</Row>
+    <Row icon={<Lock size={15} aria-hidden="true" />}>{d.mode === 'booking' ? bookingKeepLine : DESK_KEEP}</Row>
+    <Row icon={<ShieldCheck size={15} aria-hidden="true" />}>{d.mode === 'booking' ? bookingNeverLine(d.bot.name) : deskNeverLine(d)}</Row>
   </>
 );
 
@@ -880,7 +1002,23 @@ export const AllowCard: React.FC<{
 // ---------------------------------------------------------------------------------------------------
 // One guest's chat inside the card (states 5-7)
 
-const noteWords = (m: DeskMessage, bot: string, host: string) =>
+const noteWords = (m: DeskMessage, bot: string, host: string, guest = 'The guest') => {
+  const when = m.start ? slotWhen(m.start) : 'a time';
+  switch (m.note) {
+    case 'booking_requested':
+      return `${guest} asked for ${when}`;
+    case 'booking_confirmed':
+      return `${host === 'you' ? 'You' : host} booked ${guest} for ${when}`;
+    case 'booked_by_host':
+      return `${host === 'you' ? 'You' : host} booked ${guest} for ${when}`;
+    case 'booking_declined':
+      return `${host === 'you' ? 'You' : host} said Sorry to ${when}`;
+    case 'booking_cancelled':
+      return `${guest} cancelled the request for ${when}`;
+  }
+  return guideNoteWords(m, bot, host);
+};
+const guideNoteWords = (m: DeskMessage, bot: string, host: string) =>
   m.note === 'daily_cap' ? `Daily limit reached: this waits for you` : m.note === 'host_away' ? `${bot} couldn’t answer, so this came to ${host}` : `${bot} handed this to ${host}`;
 
 const Bubble: React.FC<{ m: DeskMessage; guest: DeskGuest; bot: string }> = ({ m, guest, bot }) => {
@@ -888,7 +1026,7 @@ const Bubble: React.FC<{ m: DeskMessage; guest: DeskGuest; bot: string }> = ({ m
     return (
       <p className="flex items-center justify-center gap-1.5 text-2xs text-zinc-400" data-note={m.note}>
         <BellRing size={12} aria-hidden="true" />
-        {noteWords(m, bot, 'you')} · {shortWhen(m.at)}
+        {noteWords(m, bot, 'you', guest.name)} · {shortWhen(m.at)}
       </p>
     );
   const mine = m.from !== 'guest';
@@ -920,6 +1058,7 @@ type ConvState = { status: 'loading' } | { status: 'error'; text: string } | { s
 export const deskConversationCache = new Map<string, { guest: DeskGuest; messages: DeskMessage[] }>();
 
 const Conversation: React.FC<{ code: string; d: DeskInfo; guestId: string; onBack: () => void; focus: boolean }> = ({ code, d, guestId, onBack, focus }) => {
+  const booking = d.mode === 'booking' && d.booking ? d.booking : null;
   useDeskAnswers();
   const k = deskKey(code, guestId);
   const cached = deskConversationCache.get(k);
@@ -985,7 +1124,25 @@ const Conversation: React.FC<{ code: string; d: DeskInfo; guestId: string; onBac
           </p>
         )}
         {conv.status === 'ok' && guest && conv.messages.map((m) => <Bubble key={m.id} m={m} guest={guest} bot={d.bot.name} />)}
-        {guest && (waiting || (a && a.phase !== 'sent' && isAnswered(a))) ? (
+        {booking && guest
+          ? requestsOf(booking.slots)
+              .filter((r) => r.person.guest === guestId)
+              .map((r) => <BookingAllow key={r.slot.start} code={code} req={r} host={d.host_name ?? ''} bot={d.bot.name} creature={guest.creature} />)
+          : null}
+        {booking && guest && (waiting || (a && a.phase !== 'sent' && isAnswered(a))) ? (
+          <OddAllow
+            code={code}
+            guest={guestId}
+            name={guest.name}
+            reason={guest.handoff_reason ?? `${d.bot.name} asked you to reply`}
+            quote={lastGuestWords(conv)}
+            bot={d.bot.name}
+            host={d.host_name ?? ''}
+            askedAt={handoffAt}
+            askStart={fromList?.ask_slot_start ?? null}
+            slots={booking.slots}
+          />
+        ) : guest && (waiting || (a && a.phase !== 'sent' && isAnswered(a))) ? (
           <AllowCard code={code} guest={guestId} name={guest.name} reason={guest.handoff_reason ?? `${d.bot.name} asked you to reply`} quote={lastGuestWords(conv)} bot={d.bot.name} askedAt={handoffAt} />
         ) : guest && a?.phase === 'sent' && a.text ? (
           <AllowCard code={code} guest={guestId} name={guest.name} reason="" quote={null} bot={d.bot.name} />
@@ -1077,6 +1234,48 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
   const d = useMemo(() => withAnswers(block.code, base), [block.code, base, deskAnswers.version()]); // eslint-disable-line react-hooks/exhaustive-deps
   const state = stopped || fresh?.ended ? 'ended' : block.state;
   const stage = deskStage({ state }, d);
+  // pa13b: a booking desk. The host's answers lie over the times at once; the request cards read the times as sent.
+  const bkBase = d.mode === 'booking' && d.booking ? d.booking : null;
+  const bk = useMemo(() => (bkBase ? withBookingAnswers(block.code, bkBase, deskAnswers.get) : null), [block.code, bkBase, deskAnswers.version()]); // eslint-disable-line react-hooks/exhaustive-deps
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState<DeskSlot[]>(() => bkBase?.slots ?? []);
+  const [monday, setMonday] = useState(() => weekOf(bkBase?.slots.find((x) => x.start.slice(0, 10) >= todayKey())?.start.slice(0, 10) ?? todayKey()));
+  const [rule, setRule] = useState<FillRule>(FILL_DEFAULT);
+  const [refusal, setRefusal] = useState<{ start: string; head: string; rest: string } | null>(null);
+  const editTimes = () => {
+    setDraft(bk?.slots ?? []);
+    setRefusal(null);
+    setDone(null);
+    setEditing(true);
+  };
+  /** set_slots; a 409 slot_in_use keeps the edit open with the refusal line. */
+  const saveTimes = async (): Promise<boolean> => {
+    setBusy(true);
+    try {
+      const next = deskFromRead(base, await pocketApi.deskSetSlots(block.code, slotsWire(draft)));
+      if (next) setFresh(next);
+      setRefusal(null);
+      return true;
+    } catch (e) {
+      if (e instanceof PocketApiError && e.code === 'slot_in_use') {
+        const at = typeof e.data?.start === 'string' ? e.data.start : null;
+        const slot = at ? bk?.slots.find((x) => x.start === at) ?? null : null;
+        const name = typeof e.data?.name === 'string' ? e.data.name : null;
+        if (at) setRefusal({ start: at, ...refusalLine(at, slot, name) });
+        else setDone({ kind: 'error', text: `Couldn't save the times: ${e.message} Try again.` });
+      } else if (e instanceof PocketApiError && e.code === 'bad_slots') {
+        // Vega's 400 bad_slots {index, why}: say which time and why, in the card's words.
+        const i = typeof e.data?.index === 'number' ? e.data.index : null;
+        const s = i !== null ? slotsWire(draft)[i] : null;
+        const why = typeof e.data?.why === 'string' ? e.data.why : '';
+        const what = why === 'overlap' ? 'overlaps the time before it' : why === 'start' ? 'isn’t a time the Mac can use' : why === 'too_many' ? 'is past 200 times, the most for one desk' : 'can’t be saved';
+        setDone({ kind: 'error', text: `Couldn't save the times: ${s ? slotWhen(s.start) : 'a time'} ${what}. Change it and save again.` });
+      } else setDone({ kind: 'error', text: `Couldn't save the times: ${e instanceof PocketApiError ? e.message : 'something went wrong.'} Try again.` });
+      return false;
+    } finally {
+      setBusy(false);
+    }
+  };
   // One read when a started desk shows (no polling), and the read every answer returns.
   useEffect(() => {
     if (block.state !== 'live') return;
@@ -1127,7 +1326,8 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
     }
   };
   const bot = d.bot.name;
-  const where = [d.place, `guests ask ${bot}, the rest comes to you`].filter(Boolean).join(' · ');
+  const where = [d.place, bkBase ? 'guests pick a time, you say yes' : `guests ask ${bot}, the rest comes to you`].filter(Boolean).join(' · ');
+  const kitName = bkBase ? 'Booking Desk' : 'Guest Guide';
   const conv = open && (stage === 'live' || stage === 'cap' || stage === 'stopped' || stage === 'ready');
   const firstWaiting = d.guests.find((g) => g.waiting);
 
@@ -1168,6 +1368,16 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
             <p className={SMALL}>Funnel is free on your own Tailscale account; guests need nothing. Flat Wi-Fi only works for guests on the flat&rsquo;s network.</p>
             <NoQuickLink />
           </div>
+        ) : bk ? (
+          <BookingSetup
+            d={d}
+            cap={cap}
+            setCap={setCap}
+            ask={ask}
+            costLine={deskCostLine(d, cap)}
+            CapStepper={CapStepper}
+            editor={<TimesEditor draft={draft} setDraft={setDraft} monday={monday} setMonday={setMonday} rule={rule} setRule={setRule} quickFill refusal={refusal} setRefusal={setRefusal} />}
+          />
         ) : (
           <SetupParts d={d} cap={cap} setCap={setCap} ask={ask} />
         )}
@@ -1183,16 +1393,129 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
           <button type="button" aria-disabled="true" title={DESK_LATER.address} aria-description={DESK_LATER.address} onClick={(e) => e.preventDefault()} className={`${PRIMARY} ${FULL} ${LATER_CLS}`} data-action="start">
             Start and get the link
           </button>
+        ) : bk ? (
+          <button
+            type="button"
+            disabled={busy || draft.length === 0}
+            onClick={async () => {
+              if (await saveTimes()) ask(`Start ${d.title} with ${draft.length} times and ${cap} replies a day and give me the link.`);
+            }}
+            className={`${PRIMARY} ${FULL}`}
+            data-action="start"
+          >
+            {busy ? 'Saving the times…' : 'Start and get the link'}
+          </button>
         ) : (
           <button type="button" onClick={() => ask(`Start ${d.title} with ${cap} replies a day and give me the link.`)} className={`${PRIMARY} ${FULL}`} data-action="start">
             Start and get the link
           </button>
         )}
         <TryAsGuest d={{ ...d, join: null }} />
-        <button type="button" onClick={() => ask(`Discard the ${d.title} front desk set-up.`)} className={`${STOP} sm:ml-auto`} data-action="discard">
+        <button type="button" onClick={() => ask(bk ? `Discard the ${d.title} booking desk set-up.` : `Discard the ${d.title} front desk set-up.`)} className={`${STOP} sm:ml-auto`} data-action="discard">
           <Trash2 size={13} aria-hidden="true" />
           Discard
         </button>
+      </div>
+    );
+  } else if (stage === 'stopped' && bk) {
+    body = (
+      <>
+        <BookingTiles b={bk} handoffs={0} stopped />
+        <ul className="flex flex-col gap-2">
+          <Row icon={<Lock size={15} aria-hidden="true" />}>{stoppedLine(bk.booked_upcoming)}</Row>
+        </ul>
+        <UpcomingList slots={bk.slots} creatures={Object.fromEntries(d.guests.map((g) => [g.id, g.creature]))} />
+        {open ? null : raising ? <GuestList d={d} onOpen={setOpen} /> : null}
+      </>
+    );
+    actions = (
+      <div className={GRID}>
+        <button type="button" onClick={() => ask(`Open ${d.title} again with new times.`)} className={`${PRIMARY} ${FULL}`} data-action="open-again">
+          <RotateCcw size={14} aria-hidden="true" />
+          Open again with new times
+        </button>
+        {d.guests.length > 0 && (
+          <button type="button" onClick={() => setRaising(!raising)} aria-expanded={raising} className={HALF_BTN} data-action="read-chats">
+            <MessageSquare size={14} aria-hidden="true" />
+            Read the chats
+          </button>
+        )}
+        <button type="button" onClick={() => setConfirm('delete')} className={`${STOP} sm:ml-auto`} data-action="delete">
+          <Trash2 size={13} aria-hidden="true" />
+          Delete chats now
+        </button>
+      </div>
+    );
+  } else if (bk && stage !== 'stopped') {
+    const full = stage === 'cap';
+    const handoffs = d.guests.filter((g) => g.waiting);
+    body = editing ? (
+      <TimesEditor draft={draft} setDraft={setDraft} monday={monday} setMonday={setMonday} rule={rule} setRule={setRule} quickFill={false} refusal={refusal} setRefusal={setRefusal} />
+    ) : (
+      <>
+        <BookingTiles b={bk} handoffs={handoffs.length} />
+        {stage !== 'ready' && <CapBar d={d} full={full} />}
+        {full && !conv && (
+          <p className={`flex items-start gap-2 ${P}`} data-callout="cap">
+            <Check size={15} className={`${ICON} text-ok`} aria-hidden="true" />
+            <span>{BOOKING_CAP_LINE}</span>
+          </p>
+        )}
+        {conv ? (
+          <Conversation code={block.code} d={d} guestId={open!} onBack={() => setOpen(null)} focus={moved} />
+        ) : (
+          <>
+            <BookingRequests code={block.code} slots={bkBase!.slots} host={d.host_name ?? ''} bot={bot} creatures={Object.fromEntries(d.guests.map((g) => [g.id, g.creature]))} />
+            {handoffs.length > 0 && <GuestList d={d} only="waiting" onOpen={setOpen} />}
+            <LiveWeek slots={bk.slots} />
+          </>
+        )}
+        {!conv && (
+          <ul className="flex flex-col gap-2">
+            <KeepRows d={d} />
+          </ul>
+        )}
+      </>
+    );
+    actions = editing ? (
+      <div className={GRID}>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={async () => {
+            if (await saveTimes()) {
+              setEditing(false);
+              setDone({ kind: 'ok', text: `Times saved: ${draft.length} on the desk.` });
+            }
+          }}
+          className={`${PRIMARY} ${FULL}`}
+          data-action="save-times"
+        >
+          <Check size={14} aria-hidden="true" />
+          {busy ? 'Saving…' : 'Save times'}
+        </button>
+        <button
+          type="button"
+          disabled={busy}
+          onClick={() => {
+            setEditing(false);
+            setRefusal(null);
+          }}
+          className={HALF_BTN}
+          data-action="cancel-edit"
+        >
+          Cancel
+        </button>
+      </div>
+    ) : (
+      <div className={GRID}>
+        <ShareLink d={d} />
+        <button type="button" onClick={editTimes} className={HALF_BTN} data-action="edit-times">
+          <Pencil size={14} aria-hidden="true" />
+          Edit times
+        </button>
+        <TryAsGuest d={d} />
+        {stopButton}
       </div>
     );
   } else if (stage === 'stopped') {
@@ -1319,8 +1642,10 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
       className="pocket-card relative flex max-w-[680px] flex-col gap-4 overflow-hidden rounded-2xl border border-sky-800 bg-surface-raised p-4 shadow-card sm:p-[18px]"
       data-pocket={state}
       data-desk={stage}
-      data-mood={deskMood(stage, d)}
-      aria-label={`${d.title}, pocket app Guest Guide`}
+      data-mood={bk ? bookingMood(stage, d, block.code) : deskMood(stage, d)}
+      data-mode={bk ? 'booking' : undefined}
+      data-editing={editing || undefined}
+      aria-label={`${d.title}, pocket app ${kitName}`}
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-sky-500/[0.07] to-transparent" aria-hidden="true" />
       <header className="relative flex items-start gap-3">
@@ -1328,15 +1653,15 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
           <ConciergeBell size={22} />
         </span>
         <div className="min-w-0 flex-1">
-          <div className="text-2xs font-semibold text-sky-300">Pocket app · Guest Guide</div>
+          <div className="text-2xs font-semibold text-sky-300">Pocket app · {kitName}</div>
           <h3 className="text-[20px] font-bold leading-[26px] text-zinc-50 sm:text-[19px]">{d.title}</h3>
           <p className="text-[15px] text-zinc-300 sm:text-[13px]">{where}</p>
           <span className="mt-1.5 block sm:hidden">
-            <DeskChip stage={stage} d={d} />
+            <DeskChip stage={stage} d={d} editing={editing} requests={bk?.requests} />
           </span>
         </div>
         <span className="hidden shrink-0 sm:block">
-          <DeskChip stage={stage} d={d} />
+          <DeskChip stage={stage} d={d} editing={editing} requests={bk?.requests} />
         </span>
       </header>
       <div className="relative flex flex-col gap-4">
@@ -1351,7 +1676,9 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
           <div className="flex flex-col gap-2.5 rounded-xl border border-hairline-strong bg-surface-rail/60 p-3" role="group" aria-label={confirm === 'stop' ? 'Stop the desk?' : 'Delete the chats now?'} data-confirm={confirm}>
             <p className={P}>
               {confirm === 'stop'
-                ? `Stop ${d.title}? The guest page closes and ${bot} stops answering. Each chat is still deleted 7 days after its last message.`
+                ? bk
+                  ? `Stop ${d.title}? The guest page closes and nobody new can ask. Bookings still coming up stay here until their day has passed.`
+                  : `Stop ${d.title}? The guest page closes and ${bot} stops answering. Each chat is still deleted 7 days after its last message.`
                 : `Delete every guest chat on ${d.title} now? This can't be undone.`}
             </p>
             <div className="flex flex-wrap gap-2">
@@ -1379,7 +1706,7 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
       </div>
       <footer className="relative -mx-4 -mb-4 flex items-start gap-2 border-t border-hairline px-4 py-3 text-meta text-zinc-400 sm:-mx-[18px] sm:-mb-[18px] sm:px-[18px]" data-budget>
         <Zap size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
-        <span>{deskFootLine(d)}</span>
+        <span>{bk ? bookingFootLine(bot, d.counts.daily_cap) : deskFootLine(d)}</span>
       </footer>
     </section>
   );
@@ -1447,7 +1774,9 @@ const SetupParts: React.FC<{ d: DeskInfo; cap: number; setCap: (n: number) => vo
 // ---------------------------------------------------------------------------------------------------
 // Inbox (state 10): one row per waiting guest with the Allow card inline; the Done row.
 
-export const DeskNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
+export const DeskNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => (item.ask ? <BookingNeedsRow item={item} /> : <GuideNeedsRow item={item} />);
+
+const GuideNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
   useDeskAnswers();
   const a = deskAnswers.get(deskKey(item.pocket_code, item.guest_id));
   // Sent: the row goes; held or sending: it stays, so Undo is still in reach.
@@ -1515,7 +1844,7 @@ export function useDeskItems(reload: unknown, skip = false, initial?: DeskItem[]
 /** Rows still open in this app: a sent answer closes its row (a held one stays, so Undo is in reach). */
 export const openDeskItems = (items: DeskItem[]) =>
   items.filter((it) => {
-    const a = deskAnswers.get(deskKey(it.pocket_code, it.guest_id));
+    const a = deskAnswers.get(it.ask === 'booking' && it.slot_start ? bookingKey(it.pocket_code, it.guest_id, it.slot ?? it.slot_start) : deskKey(it.pocket_code, it.guest_id));
     return !(a?.phase === 'sent' && isAnswered(a, stamp(it.asked_at)));
   });
 

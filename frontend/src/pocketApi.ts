@@ -68,6 +68,8 @@ export class PocketApiError extends Error {
     readonly code: string | null,
     /** 422 `invalid`: the server's numbered problems ("1. round 1, question 1: …"). */
     readonly problems: string[] = [],
+    /** The error body as sent (pa13b: 409 slot_in_use carries {slot, start, name}). */
+    readonly data: Record<string, unknown> | null = null,
   ) {
     super(message);
     this.name = 'PocketApiError';
@@ -174,7 +176,7 @@ async function call<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string
       (code && FALLBACK[code]) ||
       (res.status === 404 ? FALLBACK.not_found : `That didn’t work (HTTP ${res.status}).`);
     const problems = Array.isArray(data?.problems) ? data.problems.filter((p): p is string => typeof p === 'string') : [];
-    throw new PocketApiError(message, res.status, code, problems);
+    throw new PocketApiError(message, res.status, code, problems, data);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -246,6 +248,14 @@ export const pocketApi = {
   /** "No reply needed": clears `waiting`, sends nothing to the guest. */
   deskResolve: async (code: string, guest: string) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'resolve', body: { guest } }),
   /** One guest's conversation, host only: the read plus `conversation`. */
+  // pa13b booking desk (design "For Vega"; Vega's pa13b-impl.md wins once it exists).
+  deskConfirm: async (code: string, guest: string, slot: string) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'confirm', body: { guest, slot } }),
+  deskDecline: async (code: string, guest: string, slot: string, text: string | null) =>
+    call<PocketRead>('POST', `${one(code)}/action`, { name: 'decline', body: text ? { guest, slot, text } : { guest, slot } }),
+  deskBook: async (code: string, guest: string, to: { slot: string } | { new_slot: { start: string; minutes: number } }) =>
+    call<PocketRead>('POST', `${one(code)}/action`, { name: 'book', body: { guest, ...to } }),
+  deskSetSlots: async (code: string, slots: { id?: string; start: string; minutes: number; seats: number; label?: string }[]) =>
+    call<PocketRead>('POST', `${one(code)}/action`, { name: 'set_slots', body: { slots } }),
   deskGuest: async (code: string, guest: string) => call<PocketRead>('GET', `${one(code)}?view=${encodeURIComponent(`guest:${guest}`)}`),
   /** The Needs-you list (`GET /api/waiting`); the desk keeps only its own `pocket_desk` items (validDeskItems). */
   waiting: async () => call<unknown>('GET', '/api/waiting'),
