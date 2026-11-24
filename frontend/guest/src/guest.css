@@ -329,7 +329,7 @@ button.ans:active:not(:disabled) { animation: tap 120ms var(--kw-ease); }
 .stepper .sb[aria-disabled="true"] { opacity: 0.4; }
 .stepper .sb svg.pi { width: 16px; height: 16px; }
 .stepper .v { text-align: center; font-size: 26px; line-height: 30px; font-weight: 800; font-variant-numeric: tabular-nums; }
-.stepper .v small { display: block; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--zinc-400); }
+.stepper .v small { display: block; font-size: 13px; line-height: 18px; font-weight: 500; color: var(--zinc-400); font-variant-numeric: normal; }
 .tchips label { position: relative; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 14px; border-radius: 999px; border: 1px solid var(--kw-hairline-strong); background: var(--kw-surface-main); font-size: 15px; font-weight: 600; color: var(--zinc-100); }
 .tchips label svg.pi { width: 12px; height: 12px; color: var(--sky-300); }
 .tchips label.on { border-color: var(--sky-300); background: color-mix(in srgb, var(--sky-500) 24%, var(--kw-surface-main)); }

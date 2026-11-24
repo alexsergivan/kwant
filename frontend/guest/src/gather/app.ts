@@ -1056,7 +1056,7 @@ export class GatherApp {
   private letGoBlock(s: Slot, waiting: boolean): Kid {
     const next = !waiting && s.waiting_people?.[0];
     const what = waiting ? `Changed your mind? Leave the ${s.name} waiting list.` : next ? `Can't make it after all? Let the spot go, and ${next.name} moves up.` : "Can't make it after all? Let the spot go.";
-    if (!this.letGo) return h('p', { class: 'soft center fine' }, what, ' ', this.linkButton(waiting ? 'Leave the list' : 'Let the spot go', () => this.askLetGo(), 'let-go'));
+    if (!this.letGo) return [h('p', { class: 'soft center fine' }, what), h('p', { class: 'center' }, this.linkButton(waiting ? 'Leave the list' : 'Let the spot go', () => this.askLetGo(), 'let-go'))];
     const yes = h('button', { type: 'button', class: 'gbtn ghost', 'data-let-go-yes': '', 'aria-busy': this.busy === 'let_go' ? 'true' : null }, waiting ? 'Yes, leave the list' : 'Yes, let it go');
     yes.addEventListener('click', () => void this.doLetGo());
     return h(
