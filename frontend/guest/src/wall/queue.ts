@@ -20,8 +20,8 @@ export interface Row<F extends PickedFile = PickedFile> {
   loaded: number;
   total: number;
   caption: string;
-  /** Why it can't go up (G4), in plain words. */
-  why?: { title: string; fix?: string };
+  /** Why it can't go up (G4), in plain words; `again` when sending it once more can work (the row shows Try again). */
+  why?: { title: string; fix?: string; again?: true };
   /** The server's id once sent. */
   id?: string;
 }
@@ -219,7 +219,7 @@ export class UploadQueue<F extends PickedFile = PickedFile> {
         return;
       case 'row':
         r.state = 'refused';
-        r.why = { title: why.title, fix: why.fix };
+        r.why = { title: why.title, fix: why.fix, again: why.again };
         this.on.change();
         return this.pump();
     }

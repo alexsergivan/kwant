@@ -730,6 +730,12 @@ export class WallApp {
         cls = 'ur no';
         st = h('b', { class: 'fname' }, r.file.name || label);
         extra = h('p', { class: 'why' }, h('span', null, r.why?.title ?? ''), r.why?.fix ? [h('br'), h('span', { class: 'soft' }, r.why.fix)] : null);
+        // A refusal whose words say "Tap Try again" (broken_photo, the fallback) gets the same button as a dropped row.
+        if (r.why?.again) {
+          const b = this.button([wIcon('retry'), 'Try again'], () => this.queue.retry(r.key), 'retry', 'retry');
+          b.setAttribute('aria-label', `Try ${label} again`);
+          extra = [extra, b];
+        }
         break;
     }
     const canCaption = v.captions && r.state !== 'refused' && (r.state !== 'sent' || !!r.id);

@@ -104,6 +104,11 @@ test('copy: every refusal from the box has plain words and a fix; no file sizes 
   assert.equal(r(415, 'heic').fix, 'Try sharing it from Photos, which makes a JPEG.');
   assert.equal(r(415, 'not_photo').title, 'Not a photo: this wall takes photos only.');
   assert.equal(r(415, 'broken_photo').kind, 'row');
+  // Rows whose words say "Tap Try again" carry `again`, so the row shows the button; the rest don't.
+  assert.equal(r(400, 'broken_photo').again, true);
+  assert.equal(r(401, 'signed_out').again, true);
+  assert.equal(r(400, 'weird').fix, 'Tap Try again.');
+  for (const e of ['too_big', 'heic', 'not_photo', 'bad_caption']) assert.equal(r(400, e).again, undefined, e);
   assert.equal(r(400, 'bad_caption').title, "That caption can't go up.");
   assert.deepEqual(r(410, 'closed'), { kind: 'closed' });
   assert.equal(r(409, 'guest_max', { limit: 30 }).title, "You've added 30 photos, the most each guest can.");
@@ -200,6 +205,22 @@ test('queue: a refused file stays with its reason, the rest keep sending; Try ag
   assert.equal(dropped.state, 'sent');
   assert.equal(t.sent.length, 5);
   assert.deepEqual(t.q.rows.map((r) => r.state), ['refused']);
+});
+
+test('queue: a 400 broken_photo is refused with again; Try again resends it', async () => {
+  const t = queue([{ status: 400, error: 'broken_photo' }, { status: 201 }]);
+  t.q.add([file('a.jpg')]);
+  await flush();
+  const row = t.q.rows[0];
+  assert.equal(row.state, 'refused');
+  assert.equal(row.why.again, true);
+  t.q.retry(row.key);
+  await flush();
+  assert.equal(row.state, 'sent');
+  assert.equal(t.sent.length, 2);
+  // A file the page refused itself (HEIC) has no Try again: sending it again can't work.
+  t.q.add([file('b.HEIC', '')]);
+  assert.equal(t.q.rows.at(-1).why.again, undefined);
 });
 
 test('queue: 429 waits Retry-After then resends the same photo', async () => {
@@ -428,6 +449,25 @@ test('G2/G4 sending: one at a time; HEIC and too big are refused in place with a
   assert.doesNotMatch(t.text(), /\d+(\.\d+)? ?(KB|MB) (of|sent)|%/, 'no sizes or percentages');
   await click([...t.root.querySelectorAll('button')].find((b) => /Back to the wall/.test(b.textContent)));
   assert.equal(t.$('[data-refused]'), null);
+  t.app.stop();
+});
+
+test('G4 broken_photo: the row says Tap Try again and has a Try again button that resends; HEIC rows have none', async () => {
+  const t = await open('wall-broken');
+  await pick(t, [jpg('1.jpg'), new dom.window.File(['x'], '2.HEIC', { type: '' })]);
+  await t.advance(3000);
+  assert.ok(t.$('[data-refused]'), 'G4 block');
+  assert.match(t.text(), /That photo didn't arrive whole\. ?Tap Try again to send it once more\./);
+  const rows = [...t.root.querySelectorAll('li[data-state=refused]')];
+  assert.equal(rows.length, 2);
+  const again = rows.map((li) => li.querySelector('button.retry'));
+  assert.ok(again[0], 'broken_photo row has Try again');
+  assert.equal(again[0].getAttribute('aria-label'), 'Try Photo 1 again');
+  assert.equal(again[1], null, 'the HEIC row has no Try again');
+  await click(again[0]);
+  await t.advance(3000);
+  assert.deepEqual(t.box.sent.map((s) => s.status), [400, 201]);
+  assert.equal(t.root.querySelectorAll('li[data-state=refused] button.retry').length, 0);
   t.app.stop();
 });
 

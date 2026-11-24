@@ -37,6 +37,7 @@ const R = {
   max: { status: 409, error: 'guest_max', limit: 30, message: 'That is the most each guest can add.' },
   full: { status: 507, error: 'disk_low', message: 'The wall is full for now.' },
   closed: { status: 410, error: 'closed', message: 'The wall is closed.' },
+  broken: { status: 400, error: 'broken_photo', message: "That photo didn't arrive whole." },
 };
 
 export const wallScenes = {
@@ -57,6 +58,8 @@ export const wallScenes = {
   'best-snap': { seat: true, info: { ...facts, state: 'closed', best_set: true, best_by: 'snap' }, wall: wallPhotos, mine: MINE.slice(2), uploads: [R.closed] },
   // G7 closed, no seat (no best set).
   closed: { info: { ...facts, state: 'closed' }, wall: wallPhotos, mine: [], uploads: [R.closed] },
+  // G4 with Try again: the body stopped mid-upload (400 broken_photo), then the resend goes up.
+  broken: { seat: true, info: facts, wall: wallPhotos.slice(0, 6), mine: [], uploads: [R.broken, OK] },
   // Uploads close mid-batch: G7 with "N photos didn't go up".
   closing: { seat: true, info: facts, wall: wallPhotos.slice(0, 6), mine: [], uploads: [OK, R.closed] },
   // The host's computer is away: state 503 (the page was served with the public facts).

@@ -220,7 +220,7 @@ export function wallPage(wall: WallPhoto[], shown: readonly string[], limit: num
 
 // ---------- refusals ----------
 
-export type Refusal = { kind: 'row'; title: string; fix?: string } | { kind: 'page'; title: string; sub?: string } | { kind: 'closed' } | { kind: 'wait'; secs: number } | { kind: 'retry' };
+export type Refusal = { kind: 'row'; title: string; fix?: string; again?: true } | { kind: 'page'; title: string; sub?: string } | { kind: 'closed' } | { kind: 'wait'; secs: number } | { kind: 'retry' };
 
 /**
  * Plain words for a refused upload (design.md "For Iris" 3, in wall.rs's codes). Numbers come from the reply's
@@ -237,14 +237,15 @@ export function refusal(status: number, error: string | undefined, o: { limit?: 
   }
   if (error === 'heic') return { kind: 'row', title: "This photo type can't go up.", fix: 'Try sharing it from Photos, which makes a JPEG.' };
   if (error === 'not_photo') return { kind: 'row', title: 'Not a photo: this wall takes photos only.', fix: 'JPEG, PNG or WebP.' };
-  if (error === 'broken_photo') return { kind: 'row', title: "That photo didn't arrive whole.", fix: 'Tap Try again to send it once more.' };
+  // The body stopped mid-upload (server-impl.md: like a network error), so the row offers Try again.
+  if (error === 'broken_photo') return { kind: 'row', title: "That photo didn't arrive whole.", fix: 'Tap Try again to send it once more.', again: true };
   if (error === 'guest_max') {
     const n = o.limit ?? o.perGuest;
     return { kind: 'page', title: n ? `You've added ${n} photos, the most each guest can.` : "You've added the most photos each guest can.", sub: 'Photos you already added are safe.' };
   }
   if (error === 'wall_full' || error === 'disk_low' || status === 507) return { kind: 'page', title: `The wall is full for now. ${cap(host)} can make room.`, sub: 'Photos you already added are safe.' };
   if (error === 'bad_caption') return { kind: 'row', title: "That caption can't go up.", fix: 'Change the caption and try again.' };
-  return { kind: 'row', title: "That photo didn't go up.", fix: 'Tap Try again.' };
+  return { kind: 'row', title: "That photo didn't go up.", fix: 'Tap Try again.', again: true };
 }
 
 export const cap = (s: string): string => s.charAt(0).toUpperCase() + s.slice(1);

@@ -400,6 +400,17 @@ for (const name of order) {
     if (/\d+(\.\d+)? ?(KB|MB) (of|sent)|\d%/.test(txt)) problems.push('wall-g4: a size or percentage shows');
     await ctx.close();
   }
+  // G4 with Try again: the box answers 400 broken_photo; the row's Try again resends and it goes up.
+  {
+    const { ctx, page, log } = await wgo('wall-broken', 'wall');
+    await files(page).setInputFiles([jpeg('ok-1.jpg')]);
+    await page.waitForSelector('li[data-state="refused"] button.retry', { timeout: 20000 });
+    await page.waitForTimeout(300);
+    await wallShot(page, log, 'wall-g4-try-again');
+    await page.click('li[data-state="refused"] button.retry');
+    await page.waitForFunction(() => !document.querySelector('li[data-state="refused"]'), null, { timeout: 20000 });
+    await ctx.close();
+  }
   // G3 the live wall: yours first, newest first, 12 then Show more; a new approved photo waits behind the pill.
   {
     const { ctx, page, log } = await wgo('wall-live', 'wall');
