@@ -1,7 +1,9 @@
 //! The guest listener's supervisor. Every 5 s it reads the `pocket_apps` switch: on starts the
 //! guest port (main port + 1, or `KWNT_POCKET_PORT`), off stops it. While on it also sweeps
-//! expired pockets every minute (after pa7's reminders and results, `schedule::run_once`) and runs watched pockets' kit timers every second. While off it
-//! binds nothing and touches no pocket.
+//! expired pockets every minute (after pa7's reminders and results, `schedule::run_once`) and runs
+//! watched pockets' kit timers every second. While off it binds nothing and touches no pocket. It
+//! also stops a quick tunnel when the switch goes off, and on macOS keeps the computer awake while
+//! a tunnel or an open pocket runs (pa6).
 
 use crate::server::AppState;
 use std::net::SocketAddr;
@@ -39,27 +41,36 @@ impl ListenerSlot {
     }
 }
 
-/// Brings the listener in line with the switch. Returns whether pocket apps are on.
+/// Brings the listener (and the quick tunnel, and the Mac's keep-awake) in line with the
+/// switch. Returns whether pocket apps are on.
 pub async fn reconcile(state: &AppState) -> bool {
     let on = super::enabled(&state.db).await;
     state.pocket.on.store(on, Ordering::SeqCst);
-    let slot = &state.pocket.listener;
-    if !on {
-        slot.stop();
-        return false;
+    if on {
+        open(state).await;
+    } else {
+        state.pocket.tunnel.stop_all();
+        state.pocket.listener.stop();
     }
+    super::tunnel::keep_awake(state, on).await;
+    on
+}
+
+/// Opens the guest port if it isn't open yet.
+async fn open(state: &AppState) {
+    let slot = &state.pocket.listener;
     if slot.addr().is_some() {
-        return true;
+        return;
     }
     let Some(port) = super::pocket_port(&state.config) else {
         tracing::warn!("pocket apps: no guest port (the main port is 65535); set KWNT_POCKET_PORT");
-        return true;
+        return;
     };
     let listener = match tokio::net::TcpListener::bind((state.config.host.as_str(), port)).await {
         Ok(l) => l,
         Err(e) => {
             tracing::warn!(port, "pocket apps: couldn't open the guest port, trying again shortly: {e}");
-            return true;
+            return;
         }
     };
     let addr = listener.local_addr().unwrap_or_else(|_| SocketAddr::from(([127, 0, 0, 1], port)));
@@ -67,7 +78,7 @@ pub async fn reconcile(state: &AppState) -> bool {
     {
         let mut running = slot.running.lock().unwrap_or_else(|e| e.into_inner());
         if running.is_some() {
-            return true;
+            return;
         }
         *running = Some(Running { addr, cancel: cancel.clone() });
     }
@@ -79,7 +90,6 @@ pub async fn reconcile(state: &AppState) -> bool {
         }
     });
     tracing::info!(%addr, "pocket apps: guest listener started");
-    true
 }
 
 /// Starts the supervisor; it stops with kwant (and takes the guest listener with it).
@@ -110,6 +120,8 @@ pub fn spawn(state: AppState, cancel: CancellationToken) {
                 }
             }
         }
+        state.pocket.tunnel.stop_all();
+        state.pocket.awake.set(false);
         state.pocket.listener.stop();
     });
 }

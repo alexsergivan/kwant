@@ -54,7 +54,7 @@ import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard'
 import { connectSheetFor, type ConnectionSuggestionMeta } from './connectionSuggestions';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
 import { type ServerStates, chatHasInstalledServer, fetchServerStates, suggestionServerState } from './suggestionServerState';
-import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi } from './botActions';
+import { ApiError, BotActionMeta, HireMeta, applyBotAction, applyHire, botActionsApi, changesBots, decisionError, hiresApi, parseBotActionMeta } from './botActions';
 import { BotActionCard, type BotActionDecision } from './components/BotActionCard';
 import { HireCard, type HireDecision } from './components/HireCard';
 import { RouteChoiceCard } from './components/RouteChoiceCard';
@@ -1576,6 +1576,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           case 'BotActionUpdated': {
             const a = event.data?.action;
             if (a?.id) setBotActions((prev) => applyBotAction(prev, a));
+            // A bot's routine change (or its undo) moves the routine; routine cards read it again.
+            const card = parseBotActionMeta(a?.card);
+            if (card?.target_kind === 'routine') emitContinuity({ type: 'routines_changed', data: { routine_id: card.target_id } });
             break;
           }
           case 'route_choice_updated':
