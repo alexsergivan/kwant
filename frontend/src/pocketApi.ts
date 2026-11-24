@@ -64,6 +64,8 @@ export class PocketApiError extends Error {
     readonly code: string | null,
     /** 422 `invalid`: the server's numbered problems ("1. round 1, question 1: …"). */
     readonly problems: string[] = [],
+    /** pa10b: a 409 inside a wait window says until when ("Thu 6:40 PM"). */
+    readonly until: string | null = null,
   ) {
     super(message);
     this.name = 'PocketApiError';
@@ -170,7 +172,8 @@ async function call<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string
       (code && FALLBACK[code]) ||
       (res.status === 404 ? FALLBACK.not_found : `That didn’t work (HTTP ${res.status}).`);
     const problems = Array.isArray(data?.problems) ? data.problems.filter((p): p is string => typeof p === 'string') : [];
-    throw new PocketApiError(message, res.status, code, problems);
+    const until = typeof data?.until === 'string' && data.until.length <= 40 ? data.until : null;
+    throw new PocketApiError(message, res.status, code, problems, until);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -203,6 +206,16 @@ export const pocketApi = {
   // segment: /host/* lives only on the guest port (/api/pocket/, singular), which refuses another origin.
   /** A named kit action (santa: draw_now, reveal_now, skip_reveal, add_pair, ...). Returns the host view. */
   hostAction: async (code: string, name: string, body?: Record<string, unknown>) => call<unknown>('POST', `${one(code)}/action`, body === undefined ? { name } : { name, body }),
+  // pa10b gather: host actions through the same route. Names follow the pa10b design ("For Juno"/"For Lin") until Lin's
+  // server-impl.md "Pocket API v1: gather" lands; where his names differ, his win (card-impl.md "Shape I read").
+  /** The host's own paid tick on a Yes row. Never shown to members. */
+  setPaid: async (code: string, playerId: string, paid: boolean) => pocketApi.hostAction(code, 'set_paid', { player_id: playerId, paid }),
+  /** The host copied or shared a nudge. 409 with `until` inside the 48 h window. */
+  copied: async (code: string, nudgeId: string) => pocketApi.hostAction(code, 'copied', { player_id: nudgeId }),
+  /** Break a tie: the host picks. */
+  pick: async (code: string, option: string) => pocketApi.hostAction(code, 'pick', { option }),
+  /** Break a tie: voting opens again for 24 hours. */
+  revote24h: async (code: string) => pocketApi.hostAction(code, 'revote_24h'),
   /** The player's keys stop working; before the draw only for santa. Returns the host view. */
   removePlayer: async (code: string, playerId: string) => call<unknown>('POST', `${one(code)}/remove`, { player_id: playerId }),
   /** A one-time code, exactly once. Nothing else comes back: never a match. */

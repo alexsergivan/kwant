@@ -536,6 +536,167 @@ export const SANTA_FIXTURES = {
 /** What host/reset-pin answers for the shots and tests: a one-time code and its expiry (24 h). */
 export const SANTA_RESET_CODE = { code: 'K7QX', expires_at: '2026-12-08T21:41:00+01:00' };
 
+// Pocket apps (pa10b/design.md): Riverside Runners, host Oleks, 22 members, euros. Names, places and creatures are
+// made up. One engine, three faces: RSVP, Sign-up and Vote, states 1-9 plus People, Nudges and the closed results.
+const GATHER_FUNNEL = 'https://oleks-mac.tail4b2e.ts.net/p/runclub';
+const GATHER_WIFI = 'http://192.168.1.20:7480/p/runclub';
+const CREATURES = ['beret', 'antenna', 'visor', 'bulb', 'spikes', 'goggles', 'horns', 'ears'];
+const av = (i: number) => CREATURES[i % CREATURES.length];
+type P = [name: string, answer: 'yes' | 'maybe' | 'no' | null, plus: number, food: string | null, paid: boolean | null];
+const person = ([name, answer, plus_ones, food, paid]: P, i: number) => ({ id: `g${i + 1}`, name, avatar: av(i), you: i === 0, answer, plus_ones, food, paid });
+// State 1-3: Yes 14 (+3) · Maybe 4 · No 2 · Paid 10 of 14 (not yet: Ana, Kai, Ravi, Tom).
+const RSVP_OPEN_PEOPLE: P[] = [
+  ['Oleks', 'yes', 1, 'vegetarian', true], ['Mia', 'yes', 1, null, true], ['Priya', 'yes', 0, 'vegan', true], ['Ana', 'yes', 0, 'nut allergy', false],
+  ['Kai', 'yes', 0, null, false], ['Ravi', 'yes', 0, 'vegetarian', false], ['Tom', 'yes', 0, null, false], ['Leo', 'maybe', 0, null, null], ['Finn', 'no', 0, null, null],
+  ['Jonas', 'yes', 0, null, true], ['Elif', 'yes', 1, 'vegetarian', true], ['Marta', 'yes', 0, 'gluten-free', true], ['Ben', 'yes', 0, null, true],
+  ['Lucia', 'yes', 0, null, true], ['Omar', 'yes', 0, null, true], ['Zoe', 'maybe', 0, null, null], ['Nina', 'maybe', 0, null, null], ['Sam', 'maybe', 0, null, null], ['Ida', 'no', 0, null, null], ['Hana', 'yes', 0, null, true],
+];
+const LEO_NOTE = 'Hi Leo! Still a maybe for the club dinner on Sat at The Old Mill? Answers close Thu at 8 PM so Oleks can book the table. Tap to change it: oleks-mac…/p/runclub';
+const unpaidNote = (n: string) => `Hi ${n}, a quick one: the €35 for Saturday's dinner is still open. Pay Oleks whenever suits you before the dinner. Thanks!`;
+const maybeNote = (n: string) => LEO_NOTE.replace('Leo', n);
+const nudge = (id: string, name: string, i: number, why: string, text: string, copied_at: string | null = null, until: string | null = null) => ({ id, name, avatar: av(i), why, text, copied_at, until });
+const RSVP_NUDGES = [
+  nudge('g8', 'Leo', 7, 'maybe', LEO_NOTE),
+  nudge('g16', 'Zoe', 15, 'maybe', maybeNote('Zoe'), '9:12 PM', 'Fri 9:12 PM'),
+  nudge('g17', 'Nina', 16, 'maybe', maybeNote('Nina')),
+  nudge('g18', 'Sam', 17, 'maybe', maybeNote('Sam')),
+  nudge('g4', 'Ana', 3, 'not_paid', unpaidNote('Ana')),
+  nudge('g5', 'Kai', 4, 'not_paid', unpaidNote('Kai'), 'yesterday', 'Thu 6:40 PM'),
+  nudge('g6', 'Ravi', 5, 'not_paid', unpaidNote('Ravi')),
+  nudge('g7', 'Tom', 6, 'not_paid', unpaidNote('Tom')),
+];
+const gatherBase = {
+  closed_at: null,
+  event_at: null,
+  club: 'Riverside Runners',
+  host_name: 'Oleks',
+  place: null,
+  show_names: true,
+  rsvp: null,
+  slots: [],
+  moved_up: null,
+  vote: null,
+  people: [],
+  nudges: [],
+  join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: GATHER_FUNNEL, wifi_url: GATHER_WIFI },
+};
+const gatherFixture = (reply: string, name: string, state: 'live' | 'ended', gather: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: 'pocket:runclub' },
+    code: 'runclub',
+    kit: 'gather',
+    name,
+    when: null,
+    state,
+    budget: { calls: 3, usd: 0.01 },
+    gather: { ...gatherBase, ...gather },
+  });
+const rsvpOpen = {
+  face: 'rsvp',
+  phase: 'open',
+  title: 'End-of-season dinner',
+  when: 'Sat, Dec 12 · 7:30 PM · The Old Mill · €35 each, paid to Oleks',
+  closes_at: 'Thu, Dec 10 at 8 PM',
+  deletes_on: 'Sat, Dec 19',
+  kept_after: 'the dinner',
+  place: 'The Old Mill',
+  rsvp: {
+    yes: 14, maybe: 4, no: 2, plus_ones: 3, maybe_names: ['Leo', 'Zoe', 'Nina', 'Sam'], no_names: ['Finn', 'Ida'], never: null,
+    food: '3 vegetarian, 1 vegan, 1 nut allergy, 1 gluten-free', paid: { paid: 10, of: 14, not_yet: ['Ana', 'Kai', 'Ravi', 'Tom'] },
+  },
+  people: RSVP_OPEN_PEOPLE.map(person),
+  nudges: RSVP_NUDGES,
+};
+const POTLUCK_SLOTS = [
+  { id: 's1', name: 'Mains', cap: 3, who: [{ name: 'Priya', note: 'lentil stew' }], waiting: [] },
+  { id: 's2', name: 'Sides', cap: 4, who: [{ name: 'Ana', note: null }, { name: 'Kai', note: null }, { name: 'Tom', note: null }], waiting: [] },
+  { id: 's3', name: 'Desserts', cap: 2, who: [{ name: 'Mia', note: 'apple cake' }, { name: 'Ben', note: 'brownies' }], waiting: ['Hana', 'Leo'] },
+  { id: 's4', name: 'Drinks', cap: 2, who: [{ name: 'Omar', note: null }], waiting: [] },
+  { id: 's5', name: 'Washing-up crew', cap: 3, who: [], waiting: [] },
+];
+const signupOpen = {
+  face: 'signup',
+  phase: 'open',
+  title: 'Christmas potluck',
+  when: 'Sun, Dec 20 · 1 PM · the clubhouse',
+  closes_at: 'Sat, Dec 19 at 6 PM',
+  deletes_on: 'Sun, Dec 27',
+  kept_after: 'the potluck',
+  slots: POTLUCK_SLOTS,
+};
+const VOTERS = ['Mia', 'Priya', 'Jonas', 'Ana', 'Kai', 'Oleks', 'Elif', 'Marta', 'Ben', 'Lucia', 'Omar', 'Hana', 'Tom', 'Ravi', 'Zoe'].map((name, i) => ({ name, avatar: av(i + 1) }));
+const ROUND1 = [{ name: 'The Old Mill', votes: 6 }, { name: 'Casa Lupa', votes: 5 }, { name: 'Golden Lotus', votes: 3 }, { name: 'Pizza at the clubhouse', votes: 1 }];
+const voteBase = {
+  face: 'vote',
+  title: "Where's the end-of-season dinner?",
+  when: 'Ranked choice · 4 places · closes Wed, Dec 2 at 8 PM',
+  closes_at: 'Wed, Dec 2 at 8 PM',
+  deletes_on: 'Wed, Dec 9',
+  kept_after: 'it closes',
+};
+const voteOpen = { ...voteBase, phase: 'open', vote: { kind: 'ranked', voted: 15, members: 22, voters: VOTERS, counts: ROUND1, rounds: [], winner: null, tied: [], tie_note: null } };
+const ROUNDS_DONE = [
+  { counts: ROUND1, out: ['Pizza at the clubhouse'], moved: 'its vote goes to Casa Lupa' },
+  { counts: [{ name: 'The Old Mill', votes: 6 }, { name: 'Casa Lupa', votes: 6 }, { name: 'Golden Lotus', votes: 3 }], out: ['Golden Lotus'], moved: '2 votes go to The Old Mill, 1 to Casa Lupa' },
+  { counts: [{ name: 'The Old Mill', votes: 8 }, { name: 'Casa Lupa', votes: 7 }], out: [], moved: null },
+];
+const FINAL = [{ name: 'The Old Mill', votes: 8 }, { name: 'Casa Lupa', votes: 7 }, { name: 'Golden Lotus', votes: 0 }, { name: 'Pizza at the clubhouse', votes: 0 }];
+// Closed RSVP (results-1440 left): 19 coming (15 + 4), 4 no, 3 never answered, paid 14 of 15.
+const RSVP_CLOSED_PEOPLE: P[] = [
+  ['Oleks', 'yes', 1, 'vegetarian', true], ['Mia', 'yes', 1, null, true], ['Priya', 'yes', 0, 'vegan', true], ['Jonas', 'yes', 0, null, true], ['Ana', 'yes', 0, 'nut allergy', true],
+  ['Kai', 'yes', 0, null, true], ['Ravi', 'yes', 0, 'vegetarian', true], ['Tom', 'yes', 0, null, true], ['Elif', 'yes', 1, 'vegetarian', true], ['Marta', 'yes', 0, 'gluten-free', true],
+  ['Ben', 'yes', 0, null, true], ['Lucia', 'yes', 0, 'vegetarian', true], ['Omar', 'yes', 0, null, false], ['Hana', 'yes', 0, null, true], ['Leo', 'yes', 1, null, true],
+  ['Finn', 'no', 0, null, null], ['Ida', 'no', 0, null, null], ['Nina', 'no', 0, null, null], ['Sam', 'no', 0, null, null],
+];
+const rsvpClosed = {
+  ...rsvpOpen,
+  phase: 'closed',
+  closed_at: 'Thu, Dec 10',
+  rsvp: { yes: 15, maybe: 0, no: 4, plus_ones: 4, maybe_names: [], no_names: ['Finn', 'Ida', 'Nina', 'Sam'], never: 3, food: '4 vegetarian, 1 vegan, 1 nut allergy, 1 gluten-free', paid: { paid: 14, of: 15, not_yet: ['Omar'] } },
+  people: RSVP_CLOSED_PEOPLE.map(person),
+  nudges: [nudge('g13', 'Omar', 12, 'not_paid', unpaidNote('Omar'))],
+  join: null,
+};
+const signupClosed = {
+  ...signupOpen,
+  phase: 'closed',
+  closed_at: 'Fri, Dec 18',
+  slots: [
+    { id: 's1', name: 'Mains', cap: 3, who: [{ name: 'Priya', note: 'lentil stew' }, { name: 'Elif', note: 'lasagne' }, { name: 'Omar', note: 'curry' }], waiting: [] },
+    { id: 's2', name: 'Sides', cap: 4, who: [{ name: 'Ana', note: null }, { name: 'Kai', note: null }, { name: 'Tom', note: null }, { name: 'Lucia', note: null }], waiting: [] },
+    { id: 's3', name: 'Desserts', cap: 2, who: [{ name: 'Mia', note: 'apple cake' }, { name: 'Hana', note: 'gingerbread' }], waiting: ['Leo'] },
+    { id: 's4', name: 'Drinks', cap: 2, who: [{ name: 'Omar', note: null }, { name: 'Jonas', note: null }], waiting: [] },
+    { id: 's5', name: 'Washing-up crew', cap: 3, who: [{ name: 'Marta', note: null }, { name: 'Ravi', note: null }], waiting: [] },
+  ],
+  join: null,
+};
+const voteClosed = { ...voteBase, phase: 'closed', closed_at: 'Wed, Dec 2', join: null, vote: { ...voteOpen.vote, counts: FINAL, rounds: ROUNDS_DONE, winner: 'The Old Mill' } };
+export const GATHER_FIXTURES = {
+  rsvpOpen: gatherFixture("Your dinner RSVP is open. Share the link in the club chat; I'll keep count and draft nudges for you to send.", 'Dinner RSVP', 'live', rsvpOpen),
+  rsvpPeople: gatherFixture("Here's who answered. Paid ticks are yours only.", 'Dinner RSVP', 'live', rsvpOpen),
+  rsvpNudges: gatherFixture('8 nudges are drafted. Nothing sends by itself: copy one and send it from your own chat.', 'Dinner RSVP', 'live', rsvpOpen),
+  rsvpNoAddress: gatherFixture('Your dinner RSVP is open on your Wi-Fi. To let members answer from home, set up Tailscale Funnel (the How to has the steps).', 'Dinner RSVP', 'live', {
+    ...rsvpOpen,
+    join: { mode: 'wifi', anywhere_kind: null, anywhere_url: null, wifi_url: GATHER_WIFI },
+  }),
+  signupOpen: gatherFixture('Your potluck sign-up is open. Desserts is full; Hana and Leo are on its waiting list.', 'Potluck sign-up', 'live', signupOpen),
+  signupMoved: gatherFixture('Ben left Desserts, so Hana moved up from the waiting list.', 'Potluck sign-up', 'live', {
+    ...signupOpen,
+    slots: POTLUCK_SLOTS.map((s) => (s.id === 's3' ? { ...s, who: [{ name: 'Mia', note: 'apple cake' }, { name: 'Hana', note: 'gingerbread' }], waiting: ['Leo'] } : s)),
+    moved_up: { name: 'Hana', slot: 'Desserts', left: 'Ben', at: '4:12 PM', note: "Hi Hana! A spot opened up in Desserts for Sunday's potluck, so you're in now. See you at 1 PM at the clubhouse!" },
+  }),
+  voteOpen: gatherFixture("The dinner vote is open. 15 of 22 have voted; it closes Wed at 8 PM.", 'Dinner vote', 'live', voteOpen),
+  voteClosed: gatherFixture('The vote is closed: The Old Mill won, 8 to 7 in the final round.', 'Dinner vote', 'ended', voteClosed),
+  voteTie: gatherFixture("It's a tie between The Old Mill and Casa Lupa. You pick, or open the vote again for 24 hours.", 'Dinner vote', 'live', {
+    ...voteBase,
+    phase: 'tie',
+    join: null,
+    vote: { ...voteOpen.vote, counts: [{ name: 'The Old Mill', votes: 7 }, { name: 'Casa Lupa', votes: 7 }], rounds: [ROUNDS_DONE[0], { counts: [{ name: 'The Old Mill', votes: 7 }, { name: 'Casa Lupa', votes: 7 }], out: [], moved: null }], tied: ['The Old Mill', 'Casa Lupa'], tie_note: 'their first choices are level too', voted: 14 },
+  }),
+  rsvpResult: gatherFixture('Your dinner RSVP is closed. 19 are coming; the list for The Old Mill is ready to copy.', 'Dinner RSVP', 'ended', rsvpClosed),
+  signupResult: gatherFixture('Your potluck sign-up is closed. Every slot is full except Washing-up crew.', 'Potluck sign-up', 'ended', signupClosed),
+} satisfies Record<string, Fixture>;
+
 export const FIXTURES = {
   comparison,
   chartLine,

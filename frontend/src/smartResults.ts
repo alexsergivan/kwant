@@ -351,6 +351,130 @@ export interface SantaInfo {
   join: { mode: 'anywhere' | 'wifi' | 'none'; anywhere_kind: 'https' | 'funnel' | null; anywhere_url: string | null; wifi_url: string | null } | null;
 }
 
+/** pa10b: the gather kit's three faces on one engine. */
+export type GatherFace = 'signup' | 'rsvp' | 'vote';
+/** open (taking answers), closed (final), tie (a vote's final round tied: the host picks or re-runs for 24 h). */
+export type GatherPhase = 'open' | 'closed' | 'tie';
+export type GatherAnswer = 'yes' | 'maybe' | 'no';
+/** One RSVP row in People and paid (host view only). Never a ballot: the validator rejects one under a person. */
+export interface GatherPerson {
+  id: string;
+  name: string;
+  avatar: string | null;
+  you: boolean;
+  answer: GatherAnswer | null;
+  plus_ones: number;
+  /** "vegetarian"; null: no food needs. */
+  food: string | null;
+  /** Host-only paid tick; null on rows that aren't Yes. */
+  paid: boolean | null;
+}
+export interface GatherSlot {
+  id: string;
+  name: string;
+  cap: number;
+  /** Who's in, with their note ("lentil stew"), in join order. */
+  who: Array<{ name: string; note: string | null }>;
+  /** First names on this slot's FIFO waiting list, first in line first. */
+  waiting: string[];
+}
+/** A count line: an option and its votes (1st choices while open, the final round once closed). */
+export interface GatherCount {
+  name: string;
+  votes: number;
+}
+/** One round of the ranked count ("How it was counted"). `out` is who dropped out after it. */
+export interface GatherRound {
+  counts: GatherCount[];
+  out: string[];
+  /** "its vote goes to Casa Lupa"; display text from the box, or null. */
+  moved: string | null;
+}
+export type GatherNudgeWhy = 'maybe' | 'not_paid' | 'moved_up' | 'not_answered' | 'not_voted';
+/** A Chaser draft for one person (host view only). Nothing sends: the host copies or shares it. */
+export interface GatherNudge {
+  /** The person's id, for `copied`. */
+  id: string;
+  name: string;
+  avatar: string | null;
+  why: GatherNudgeWhy;
+  text: string;
+  /** "9:12 PM" or "yesterday": when the host last copied it; null: never. */
+  copied_at: string | null;
+  /** Inside the 48 h window: "Thu 6:40 PM", the next time a copy is allowed; null: copy now. */
+  until: string | null;
+}
+/**
+ * The gather kit's host facts on a Pocket card (pa10b/card-impl.md "Shape I read"). Counts, first names, the host's
+ * own paid ticks and display dates. Who voted is a list of names apart from the counts: no person ever carries a ballot.
+ */
+export interface GatherInfo {
+  face: GatherFace;
+  phase: GatherPhase;
+  /** "End-of-season dinner" */
+  title: string;
+  /** "Sat, Dec 12 · 7:30 PM · The Old Mill · €35 each, paid to Oleks" */
+  when: string | null;
+  /** "Thu, Dec 10 at 8 PM" */
+  closes_at: string;
+  /** "Thu 8 PM" once closed */
+  closed_at: string | null;
+  /** "Sat, Dec 12"; null: no event (a vote). */
+  event_at: string | null;
+  /** "Sat, Dec 19" */
+  deletes_on: string;
+  /** "the dinner" / "the potluck" / null (then: "it closes"): what the 7 days count from. */
+  kept_after: string | null;
+  /** The club or group name for the eyebrow ("Riverside Run Club"). */
+  club: string | null;
+  /** The host's first name ("Oleks"), for "Tie: Oleks picks". */
+  host_name: string | null;
+  /** RSVP: the venue, for "Tell The Old Mill: …". */
+  place: string | null;
+  /** Members see names and Yes / Maybe / No (RSVP) or the live count after voting (vote). */
+  show_names: boolean;
+  /** RSVP counts. */
+  rsvp: {
+    yes: number;
+    maybe: number;
+    no: number;
+    plus_ones: number;
+    maybe_names: string[];
+    no_names: string[];
+    /** Members on the host's list who never answered; null without a list. */
+    never: number | null;
+    /** "3 vegetarian, 1 vegan, 1 nut allergy, 1 gluten-free"; null: none. */
+    food: string | null;
+    /** Host-only. Null when the RSVP doesn't collect money. */
+    paid: { paid: number; of: number; not_yet: string[] } | null;
+  } | null;
+  /** Sign-up slots in the host's order. */
+  slots: GatherSlot[];
+  /** Sign-up: the last move up from a waiting list (state 6). */
+  moved_up: { name: string; slot: string; left: string; at: string; note: string | null } | null;
+  /** Vote. */
+  vote: {
+    kind: 'one_pick' | 'ranked';
+    voted: number;
+    /** Members on the host's list; null without a list. */
+    members: number | null;
+    /** Who voted, first names and creatures only (never what they picked). */
+    voters: Array<{ name: string; avatar: string | null }>;
+    /** Open: 1st choices; closed or tie: the final round. */
+    counts: GatherCount[];
+    rounds: GatherRound[];
+    winner: string | null;
+    /** The tied names in a tie. */
+    tied: string[];
+    /** "they tied on 1st choices too" (display text) */
+    tie_note: string | null;
+  } | null;
+  people: GatherPerson[];
+  nudges: GatherNudge[];
+  /** How members join: as santa (own https, else Tailscale Funnel, else Same Wi-Fi). Never a quick tunnel. */
+  join: SantaInfo['join'];
+}
+
 /**
  * A pocket app's card in chat (pa4, pa0a/design.md §1 and §6); source is always slot. Every time and
  * date is display text the server wrote for the person's time zone ("Fri, Nov 27 · 8:00 PM").
@@ -392,6 +516,8 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   results: PocketResults | null;
   /** kit "santa" only: the Secret Santa card (pa10a). `state` is "live" until the phase is "ended". */
   santa: SantaInfo | null;
+  /** kit "gather" only (pa10b): Sign-up, RSVP or Vote. `state` is "live" until the phase is "closed". */
+  gather?: GatherInfo | null;
   /** pa4c: the quiz_drafts id (the bot card's `id`) that Edit questions opens. Null or absent: no editor. */
   draft?: string | null;
   /** pa4c: questions the person wrote or changed themselves (not source-checked). */
