@@ -270,6 +270,11 @@ pub trait Kit: Send + Sync + 'static {
     fn forgets_everyone(&self, _state: &Value) -> bool {
         false
     }
+    /// pa10c: how many joined, kept after the players were forgotten (the end line, the card
+    /// and Done count it). `None`: count the players.
+    fn kept_players(&self, _state: &Value) -> Option<usize> {
+        None
+    }
     /// pa13a: one part of the host's view by key (`guest:<id>`: a front desk conversation),
     /// for `host/state?view=<key>` and the card. `None`: no such part.
     fn host_detail(&self, _ctx: &KitCtx, _state: &Value, _key: &str) -> Option<Value> {

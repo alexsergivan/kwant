@@ -96,6 +96,11 @@ impl Snapshot {
     pub fn rules(&self) -> Option<KitRules> {
         self.kit().map(|k| effective_rules(k, &self.spec))
     }
+
+    /// How many took part: the players, or the count a kit kept after forgetting them (pa10c).
+    pub fn player_count(&self) -> usize {
+        self.kit().and_then(|k| k.kept_players(&self.kit_state)).unwrap_or(self.players.len())
+    }
 }
 
 /// The in-memory side of pockets: per-pocket locks, viewers' channels, snapshots, limiters and
@@ -279,7 +284,7 @@ pub fn pocket_json(s: &Snapshot) -> Value {
         "closes_at": s.row.closes_at,
         "ended_at": s.row.ended_at,
         "expires_at": s.row.expires_at,
-        "players": s.players.len(),
+        "players": s.player_count(),
         "max_players": rules.as_ref().map(|r| r.max_players),
         "needs_pin": rules.as_ref().is_some_and(|r| r.needs_pin),
         "retention": rules.as_ref().map(|r| r.retention.describe()),

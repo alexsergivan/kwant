@@ -219,6 +219,8 @@ struct Kept {
     summary: String,
     joined: usize,
     answered: usize,
+    /// Listed members who never answered (or voted): the card's "N never answered".
+    never: usize,
     /// RSVP: yes / maybe / no / plus_ones / coming.
     rsvp: Value,
     /// Sign-up: (filled, waiting) per slot.
@@ -366,6 +368,7 @@ impl St {
                 summary: Gather::summary_line(ctx, self),
                 joined: ctx.players.len(),
                 answered: self.answered_count(ctx),
+                never: self.not_answered(ctx).len(),
                 rsvp: Gather::rsvp_counts(self),
                 slots: self.slots.iter().map(|x| (x.taken.len(), x.waiting.len())).collect(),
                 ballots: self.ballots.len(),
@@ -387,6 +390,11 @@ impl St {
     /// People who joined (kept after a delete: the players are gone then).
     fn joined(&self, ctx: &KitCtx) -> usize {
         self.deleted.as_ref().map_or(ctx.players.len(), |k| k.joined)
+    }
+
+    /// How many listed members never answered (or voted), kept after a delete (the names go).
+    fn not_answered_count(&self, ctx: &KitCtx) -> usize {
+        self.deleted.as_ref().map_or_else(|| self.not_answered(ctx).len(), |k| k.never)
     }
 
     /// A slot's (filled, waiting), kept after a delete.
@@ -882,6 +890,8 @@ impl Gather {
             }
         }
         v["not_answered"] = json!(s.not_answered(ctx));
+        // pa10c: the count stays after "Delete answers now", when the list above is empty
+        v["not_answered_count"] = json!(s.not_answered_count(ctx));
         v["drafts"] = json!(s.drafts(ctx));
         v["needs_you"] = json!(s.phase == TIE);
         v["summary"] = json!(Self::summary_line(ctx, s));
@@ -1414,6 +1424,10 @@ impl Kit for Gather {
         load(state).deleted.is_some()
     }
 
+    fn kept_players(&self, state: &Value) -> Option<usize> {
+        load(state).deleted.map(|k| k.joined)
+    }
+
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value {
         let s = load(state);
         match viewer {
@@ -1435,7 +1449,7 @@ impl Kit for Gather {
             "phase": s.phase,
             "joined": s.joined(ctx),
             "answered": s.answered_count(ctx),
-            "not_answered": s.not_answered(ctx).len(),
+            "not_answered": s.not_answered_count(ctx),
             "drafts": s.drafts(ctx).len(),
             "needs_you": s.phase == TIE,
             "summary": Self::summary_line(ctx, &s),

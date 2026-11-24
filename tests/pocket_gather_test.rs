@@ -744,7 +744,9 @@ async fn delete_answers_now_keeps_only_the_rsvp_counts() {
 
     assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
     let line = "4 coming · 1 maybe · 1 no";
-    assert_eq!(host_view(&t, &code).await["summary"], line);
+    let h = host_view(&t, &code).await;
+    assert_eq!(h["summary"], line);
+    assert_eq!((h["not_answered"].clone(), h["not_answered_count"].clone()), (json!(["Zebulon"]), json!(1)), "{h}");
     let expiry = before_expiry(&t, &code).await;
     assert!(expiry.is_string(), "{expiry}");
     let r = host_act(&t, &code, "delete_answers", json!({})).await;
@@ -759,7 +761,9 @@ async fn delete_answers_now_keeps_only_the_rsvp_counts() {
     assert_eq!(h["paid"]["not_yet"], json!([]));
     assert_eq!((r.body["summary"]["summary"].as_str(), r.body["summary"]["answers_deleted_at"].as_str()), (Some(line), Some(at.as_str())), "the Done row");
     assert_eq!(r.body["summary"]["counts"]["coming"], 4);
-    assert_eq!(r.body["summary"]["not_answered"], 0);
+    // The card's "1 never answered" stays (pa10c QA F1): the count, not the name
+    assert_eq!((r.body["summary"]["not_answered"].clone(), h["not_answered_count"].clone()), (json!(1), json!(1)));
+    assert_eq!((r.body["summary"]["joined"].clone(), r.body["pocket"]["players"].clone()), (json!(4), json!(4)), "joined is kept");
     assert_eq!(r.body["pocket"]["expires_at"], expiry, "the deletion date doesn't move");
     let ids: Vec<String> = people.iter().map(|p| p.0.clone()).collect();
     let mut gone: Vec<&str> = vec!["Anneliese", "Bartholomew", "Cordelia", "Dagobert", "Evangeline", "Zebulon", "zebulon", "Sesame", "nut_allergy\":1", &gone_id];
@@ -867,4 +871,21 @@ async fn delete_answers_now_keeps_slot_counts_and_drops_names_and_waiting_lists(
     let mut gone = vec!["Anneliese", "Bartholomew", "Cordelia", "Dagobert", "Tiramisu", "Lemonade"];
     gone.extend(ids);
     nothing_of(&t, &code, &host_key, &gone, &[&ana.1, &ben.1, &cleo.1, &dev.1]).await;
+
+    // Then the event passes and the pocket ends (pa10c QA F2): the end line counts who took
+    // part from what was kept, not the forgotten players ("Nobody joined.")
+    let mut rx = t.state.event_sender.subscribe();
+    let later = now + Duration::days(7) + Duration::minutes(5);
+    pocket::sweep(&t.state, later).await;
+    pocket::schedule::run_once(&t.state, later).await;
+    assert_eq!(before_state(&t, &code).await, "ended");
+    let mut ends = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        match ev {
+            kwnt::drivers::events::RuntimeEvent::Notify { title, body, .. } if title.ends_with("has ended") => ends.push((title, body)),
+            _ => {}
+        }
+    }
+    assert_eq!(ends, vec![("Club dinner has ended".to_string(), "4 players took part.".to_string())]);
+    assert_eq!(send(&t.main, "GET", &format!("/api/pockets/{code}"), None, &person()).await.body["pocket"]["players"], 4);
 }
