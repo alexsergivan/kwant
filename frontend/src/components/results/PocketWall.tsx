@@ -79,15 +79,16 @@ export function validWall(v: unknown): WallInfo | undefined {
   const c = v.counts;
   if (!isObj(c) || !['total', 'waiting', 'approved', 'hidden', 'guests', 'senders'].every((k) => isCount(c[k]))) return undefined;
   const counts = { total: c.total, waiting: c.waiting, approved: c.approved, hidden: c.hidden, guests: c.guests, senders: c.senders } as WallInfo['counts'];
-  if (counts.waiting + counts.approved + counts.hidden !== counts.total || counts.senders > counts.guests) return undefined;
+  // No senders <= guests rule: guests counts active players only, so removing a guest who sent photos leaves senders > guests.
+  if (counts.waiting + counts.approved + counts.hidden !== counts.total) return undefined;
   if (!isMb(v.used_mb) || !isMb(v.pocket_cap_mb) || v.pocket_cap_mb <= 0) return undefined;
   const best = v.best ?? [];
   if (!Array.isArray(best) || best.some((id) => typeof id !== 'string' || !PHOTO_ID.test(id))) return undefined;
   const bestMax = v.best_max === undefined || v.best_max === null ? 30 : v.best_max;
   if (!isCount(bestMax) || bestMax < 1 || best.length > bestMax) return undefined;
   if (v.best_set !== undefined && typeof v.best_set !== 'boolean') return undefined;
-  const best_set = v.best_set === true;
-  if (best_set && best.length === 0) return undefined;
+  // Hiding the last best photo leaves best_set true with an empty list on the server: that is "no best set", not a bad wall.
+  const best_set = v.best_set === true && best.length > 0;
   const closes_at = optStr(v.closes_at, 60);
   const delete_on = optStr(v.delete_on, 60);
   const host_name = optStr(v.host_name, 40);
@@ -134,6 +135,9 @@ export interface WallView {
   used_mb: number | null;
   best: string[] | null;
   best_set: boolean | null;
+  /** host_view.limits: the per-photo and per-guest caps the summary itself doesn't carry. */
+  photo_cap_mb: number | null;
+  per_guest_max: number | null;
 }
 
 function validPhoto(v: unknown): WallPhoto | null {
@@ -166,7 +170,9 @@ export function validWallView(v: unknown): WallView | null {
     counts: counts ? { total: counts.total, waiting: counts.waiting, approved: counts.approved, hidden: counts.hidden, guests: counts.guests, senders: counts.senders } : null,
     used_mb: isMb(v.used_mb) ? v.used_mb : null,
     best,
-    best_set: typeof v.best_set === 'boolean' ? v.best_set : null,
+    best_set: typeof v.best_set === 'boolean' ? v.best_set && (best === null || best.length > 0) : null,
+    photo_cap_mb: isObj(v.limits) && isMb(v.limits.photo_cap_mb) ? v.limits.photo_cap_mb : null,
+    per_guest_max: isObj(v.limits) && isCount(v.limits.per_guest_max) ? v.limits.per_guest_max : null,
   };
 }
 
@@ -368,6 +374,8 @@ type Pending = Record<string, 'approve' | 'hide'>;
 type Undo = { id: string; name: string; left: number } | null;
 export const UNDO_MS = 5000;
 const FAIL = "Couldn't reach the box. Try again";
+/** 409 not_now: the photo was hidden (or changed) elsewhere, so Try again could never work. */
+const GONE = "That photo isn't waiting any more.";
 const QUEUE_SHOWN = 5;
 const GRID_SHOWN = 15;
 
@@ -816,8 +824,9 @@ const DONE_TEXT: Record<ConfirmKind, string> = {
 };
 
 const WallConfirm: React.FC<{ block: PocketBlock; n: number; kind: ConfirmKind; busy: boolean; onYes: () => void; onNo: () => void }> = ({ block, n, kind, busy, onYes, onNo }) => {
-  const yes = useRef<HTMLButtonElement | null>(null);
-  useEffect(() => yes.current?.focus(), []);
+  // Focus the safe answer, so Enter or Space right after opening never deletes or stops anything.
+  const no = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => no.current?.focus(), []);
   const c = CONFIRM[kind];
   return (
     <div
@@ -831,11 +840,11 @@ const WallConfirm: React.FC<{ block: PocketBlock; n: number; kind: ConfirmKind; 
         <strong className="font-semibold">{c.q(block, n)}</strong> {c.text(block, n)}
       </p>
       <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
-        <button ref={yes} type="button" onClick={onYes} disabled={busy} className={`inline-flex items-center justify-center gap-1.5 rounded-xl bg-rose-600 px-3.5 font-semibold text-white hover:bg-rose-700 disabled:opacity-60 kw-focus ${BTN}`} data-action={`${kind}-yes`}>
+        <button type="button" onClick={onYes} disabled={busy} className={`inline-flex items-center justify-center gap-1.5 rounded-xl bg-rose-600 px-3.5 font-semibold text-white hover:bg-rose-700 disabled:opacity-60 kw-focus ${BTN}`} data-action={`${kind}-yes`}>
           {busy && <Loader2 size={14} className="motion-safe:animate-spin" aria-hidden="true" />}
           {c.yes}
         </button>
-        <button type="button" onClick={onNo} disabled={busy} className={GHOST}>
+        <button ref={no} type="button" onClick={onNo} disabled={busy} className={GHOST} data-action={`${kind}-no`}>
           {c.no}
         </button>
       </div>
@@ -856,6 +865,8 @@ const mergeView = (w: WallInfo, v: WallView): WallInfo => ({
   used_mb: v.used_mb ?? w.used_mb,
   best: v.best ?? w.best,
   best_set: v.best_set ?? w.best_set,
+  photo_cap_mb: v.photo_cap_mb ?? w.photo_cap_mb,
+  per_guest_max: v.per_guest_max ?? w.per_guest_max,
 });
 
 export const WallCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; join?: React.ReactNode; undoMs?: number }> = ({ block, ask, join, undoMs = UNDO_MS }) => {
@@ -912,8 +923,10 @@ export const WallCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
           for (const id of ids) delete next[id];
           return next;
         });
-      } catch {
-        setErrs((e) => ({ ...e, ...Object.fromEntries(ids.map((id) => [id, FAIL])) }));
+      } catch (e) {
+        const gone = e instanceof PocketApiError && e.status === 409;
+        setErrs((old) => ({ ...old, ...Object.fromEntries(ids.map((id) => [id, gone ? GONE : FAIL])) }));
+        if (gone) void read();
       } finally {
         setPending((p) => {
           const next = { ...p };

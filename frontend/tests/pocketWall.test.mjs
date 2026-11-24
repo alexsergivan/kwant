@@ -65,6 +65,7 @@ function box(name, onAction = null) {
     if (onAction) {
       const r = await onAction({ url: String(url), method, body, hv });
       if (r === 'fail') throw new TypeError('network down');
+      if (r === 'gone') return new Response(JSON.stringify({ error: 'not_now', message: "That can't happen right now." }), { status: 409 });
       if (r) hv = r;
     }
     return new Response(JSON.stringify({ pocket: {}, summary: {}, removed: 0, host_view: hv, join: null }), { status: 200 });
@@ -157,17 +158,51 @@ test('junk is rejected: a guest id, a file size or a photo list anywhere in the 
   bad({ ...raw('shown'), state: 'live' }, 'closed wall must be ended');
   bad(withWall('waiting', { state: 'paused' }), 'unknown wall state');
   bad(withWall('waiting', { counts: { ...raw('waiting').wall.counts, waiting: 10 } }), 'counts that do not add up');
-  bad(withWall('waiting', { counts: { ...raw('waiting').wall.counts, senders: 99 } }), 'more senders than guests');
   bad(withWall('waiting', { counts: { ...raw('waiting').wall.counts, guests: -1 } }), 'negative count');
   bad(withWall('waiting', { used_mb: -1 }), 'negative MB');
   bad(withWall('waiting', { pocket_cap_mb: 0 }), 'no cap');
   bad(withWall('waiting', { used_mb: '452' }), 'MB as text');
   bad(withWall('shown', { best: Array.from({ length: 31 }, (_, i) => `ph_${i}`) }), 'more than best_max');
   bad(withWall('shown', { best: ['../etc/passwd'] }), 'a photo id that is not an id');
-  bad(withWall('shown', { best: [] }), 'best_set with nothing in it');
   bad(withWall('waiting', { best_set: 'yes' }), 'best_set as text');
   bad(withWall('waiting', { closes_at: 42 }), 'closes_at not text');
   bad({ ...raw('waiting'), results: structuredClone(m.POCKET_FIXTURES.results.results.blocks[0].results) }, 'quiz results on a wall');
+});
+
+test('a removed guest who sent photos (senders > guests) still shows the card (Rigel D1)', async () => {
+  const b = withWall('waiting', { counts: { total: 12, waiting: 3, approved: 8, hidden: 1, guests: 4, senders: 5 } });
+  const w = m.validPocket(b)?.wall;
+  assert.ok(w, 'removing a guest who uploaded is a normal state');
+  assert.equal(w.counts.senders, 5);
+  assert.equal(w.counts.guests, 4);
+  box('waiting');
+  const v = await inChat('waiting', b);
+  assert.ok(v.host.querySelector('[data-wall="waiting"]'), 'the card renders');
+});
+
+test('best_set with an empty best list (the last best photo was hidden) reads as no best set (Rigel D2)', () => {
+  const w = m.validPocket(withWall('shown', { best: [] }))?.wall;
+  assert.ok(w, 'the card stays');
+  assert.equal(w.best_set, false);
+  const hv = { ...structuredClone(m.WALL_HOST_VIEWS.shown), best: [], best_set: true };
+  assert.equal(m.validWallView(hv).best_set, false);
+});
+
+test('the space line takes the per-photo and per-guest caps from host_view.limits when the summary lacks them (D5)', async () => {
+  const b = raw('waiting');
+  delete b.wall.photo_cap_mb;
+  delete b.wall.per_guest_max;
+  assert.equal(m.meterLine(m.validPocket(b).wall), '452 MB of 1,024 MB photo space used');
+  box('waiting', null);
+  const hv = m.WALL_HOST_VIEWS.waiting;
+  g.fetch = ((f) => async (url, init) => {
+    const res = await f(url, init);
+    const data = await res.json();
+    data.host_view = { ...hv, limits: { photo_cap_mb: 15, pocket_cap_mb: 1024, per_guest_max: 40, caption_max: 80 } };
+    return new Response(JSON.stringify(data), { status: 200 });
+  })(g.fetch);
+  const v = await card('waiting', { block: b });
+  assert.match(v.host.textContent, /452 MB of 1,024 MB photo space used · up to 15 MB a photo, 40 a guest/);
 });
 
 test('the host view: bad photos are dropped, turns kept, and a non-wall view is null', () => {
@@ -266,6 +301,16 @@ test('approve is optimistic: the row goes and counts move at once; on failure it
   const err = v.host.querySelector('[data-row="ph_q1"] [data-row-error]');
   assert.equal(err.textContent.trim(), "Couldn't reach the box. Try again");
   assert.ok(!v.host.querySelector('.text-bad.kw-chip, [data-chip="error"]'), 'no error chip, a plain line');
+});
+
+test('approve answered 409 not_now: a plain "not waiting any more" line, never Try again (D3)', async () => {
+  const calls = box('waiting', async () => 'gone');
+  const v = await card('waiting');
+  await click(v.host.querySelector('[data-row="ph_q1"] [data-action="approve"]'));
+  await settle();
+  const err = v.host.querySelector('[data-row="ph_q1"] [data-row-error]');
+  assert.equal(err?.textContent.trim(), "That photo isn't waiting any more.");
+  assert.ok(calls.filter((c) => c.method === 'GET').length >= 2, 'the card reads the box again');
 });
 
 test('approve that works takes the box answer as the new lists', async () => {
@@ -471,6 +516,7 @@ test('actions per state, downloads, Delete now asks once, and buttons with no ro
   assert.equal(button(v, 'Download the best 30').getAttribute('href'), '/api/pockets/wl8m3q/wall.zip?best=1');
   await click(button(v, 'Delete now'));
   const dialog = v.host.querySelector('[role="alertdialog"]');
+  assert.equal(document.activeElement?.textContent.trim(), 'Keep them', 'focus lands on the safe answer, not on delete (D4)');
   assert.match(dialog.textContent, /Delete all 212 photos from this box now\? Download them first if you want to keep them\./);
   await click(button(v, 'Delete them now'));
   assert.ok(calls.some((c) => c.method === 'DELETE' && c.url === '/api/pockets/wl8m3q'));
