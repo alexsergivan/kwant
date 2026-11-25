@@ -21,7 +21,10 @@ const BAD = /\b(kwants?|kwnt|agents?)\b/i;
 // Agent Maestro, the VS Code extension's own name (a Custom API preset), and "coding agent", what
 // Claude Code, Codex and Cursor are called in Settings → Coding agents (0.7.4).
 // 0.9.8 first screen (Mira, first-screen F): the product's own name in the welcome and the claude.ai step.
-const ALLOWED = /\bWelcome to kwant\b|\ballow kwant\.|\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/gi;
+// Plain words (0.9.52 36h-a): Mira's plain-words/word-list.md rows 8, 14, 39-45 make "kwant" the product's name
+// (it was "kwant bots") on the sign-in, update, install, phone and team screens, and kwant picks who answers.
+const PRODUCT_PW_A = /^\s*kwant\s*$|\b(?:[Oo]pen|[Oo]pens|Install|[Uu]se|[Aa]dd|Run|Put|Star|Download|Downloading|Updated to|What’s new in|find|signed in to|control of|this|its own|the user that runs|machine running|server) kwant\b|\bkwant (?:again|at|then opens|opens|server|runs|picks|printed|address|folder|icon|browser|on|from|behind|that way|to)\b|\bkwant’s shared folder\b/;
+const ALLOWED = new RegExp(/\bWelcome to kwant\b|\ballow kwant\.|\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/.source + '|' + PRODUCT_PW_A.source, 'gi');
 const MAESTRO = /\bAgent Maestro\b|\bHermes Agent\b/g;
 // T/D preview sheet (0.7.7): Mira's review-396-397 must-fix 7 and Ada's deviation-4 ruling keep "kwant"
 // as the subject in these three sentences only.
@@ -35,6 +38,10 @@ const MAESTRO = /\bAgent Maestro\b|\bHermes Agent\b/g;
 // Done-check card (0.9.8): Mira's done-check/design.md keeps kwant as the subject of the server's `how` 'kwant compared the reply with what you asked for'.
 // Allowed without asking (0.9.22 25e): Mira's design-check-768 fix 4 says whose restart, in the docs' words ("also after kwant restarts").
 const RULED = /\bafter kwant restarts\b|\bkwant compared the reply with what you asked for\b|\bkwant (?:can remove it|won’t delete it|won’t write into it|suggests one from the task|cleans build output)\b|\bmade outside kwant\b|\bso kwant can read\b|\bmanifests kwant knows\b|\bnames kwant knows\b|\bkwant’s (?:browser|log|own data|tools)\b|\bkwant (?:adds it|couldn’t|won’t share|keeps|is running as root|can’t pass|can’t fetch|can’t download|only downloads)\b|\b[Rr]estart kwant\b|\bStart kwant as\b|\bkwant (?:looked|never follows|downloads it|found nothing|doesn’t fetch)\b|\bNothing kwant can bring\b|\bwhere kwant looked\b|\bsent kwant somewhere\b/g;
+
+// Plain words (0.9.52 36h-b): Mira's plain-words/word-list.md makes "kwant" the product's name in these Settings,
+// AI and usage sentences (rows 3-5, 35, 37, 38): kwant picks the AI, and nothing is sent from kwant.
+const RULED_PW = /\bkwant (?:picks|picked|moves to|didn’t say)\b|\b(?:not in|reach|Update|sent from) kwant\b/g;
 
 // Connect Home Assistant (0.9.21 26e): Mira's connect-home-assistant/design.md (plain-words check) names kwant, the
 // program that connects, in the sheet's helper, token, MCP Server off and can't-reach copy and the Tested sticker's title.
@@ -67,7 +74,7 @@ export function findBareWording() {
       else if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) s = node.text;
       else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) s = node.text;
       if (s !== null) {
-        const stripped = s.replace(MAESTRO, '').replace(RULED, '').replace(RULED_HA, '').replace(ALLOWED, '');
+        const stripped = s.replace(MAESTRO, '').replace(RULED, '').replace(RULED_HA, '').replace(RULED_PW, '').replace(ALLOWED, '');
         // URLs, paths, event names and storage keys (kwnt:..., kwant.x) are not prose.
         // Example paths a person reads (~/dev/x) stay in.
         const prose = stripped.replace(/(?<!\S)(?!~)\S*(?:[:./_#=]\w)\S*/g, (w) => (/^[A-Za-z]+[.,;:!?)]?$/.test(w) ? w : ''));
@@ -88,10 +95,43 @@ test('no visible text says a bare "kwant", "kwnt" or "agent"', () => {
   assert.deepEqual(findBareWording(), []);
 });
 
-test('the page title says "kwant bots"', () => {
-  const title = readFileSync(join(root, 'index.html'), 'utf8').match(/<title>([^<]*)<\/title>/)?.[1] ?? '';
-  assert.match(title, /kwant bots/);
-  assert.doesNotMatch(title.replace(/\bkwant bots?\b/gi, ''), BAD);
+test('the page title and Home Screen name say "kwant" (plain words, row 45)', () => {
+  const html = readFileSync(join(root, 'index.html'), 'utf8');
+  const title = html.match(/<title>([^<]*)<\/title>/)?.[1] ?? '';
+  assert.equal(title, 'kwant: your team of AI bots');
+  assert.doesNotMatch(title.replace(/^kwant:/, ''), BAD);
+  assert.match(html, /<meta name="apple-mobile-web-app-title" content="kwant" \/>/);
+  assert.doesNotMatch(html, /kwant bots/);
+});
+
+// Plain words (0.9.52 36h-b-2): Mira's plain-words/word-list.md row "engine" says "AI" outside Dev mode and Details.
+// The New bot form's More options line and account fold, and the steps list's info button, were the last ones.
+const enginesIn = (rel) => {
+  const file = join(src, rel);
+  const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out = [];
+  const visit = (node) => {
+    let s = null;
+    if (ts.isJsxText(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) s = node.text;
+    else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) s = node.text;
+    const at = s !== null && ts.isTemplateLiteralToken(node) ? node.parent.parent ?? node : node;
+    if (s !== null && /\bengines?\b/i.test(s) && looksVisible(s, at)) out.push(s.trim());
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+};
+
+test('the New bot form, the steps list and Apps & accounts say "AI", not "engine" (plain words, 36h-b-2)', () => {
+  const modal = readFileSync(join(src, 'components/NewAgentModal.tsx'), 'utf8');
+  for (const s of ['title, avatar, AI and more', 'persona, avatar, AI and more', 'From another AI (cleared on save)', 'Switch to this AI’s next account when this one runs out of usage or is signed out']) {
+    assert.ok(modal.includes(s), s);
+  }
+  assert.match(readFileSync(join(src, 'components/ActivityList.tsx'), 'utf8'), /aria-label="About this AI’s steps"/);
+  assert.deepEqual(enginesIn('components/NewAgentModal.tsx'), []);
+  assert.deepEqual(enginesIn('components/ActivityList.tsx'), []);
+  // Apps & accounts heading. Only the heading here: the rest of EnginesPanel's "engine" words are #1196's.
+  assert.match(readFileSync(join(src, 'components/EnginesPanel.tsx'), 'utf8'), /id="engines-title"[^>]*>AIs &amp; accounts</);
 });
 
 if (process.argv.includes('--list')) console.log(findBareWording().join('\n'));

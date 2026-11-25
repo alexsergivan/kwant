@@ -22,7 +22,7 @@ export function useDesktopInstallKind(): DesktopInstallKind {
 
 /** "Install app", on desktop: Chrome and Edge install in one click; other browsers get the steps
  *  that work there. Gone once kwant runs installed, or in the Mac app. It lives in the footer of
- *  Settings › All spaces › Use kwant bots on your phone, as "Install on this computer". */
+ *  Settings › All spaces › Use kwant on your phone, as "Install on this computer". */
 export const InstallAppButton: React.FC<{ className: string; label?: string }> = ({ className, label = 'Install app' }) => {
   const kind = useDesktopInstallKind();
   const [open, setOpen] = useState(false);
@@ -52,7 +52,7 @@ export const InstallAppButton: React.FC<{ className: string; label?: string }> =
         <div id={panelId} className="mx-2.5 mt-1 mb-1.5 rounded-lg border border-zinc-800 bg-zinc-900/70 p-2.5 text-[11px] leading-relaxed text-zinc-400">
           {kind === 'safari' ? (
             <p>
-              In Safari, choose <span className="text-zinc-200">File › Add to Dock</span>. kwant bots then opens in its own window.
+              In Safari, choose <span className="text-zinc-200">File › Add to Dock</span>. kwant then opens in its own window.
             </p>
           ) : kind === 'ios' ? (
             <p>
@@ -61,7 +61,7 @@ export const InstallAppButton: React.FC<{ className: string; label?: string }> =
             </p>
           ) : kind === 'insecure' ? (
             <p>
-              Installing needs <span className="text-zinc-200">https</span>. Browsers don't install pages served over plain http. Put kwant bots
+              Installing needs <span className="text-zinc-200">https</span>. Browsers don't install pages served over plain http. Put kwant
               behind an https proxy, or open it at 127.0.0.1 on the machine it runs on.
             </p>
           ) : (
@@ -80,7 +80,7 @@ export const InstallAppButton: React.FC<{ className: string; label?: string }> =
               <Laptop size={12} aria-hidden="true" /> Download the Mac app <ExternalLink size={11} aria-hidden="true" />
             </a>
           )}
-          {onMac() && <p className="mt-0.5 text-zinc-500">It runs its own kwant bots on this Mac.</p>}
+          {onMac() && <p className="mt-0.5 text-zinc-500">It runs its own kwant on this Mac.</p>}
         </div>
       )}
     </div>

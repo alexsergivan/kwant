@@ -1,4 +1,4 @@
-// 20h round 2 (Rigel's QA on #691): on an iPhone the floating InstallHint ("Install kwant bots on your
+// 20h round 2 (Rigel's QA on #691): on an iPhone the floating InstallHint ("Install kwant on your
 // phone") sat over the PhoneAppCard in Settings › All spaces, which already shows the same steps.
 // The hint steps aside while the card is mounted and comes back when it goes; its dismissal is unchanged.
 import assert from 'node:assert/strict';

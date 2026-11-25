@@ -190,7 +190,7 @@ export function parseSpendStopped(meta: string | null | undefined): SpendStopped
 /** "17.4k of 10k tokens" or "$0.84 of $0.50": the limit it reached, from the server's numbers. */
 export function stoppedDetail(m: Pick<SpendStoppedMeta, 'over' | 'used_tokens' | 'stop_tokens' | 'used_usd' | 'stop_usd'>): string | null {
   if (m.over === 'usd' && m.stop_usd > 0) return `${usdText(m.used_usd) ?? '$0.00'} of ${usdText(m.stop_usd)} today`;
-  if (m.stop_tokens > 0) return `${compactTokens(m.used_tokens)} of ${compactTokens(m.stop_tokens)} fresh tokens today`;
+  if (m.stop_tokens > 0) return `${compactTokens(m.used_tokens)} of ${compactTokens(m.stop_tokens)} tokens today`;
   return null;
 }
 

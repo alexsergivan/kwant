@@ -34,6 +34,9 @@ struct Job {
     fresh_tokens: u64,
     /// A reply in it already went through the decide-first gate (see [`super::decide`]).
     decided: bool,
+    /// Cancelled by the silent-turn sweep ([`super::lost_turns`]), not by a person's Stop: its
+    /// turn leaves the sweep's `turn_lost` line and no "Stopped. You stopped this reply.".
+    lost: bool,
 }
 
 /// A turn the UI can show: running, or waiting for a slot.
@@ -166,7 +169,7 @@ impl TurnRegistry {
         let token = CancellationToken::new();
         let mut keys: Vec<String> = keys.into_iter().map(Into::into).filter(|k: &String| !k.is_empty()).collect();
         keys.push(id.clone());
-        self.lock().jobs.insert(id.clone(), Job { keys, token: token.clone(), fresh_tokens: 0, decided: false });
+        self.lock().jobs.insert(id.clone(), Job { keys, token: token.clone(), fresh_tokens: 0, decided: false, lost: false });
         JobGuard { registry: self.clone(), id, token }
     }
 
@@ -220,6 +223,27 @@ impl TurnRegistry {
             }
         }
         n
+    }
+
+    /// [`Self::cancel`] for the silent-turn sweep: marks every job holding `key` as cancelled by
+    /// the sweep before cancelling it, so its turn doesn't read the cancel as a person's Stop
+    /// (stop-leaves-a-line after #1181). Returns how many.
+    pub fn cancel_lost(&self, key: &str) -> usize {
+        let mut inner = self.lock();
+        let mut n = 0;
+        for job in inner.jobs.values_mut() {
+            if job.keys.iter().any(|j| j == key) {
+                job.lost = true;
+                job.token.cancel();
+                n += 1;
+            }
+        }
+        n
+    }
+
+    /// Whether the job was cancelled by the silent-turn sweep ([`Self::cancel_lost`]).
+    pub fn cancelled_as_lost(&self, job_id: &str) -> bool {
+        self.lock().jobs.get(job_id).is_some_and(|j| j.lost)
     }
 
     pub fn has_job(&self, key: &str) -> bool {
@@ -973,6 +997,28 @@ mod tests {
         drop(b);
         assert!(!r.has_job("chat-1"));
         assert!(r.has_job("thread-9"));
+    }
+
+    /// stop-leaves-a-line after #1181: the sweep's cancel is told apart from a person's Stop.
+    #[test]
+    fn only_the_sweeps_cancel_marks_a_job_as_lost() {
+        let r = TurnRegistry::default();
+        let silent = r.start_job(["chat-1", "t-silent"]);
+        let stopped = r.start_job(["chat-2", "t-stopped"]);
+        let other = r.start_job(["chat-3"]);
+        assert_eq!(r.cancel_lost("t-silent"), 1);
+        assert_eq!(r.cancel(Some("t-stopped")), 1);
+        assert!(silent.token.is_cancelled() && stopped.token.is_cancelled());
+        assert!(r.cancelled_as_lost(&silent.id), "the sweep's cancel");
+        assert!(!r.cancelled_as_lost(&stopped.id), "a person's Stop is not the sweep's");
+        assert!(!other.token.is_cancelled() && !r.cancelled_as_lost(&other.id));
+        // A person's Stop after the sweep's doesn't make it a person's Stop
+        assert_eq!(r.cancel(Some("t-silent")), 1);
+        assert!(r.cancelled_as_lost(&silent.id));
+        assert_eq!(r.cancel_lost("nobody"), 0);
+        let id = silent.id.clone();
+        drop(silent);
+        assert!(!r.cancelled_as_lost(&id), "a finished job is nobody's");
     }
 
     #[test]
