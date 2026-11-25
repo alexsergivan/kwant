@@ -1268,6 +1268,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
 pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     super::continuity::spawn_notifier(state.clone());
     super::bot_status::spawn_watcher(state.clone());
+    super::lost_turns::spawn(state.clone(), shutdown.clone());
     crate::zombie::hunt::spawn(state.clone(), shutdown.clone());
     crate::documents::reminders::spawn(state.clone(), shutdown.clone());
     super::missions::listener::spawn(state.clone(), shutdown.clone());

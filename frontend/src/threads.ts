@@ -296,6 +296,21 @@ export function queuePosition(turns: TurnMap, turnId: string): number | null {
   return t.reported ? Math.min(t.reported, computed) : computed;
 }
 
+/**
+ * stuck-getting-started (0.9.51): the chats showing a reply as live (`live`, keyed by chat) that no
+ * turn the server lists runs in. A missed `turn_ended` left one "getting started" for hours.
+ */
+export const unlistedLive = (live: Readonly<Record<string, unknown>>, turns: TurnMap): string[] => {
+  const busy = new Set(Object.values(turns).map((t) => t.context_id));
+  return Object.keys(live).filter((ctx) => !busy.has(ctx));
+};
+
+/** The least time between two re-reads of the running turns when the window comes back. */
+export const REREAD_GAP_MS = 5_000;
+
+/** Whether the window coming back (focus, or the tab shown again) re-reads the running turns now. */
+export const rereadDue = (lastAt: number, now: number, hidden: boolean): boolean => !hidden && now - lastAt >= REREAD_GAP_MS;
+
 export const turnsIn = (turns: TurnMap, contextId: string): TrackedTurn[] =>
   Object.values(turns)
     .filter((t) => t.context_id === contextId)

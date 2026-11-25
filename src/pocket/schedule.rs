@@ -498,7 +498,7 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
     let row = state.db.pocket_schedule(code).await?;
     let zone = Zone::parse(row.as_ref().map_or("UTC", |r| r.zone.as_str()));
     let origin = row.as_ref().and_then(origin_of);
-    let (_, _, line) = results_copy(&s.row.title, s.players.len(), true);
+    let (_, _, line) = results_copy(&s.row.title, s.player_count(), true);
     let posted = match &origin {
         Some(o) => {
             let mut block = ended_block(&s, row.as_ref(), &zone);
@@ -519,7 +519,7 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
         }
         None => false,
     };
-    let (title, body, _) = results_copy(&s.row.title, s.players.len(), posted);
+    let (title, body, _) = results_copy(&s.row.title, s.player_count(), posted);
     notify(state, origin.as_ref(), &s, title, body).await;
     Ok(true)
 }

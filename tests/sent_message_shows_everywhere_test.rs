@@ -20,7 +20,10 @@ use common::*;
 use kwnt::RuntimeEvent;
 use serde_json::{json, Value};
 use std::time::Duration;
-use tokio::sync::broadcast::{error::TryRecvError, Receiver};
+use tokio::sync::broadcast::{
+    error::{RecvError, TryRecvError},
+    Receiver,
+};
 use tower::ServiceExt;
 
 const PNG: &[u8] = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR-not-a-real-image-but-png-magic";
@@ -42,6 +45,31 @@ async fn open_question(env: &Env, ctx: &str) -> String {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     panic!("no open question in {ctx}");
+}
+
+/// Waits (up to 10 s) until `rx` has carried the `question_asked` notification for the question
+/// asked in `thread`. The question row is saved before that notification goes out, so a test that
+/// only polls for the open question can subscribe in between and count the question's own
+/// notification as the next message's.
+async fn question_notified(rx: &mut Receiver<RuntimeEvent>, thread: &str) {
+    let seen = async {
+        loop {
+            match rx.recv().await {
+                Ok(e) => {
+                    if let RuntimeEvent::Notify { kind, thread_id, .. } = e.unscoped() {
+                        if kind.as_str() == "question_asked" && thread_id.as_deref() == Some(thread) {
+                            return;
+                        }
+                    }
+                }
+                Err(RecvError::Lagged(_)) => continue,
+                Err(RecvError::Closed) => panic!("the event stream closed before the question's notification"),
+            }
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(10), seen)
+        .await
+        .unwrap_or_else(|_| panic!("no question_asked notification for the question in {thread} within 10 s"));
 }
 
 async fn new_thread(env: &Env, title: &str) -> String {
@@ -177,8 +205,13 @@ async fn a_message_with_a_file_shows_its_card_on_every_open_screen() {
 async fn a_held_message_shows_on_every_open_screen() {
     let env = setup().await;
     let side = new_thread(&env, "ask").await;
+    // Subscribed before the asking send, so the question's own notification is seen (and done
+    // with) before the held messages' streams subscribe
+    let mut asked = env.state.event_sender.subscribe();
     send(&env, json!({"prompt": format!("Ship it? {} REPLYTAG:smheldq", ask_marker("Which branch should I ship (smheld)?", &["main", "batch2"])), "sender_id": "user", "thread_id": side})).await;
     open_question(&env, &side).await;
+    question_notified(&mut asked, &side).await;
+    drop(asked);
     let other = new_thread(&env, "other").await;
     for (place, ctx) in [("direct_kwant_id", env.a.clone()), ("thread_id", other.clone())] {
         let mut rx = env.state.event_sender.subscribe();
