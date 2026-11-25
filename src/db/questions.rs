@@ -245,6 +245,15 @@ impl Database {
         Ok((q, message))
     }
 
+    /// Whether a question that turn asked is still open (the turn waits for its answer).
+    pub async fn turn_has_open_question(&self, turn_id: &str) -> Result<bool, DbError> {
+        let n: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM questions WHERE turn_id = ?1 AND status = 'open'")
+            .bind(turn_id)
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(n > 0)
+    }
+
     pub async fn get_question(&self, id: &str) -> Result<Option<Question>, DbError> {
         Ok(sqlx::query_as::<_, Question>("SELECT * FROM questions WHERE id = ?")
             .bind(id)

@@ -251,7 +251,7 @@ pub async fn create(State(state): State<AppState>, Scope(space): Scope, Json(bod
     let Some(engine) = Engine::parse(&body.engine) else {
         return err(
             StatusCode::BAD_REQUEST,
-            "engine must be claude, codex, grok or custom",
+            "engine must be claude, codex, grok, custom or mistral",
         );
     };
     let is_custom = engine == Engine::Custom;
@@ -260,6 +260,16 @@ pub async fn create(State(state): State<AppState>, Scope(space): Scope, Json(bod
     }
     if !is_custom && (body.protocol.is_some() || body.base_url.is_some() || body.model.is_some()) {
         return err(StatusCode::BAD_REQUEST, "protocol, base_url and model only go with kind custom_api");
+    }
+    // 35a: Mistral has no CLI yet, so its accounts are API keys only
+    if engine == Engine::Mistral && body.kind != "api_key" {
+        return err(StatusCode::BAD_REQUEST, "engine mistral goes with kind api_key, and only with it");
+    }
+    if engine == Engine::Mistral && !state.db.mistral_ready().await {
+        return err(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Mistral accounts are unavailable: the database couldn't be updated for them (see the log)",
+        );
     }
     if is_custom && !state.db.custom_api_ready().await {
         return err(

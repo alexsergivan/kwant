@@ -141,6 +141,7 @@ export const FlightSchoolSetting: React.FC<{ value: FlightSchoolSettings; onChan
 interface SettingsData {
   anthropic_api_key: string;
   xai_api_key: string;
+  mistral_api_key?: string;
   openai_api_key: string;
   ollama_url: string;
   claude_cli_found: boolean;

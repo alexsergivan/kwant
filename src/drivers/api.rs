@@ -48,12 +48,17 @@ async fn api_model_name(
         "claude" => super::engines::EngineId::AnthropicApi,
         "codex" | "openai" => super::engines::EngineId::OpenaiApi,
         "grok" => super::engines::EngineId::XaiApi,
+        "mistral" => super::engines::EngineId::MistralApi,
         model => return Ok(model.to_string()),
     };
-    let listed = match api_key {
+    let mut listed = match api_key {
         Some(key) => list_api_models(engine, url, key).await,
         None => Vec::new(),
     };
+    // Mistral's tier models are known by name: a list that didn't load still picks one
+    if listed.is_empty() && engine == super::engines::EngineId::MistralApi {
+        listed = super::engines::mistral_fallback_models();
+    }
     let tier = super::engines::Tier::from_effort(effort);
     match super::engines::choose_model(&listed, None, tier) {
         Some(m) => Ok(m.id),
@@ -126,8 +131,8 @@ fn is_anthropic(url: &str) -> bool {
     url.ends_with("/v1/messages")
 }
 
-/// Who a model call to `url` goes to, in words a person knows: Anthropic, OpenAI, xAI, OpenRouter,
-/// or Ollama on its usual port (11434); else the address's host, with its port when it has one.
+/// Who a model call to `url` goes to, in words a person knows: Anthropic, OpenAI, xAI, Mistral,
+/// OpenRouter, or Ollama on its usual port (11434); else the address's host, with its port when it has one.
 pub(crate) fn provider_name(url: &str) -> String {
     let Ok(parsed) = reqwest::Url::parse(url) else {
         return "the model's server".into();
@@ -140,6 +145,8 @@ pub(crate) fn provider_name(url: &str) -> String {
         "OpenAI"
     } else if under("x.ai") {
         "xAI"
+    } else if under("mistral.ai") {
+        "Mistral"
     } else if under("openrouter.ai") {
         "OpenRouter"
     } else if parsed.port() == Some(11434) {
@@ -750,6 +757,87 @@ impl TurnResults {
     }
 }
 
+/// Mistral's API answers 422 to a request with any tool call id that isn't exactly 9 letters or
+/// digits. Its own ids fit, but kwant names a call that came without one `call_<uuid>`, and a
+/// proxy may hand on OpenAI's `call_…` ids. So on the way out to Mistral (and only there) each
+/// other id is sent as a 9-character stand-in, the same one for the whole turn. Inside the turn
+/// nothing changes: results, events and `READ_RESULT`'s notes keep the turn's own ids.
+#[derive(Debug, Default)]
+struct WireIds {
+    /// The turn's id → the id sent.
+    sent: std::collections::HashMap<String, String>,
+    /// The id sent → the turn's id.
+    turn: std::collections::HashMap<String, String>,
+}
+
+impl WireIds {
+    /// Only for Mistral: its API, or one of its models behind another address.
+    fn for_request(url: &str, model: &str) -> Option<Self> {
+        let host = reqwest::Url::parse(url)
+            .ok()
+            .and_then(|u| u.host_str().map(str::to_ascii_lowercase))
+            .unwrap_or_default();
+        let mistral_host = host == "mistral.ai" || host.ends_with(".mistral.ai");
+        (mistral_host || crate::profiles::is_mistral_model(model)).then(Self::default)
+    }
+
+    fn fits(id: &str) -> bool {
+        id.len() == 9 && id.bytes().all(|b| b.is_ascii_alphanumeric())
+    }
+
+    /// The id `id` is sent as: itself when it fits and isn't another call's stand-in, else a
+    /// fresh 9-character one.
+    fn sent_id(&mut self, id: &str) -> String {
+        if let Some(sent) = self.sent.get(id) {
+            return sent.clone();
+        }
+        let sent = if Self::fits(id) && !self.turn.contains_key(id) {
+            id.to_string()
+        } else {
+            loop {
+                let fresh: String = uuid::Uuid::new_v4().simple().to_string().chars().take(9).collect();
+                if !self.turn.contains_key(&fresh) && !self.sent.contains_key(&fresh) {
+                    break fresh;
+                }
+            }
+        };
+        self.sent.insert(id.to_string(), sent.clone());
+        self.turn.insert(sent.clone(), id.to_string());
+        sent
+    }
+
+    /// Rewrites the ids in a request's `messages`: the assistant's `tool_calls[].id` and each
+    /// tool result's `tool_call_id`.
+    fn apply(&mut self, messages: &mut Value) {
+        for m in messages.as_array_mut().into_iter().flatten() {
+            for call in m.get_mut("tool_calls").and_then(Value::as_array_mut).into_iter().flatten() {
+                if let Some(id) = call["id"].as_str().map(str::to_string) {
+                    call["id"] = json!(self.sent_id(&id));
+                }
+            }
+            if m["role"] == "tool" {
+                if let Some(id) = m["tool_call_id"].as_str().map(str::to_string) {
+                    m["tool_call_id"] = json!(self.sent_id(&id));
+                }
+            }
+        }
+    }
+
+    /// `READ_RESULT`'s arguments with a sent id put back as the turn's own.
+    fn read_args(&self, raw_args: &str) -> String {
+        let Ok(mut args) = serde_json::from_str::<Value>(raw_args) else {
+            return raw_args.to_string();
+        };
+        match args["id"].as_str().and_then(|id| self.turn.get(id)) {
+            Some(own) => {
+                args["id"] = json!(own);
+                args.to_string()
+            }
+            None => raw_args.to_string(),
+        }
+    }
+}
+
 /// OpenAI-style function tools (`McpToolSession::openai_tools`) in the Anthropic format.
 fn anthropic_tools(tools: &[Value]) -> Vec<Value> {
     tools
@@ -1125,6 +1213,9 @@ impl ApiDriver {
         } else if model.contains("grok") {
             let key = self.key_or_env("XAI_API_KEY");
             ("https://api.x.ai/v1/chat/completions".to_string(), key)
+        } else if crate::profiles::is_mistral_model(model) {
+            let key = self.key_or_env("MISTRAL_API_KEY");
+            (format!("{}/v1/chat/completions", super::engines::MISTRAL_API_BASE), key)
         } else {
             let key = self.key_or_env("OPENAI_API_KEY");
             ("https://api.openai.com/v1/chat/completions".to_string(), key)
@@ -1300,6 +1391,7 @@ impl ApiDriver {
         let menu = tool_menu(session.map(|s| s.openai_tools()).unwrap_or_default());
         let tools = &turn_tools(&menu.upfront, request.url);
         let mut results = TurnResults::for_url(request.url);
+        let mut wire_ids = WireIds::for_request(request.url, request.model);
         let max_calls = request.max_calls.max(1);
         let mut tokens = 0usize;
         if request.stream && tools.is_empty() {
@@ -1343,6 +1435,9 @@ impl ApiDriver {
                 });
                 if !tools.is_empty() {
                     body["tools"] = json!(tools);
+                }
+                if let Some(wire) = wire_ids.as_mut() {
+                    wire.apply(&mut body["messages"]);
                 }
                 body
             };
@@ -1420,6 +1515,8 @@ impl ApiDriver {
                     continue;
                 }
                 if name == READ_RESULT {
+                    // The model may name a result by the id it was sent (see `WireIds`)
+                    let raw_args = wire_ids.as_ref().map_or(raw_args.clone(), |w| w.read_args(&raw_args));
                     let full = results.read(&raw_args);
                     results.push(&mut messages, id, name, full, true);
                     continue;
@@ -3030,11 +3127,70 @@ mod tests {
         assert_eq!(provider_name("https://api.openai.com/v1/chat/completions"), "OpenAI");
         assert_eq!(provider_name("https://api.x.ai/v1/chat/completions"), "xAI");
         assert_eq!(provider_name("https://openrouter.ai/api/v1/chat/completions"), "OpenRouter");
+        assert_eq!(provider_name("https://api.mistral.ai/v1/chat/completions"), "Mistral");
+        assert_eq!(provider_name("https://api.mistral.ai.evil.test/v1/chat/completions"), "api.mistral.ai.evil.test");
         assert_eq!(provider_name("http://localhost:11434/v1/chat/completions"), "Ollama");
         assert_eq!(provider_name("https://llm.example.com/v1/messages"), "llm.example.com");
         assert_eq!(provider_name("http://10.0.0.5:8080/v1/chat/completions"), "10.0.0.5:8080");
         assert_eq!(provider_name("https://api.anthropic.com.evil.test/v1/messages"), "api.anthropic.com.evil.test");
         assert_eq!(provider_name("not a url"), "the model's server");
+    }
+
+    /// 35a: only a Mistral request gets 9-character ids; a fitting id is kept, any other gets one
+    /// stand-in for the whole turn, two calls never share one, and a read-back by the sent id
+    /// finds the turn's own result.
+    #[test]
+    fn mistral_tool_ids_are_nine_characters_and_stable() {
+        assert!(WireIds::for_request("https://api.mistral.ai/v1/chat/completions", "mistral-small-latest").is_some());
+        assert!(WireIds::for_request("https://openrouter.ai/api/v1/chat/completions", "mistralai/devstral-small").is_some());
+        assert!(WireIds::for_request("https://api.openai.com/v1/chat/completions", "gpt-5").is_none());
+        assert!(WireIds::for_request("https://api.x.ai/v1/chat/completions", "grok-4").is_none());
+        assert!(WireIds::for_request("https://api.mistral.ai.evil.test/v1/chat/completions", "gpt-5").is_none());
+
+        let mut wire = WireIds::default();
+        let long = "call_9f2c1a7b3e4d4b0f8a1c2d3e4f5a6b7c";
+        let mut messages = json!([
+            {"role": "user", "content": "hi"},
+            {"role": "assistant", "content": "", "tool_calls": [
+                {"id": long, "type": "function", "function": {"name": "a", "arguments": "{}"}},
+                {"id": "aB3dE5gH7", "type": "function", "function": {"name": "b", "arguments": "{}"}},
+                {"id": "toolong123", "type": "function", "function": {"name": "c", "arguments": "{}"}},
+                {"id": "call-12_x", "type": "function", "function": {"name": "d", "arguments": "{}"}}
+            ]},
+            {"role": "tool", "tool_call_id": long, "content": "A"},
+            {"role": "tool", "tool_call_id": "aB3dE5gH7", "content": "B"},
+            {"role": "tool", "tool_call_id": "toolong123", "content": "C"},
+            {"role": "tool", "tool_call_id": "call-12_x", "content": "D"}
+        ]);
+        let before = messages.clone();
+        wire.apply(&mut messages);
+        let calls: Vec<String> = messages[1]["tool_calls"].as_array().unwrap().iter().map(|c| c["id"].as_str().unwrap().into()).collect();
+        let results: Vec<String> = messages.as_array().unwrap()[2..].iter().map(|m| m["tool_call_id"].as_str().unwrap().into()).collect();
+        assert_eq!(results, calls, "each result still answers its call");
+        assert!(calls.iter().all(|id| WireIds::fits(id)), "{calls:?}");
+        assert_eq!(calls[1], "aB3dE5gH7", "Mistral's own id is kept");
+        let unique: std::collections::HashSet<_> = calls.iter().collect();
+        assert_eq!(unique.len(), 4);
+        // Nothing else in the messages changed
+        assert_eq!(messages[0], before[0]);
+        assert_eq!(messages[2]["content"], "A");
+
+        // The next request of the turn sends the same ids
+        let mut again = before.clone();
+        wire.apply(&mut again);
+        assert_eq!(again, messages);
+
+        // A model id that fits but is already another call's stand-in gets its own
+        let mut clash = json!([{"role": "assistant", "content": "", "tool_calls": [{"id": calls[0].clone(), "function": {"name": "e"}}]}]);
+        wire.apply(&mut clash);
+        let new = clash[0]["tool_calls"][0]["id"].as_str().unwrap();
+        assert!(WireIds::fits(new) && !calls.iter().any(|c| c == new), "{new}");
+
+        // A read-back by the sent id reads the turn's own; by the turn's id, or garbage, unchanged
+        let back: Value = serde_json::from_str(&wire.read_args(&json!({"id": calls[0]}).to_string())).unwrap();
+        assert_eq!(back["id"], long);
+        assert_eq!(wire.read_args(&json!({"id": long}).to_string()), json!({"id": long}).to_string());
+        assert_eq!(wire.read_args("not json"), "not json");
     }
 
     /// 32z: the unreachable sentence is never read as a failover class (it would skip to another
@@ -3097,3 +3253,7 @@ mod tests {
         assert_eq!(out.text, "⚠️ The model request failed: API returned 400: invalid_request_error: prompt is too long");
     }
 }
+
+#[cfg(test)]
+#[path = "api_mistral_tests.rs"]
+mod mistral_tests;

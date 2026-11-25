@@ -12,12 +12,13 @@ const KEY_PROVIDERS = [
   { card: 'anthropic_api', label: 'Anthropic' },
   { card: 'openai_api', label: 'OpenAI' },
   { card: 'xai_api', label: 'xAI' },
+  { card: 'mistral_api', label: 'Mistral' },
 ] as const;
 
 const CHOICES: Array<{ id: StartChoice; title: string; hint: string; Icon: typeof Key }> = [
   { id: 'claude', title: 'Sign in with Claude', hint: 'Uses your Claude Pro or Max plan', Icon: LogIn },
   { id: 'codex', title: 'Sign in with ChatGPT', hint: 'Through Codex, with your ChatGPT plan', Icon: LogIn },
-  { id: 'key', title: 'Paste an API key', hint: 'Anthropic, OpenAI or xAI', Icon: Key },
+  { id: 'key', title: 'Paste an API key', hint: 'Anthropic, OpenAI, xAI or Mistral', Icon: Key },
 ];
 
 /** Inline `code` in an engine's hint like "Not signed in: run `codex login`". */
