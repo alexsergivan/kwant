@@ -21,7 +21,7 @@ const m = await loadBundled(`
   export { default as React } from 'react';
   export { createRoot } from 'react-dom/client';
   export { validPocket, kitLabel } from './src/components/results/Pocket';
-  export { validQueue, queueFromRead, queueMood, QueueCard, hourLabel, QUEUE_UNDO_MS, QUEUE_CLOSE_DEFAULT } from './src/components/results/PocketQueue';
+  export { validQueue, queueFromRead, queueMood, QueueCard, hourLabel, QUEUE_UNDO_MS, QUEUE_CLOSE_DEFAULT, QUEUE_POLL_MS, oneLine } from './src/components/results/PocketQueue';
   export { QUEUE_FIXTURES } from './src/components/results/fixtures';
 `);
 const { React, createRoot } = m;
@@ -285,6 +285,17 @@ test('N calls the next number only while the card has focus, never from a text f
   assert.deepEqual(actions(), [{ name: 'call_next' }]);
 });
 
+test('holding N calls once: key repeats do nothing', async () => {
+  stub(raw('waiting').queue, () => raw('waiting').queue);
+  const v = await card('waiting');
+  const el = v.$('section');
+  el.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'n', bubbles: true }));
+  await settle();
+  for (let i = 0; i < 5; i++) el.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'n', repeat: true, bubbles: true }));
+  await settle();
+  assert.deepEqual(actions(), [{ name: 'call_next' }]);
+});
+
 test('N from the pause text field types, not calls', async () => {
   stub(raw('waiting').queue);
   const v = await card('waiting');
@@ -330,6 +341,85 @@ test('Close for today is an inline confirm with the message, no modal', async ()
   await click(v.$('[data-action="confirm-close"]'));
   assert.deepEqual(actions(), [{ name: 'close', body: { text: m.QUEUE_CLOSE_DEFAULT } }]);
   assert.equal(v.$('section').dataset.queue, 'closed');
+});
+
+test('pause and close text go out on one line: the server refuses an Enter', async () => {
+  assert.equal(m.oneLine('a\nb'), 'a b');
+  assert.equal(m.oneLine('  Back\r\n at\t2 PM  '), 'Back at 2 PM');
+  stub(raw('waiting').queue, () => raw('closed').queue);
+  const v = await card('waiting');
+  await click(v.$('[data-action="close"]'));
+  const ta = v.$('[data-confirm="close"] textarea');
+  Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set.call(ta, 'a\nb');
+  ta.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await settle();
+  await click(v.$('[data-action="confirm-close"]'));
+  assert.deepEqual(actions(), [{ name: 'close', body: { text: 'a b' } }]);
+});
+
+/** Track the card's poll timers (setInterval at QUEUE_POLL_MS) so a test can fire them by hand. */
+function pollTimers() {
+  const live = new Map();
+  const set = window.setInterval;
+  const clear = window.clearInterval;
+  let next = 1e6;
+  window.setInterval = (fn, ms, ...rest) => {
+    if (ms !== m.QUEUE_POLL_MS) return set.call(window, fn, ms, ...rest);
+    const id = next++;
+    live.set(id, fn);
+    return id;
+  };
+  window.clearInterval = (id) => (live.has(id) ? live.delete(id) : clear.call(window, id));
+  return { live, fire: () => [...live.values()].forEach((fn) => fn()), restore: () => ((window.setInterval = set), (window.clearInterval = clear)) };
+}
+
+test('a 404 stops the polling; other errors back off', async () => {
+  const timers = pollTimers();
+  try {
+    calls.length = 0;
+    let status = 500;
+    g.fetch = async (url, init = {}) => {
+      calls.push([init.method ?? 'GET', String(url), null]);
+      return new Response(JSON.stringify({ error: 'x', message: 'x' }), { status, headers: { 'content-type': 'application/json' } });
+    };
+    await card('waiting');
+    assert.equal(timers.live.size, 1, 'polls while open');
+    const gets = () => calls.filter((c) => c[0] === 'GET').length;
+    const before = gets(); // the read on show failed once: the next poll waits a beat
+    timers.fire();
+    await settle();
+    assert.equal(gets(), before, 'skips a beat after a failed read');
+    timers.fire();
+    await settle();
+    assert.equal(gets(), before + 1);
+    status = 404;
+    timers.fire(), timers.fire(), timers.fire(), timers.fire();
+    await settle();
+    assert.equal(timers.live.size, 0, 'a gone pocket is not polled again');
+  } finally {
+    timers.restore();
+  }
+});
+
+test('a read that started before an action does not paint over it', async () => {
+  let release;
+  const slow = new Promise((r) => (release = r));
+  stub(raw('waiting').queue, () => raw('called').queue);
+  const inner = g.fetch;
+  let first = true;
+  g.fetch = async (url, init = {}) => {
+    if ((init.method ?? 'GET') === 'GET' && first) {
+      first = false;
+      await slow;
+    }
+    return inner(url, init);
+  };
+  const v = await card('waiting');
+  await click(v.$('[data-action="call-next"]'));
+  assert.ok(v.$('[data-action="served-call-next"]'), 'called after the action');
+  release();
+  await settle();
+  assert.ok(v.$('[data-action="served-call-next"]'), 'the late read of the waiting queue is ignored');
 });
 
 test('Closed: Open again sends reopen; End asks first, then ends the pocket', async () => {

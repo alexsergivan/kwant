@@ -57,6 +57,8 @@ const MAX_TICKETS = 260;
 export const QUEUE_UNDO_MS = 5000;
 /** While open or paused, the card reads the queue again this often (only while the page is visible). */
 export const QUEUE_POLL_MS = 10_000;
+/** The server refuses control characters in pause and close text, so an Enter becomes a space. */
+export const oneLine = (text: string): string => text.replace(/\s+/g, ' ').trim();
 /** The guest page's creatures, so a number looks the same here as on the customer's phone. */
 const AVATARS = ['antenna', 'ears', 'visor', 'spikes', 'beret', 'goggles', 'bulb', 'horns'];
 export const ticketCreature = (n: number) => AVATARS[n % AVATARS.length];
@@ -459,16 +461,26 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
   // Numbers this card skipped by hand (so the callout doesn't say they didn't come).
   const skippedByHost = useRef(new Map<number, string>());
 
+  // Each action bumps this, so a read that started before it can't paint over the newer state.
+  const actSeq = useRef(0);
+  // Reads that failed in a row (polls back off), and a 404: the pocket is gone, so polling stops.
+  const fails = useRef(0);
+  const [gone, setGone] = useState(false);
   const refresh = useCallback(async () => {
+    const seq = actSeq.current;
     try {
       const next = queueFromRead(q, await pocketApi.read(code));
-      if (next) setFresh(next);
-    } catch {
+      fails.current = 0;
+      if (next && seq === actSeq.current) setFresh(next);
+    } catch (e) {
       /* the card keeps what it shows */
+      if (e instanceof PocketApiError && e.status === 404) setGone(true);
+      else fails.current += 1;
     }
   }, [code, q]);
 
   const act = async (name: string, body?: Record<string, unknown>, ok?: string) => {
+    actSeq.current += 1;
     setBusy(true);
     setDone(null);
     try {
@@ -487,6 +499,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
 
   const sendRemove = useCallback(
     async (n: number) => {
+      actSeq.current += 1;
       try {
         const next = queueFromRead(q, await pocketApi.queueAction(code, 'remove', { ticket: n }));
         if (next) setFresh(next);
@@ -528,7 +541,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
   useEffect(() => () => flushRef.current(), []);
 
   // Read the queue on show, then every 10 s while open or paused and the page is visible.
-  const running = live && (q.state === 'open' || q.state === 'paused');
+  const running = live && !gone && (q.state === 'open' || q.state === 'paused');
   const refreshRef = useRef(refresh);
   refreshRef.current = refresh;
   useEffect(() => {
@@ -536,7 +549,11 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
   }, [live]);
   useEffect(() => {
     if (!running) return;
+    let beat = 0;
     const t = window.setInterval(() => {
+      // After failed reads, poll every 20, 40, then 80 s until one works.
+      beat += 1;
+      if (beat % 2 ** Math.min(fails.current, 3) !== 0) return;
       if (typeof document === 'undefined' || document.visibilityState === 'visible') void refreshRef.current();
     }, QUEUE_POLL_MS);
     return () => window.clearInterval(t);
@@ -559,10 +576,12 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
     const t = window.setInterval(() => tick((n) => n + 1), 1000);
     return () => window.clearInterval(t);
   }, [called, q.state]);
-  const readAtZero = useRef<number | null>(null);
+  // Keyed by number and call time, so the same number called again gets its own read at 0.
+  const readAtZero = useRef<string | null>(null);
   useEffect(() => {
-    if (called && left !== null && left <= 0 && live && readAtZero.current !== called.number) {
-      readAtZero.current = called.number;
+    const callKey = called ? `${called.number}@${called.called_at ?? ''}` : null;
+    if (called && left !== null && left <= 0 && live && readAtZero.current !== callKey) {
+      readAtZero.current = callKey;
       void refresh();
     }
   }, [called, left, live, refresh]);
@@ -577,6 +596,8 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
     return null;
   };
   const onKey = (e: React.KeyboardEvent) => {
+    // Holding N must not call the queue down: only a fresh press counts.
+    if (e.repeat) return;
     if (e.key !== 'n' && e.key !== 'N') return;
     if (e.metaKey || e.ctrlKey || e.altKey) return;
     const el = e.target as HTMLElement;
@@ -908,7 +929,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
     if (q.state === 'paused') {
       if (!(await act('resume'))) return;
     }
-    await act('pause', { text });
+    await act('pause', { text: oneLine(text) });
   };
   const presetCls = (on: boolean) =>
     `inline-flex min-h-[44px] items-center justify-center gap-1.5 rounded-[10px] border px-3 text-[15px] kw-focus sm:min-h-[34px] sm:text-meta ${on ? 'border-amber-300/60 bg-amber-300/[0.08] font-semibold text-zinc-50' : 'border-hairline-strong text-zinc-200 hover:bg-white/[0.04]'}`;
@@ -1147,7 +1168,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
             type="button"
             disabled={busy}
             onClick={async () => {
-              if (await act('close', { text: closeText.trim() || QUEUE_CLOSE_DEFAULT })) setConfirm(null);
+              if (await act('close', { text: oneLine(closeText) || QUEUE_CLOSE_DEFAULT })) setConfirm(null);
             }}
             className={STOP}
             data-action="confirm-close"
