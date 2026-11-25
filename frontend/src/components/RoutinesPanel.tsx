@@ -31,6 +31,8 @@ import { asSchedule, scheduleWords } from '../botActions';
 import type { Channel, Kwant } from './Sidebar';
 import { playSfx } from '../audio/chiptune';
 import { SuggestedRoutines } from './SuggestedRoutines';
+import { ModernAvatar } from './ModernAvatar';
+import { useFocusAfterRender } from '../focusAfterRender';
 import { editorProps } from '../escape';
 import type { MessageTarget } from './DoneDetail';
 
@@ -169,12 +171,36 @@ export const RoutineForm: React.FC<{
     requestAnimationFrame(() => tzRef.current?.focus());
   };
   const setS = (patch: Partial<ScheduleForm>) => setF((prev) => ({ ...prev, schedule: { ...prev.schedule, ...patch } }));
+  // 36i routine-three-fields: the bot and where it posts are one folded line; Change opens both selects in place.
+  // With no bot picked the selects start open, so there is something to choose.
+  const [whoOpen, setWhoOpen] = useState(() => !start.kwantId);
+  const whoRef = useRef<HTMLDivElement>(null);
+  const focusAfterRender = useFocusAfterRender();
+  const openWho = () => {
+    setWhoOpen(true);
+    // The selects mount in this same update, so the first one takes focus after the render.
+    focusAfterRender(() => whoRef.current?.querySelector<HTMLSelectElement>('select'));
+  };
+  const who = kwants.find((k) => k.id === f.kwantId);
+  const placeWords =
+    f.channelId === IN_THREAD
+      ? 'the thread it was set up in'
+      : !f.channelId
+        ? 'direct chat'
+        : (() => {
+            const c = channels.find((ch) => ch.id === f.channelId);
+            return c ? channelLabel(c.name) : 'a deleted channel';
+          })();
+  const whoWords = fixedKwantId ? `Posts in ${placeWords}` : `${who?.name ?? 'No bot picked'} · posts in ${placeWords}`;
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!f.name.trim()) return setError('Give the routine a name.');
     if (!f.instructions.trim()) return setError('Say what the bot should do.');
-    if (!f.kwantId) return setError('Pick a bot.');
+    if (!f.kwantId) {
+      openWho();
+      return setError('Pick a bot.');
+    }
     const built = scheduleFromForm(s);
     if ('error' in built) return setError(built.error);
     setSaving(true);
@@ -207,31 +233,9 @@ export const RoutineForm: React.FC<{
 
   return (
     <form onSubmit={submit} noValidate {...editorProps(unsaved, onCancel)} className="p-3 rounded-xl border border-sky-500/30 bg-zinc-950/70 space-y-3" aria-label={label ?? (initial ? `Edit ${initial.name}` : 'New routine')}>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-        <div>
-          <label htmlFor={id('name')} className={labelClass}>Name</label>
-          <input id={id('name')} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Competitor prices" className={inputClass} autoFocus />
-        </div>
-        {!fixedKwantId && (
-          <div>
-            <label htmlFor={id('kwant')} className={labelClass}>Bot</label>
-            <select id={id('kwant')} value={f.kwantId} onChange={(e) => setF({ ...f, kwantId: e.target.value })} className={inputClass}>
-              {kwants.map((k) => (
-                <option key={k.id} value={k.id}>{k.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
-        <div>
-          <label htmlFor={id('channel')} className={labelClass}>Posts in</label>
-          <select id={id('channel')} value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value })} className={inputClass}>
-            {base?.thread_id && <option value={IN_THREAD}>The thread it was set up in</option>}
-            <option value="">Direct chat with the bot</option>
-            {channels.map((c) => (
-              <option key={c.id} value={c.id}>{channelLabel(c.name)}</option>
-            ))}
-          </select>
-        </div>
+      <div>
+        <label htmlFor={id('name')} className={labelClass}>Name</label>
+        <input id={id('name')} value={f.name} onChange={(e) => setF({ ...f, name: e.target.value })} placeholder="Competitor prices" className={inputClass} autoFocus />
       </div>
 
       <div>
@@ -424,6 +428,48 @@ export const RoutineForm: React.FC<{
           </div>
         )}
       </fieldset>
+
+      <div className="pt-3 border-t border-zinc-800" data-routine-who>
+        <div className="min-h-11 sm:min-h-[34px] flex items-center gap-2 text-sm sm:text-xs" data-routine-who-line>
+          {!fixedKwantId && who && <ModernAvatar role={who.avatar_sprite} name={who.name} size={20} kwantId={who.id} />}
+          <span className="min-w-0 break-words text-zinc-100">{whoWords}</span>
+          <button
+            type="button"
+            onClick={() => (whoOpen ? setWhoOpen(false) : openWho())}
+            aria-expanded={whoOpen}
+            aria-controls={whoOpen ? id('who') : undefined}
+            aria-label={whoOpen ? 'Done choosing' : fixedKwantId ? `Change where it posts, now ${placeWords}` : `Change the bot and where it posts, now ${whoWords}`}
+            className="ml-auto shrink-0 rounded font-medium text-sky-300 hover:text-sky-200 kw-focus kw-hit"
+            data-routine-who-change
+          >
+            {whoOpen ? 'Done' : 'Change'}
+          </button>
+        </div>
+        {whoOpen && (
+          <div ref={whoRef} id={id('who')} className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-3" data-routine-who-fields>
+            {!fixedKwantId && (
+              <div>
+                <label htmlFor={id('kwant')} className={labelClass}>Bot</label>
+                <select id={id('kwant')} value={f.kwantId} onChange={(e) => setF({ ...f, kwantId: e.target.value })} className={inputClass}>
+                  {kwants.map((k) => (
+                    <option key={k.id} value={k.id}>{k.name}</option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <div>
+              <label htmlFor={id('channel')} className={labelClass}>Posts in</label>
+              <select id={id('channel')} value={f.channelId} onChange={(e) => setF({ ...f, channelId: e.target.value })} className={inputClass}>
+                {base?.thread_id && <option value={IN_THREAD}>The thread it was set up in</option>}
+                <option value="">Direct chat with the bot</option>
+                {channels.map((c) => (
+                  <option key={c.id} value={c.id}>{channelLabel(c.name)}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+        )}
+      </div>
 
       {!hideEnabled && (
         <label className="flex items-center gap-2 text-[11px] text-zinc-300">

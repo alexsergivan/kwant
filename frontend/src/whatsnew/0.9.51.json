@@ -1,0 +1,54 @@
+{
+  "version": "0.9.51",
+  "date": "2026-11-25",
+  "highlights": [
+    {
+      "id": "one-status-steps",
+      "title": "A step the bot recovered from now says Retried",
+      "text": "When a command fails and the bot tries again, the step shows a grey Retried instead of a red Failed. Steps say what they did in plain words, and the exact command is one tap away under Show command.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "stop-leaves-a-line",
+      "title": "Stop now says it stopped",
+      "text": "Press Stop and the chat shows a short Stopped line from the bot, with the steps it had taken. A question you stopped no longer looks answered.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "router-one-line",
+      "title": "One quiet line shows who answers",
+      "text": "When you ask a team, one line now says who got it and why. Tap Who else to see the other bots that could answer.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "new-bot-name-first",
+      "title": "A new bot needs only a name and a job",
+      "text": "The New bot form now asks for a name and what the bot should do. The avatar follows the job. Persona, model, personality and the rest wait under More options.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "space-icons",
+      "title": "Space icons now match kwant's pixel look",
+      "text": "The icons for your spaces are drawn in the same pixel style as your bots, in each space's own colour. Your spaces keep their icons; nothing to change.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "connect-preselects-bots",
+      "title": "Connecting an app gives it to your bots",
+      "text": "When you connect an app like Gmail for the first time, every bot in the space gets it, turned on. Press Choose bots to pick fewer.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Telegram catches up after a busy moment: questions and approvals still arrive, closed cards lose their buttons.",
+    "A busy server no longer loses the push or webhook notice that a bot is waiting for your approval.",
+    "A chat no longer stays on \"getting started\" after a missed reply end, and a stuck bot is stopped with a short line.",
+    "Keyboard users can skip past the sidebar, reach long code blocks with Tab, and stay inside New bot while it is open."
+  ]
+}
