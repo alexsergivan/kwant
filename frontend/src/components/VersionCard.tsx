@@ -247,9 +247,9 @@ export const VersionCardView: React.FC<VersionCardProps> = ({ model, now, onChec
 
   return (
     <section aria-labelledby="version-card-title" data-version-card={line.kind} className="rounded-xl border border-zinc-800 bg-zinc-950/60 p-4">
-      <h3 id="version-card-title" className="m-0 text-sm font-semibold text-zinc-100">
+      <h4 id="version-card-title" className="m-0 text-sm font-semibold text-zinc-100">
         kwant bots <span className="font-mono text-[13px] font-medium text-zinc-300">{current || 'version unknown'}</span>
-      </h3>
+      </h4>
       <div role="status" aria-live="polite" className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-xs" data-version-line>
         {status}
       </div>

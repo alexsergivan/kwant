@@ -263,6 +263,13 @@ test('All spaces has the same left nav as This space, four pages, one h3 with th
   assert.match(nav.className, /md:flex-col/, 'a column on desktop, chips on phones, like This space');
   const h3 = qa('h3', v.host).filter((e) => e.closest('[data-app-page]') && !e.closest('[data-settings-page]'));
   assert.deepEqual(h3.map((e) => e.textContent), ['Usage']);
+  // One h3 per page: the cards inside (version, AI use) are h4 under it.
+  for (const page of ['general', 'bots', 'usage', 'notifications']) {
+    await v.render(shell({ appPage: page }));
+    const all = qa('h3', v.host).filter(shown).map((e) => e.textContent.trim());
+    assert.equal(all.length, 1, `${page}: ${all.join(' | ')}`);
+  }
+  await v.render(shell({ appPage: 'usage', onAppPage: (p) => picked.push(p) }));
   assert.match(v.host.textContent, /Applies to every space and to this app/);
   assert.ok(!shown(q('[data-all-spaces-spaces]', v.host)), 'the Spaces card is on General');
   await click(qa('button', nav)[1]);
