@@ -105,7 +105,9 @@ async function newPage() {
 const openChat = async (page, label) => {
   // The row's own text sits behind its focus/click button (an `absolute inset-0` overlay, a11y-basics
   // #1186's fix for "a button can't nest another interactive element"), so click the button, not the text.
-  await page.getByRole('button', { name: new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).first().click();
+  // A bot row's name is the button's own accessible name ("Wren, …"); a team row's is prefixed
+  // ("Open the @Kitchen chat, …"), so the prefix is optional.
+  await page.getByRole('button', { name: new RegExp(`^(Open the )?${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).first().click();
   await page.locator('[data-drop-target="chat"]').first().waitFor({ timeout: 10000 });
   await page.waitForTimeout(600);
 };
