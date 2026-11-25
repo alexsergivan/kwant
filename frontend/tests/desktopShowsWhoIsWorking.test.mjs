@@ -97,9 +97,11 @@ test('"and n more below" scrolls to and focuses the first hidden working bot in 
   scrolled.length = 0;
   m.flushSync(() => more.click());
   // Shown: Lin, Pixel, Iris (Lin is also first in the list). Hidden: Vega (in Ship) and Scout (No team, last), so Vega
-  const first = host.querySelector('[data-bot-row="vega"]');
+  const row = host.querySelector('[data-bot-row="vega"]');
+  // The row just holds the data hooks; its one real button is what gets focused (Finding 1).
+  const first = row.querySelector('button');
   assert.equal(document.activeElement, first, 'focus on the first hidden working bot\'s own row');
-  assert.deepEqual(scrolled, [first]);
+  assert.deepEqual(scrolled, [row]);
   assert.ok(first.hasAttribute('data-arrived'), 'a ring after a mouse click');
   assert.match(first.className, /data-\[arrived\]:outline-sky-400/);
   assert.doesNotMatch(first.className, /kw-flash|amber/);

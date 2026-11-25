@@ -126,7 +126,7 @@ export const FolderBrowserModal: React.FC<FolderBrowserModalProps> = ({
                     playSfx('click');
                     fetchDirectories(qp.path);
                   }}
-                  className={`px-2 py-1 rounded-md text-[11px] font-mono border transition-all flex items-center gap-1.5 ${
+                  className={`px-2 py-1 rounded-md text-[11px] font-mono border transition-all motion-reduce:transition-none flex items-center gap-1.5 ${
                     currentPath === qp.path
                       ? 'bg-amber-500/20 text-amber-300 border-amber-500/40 shadow-sm'
                       : 'bg-zinc-950 text-zinc-400 border-zinc-800 hover:border-zinc-700 hover:text-zinc-200'
@@ -224,7 +224,7 @@ export const FolderBrowserModal: React.FC<FolderBrowserModalProps> = ({
                   key={dir}
                   type="button"
                   onClick={() => handleNavigate(dir)}
-                  className="flex items-center gap-2 p-2 rounded-lg text-left text-xs text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-100 border border-transparent hover:border-zinc-700/60 transition-all group"
+                  className="flex items-center gap-2 p-2 rounded-lg text-left text-xs text-zinc-300 hover:bg-zinc-800/80 hover:text-zinc-100 border border-transparent hover:border-zinc-700/60 transition-all motion-reduce:transition-none group"
                 >
                   <Folder size={15} className="text-amber-400/80 group-hover:text-amber-400 flex-shrink-0" />
                   <span className="truncate flex-1 font-mono">{dir}</span>

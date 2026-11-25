@@ -183,6 +183,11 @@
 [data-smart-row]:has(> [data-smart-actions]:empty) {
   display: none;
 }
+/* 36b: the skip link has nowhere to land on screens with no <main> (phone Chats, Bots and setup
+   lists), so it's hidden there rather than focusable and dead. */
+body:not(:has([data-main-pane])) [data-skip-link] {
+  display: none;
+}
 @media (max-width: 767px) and (pointer: coarse) {
   [data-smart-row] [data-evidence] {
     border-color: transparent;
