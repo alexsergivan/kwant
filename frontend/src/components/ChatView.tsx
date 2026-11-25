@@ -2270,7 +2270,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <button
                     type="button"
                     onClick={() => toggleThought(msg.id)}
-                    className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer shadow-sm group"
+                    className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all motion-reduce:transition-none cursor-pointer shadow-sm group"
                   >
                     <Sparkles size={13} className="text-sky-400 group-hover:rotate-12 transition-transform flex-shrink-0" />
                     <span className="truncate min-w-0 sm:max-w-md">
@@ -2468,7 +2468,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <button
             type="button"
             onClick={() => toggleThought(threadKey)}
-            className="sm:ml-[48px] max-w-full flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer"
+            className="sm:ml-[48px] max-w-full flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all motion-reduce:transition-none cursor-pointer"
           >
             {isThreadOpen ? <ChevronDown size={13} className="text-zinc-500" /> : <ChevronRight size={13} className="text-zinc-500" />}
             <span className="flex -space-x-1.5">
