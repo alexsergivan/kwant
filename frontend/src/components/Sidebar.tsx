@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare, CalendarClock } from 'lucide-react';
-import { ModernAvatar, useModelBadge } from './ModernAvatar';
+import { ModernAvatar, modelBadgeSnapshot, useModelBadge } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
 import { badgeText } from '../away';
 import { canRunNow, engineTip, isUsable, pinnedCantRun, type RunsOn } from '../engines';
@@ -645,7 +645,22 @@ export const Sidebar: React.FC<SidebarProps> = ({
     // its descendants (Finding 1: a button can't nest another interactive element). The row div keeps the
     // query hooks ("here", rank, the pinned/bot id) and its name and status as ordinary content; the
     // button carries the accessible name and the focus ring, since those belong on what's actually focused.
-    const rowLabel = [k.name, busyLine ?? doneLine ?? k.title].filter(Boolean).join(', ');
+    // Pixel's FIX on #1186 (1 & 2): the overlay button hides every title the row used to show on hover
+    // (name·engine, avatar status, the full busy/done line, the needs-you pill), and its accessible name
+    // dropped what those conveyed too (needs-you count, lead, the approvals mark). Both are rebuilt here
+    // from the same pieces, via modelBadgeSnapshot (a plain read, not useModelBadge: botRow runs a variable
+    // number of times per render across several .map()s, so a real hook can't be called in it).
+    const avatarStatusTitle = status === 'cant_run' ? pinnedTip ?? "Can't run yet: no account works here" : statusText(k.name, status);
+    const busyTitle = busyLine ? (fullLine ? undefined : busyLine === busyKwants[k.id] ? busyTitles?.[k.id] ?? busyLine : busyLine) : doneLine;
+    const needsLabel = needs > 0 && !asked ? `Needs you (${needs})` : undefined;
+    const leadLabel = isLead ? `Leads @${team!.name}` : undefined;
+    const approvalsLabel = approvalsDiffers(k, space.approvals) ? (approvalsOff(k) ? 'Approvals off' : 'Asks before acting') : undefined;
+    const rowLabel = [k.name, leadLabel, needsLabel, approvalsLabel, busyLine ?? doneLine ?? k.title].filter(Boolean).join(', ');
+    const rowTitle = tipId
+      ? undefined
+      : [`${k.name} · ${modelBadgeSnapshot(k.id)?.label ?? engineTip(k.preferred_model)}`, avatarStatusTitle, busyTitle, needsLabel ? needsTip : undefined]
+          .filter(Boolean)
+          .join('\n');
     const rowDescribedBy = [tipId, pin?.alsoIn ? `pin-also-${k.id}` : null].filter(Boolean).join(' ') || undefined;
     return (
       <div
@@ -656,10 +671,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
         // The pinned copy is not the bot's row: focus returns to the one in its team
         data-bot-row={pin ? undefined : k.id}
         data-pin-row={pin ? k.id : undefined}
-        // The pinned copy lights with it but isn't "here"; the bot's own row is
-        aria-current={active && !pin ? 'page' : undefined}
         data-rank={att?.rank}
-        aria-describedby={rowDescribedBy}
         data-chat-row={chat ? (asked ? 'needs' : 'bot') : undefined}
         className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left transition-colors ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
@@ -670,11 +682,14 @@ export const Sidebar: React.FC<SidebarProps> = ({
           onClick={open}
           onFocus={tipId ? (e) => e.currentTarget.matches?.(':focus-visible') && showRowTip(k.id, e.currentTarget, 0) : undefined}
           onBlur={tipId ? hideRowTip : undefined}
+          // The pinned copy lights with it but isn't "here"; the bot's own row is
+          aria-current={active && !pin ? 'page' : undefined}
           aria-label={rowLabel}
           aria-describedby={rowDescribedBy}
+          title={rowTitle}
           className="absolute inset-0 rounded-xl cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 data-[arrived]:outline data-[arrived]:outline-2 data-[arrived]:outline-sky-400"
         />
-        <span className="shrink-0" title={status === 'cant_run' ? pinnedTip ?? "Can't run yet: no account works here" : statusText(k.name, status)}>
+        <span className="shrink-0" title={avatarStatusTitle}>
           <ModernAvatar role={k.avatar_sprite} name={k.name} size={chat ? 32 : 28} status={status} kwantId={k.id} />
         </span>
         <div className="flex-1 min-w-0">
@@ -780,7 +795,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               className={`flex items-center gap-1.5 text-meta truncate${actionRoom} ${
                 warn || asked ? 'text-warn' : attLine ? attTone : status === 'queued' ? 'text-zinc-300' : 'text-[#b8adff]'
               }`}
-              title={fullLine ? undefined : busyLine === busyKwants[k.id] ? busyTitles?.[k.id] ?? busyLine : busyLine}
+              title={busyTitle}
               data-bot-busy
             >
               <span
@@ -825,9 +840,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
     );
   };
 
-  // H5: a team header's rollup, one mini dot + count for each of ranks 1–4; else the working count.
-  const teamRollup = (t: Team) => {
-    if (!attention) return null;
+  // The same per-rank counts feed the visual rollup (teamRollup) and the team row's accessible name;
+  // kept in one place so they can't drift apart.
+  const teamCounts = (t: Team) => {
     const c = { needs: 0, stuck: 0, review: 0, finished: 0, working: 0 };
     for (const id of new Set(memberIdsOf(t))) {
       const r = rankOf.get(id);
@@ -837,6 +852,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
       else if (r === 4) c.finished++;
       else if (r === 5) c.working++;
     }
+    return c;
+  };
+
+  // H5: a team header's rollup, one mini dot + count for each of ranks 1–4; else the working count.
+  const teamRollup = (t: Team) => {
+    if (!attention) return null;
+    const c = teamCounts(t);
     const dots: Array<[number, string]> = c.needs || c.stuck || c.review || c.finished
       ? ([[c.needs, 'bg-amber-400'], [c.stuck, 'bg-rose-400'], [c.review, 'border-[1.5px] border-sky-300 bg-transparent'], [c.finished, 'kw-status-ok']] as Array<[number, string]>).filter(([n]) => n > 0)
       : c.working
@@ -860,10 +882,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const active = isTeamActive(t);
     const count = memberIdsOf(t).length;
     const expanded = withMembers && !collapsedTeams.has(t.id);
+    // Pixel's FIX (2): the button's name should carry what the row shows when withMembers (the rollup
+    // dots' counts, or the plain member count), not just "open the chat".
+    const memberWord = `${count} ${count === 1 ? 'member' : 'members'}`;
+    const rowLabel = withMembers
+      ? [`Open the @${teamNamed(t.name)} chat`, attention ? rollupLabel(teamCounts(t)) : undefined, memberWord].filter(Boolean).join(', ')
+      : `Open the @${teamNamed(t.name)} chat`;
     return (
       <div
         data-team-row={t.id}
-        aria-current={active ? 'page' : undefined}
         title={`Open the @${teamNamed(t.name)} chat`}
         className={`relative w-full flex items-center justify-between px-1.5 py-1.5 rounded-lg text-body font-medium transition-colors text-left group ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
@@ -874,7 +901,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <button
           type="button"
           onClick={() => onSelectTeam(t)}
-          aria-label={`Open the @${teamNamed(t.name)} chat`}
+          aria-current={active ? 'page' : undefined}
+          aria-label={rowLabel}
           className="absolute inset-0 rounded-lg cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
         />
         <div className="flex items-center gap-1.5 min-w-0">
