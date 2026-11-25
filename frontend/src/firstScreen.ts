@@ -34,49 +34,6 @@ export function spaceSublineParts(counts: SpaceCounts | undefined, s: { devOn?: 
 /** The whole sub-line as one string, for its `title`. */
 export const sublineText = (parts: SublinePart[]): string => parts.map((p) => p.text).join(' · ');
 
-// ------------------------------------------------------------------ A: the "moved" pointer (0.9.8 and 0.9.9)
-
-/** Set once Open or ✕ was pressed. Remove the pointer and this key in 0.9.10. */
-export const MOVED_KEY = 'kwnt:moved-space-controls';
-
-const store = (): Storage | null => {
-  try {
-    return typeof localStorage === 'undefined' ? null : localStorage;
-  } catch {
-    return null;
-  }
-};
-
-export const movedSeen = (): boolean => {
-  try {
-    return !!store()?.getItem(MOVED_KEY);
-  } catch {
-    return false;
-  }
-};
-
-export function markMovedSeen(): void {
-  try {
-    store()?.setItem(MOVED_KEY, '1');
-  } catch {
-    /* private mode: it shows again next time, which is harmless */
-  }
-}
-
-/**
- * Only someone who used kwant before sees it: the same `established` What's new works out (true only, so a
- * brand-new person and "can't tell yet" both get nothing), and never again once Open or ✕ set the key.
- */
-export const movedPointerShows = (opts: { established: boolean | null; seen: boolean }): boolean => opts.established === true && !opts.seen;
-
-/**
- * 29v: a brand-new person (`established === false`, decided) has never seen the old place, so the pointer is
- * recorded as seen, the way What's new records its version for them ('record'). Otherwise `established`
- * turns true at their first message and the pointer would pin to their sidebar. `null` (can't tell yet) waits;
- * someone who used kwant before (true on load) is left to see it.
- */
-export const recordMovedForNewPerson = (opts: { established: boolean | null; seen: boolean }): boolean => opts.established === false && !opts.seen;
-
 // ------------------------------------------------------------------ E: the account card
 
 /**
@@ -210,33 +167,6 @@ export function teamDoneValue(opts: { imported: boolean; mainSpace: boolean; sta
   if (opts.imported) return 'Your imported bots';
   if (opts.startHandle) return `@${opts.startHandle}`;
   return opts.mainSpace ? 'Starter bots' : 'Your bots';
-}
-
-/** Ring classes for the Dev mode card after Open; Tailwind sees them here. */
-const RING_ON = ['ring-2', 'ring-sky-400/55', 'transition-[box-shadow]', 'duration-[160ms]', 'motion-reduce:transition-none'];
-
-/**
- * After Open: find the Dev mode card in Space settings › General (it mounts a frame or two later), scroll it
- * into view and ring it once, 1.2 s, then a 160 ms fade (static and simply removed under reduced motion).
- */
-export function ringDevSettings(doc: Document = document, tries = 20): void {
-  const el = doc.querySelector<HTMLElement>('[data-dev-settings]');
-  if (!el) {
-    if (tries > 0) setTimeout(() => ringDevSettings(doc, tries - 1), 50);
-    return;
-  }
-  const reduce = !!doc.defaultView?.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
-  el.scrollIntoView({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
-  el.classList.add(...RING_ON);
-  el.setAttribute('data-moved-ring', '');
-  setTimeout(() => {
-    el.classList.remove('ring-sky-400/55');
-    el.classList.add('ring-transparent');
-    setTimeout(() => {
-      el.classList.remove(...RING_ON, 'ring-transparent');
-      el.removeAttribute('data-moved-ring');
-    }, reduce ? 0 : 160);
-  }, 1200);
 }
 
 /** The static arrival outline on the Dev mode card (design.md §3); Tailwind sees the classes here. */
