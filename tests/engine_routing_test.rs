@@ -97,7 +97,7 @@ async fn turns_skip_engines_that_cannot_run() {
     std::env::set_var("PATH", format!("{}:/usr/bin:/bin", bin.display()));
     std::env::set_var("HOME", tmp.path());
     std::env::set_var("FAKE_DIR", tmp.path());
-    for var in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "OLLAMA_MODEL", "CLAUDE_CONFIG_DIR"] {
+    for var in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY", "OLLAMA_MODEL", "CLAUDE_CONFIG_DIR"] {
         std::env::remove_var(var);
     }
     std::env::set_var("OLLAMA_URL", "http://127.0.0.1:9");
@@ -123,7 +123,7 @@ async fn turns_skip_engines_that_cannot_run() {
     let (s, v) = call(&app, "GET", "/api/engines", None).await;
     assert_eq!(s, StatusCode::OK);
     let engines = v["engines"].as_array().unwrap();
-    assert_eq!(engines.len(), 8, "7 engines + Custom API");
+    assert_eq!(engines.len(), 9, "8 engines + Custom API");
     assert!(engines.iter().all(|e| e["status"] == "checking" && e["checked_at"].is_null()));
 
     // 1. Re-check: only the fake claude is ready; the shape is the agreed contract
@@ -137,7 +137,7 @@ async fn turns_skip_engines_that_cannot_run() {
     assert_eq!(claude["version"], "7.0.1");
     assert!(claude["checked_at"].as_str().unwrap().contains('T'));
     assert!(claude["models"].as_array().unwrap().iter().any(|m| m["id"] == "opus" && m["default"] == true && m["label"].is_string()));
-    for (id, kind) in [("codex", "cli"), ("grok", "cli"), ("anthropic_api", "api"), ("openai_api", "api"), ("xai_api", "api"), ("ollama", "local")] {
+    for (id, kind) in [("codex", "cli"), ("grok", "cli"), ("anthropic_api", "api"), ("openai_api", "api"), ("xai_api", "api"), ("mistral_api", "api"), ("ollama", "local")] {
         let e = by_id(&v, id);
         assert_eq!(e["status"], "not_installed", "{e}");
         assert_eq!(e["kind"], kind);

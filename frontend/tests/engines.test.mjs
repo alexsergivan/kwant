@@ -198,7 +198,7 @@ test('with nothing ready the picker points to Settings', () => {
   assert.match(html, /Open Settings/);
   assert.match(picker('auto', null), /Checking which engines can run/);
   // An older server without /api/engines keeps every engine on offer.
-  assert.deepEqual(options(picker('auto', []), 0).map(([v]) => v), ['auto', 'claude', 'codex', 'grok', 'ollama']);
+  assert.deepEqual(options(picker('auto', []), 0).map(([v]) => v), ['auto', 'claude', 'codex', 'grok', 'mistral', 'ollama']);
 });
 
 test('a reply says which engine and model answered it', () => {

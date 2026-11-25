@@ -181,7 +181,9 @@ pub async fn wire_event(db: &Database, cache: &mut HashMap<String, Option<String
 
 /// `GET /api/events`: every event, each tagged with its `space_id`. With `?space=<id>`, only
 /// that space's events and the [`GLOBAL_EVENTS`]; an event that can't be placed is dropped. An
-/// unknown space is a 404 and an archived one a 409, as for the collections.
+/// unknown space is a 404 and an archived one a 409, as for the collections. A reader that falls
+/// more than [`super::EVENT_BUFFER`] events behind loses its connection, so it reconnects and
+/// reloads instead of missing events quietly.
 pub async fn sse_handler(State(state): State<AppState>, uri: Uri) -> Response {
     let only = match super::spaces::space_param(uri.query()) {
         None => None,
@@ -193,6 +195,15 @@ pub async fn sse_handler(State(state): State<AppState>, uri: Uri) -> Response {
     let rx = state.event_sender.subscribe();
     let cache = Arc::new(Mutex::new(HashMap::new()));
     let stream = BroadcastStream::new(rx)
+        // stuck-getting-started (0.9.51): a reader that fell behind lost events, `turn_ended` among
+        // them. Carrying on left a chat "getting started" for hours, so the stream ends instead: the
+        // app reconnects and reads the running turns and the open chat again, as on every connect.
+        .take_while(|msg| {
+            if let Err(e) = msg {
+                tracing::info!(error = %e, "an event stream fell behind; closing it so the app reloads what it missed");
+            }
+            futures::future::ready(msg.is_ok())
+        })
         .filter_map(|msg| async move { msg.ok() })
         .then(move |event| {
             let db = state.db.clone();

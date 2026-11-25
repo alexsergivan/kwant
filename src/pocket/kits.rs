@@ -181,7 +181,8 @@ pub trait Kit: Send + Sync + 'static {
         false
     }
     /// Host actions that still work after the pocket ended, while its data is kept (pa14b: the
-    /// Wall's `set_best`, so the host can show the best 30 picked the morning after). None by default.
+    /// Wall's `set_best`, so the host can show the best 30 picked the morning after; pa10c: Gather's
+    /// `delete_answers`, "Delete answers now"). None by default.
     fn host_actions_after_end(&self) -> &'static [&'static str] {
         &[]
     }
@@ -275,6 +276,16 @@ pub trait Kit: Send + Sync + 'static {
     /// last message). The sweeper deletes each: their row, keys, events, threads and kit state.
     fn idle_players(&self, _ctx: &KitCtx, _state: &Value) -> Vec<String> {
         Vec::new()
+    }
+    /// pa10c: `true` once the host deleted everyone's answers: the core then deletes every
+    /// player (removed ones too), their guest keys and their events, keeping the pocket.
+    fn forgets_everyone(&self, _state: &Value) -> bool {
+        false
+    }
+    /// pa10c: how many joined, kept after the players were forgotten (the end line, the card
+    /// and Done count it). `None`: count the players.
+    fn kept_players(&self, _state: &Value) -> Option<usize> {
+        None
     }
     /// pa13a: one part of the host's view by key (`guest:<id>`: a front desk conversation),
     /// for `host/state?view=<key>` and the card. `None`: no such part.

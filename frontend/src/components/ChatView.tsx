@@ -3,6 +3,7 @@ import { parseWatchMeta, type WatchMeta } from '../missionWatch';
 import { flushSync } from 'react-dom';
 import { createStreamText, useStreamPart, useStreamThinking, useStreamWriting, type StreamText, type StreamView } from '../streamText';
 import { queuedText } from '../claudeVm';
+import { stepsWho } from '../toolLabel';
 import { QueuedBeside } from './QueuedBeside';
 import { WaitingBanner } from './WaitingBanner';
 import { answerPlaceholder, isTeamTurn, onlyAskOpen, turnRail, waitingStopLabel } from '../waitingState';
@@ -84,7 +85,7 @@ import { replyCostWords, replyTokens } from '../modelUsage';
 import { parseRoutingMeta, ranOnAccount } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSuggestions';
-import { routeReasonText, routeWhyText } from '../routeReason';
+import { routeLineWhy, routeRole, routeWhyText } from '../routeReason';
 import { useInbox } from '../inboxStore';
 import { doneItemsOf, doneOf } from '../replyDone';
 import { APPROVE_TEXT, approveRowId, changePlaceholder, refocusAfterApprove } from '../approvalAsk';
@@ -490,78 +491,90 @@ export const renderFormattedText = (text: string): React.ReactNode => {
   });
 };
 
-const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> = ({ routing, spaceName }) => {
+/**
+ * 36c router-one-line: who answers, as one quiet line. "✦ Sent to Quant, the team lead · Why · Change".
+ * The short why shows inline from md up and behind "Why" on phones; "Change" opens the candidates in place.
+ * The router's own name and its offline note never show here: Details (routeWhyText) and Settings keep them.
+ */
+export const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> = ({ routing }) => {
+  const [whyOpen, setWhyOpen] = useState(false);
+  const [othersOpen, setOthersOpen] = useState(false);
   const deciding = routing.phase === 'deciding';
   const isDiscuss = routing.mode === 'discuss';
-  const why = routeReasonText(routing);
-  const pool = routing.candidateCount ?? (routing.candidates.length || null);
-  const where = spaceName ? ` in ${spaceName}` : '';
+  const role = routeRole(routing);
+  const why = routeLineWhy(routing);
+  const others = routing.candidates;
+  const ids = `kw-route-${routing.contextId ?? 'live'}`;
+  const link =
+    'inline-flex items-center min-h-[44px] -my-3 px-1.5 rounded-md text-sky-300 font-medium hover:text-sky-200 md:min-h-0 md:my-0 md:py-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 focus-visible:outline-offset-2';
 
   return (
-    <div className="flex items-start gap-3.5 w-full max-w-5xl" aria-live="polite">
-      <div className="w-[34px] h-[34px] flex-shrink-0 rounded-full bg-sky-500/15 border border-sky-500/40 flex items-center justify-center shadow-sm shadow-sky-500/10">
-        <Sparkles size={16} className={`text-info ${deciding ? 'animate-pulse' : ''}`} />
+    <div className="flex flex-col items-start w-full max-w-5xl pl-1 text-[13px] leading-5 text-zinc-400" data-route-line>
+      <div className="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0" aria-live="polite">
+        <Sparkles size={14} aria-hidden="true" className={`text-sky-300 flex-shrink-0 ${deciding ? 'motion-safe:animate-pulse' : ''}`} />
+        {deciding ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span>Choosing who answers</span>
+            <span className="inline-flex gap-0.5" aria-hidden="true">
+              {[0, 1, 2].map((i) => (
+                <span key={i} className="w-1 h-1 rounded-full bg-sky-300 motion-safe:animate-bounce" style={{ animationDelay: `${i * 150}ms` }} />
+              ))}
+            </span>
+          </span>
+        ) : (
+          <>
+            <span className="min-w-0">
+              {isDiscuss ? 'Team discussion led by ' : 'Sent to '}
+              <b className="font-semibold text-zinc-200">{routing.kwantName}</b>
+              {role && `, ${role}`}
+              {why && <span className="hidden md:inline"> · {why}</span>}
+            </span>
+            {why && (
+              <button type="button" className={`${link} md:hidden`} aria-expanded={whyOpen} aria-controls={`${ids}-why`} onClick={() => setWhyOpen((o) => !o)}>
+                Why
+              </button>
+            )}
+            {others.length > 1 && (
+              <button type="button" className={link} aria-expanded={othersOpen} aria-controls={`${ids}-others`} onClick={() => setOthersOpen((o) => !o)}>
+                Who else
+              </button>
+            )}
+          </>
+        )}
       </div>
-      <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
-        <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
-          <span className="text-zinc-200">Laya</span>
-          <span className="text-zinc-500">· router</span>
+      {!deciding && why && whyOpen && (
+        <p id={`${ids}-why`} className="md:hidden mt-1 pl-[22px] text-xs text-zinc-400 motion-safe:animate-[kw-opacity-in_160ms_ease-out_both]">
+          {why}
+        </p>
+      )}
+      {!deciding && othersOpen && others.length > 1 && (
+        <div
+          id={`${ids}-others`}
+          role="group"
+          aria-label="Who else could answer"
+          className="mt-2 pl-[22px] flex flex-col gap-1.5 motion-safe:animate-[kw-opacity-in_160ms_ease-out_both]"
+        >
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {others.map((c) => {
+              const chosen = c.id === routing.kwantId;
+              return (
+                <span
+                  key={c.id}
+                  title={c.title && c.title !== c.name ? `${c.name}, ${c.title}` : c.name}
+                  className={`flex items-center gap-1.5 pl-0.5 pr-2.5 py-0.5 rounded-full border text-[11px] ${
+                    chosen ? 'border-sky-400/60 bg-sky-500/20 text-sky-100' : 'border-transparent bg-transparent text-zinc-400 cursor-default'
+                  }`}
+                >
+                  <ModernAvatar role={c.name} name={c.name} size={18} mood="idle" />
+                  <span>{c.name}</span>
+                  {chosen && <Check size={11} className="text-info" aria-label="answering" />}
+                </span>
+              );
+            })}
+          </div>
+          <span className="text-xs text-zinc-400">After {routing.kwantName} replies, tap “Wrong bot?” in its Details to send your message to one of them.</span>
         </div>
-        <div className="px-4 py-3 rounded-2xl rounded-tl-sm bg-sky-950/20 border border-sky-500/20 text-sm text-zinc-200 shadow-sm w-full">
-          {deciding ? (
-            <div className="flex items-center gap-2">
-              <span>
-                {pool ? `Choosing from ${pool} ${pool === 1 ? 'bot' : 'bots'}${where}` : `Choosing who's best to answer${where}`}
-              </span>
-              <span className="inline-flex gap-0.5" aria-hidden="true">
-                {[0, 1, 2].map((i) => (
-                  <span
-                    key={i}
-                    className="w-1 h-1 rounded-full bg-sky-300 animate-bounce"
-                    style={{ animationDelay: `${i * 150}ms` }}
-                  />
-                ))}
-              </span>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span>{isDiscuss ? 'Starting a team discussion led by' : 'Sending your question to'}</span>
-                <span className="font-semibold text-sky-200">{routing.kwantName}</span>
-                {routing.kwantTitle && <span className="text-zinc-400 text-xs">({routing.kwantTitle})</span>}
-              </div>
-              {why && <span className="text-xs text-zinc-400">{why}</span>}
-              {routing.fallback && <span className="text-xs text-amber-300/90">Picked by keywords (Laya is offline)</span>}
-            </div>
-          )}
-
-          {routing.candidates.length > 0 && (
-            <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
-              {routing.candidates.map((c, i) => {
-                const chosen = !deciding && c.id === routing.kwantId;
-                return (
-                  <div
-                    key={c.id}
-                    title={`${c.name} — ${c.title}`}
-                    className={`flex items-center gap-1.5 pl-0.5 pr-2.5 py-0.5 rounded-full border text-[11px] transition-all duration-300 ${
-                      chosen
-                        ? 'border-sky-400/60 bg-sky-500/20 text-sky-100 scale-105'
-                        : deciding
-                          ? 'border-zinc-700/60 bg-zinc-900/60 text-zinc-300 animate-pulse'
-                          : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 opacity-50'
-                    }`}
-                    style={deciding ? { animationDelay: `${i * 200}ms` } : undefined}
-                  >
-                    <ModernAvatar role={c.name} name={c.name} size={18} />
-                    <span>{c.name}</span>
-                    {chosen && <Check size={11} className="text-info" />}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 };
@@ -912,6 +925,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const liveSpeaker = streamingSpeakerName || title;
   // Who the live row shows: the current speaker in a discussion, else the replying bot.
   const liveName = discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : liveSpeaker;
+  // 36a: who the live steps' words name; never the team or room chat's title (stepsWho).
+  const stepsName = stepsWho({
+    discussing: discussionState?.inProgress,
+    currentSpeaker: discussionState?.currentSpeaker,
+    streamingSpeakerName,
+    title,
+    direct: home?.kind === 'bot',
+  });
   const livePages = useMemo(() => pagesOfReply(liveActivity?.steps), [liveActivity?.steps]);
   const savedTrail = useMemo((): { id: string; bot: string; pages: ReplyPage[] } | null => {
     const from = (m: ChatMessage) => {
@@ -2245,7 +2266,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             >
               {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
               {savedActivity && (
-                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`} openRequest={detailsAsk[msg.id]} focusStep={outcome?.stepId ?? null}>
+                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`} openRequest={detailsAsk[msg.id]} focusStep={outcome?.stepId ?? null} who={displayName}>
                   {msg.tool_calls && (
                     <div className="border-t border-zinc-800/60 p-2">
                       <ToolCallsList raw={msg.tool_calls} />
@@ -2773,6 +2794,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       idBase={`live-${liveActivity.turnId}`}
       compact={phone}
       folded={stepsBelow}
+      who={stepsName}
       lead={
         livePages.length > 0 ? (
           <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
