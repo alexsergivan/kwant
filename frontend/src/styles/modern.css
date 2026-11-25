@@ -877,7 +877,10 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 }
 
 /* The blueprint grid: only the main pane, fading down it; cards stay opaque on top. The pane's own
-   root background goes transparent so the grid sits between the surface and the content. */
+   root background goes transparent so the grid sits between the surface and the content.
+   It stays at the pane's two edges only: full in the 24 px gutter, clear by 72 px, where a reply's
+   text starts (24 px pad + 36 px avatar + 14 px gap), so no line runs behind words. Phones have no
+   gutter to keep, so there the grid goes. */
 .kw-blueprint { position: relative; isolation: isolate; background-color: var(--kw-surface-main); }
 .kw-blueprint > * { background-color: transparent !important; }
 .kw-blueprint::before {
@@ -888,10 +891,17 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
     linear-gradient(to right, rgb(157 143 255 / 0.045) 1px, transparent 1px),
     linear-gradient(to bottom, rgb(157 143 255 / 0.045) 1px, transparent 1px);
   background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
-  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.25) 100%);
-  mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.25) 100%);
+  -webkit-mask-image:
+    linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.25) 100%),
+    linear-gradient(90deg, #000 0, #000 24px, transparent 72px, transparent calc(100% - 72px), #000 calc(100% - 24px), #000 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.25) 100%),
+    linear-gradient(90deg, #000 0, #000 24px, transparent 72px, transparent calc(100% - 72px), #000 calc(100% - 24px), #000 100%);
+  mask-composite: intersect;
   animation: kw-dv-grid 200ms var(--kw-ease) both;
 }
+@media (max-width: 639.98px) { .kw-blueprint::before { display: none; } }
 @keyframes kw-dv-grid { from { opacity: 0; } to { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {

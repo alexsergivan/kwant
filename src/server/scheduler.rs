@@ -1212,6 +1212,9 @@ pub async fn tick(state: &AppState, now: DateTime<Utc>) -> usize {
 
 /// Runs the scheduler until `shutdown`.
 pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinHandle<()> {
+    // 0.9.53: the heartbeat's stale clock starts now, so a startup step that hangs shows too
+    state.scheduler_heartbeat.spawned();
+    spawn_heartbeat_watch(state.clone(), shutdown.clone());
     tokio::spawn(async move {
         if let Ok(n) = state.db.fail_interrupted_runs().await {
             if n > 0 {
@@ -1226,6 +1229,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
         super::delegation::interrupt_open(&state).await;
         reschedule_all(&state, Utc::now()).await;
         loop {
+            state.scheduler_heartbeat.pass_started();
             tick(&state, Utc::now()).await;
             super::delegation::follow_ups(&state, Utc::now()).await;
             // G2: bots whose budget pause ended on its own (a new month) start what they held
@@ -1238,6 +1242,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
             super::idea_jar::scan(&state, Utc::now(), false).await;
             super::missions::runner::tick(&state).await;
             super::goals_remediation::tick(&state).await;
+            state.scheduler_heartbeat.pass_finished();
             let next = [
                 state.db.next_routine_due().await.ok().flatten(),
                 state.db.next_parked_due().await.ok().flatten(),
@@ -1262,6 +1267,20 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
             }
         }
     })
+}
+
+/// Looks at the scheduler's heartbeat every [`WATCH_EVERY`](super::scheduler_heartbeat::WATCH_EVERY),
+/// apart from the loop it watches, so a stale scheduler is logged even if nobody asks `/api/health`.
+fn spawn_heartbeat_watch(state: AppState, shutdown: CancellationToken) {
+    tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                _ = shutdown.cancelled() => return,
+                _ = tokio::time::sleep(super::scheduler_heartbeat::WATCH_EVERY) => {}
+            }
+            state.scheduler_heartbeat.check();
+        }
+    });
 }
 
 /// Starts the scheduler and the notifier.
