@@ -167,7 +167,7 @@ test('states draw their own chip, block and actions; never holo', async () => {
   const want = {
     setup: ['Set up · not open yet', 'Open the queue'],
     empty: ['Open · nobody waiting', 'Nobody waiting yet. The first ticket is #1.', 'Customers scan this to take a ticket', 'Print counter sign'],
-    waiting: ['Open · 5 waiting', 'Call next · #24', 'Next 3 · 5 waiting', '+ 2 more: #27, #28', 'Served today'],
+    waiting: ['Open · 5 waiting', 'Call next · #24', 'Next 3 · 5 waiting', '+ 2 more: #27, #28', 'Served', 'Average wait'],
     called: ['Open · #24 called', 'Served · call #25', 'Skip #24', 'to reach the counter', '4 waiting after'],
     skipped: ["#24 didn't come in 3 minutes", 'Bring back #24', 'until 10:44'],
     paused: ['Paused · 5 keep their place', 'Back in 10 minutes', 'Resume · call #24 next', 'Paused since 10:40'],
@@ -351,7 +351,10 @@ test('Closed: Open again sends reopen; End asks first, then ends the pocket', as
 test('Change hours sends set_hours with the time, or null for "until I close it"', async () => {
   stub(raw('closed').queue);
   const v = await card('closed');
+  assert.match(v.$('[data-action="reopen"]').className, /kw-btn-primary/);
   await click(v.$('[data-action="change-hours"]'));
+  assert.equal(v.$('[data-action="change-hours"]'), null, 'Change hours hides while the editor is open');
+  assert.doesNotMatch(v.$('[data-action="reopen"]').className, /kw-btn-primary/, 'only Save hours stays violet');
   const radios = v.host.querySelectorAll('[data-hours-edit] input[type="radio"]');
   await click(radios[1]);
   await click(v.$('[data-action="save-hours"]'));
@@ -363,6 +366,7 @@ test('Set-up: Open the queue asks the bot with the choices; Ask for a first name
   const v = await card('setup');
   const sw = v.$('[role="switch"]');
   assert.equal(sw.getAttribute('aria-checked'), 'false');
+  assert.equal(v.$('[data-setup] input').getAttribute('maxlength'), '40', 'the server takes a name of 1-40');
   await click(v.$('[data-step="up"]'));
   await click(sw);
   await click(v.$('[data-action="open-queue"]'));

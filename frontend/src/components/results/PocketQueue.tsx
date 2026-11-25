@@ -49,6 +49,7 @@ export const QUEUE_PAUSE_PRESETS = ['Back in 10 minutes', 'Back after lunch'] as
 export const QUEUE_PAUSE_MAX = 60;
 export const QUEUE_CLOSE_MAX = 140;
 export const QUEUE_LINE_MAX = 80;
+export const QUEUE_TITLE_MAX = 40;
 const CALL_MIN = 1;
 const CALL_MAX = 10;
 const MAX_TICKETS = 260;
@@ -265,7 +266,7 @@ const QueueChip: React.FC<{ q: QueueInfo; called: QueueTicket | null }> = ({ q, 
   );
 };
 
-const Tile: React.FC<{ k: string; label: string; value: React.ReactNode; sub: string; hot?: boolean }> = ({ k, label, value, sub, hot }) => (
+const Tile: React.FC<{ k: string; label: React.ReactNode; value: React.ReactNode; sub: React.ReactNode; hot?: boolean }> = ({ k, label, value, sub, hot }) => (
   <div className={`min-w-0 rounded-xl border bg-surface-main px-3 py-2 ${hot ? 'border-sky-600' : 'border-hairline-strong'}`} data-count={k}>
     <div className="text-2xs font-semibold leading-4 text-zinc-400 sm:truncate">{label}</div>
     <div className="text-[22px] font-extrabold leading-7 text-zinc-50 tabular-nums">{value}</div>
@@ -295,9 +296,14 @@ const Tiles: React.FC<{ q: QueueInfo }> = ({ q }) => {
     );
   return (
     <div className="grid grid-cols-3 gap-2" role="group" aria-label="Today at the counter">
-      <Tile k="served" label="Served today" value={num(s.served_today)} sub="today" />
-      <Tile k="avg" label="Average wait" value={avg(s.avg_minutes)} sub={s.avg_minutes === null ? 'measured after 3 calls' : 'per turn, measured today'} />
-      <Tile k="waiting" label="Waiting" value={num(s.waiting)} sub={s.waiting && s.longest_wait_minutes !== null ? `longest ${num(s.longest_wait_minutes)} min` : 'nobody now'} hot={s.waiting > 0} />
+      <Tile k="served" label="Served" value={num(s.served_today)} sub="today" />
+      <Tile
+        k="avg"
+        label={<><span className="sm:hidden">Each turn</span><span className="hidden sm:inline">Average wait</span></>}
+        value={avg(s.avg_minutes)}
+        sub={s.avg_minutes === null ? 'after 3 calls' : <><span className="sm:hidden">measured</span><span className="hidden sm:inline">per turn, measured today</span></>}
+      />
+      <Tile k="waiting" label="Waiting" value={num(s.waiting)} sub={s.waiting && s.longest_wait_minutes !== null ? `longest ${num(s.longest_wait_minutes)} min` : 'nobody now'} />
     </div>
   );
 };
@@ -661,18 +667,18 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
 
   const serving = (
     <div className="flex flex-col gap-3 rounded-2xl border border-sky-800/70 bg-surface-rail/40 p-3.5" data-serving={called ? 'called' : q.now_serving ? 'serving' : 'none'}>
-      <div className="flex items-end justify-between gap-3">
+      <div className="flex flex-col items-start gap-1 sm:flex-row sm:items-end sm:justify-between sm:gap-3">
         <div className="min-w-0">
           <div className="text-2xs font-semibold text-sky-300">{called ? 'Called' : skipped && !q.now_serving ? 'Skipped' : 'Now serving'}</div>
           <div className="flex items-baseline gap-2">
             <span className="text-[40px] font-extrabold leading-[44px] text-zinc-50 tabular-nums" data-number>
               {called ? `#${called.number}` : q.now_serving ? `#${q.now_serving}` : '—'}
             </span>
-            {called?.called_at ? <span className={SMALL}>called {clock(called.called_at)}</span> : null}
+            {called?.called_at ? <span className={`${SMALL} whitespace-nowrap`}>called {clock(called.called_at)}</span> : null}
             {called?.name ? <span className="truncate text-[15px] font-semibold text-zinc-200 sm:text-meta">{called.name}</span> : null}
           </div>
         </div>
-        <div className="shrink-0 text-right text-[15px] font-semibold text-zinc-200 sm:text-meta" data-waiting-count>
+        <div className="shrink-0 text-left text-[15px] font-semibold text-zinc-200 sm:text-right sm:text-meta" data-waiting-count>
           {called ? `${num(waitingCount)} waiting after` : waitingCount ? `${num(waitingCount)} waiting` : ''}
         </div>
       </div>
@@ -686,7 +692,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
                 has <b className="font-semibold tabular-nums text-zinc-50">{mmss(left)}</b> to reach the counter
               </span>
             </span>
-            <span className="text-zinc-400">then skipped</span>
+            <span className="hidden text-zinc-400 sm:inline">then skipped</span>
           </p>
           <Bar value={left / (q.spec.call_minutes * 60_000)} label={`Time left for #${called.number}`} />
         </div>
@@ -826,8 +832,8 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
           <div className="text-[13px] font-semibold text-zinc-200 sm:text-meta">Customers scan this to take a ticket</div>
           <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">Put the counter sign by the till. Each phone gets one ticket; nobody signs up.</p>
           <div className="grid grid-cols-2 gap-2 sm:flex sm:flex-wrap">
-            {printBtn(HALF_BTN)}
-            {bigScreenBtn(HALF_BTN)}
+            {printBtn(`${HALF_BTN} col-span-2 sm:col-span-1`)}
+            <div className="hidden sm:contents">{bigScreenBtn(HALF_BTN)}</div>
           </div>
           <LinkField url={url} />
         </div>
@@ -858,9 +864,9 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
     <div className="flex flex-col gap-4" data-setup>
       <label className="flex flex-col gap-1.5">
         <span className={LABEL}>
-          Name <span className="text-2xs font-medium text-zinc-400">on the ticket and the counter sign</span>
+          Name <span className="text-2xs font-medium text-zinc-400">on the ticket and the counter sign · up to 40</span>
         </span>
-        <input className={FIELD} value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
+        <input className={FIELD} value={name} maxLength={QUEUE_TITLE_MAX} onChange={(e) => setName(e.target.value)} />
       </label>
       <label className="flex flex-col gap-1.5">
         <span className={LABEL}>
@@ -1077,23 +1083,24 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
     );
     actions = (
       <div className={GRID}>
-        <button type="button" disabled={busy} onClick={() => void act('reopen', undefined, 'Open again. The next ticket is #1.')} className={`${PRIMARY} ${FULL}`} data-action="reopen">
+        <button type="button" disabled={busy} onClick={() => void act('reopen', undefined, 'Open again. The next ticket is #1.')} className={`${hoursEdit ? GHOST : PRIMARY} ${FULL}`} data-action="reopen">
           <Ticket size={14} aria-hidden="true" />
           Open again · starts at #1
         </button>
+        {hoursEdit ? null : (
         <button
           type="button"
           onClick={() => {
             setHours(q.hours_until);
-            setHoursEdit(!hoursEdit);
+            setHoursEdit(true);
           }}
-          aria-expanded={hoursEdit}
           className={HALF_BTN}
           data-action="change-hours"
         >
           <Clock size={14} aria-hidden="true" />
           Change hours
         </button>
+        )}
         <button type="button" onClick={() => setConfirm('end')} className={`${STOP} sm:ml-auto`} data-action="end">
           <Square size={13} aria-hidden="true" />
           End this queue
