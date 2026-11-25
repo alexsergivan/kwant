@@ -133,7 +133,7 @@ test('the Inbox row keeps the unseen badge and marks the open page', () => {
 
 test('the sidebar tip points to the phone card, can be dismissed, and Install moved into that card', () => {
   const card = src('components/PhoneAppCard.tsx') + src('components/PhoneAppTip.tsx');
-  assert.match(card, /Tip: use kwant bots on your phone/);
+  assert.match(card, /Tip: use kwant on your phone/);
   assert.match(card, /dismissPhoneTip\(\)/);
   assert.match(card, /Find it any time in Settings › All spaces/);
   assert.match(card, /<InstallAppButton className=\{rowBtn\} label="Install on this computer"/);

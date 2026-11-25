@@ -34,6 +34,8 @@
 //! - `COSTUSD:<dollars>`: the reply's result line reports usage and that `total_cost_usd`.
 //! - `STREAMLINES:<base64 text>`: print that text (claude `stream-json` lines: an init line, tool
 //!   calls and their results) before the reply; once per marker.
+//! - `HANGONCE:<tag>:<ms>`: after any `STREAMLINES`, wait that long before answering; once per tag
+//!   (a turn stopped mid-step).
 //!
 //! Each "once" above is once per kwant instance (the test's own `setup()`), never shared with
 //! another test in the binary. `REPLYSEQ`'s planned answers stay one set per binary: the test
@@ -156,6 +158,13 @@ if sl:
         open(sl_flag, "w").close()
         sys.stdout.write(base64.b64decode(sl[-1]).decode())
         sys.stdout.flush()
+# HANGONCE:<tag>:<ms>: after any stream lines, wait that long before answering, once per tag (a
+# turn stopped mid-step: its steps are already out, the reply isn't)
+ho = re.findall(r"HANGONCE:([A-Za-z0-9_]+):([0-9]+)", prompt)
+ho_flag = ho and os.path.join(flags, "hung-" + ho[-1][0])
+if ho and not os.path.exists(ho_flag):
+    open(ho_flag, "w").close()
+    time.sleep(int(ho[-1][1]) / 1000.0)
 # REPLYSEQ:<tag>: the next planned answer, seq-<tag>-1, seq-<tag>-2, ... (the last one repeats)
 sq = re.findall(r"REPLYSEQ:([A-Za-z0-9_]+)", prompt)
 if sq:

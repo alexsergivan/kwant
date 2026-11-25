@@ -893,7 +893,7 @@ export function actorName(actor: string, name: string | null | undefined, names:
 export function cardStatus(t: Task, names: Record<string, string> = {}, now: number = Date.now()): string | null {
   switch (t.state) {
     case 'blocked':
-      if (t.needs_you.some((n) => n.kind === ENGINE_CANT_SANDBOX)) return 'Blocked: its engine can’t be held to its tier';
+      if (t.needs_you.some((n) => n.kind === ENGINE_CANT_SANDBOX)) return 'Blocked: its AI can’t be held to its tier';
       return t.blocked_reason === 'budget' ? 'Reached its token limit' : t.blocked_reason ? `Blocked: ${t.blocked_reason}` : 'Blocked';
     case 'failed': {
       const auto = autofixCardText(t, now);
