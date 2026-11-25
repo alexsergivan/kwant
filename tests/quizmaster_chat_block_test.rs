@@ -110,6 +110,65 @@ async fn a_ready_draft_reply_carries_its_draft_id_and_zero_yours() {
     assert_eq!(pocket(&m).unwrap()["draft"], json!(id));
 }
 
+/// A call as the Claude CLI engine records it: let through on its permission path ("allowed"),
+/// with no `result` (the CLI keeps the tool's answer to itself).
+fn claude_call(tool: &str, args: Value) -> Value {
+    json!({"id": format!("toolu-{tool}"), "name": format!("mcp__{SELF_SERVER_NAME}__{tool}"), "server": SELF_SERVER_NAME, "tool": tool,
+           "arguments": args, "status": "allowed"})
+}
+
+/// The person's message in the bot's direct chat: the ask a turn answers.
+async fn ask(e: &Env) {
+    let msg = NewMessage {
+        channel_id: None,
+        direct_kwant_id: Some(e.bot.id.clone()),
+        sender_role: "user".into(),
+        sender_id: "user".into(),
+        text: "Make us a pub quiz for Friday 8 PM".into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    };
+    e.state.db.insert_message_with(&msg, &MessageExtra::default()).await.unwrap();
+}
+
+/// quiz-card-and-results (Mira's ux-pass-0952 #2): on the Claude engine the Quizmaster said the
+/// quiz was ready and no card came, because its calls are "allowed" with no answer. The card comes
+/// from the draft the turn made (a create alone) or named (a later call's `id`).
+#[tokio::test]
+async fn a_claude_engine_turn_gets_the_ready_card() {
+    let e = setup(true).await;
+    ask(&e).await;
+    let (id, _) = ready(&e).await;
+    // What the bot sent (the record keeps the arguments; the stored draft is what the card shows)
+    let spec = json!({"version": 1, "title": "Friday Pub Quiz"});
+
+    // pocket_create alone: no id anywhere in the record, so the draft this turn made
+    let m = reply(&e, vec![claude_call("pocket_create", json!({"spec": spec}))]).await;
+    let b = pocket(&m).unwrap_or_else(|| panic!("the Ready card under a Claude reply: {:?}", m.results));
+    assert_eq!((b["state"].clone(), b["draft"].clone(), b["name"].clone()), (json!("ready"), json!(id), json!("Friday Pub Quiz")), "{b}");
+    assert_eq!(b["dry_run"]["passed"], json!(true), "{b}");
+    assert_eq!(b["checks"]["matched"], json!(4), "{b}");
+    assert_eq!(served(&e, &m).await, Some(b));
+
+    // A later call names the draft
+    let m = reply(&e, vec![claude_call("pocket_create", json!({"spec": spec})), claude_call("pocket_dry_run", json!({"id": id}))]).await;
+    assert_eq!(pocket(&m).expect("a pocket block")["draft"], json!(id));
+
+    // Asking for the template makes no draft; a denied call ran nothing
+    assert_eq!(pocket(&reply(&e, vec![claude_call("pocket_create", json!({}))]).await), None);
+    let mut denied = claude_call("pocket_dry_run", json!({"id": id}));
+    denied["status"] = json!("denied");
+    assert_eq!(pocket(&reply(&e, vec![denied]).await), None);
+
+    // A draft made before the newest ask isn't this turn's (message times keep whole seconds)
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    ask(&e).await;
+    assert_eq!(pocket(&reply(&e, vec![claude_call("pocket_create", json!({"spec": spec}))]).await), None, "an older draft");
+    // Named by id, it is still the bot's own draft
+    assert_eq!(pocket(&reply(&e, vec![claude_call("pocket_update", json!({"id": id}))]).await).expect("a pocket block")["draft"], json!(id));
+}
+
 #[tokio::test]
 async fn after_the_persons_edit_yours_is_one() {
     let e = setup(true).await;

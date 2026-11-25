@@ -304,6 +304,68 @@ async fn results_are_posted_once_across_end_sweep_and_restart() {
     assert!(!text.contains("Zyxqv"), "the chat line holds counts only");
 }
 
+/// The pocket's posted messages as the chat reads them (with their stored results card).
+async fn served(state: &AppState, k: &Kwant) -> Vec<kwnt::db::models::Message> {
+    let mut list = state.db.list_messages(&k.id, 100).await.unwrap();
+    state.db.attach_results(&mut list).await;
+    list.into_iter().filter(|m| m.meta.as_deref().is_some_and(|t| t.contains("\"pocket\""))).collect()
+}
+
+/// quiz-card-and-results (Mira's ux-pass-0952 #2): the results message gets the chat's results
+/// card, from the block it carries, with every team and its points; the names leave it with
+/// the pocket's data.
+#[tokio::test]
+async fn the_results_message_carries_the_results_card() {
+    let t = setup().await;
+    let k = bot(&t, "Quizmaster").await;
+    let code = make(&t, json!({ "title": "Pub quiz" }), origin(&k), None).await;
+    join(&t, &code, CANARY).await;
+    join(&t, &code, "Mia").await;
+    let mut rx = t.state.event_sender.subscribe();
+    pocket::end(&t.state, &code).await.unwrap();
+    let now = Utc::now() + Duration::seconds(1);
+    assert_eq!(schedule::run_once(&t.state, now).await.results, vec![code.clone()]);
+
+    // The message as it is posted, and as the chat reads it back
+    let mut posted = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let RuntimeEvent::MessageAdded { message } = ev {
+            posted = Some(message);
+        }
+    }
+    let posted = posted.expect("the results message reached the chat");
+    let list = served(&t.state, &k).await;
+    assert_eq!(list.len(), 1);
+    let card = list[0].results.clone().unwrap_or_else(|| panic!("a results card on the message: {posted}"));
+    assert_eq!(posted["results"], card, "posted and served agree");
+    let b = &card["blocks"][0];
+    assert_eq!((b["type"].as_str(), b["id"].as_str(), b["state"].as_str(), b["code"].as_str()), (Some("pocket"), Some("b0"), Some("ended"), Some(code.as_str())));
+    assert_eq!(b["provenance"], json!({ "kind": "kwant_data", "ref": format!("pocket:{code}") }));
+    assert_eq!(b["source"], json!({ "kind": "slot" }));
+    let teams = b["results"]["teams"].as_array().expect("teams");
+    assert_eq!(teams.len(), 2, "{b}");
+    assert!(teams.iter().all(|t| t["name"].is_string() && t["points"].is_number()), "{b}");
+    assert!(b["ended"]["winner"]["name"].is_string(), "{b}");
+    assert!(card.to_string().contains("Zyxqv"), "names show while the data is kept");
+
+    // The host deletes the pocket: the names leave the card too, and the open chat hears it
+    assert!(pocket::delete(&t.state, &code).await.unwrap());
+    let mut rx = t.state.event_sender.subscribe();
+    assert_eq!(schedule::run_once(&t.state, now + Duration::minutes(1)).await.names_deleted, 1);
+    let mut heard = None;
+    while let Ok(ev) = rx.try_recv() {
+        if let RuntimeEvent::MessageAdded { message } = ev {
+            heard = Some(message);
+        }
+    }
+    let heard = heard.expect("the open chat hears about the change");
+    let card = served(&t.state, &k).await[0].results.clone().expect("the card stays, without names");
+    assert_eq!(heard["results"], card);
+    assert!(!card.to_string().contains("Zyxqv") && !card.to_string().contains("Mia"), "{card}");
+    assert_eq!(card["blocks"][0]["results"]["teams"].as_array().map(Vec::len), Some(2), "the teams and points stay");
+    assert!(card["blocks"][0]["results"]["names_deleted_at"].is_string());
+}
+
 #[tokio::test]
 async fn a_pocket_kept_only_until_it_ends_still_gets_its_results() {
     let t = setup().await;
