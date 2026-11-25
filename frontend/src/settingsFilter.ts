@@ -18,10 +18,12 @@ export function rowText(el: Element): string {
 
 const norm = (s: string) => s.toLowerCase().replace(/[’‘]/g, "'").replace(/\s+/g, ' ').trim();
 
-/** Whether a row's text holds every typed word. */
+/** Whether every typed word starts a word in the row ("me" finds "me", not the "me" in "Home"). */
 export function rowMatches(text: string, words: string): boolean {
-  const want = norm(words).split(' ').filter(Boolean);
-  return want.every((w) => text.includes(w));
+  // Apostrophes drop on both sides, so "dont" and "don't" find each other.
+  const want = norm(words).replace(/'/g, '').split(' ').filter(Boolean);
+  const toks = norm(text).replace(/'/g, '').split(/[^\p{L}\p{N}]+/u);
+  return want.every((w) => toks.some((t) => t.startsWith(w)));
 }
 
 /** Applies the words under `root`; returns how many rows show (0 with no rows marked). */

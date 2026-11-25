@@ -165,6 +165,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
   }, [tab, scope, appPage]);
   // All spaces › "Find a setting": words typed show the matching rows of every page; empty, the open page again.
   const [find, setFind] = useState('');
+  const findRef = useRef<HTMLInputElement>(null);
   const finding = scope === 'app' && find.trim() !== '';
   const contentRef = useRef<HTMLDivElement>(null);
   const [found, setFound] = useState<number | null>(null);
@@ -253,6 +254,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
             <div className="relative mx-3 md:mx-2 mb-2" role="search">
               <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" aria-hidden="true" />
               <input
+                ref={findRef}
                 type="search"
                 value={find}
                 onChange={(e) => setFind(e.target.value)}
@@ -270,10 +272,24 @@ export const SpaceSettings: React.FC<Props> = (p) => {
                 autoComplete="off"
                 spellCheck={false}
                 data-settings-find
-                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-7 pr-2.5 py-1.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none"
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-7 pr-9 py-1.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none [&::-webkit-search-cancel-button]:appearance-none"
               />
+              {find && (
+                <button
+                  type="button"
+                  aria-label="Clear"
+                  data-settings-find-clear
+                  onClick={() => {
+                    setFind('');
+                    findRef.current?.focus();
+                  }}
+                  className="absolute right-0.5 top-1/2 -translate-y-1/2 kw-hit kw-focus flex items-center justify-center w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              )}
             </div>
-            <ScrollRow as="nav" aria-label="All spaces settings" className="kw-scroll-row flex md:flex-col gap-1 px-3 pb-3 md:px-2 overflow-x-auto md:overflow-visible" data-app-settings-nav>
+            <ScrollRow as="nav" aria-label="All spaces settings" className="kw-scroll-row flex flex-wrap md:flex-col gap-1 px-3 pb-3 md:px-2" data-app-settings-nav>
               {APP_PAGES.map((t) => {
                 const on = !finding && appPage === t.id;
                 return (

@@ -298,6 +298,33 @@ test('Find a setting: "Notify me on this device" is found from General, across p
   assert.equal(q('[data-settings-find-count]', v.host), null);
 });
 
+test('Find a setting matches at the start of words; our own Clear button; the page chips wrap', async () => {
+  assert.ok(!m.rowMatches('use kwant bots on your phone add it to your home screen', 'notify me'), '"me" inside "Home" is no match');
+  assert.ok(m.rowMatches('notify me on this device', 'notify me'));
+  assert.ok(m.rowMatches('notifications', 'notif'));
+  assert.ok(m.rowMatches("don't ask again", 'dont'));
+  assert.ok(m.rowMatches('dont ask again', "don\u2019t"));
+  const v = await mount(shell({ appPage: 'general' }));
+  const nav = q('nav[data-app-settings-nav]', v.host);
+  assert.match(nav.className, /\bflex-wrap\b/);
+  assert.doesNotMatch(nav.className, /overflow-x-auto/);
+  const find = q('input[data-settings-find]', v.host);
+  assert.match(find.className, /\[&::-webkit-search-cancel-button\]:appearance-none/);
+  assert.equal(q('[data-settings-find-clear]', v.host), null, 'no Clear button while empty');
+  await type(find, 'notify me');
+  await settle();
+  assert.match(q('[data-settings-find-count]', v.host).textContent, /^1 setting matches/);
+  const clear = q('[data-settings-find-clear]', v.host);
+  assert.equal(clear.getAttribute('type'), 'button');
+  assert.equal(clear.getAttribute('aria-label'), 'Clear');
+  await click(clear);
+  await settle();
+  assert.equal(find.value, '');
+  assert.equal(v.host.ownerDocument.activeElement, find, 'focus goes back to the field');
+  assert.equal(q('[data-settings-find-clear]', v.host), null);
+  assert.ok(shown(q('#sfx-label', v.host)), 'back to General');
+});
+
 // Some panels start long timers that jsdom keeps alive after unmount; close the window so node can exit.
 after(() => {
   dom.window.close();

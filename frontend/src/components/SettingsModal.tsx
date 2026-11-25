@@ -604,7 +604,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         )}
 
         <div hidden={!show('general')} data-settings-page="general" className="space-y-6">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3" data-settings-section>
+        <div className={`grid grid-cols-1 ${hapticsAvailable() ? 'sm:grid-cols-2' : ''} gap-3`} data-settings-section>
           <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800" data-setting-row>
             <span className="flex-1 text-xs font-medium text-zinc-200 flex items-center gap-2">
               {sfxMuted ? <VolumeX size={15} className="text-zinc-500" aria-hidden="true" /> : <Volume2 size={15} className="text-sky-400" aria-hidden="true" />}
