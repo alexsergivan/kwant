@@ -588,3 +588,40 @@ async fn remote_requests_need_the_token() {
         json!({"auth_required": false, "authenticated": true, "device_login": true, "person_auth_required": false, "person_authenticated": true})
     );
 }
+
+/// 35a: a Mistral account is an API key, nothing else, and the shared Mistral key in Settings
+/// is checked like an account's key before anything is saved.
+#[tokio::test]
+async fn mistral_accounts_are_api_keys_and_keys_are_checked() {
+    let (app, state, _tmp) = setup().await;
+    for kind in ["cli_home", "custom_api", "system"] {
+        let (s, v, _) = call(&app, "POST", "/api/profiles", Some(json!({"engine": "mistral", "name": "M", "kind": kind}))).await;
+        assert_eq!(s, StatusCode::BAD_REQUEST, "{kind} -> {v}");
+    }
+    let (s, v, _) = call(
+        &app,
+        "POST",
+        "/api/profiles",
+        Some(json!({"engine": "mistral", "name": "Mistral", "kind": "api_key", "api_key": "mistral-test-key-123", "is_default": true})),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["engine"], "mistral");
+    assert_eq!(v["has_key"], true);
+    assert!(!v.to_string().contains("mistral-test-key-123"), "the key is write-only");
+
+    // Settings' own Mistral key: a bad one is refused and nothing else in the save is kept
+    let (s, v, _) = call(&app, "POST", "/api/settings", Some(json!({"mistral_api_key": "has a space", "openai_api_key": "sk-kept-not"}))).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST, "{v}");
+    assert!(v["error"].as_str().unwrap().contains("mistral_api_key"));
+    assert_eq!(state.db.get_setting("mistral_api_key").await.unwrap(), None);
+    assert_eq!(state.db.get_setting("openai_api_key").await.unwrap(), None);
+    // A saved key reads back masked, and sending the mask back changes nothing. (Saving a new
+    // good key rechecks the engines against the real API, so this test doesn't.)
+    state.db.set_setting("mistral_api_key", "mistral-key-abc123").await.unwrap();
+    let (_, settings, _) = call(&app, "GET", "/api/settings", None).await;
+    assert_eq!(settings["mistral_api_key"], "••••••••");
+    let (s, _, _) = call(&app, "POST", "/api/settings", Some(json!({"mistral_api_key": "••••••••"}))).await;
+    assert!(s.is_success());
+    assert_eq!(state.db.get_setting("mistral_api_key").await.unwrap().as_deref(), Some("mistral-key-abc123"));
+}

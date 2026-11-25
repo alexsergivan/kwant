@@ -26,6 +26,20 @@ pub enum Engine {
     /// A Custom API account: any OpenAI-compatible or Anthropic-compatible server (Agent
     /// Maestro, OpenRouter, LM Studio, …). Only ever runs on the space's own accounts.
     Custom,
+    /// 35a: Mistral's API (api.mistral.ai). No CLI yet (35b adds Vibe): its accounts are API
+    /// keys only, and there's no system profile.
+    Mistral,
+}
+
+/// Words in Mistral's own model ids (`mistral-large-latest`, `magistral-medium-2509`,
+/// `devstral-small-2507`, `open-mixtral-8x22b`, …).
+const MISTRAL_MODEL_WORDS: [&str; 8] =
+    ["mistral", "mixtral", "magistral", "devstral", "codestral", "ministral", "pixtral", "voxtral"];
+
+/// Whether `model` names one of Mistral's models (any case, any provider prefix).
+pub fn is_mistral_model(model: &str) -> bool {
+    let m = model.to_ascii_lowercase();
+    MISTRAL_MODEL_WORDS.iter().any(|w| m.contains(w))
 }
 
 impl Engine {
@@ -35,6 +49,7 @@ impl Engine {
             "codex" => Some(Engine::Codex),
             "grok" => Some(Engine::Grok),
             "custom" => Some(Engine::Custom),
+            "mistral" => Some(Engine::Mistral),
             _ => None,
         }
     }
@@ -49,6 +64,9 @@ impl Engine {
             Some(Engine::Claude)
         } else if model.contains("grok") {
             Some(Engine::Grok)
+        } else if is_mistral_model(model) && !(model == "local_ollama" || model.starts_with("ollama/")) {
+            // Ollama's own "mistral" runs on this computer, not on a Mistral account
+            Some(Engine::Mistral)
         } else if model.contains("codex") || model.contains("gpt") || model.contains("openai") {
             Some(Engine::Codex)
         } else {
@@ -62,6 +80,7 @@ impl Engine {
             Engine::Codex => "codex",
             Engine::Grok => "grok",
             Engine::Custom => "custom",
+            Engine::Mistral => "mistral",
         }
     }
 
@@ -73,6 +92,7 @@ impl Engine {
             Engine::Grok => "GROK_HOME",
             // No CLI; never set (see `system_home`)
             Engine::Custom => "KWNT_CUSTOM_API_HOME",
+            Engine::Mistral => "KWNT_MISTRAL_API_HOME",
         }
     }
 
@@ -110,7 +130,7 @@ impl Engine {
             ],
             Engine::Codex => &["OPENAI_API_KEY", "CODEX_API_KEY"],
             Engine::Grok => &["XAI_API_KEY", "GROK_AUTH_PATH"],
-            Engine::Custom => &[],
+            Engine::Custom | Engine::Mistral => &[],
         }
     }
 
@@ -129,7 +149,7 @@ impl Engine {
                 "ANTHROPIC_AWS_",
                 "VERTEX_REGION_",
             ],
-            Engine::Codex | Engine::Grok | Engine::Custom => &[],
+            Engine::Codex | Engine::Grok | Engine::Custom | Engine::Mistral => &[],
         }
     }
 
@@ -141,6 +161,7 @@ impl Engine {
             Engine::Grok => "xai_api_key",
             // Never stored: a Custom API key lives with its account only
             Engine::Custom => "custom_api_key",
+            Engine::Mistral => "mistral_api_key",
         }
     }
 
@@ -151,12 +172,13 @@ impl Engine {
             Engine::Codex => "codex",
             Engine::Grok => "grok",
             Engine::Custom => "custom",
+            Engine::Mistral => "mistral",
         }
     }
 
     /// The CLI's own config dir when kwnt doesn't set one: what the system profile uses.
     pub fn system_home(self) -> Option<PathBuf> {
-        if self == Engine::Custom {
+        if matches!(self, Engine::Custom | Engine::Mistral) {
             return None;
         }
         let from_env = std::env::var_os(self.home_env())
@@ -168,7 +190,7 @@ impl Engine {
                     Engine::Claude => ".claude",
                     Engine::Codex => ".codex",
                     Engine::Grok => ".grok",
-                    Engine::Custom => unreachable!("Custom API has no CLI home"),
+                    Engine::Custom | Engine::Mistral => unreachable!("API-only engines have no CLI home"),
                 })
             })
         })
@@ -245,7 +267,7 @@ impl CliEnv {
                     .collect();
                 vec!["--settings".into(), serde_json::json!({ "env": env }).to_string()]
             }
-            Engine::Codex | Engine::Grok | Engine::Custom => Vec::new(),
+            Engine::Codex | Engine::Grok | Engine::Custom | Engine::Mistral => Vec::new(),
         };
         Self {
             set: vec![(engine.home_env().to_string(), home.as_os_str().to_owned())],
@@ -590,6 +612,35 @@ mod tests {
         assert_eq!(Engine::from_model("gpt-5"), Some(Engine::Codex));
         assert_eq!(Engine::from_model("codex"), Some(Engine::Codex));
         assert_eq!(Engine::from_model("local_ollama"), None);
+    }
+
+    #[test]
+    fn mistral_models_run_on_mistral_but_ollamas_stay_local() {
+        assert_eq!(Engine::parse("mistral"), Some(Engine::Mistral));
+        assert_eq!(Engine::Mistral.as_str(), "mistral");
+        for m in [
+            "mistral",
+            "mistral-small-latest",
+            "mistral-large-2411",
+            "magistral-medium-2509",
+            "devstral-small-2507",
+            "codestral-latest",
+            "ministral-8b-latest",
+            "pixtral-large-latest",
+            "open-mixtral-8x22b",
+        ] {
+            assert_eq!(Engine::from_model(m), Some(Engine::Mistral), "{m}");
+        }
+        assert_eq!(Engine::from_model("ollama/mistral"), None);
+        assert_eq!(Engine::from_model("ollama/mistral-nemo:12b"), None);
+        // A Custom API account's Mistral model stays on that account
+        assert_eq!(Engine::from_model("custom:mistral-large-latest"), Some(Engine::Custom));
+        // Nothing else moved
+        assert_eq!(Engine::from_model("gpt-5"), Some(Engine::Codex));
+        assert_eq!(Engine::from_model("claude-sonnet-5-5"), Some(Engine::Claude));
+        assert_eq!(Engine::Mistral.system_home(), None);
+        assert_eq!(Engine::Mistral.api_model(), "mistral");
+        assert_eq!(Engine::Mistral.key_setting(), "mistral_api_key");
     }
 
     #[test]

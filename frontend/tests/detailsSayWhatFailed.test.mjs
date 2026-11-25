@@ -84,7 +84,9 @@ test('activity: unanswered and rehearsed parse as their own statuses, never ok',
   assert.equal(o.statusLabel(a.steps[0]), 'Not approved in time');
   assert.equal(o.statusLabel(a.steps[2]), 'Dry run');
   assert.equal(o.activitySummary(a), '3 steps · 1 didn’t run');
-  assert.equal(o.activitySummary({ steps: FAILED_THEN_OK, dropped: 0 }), '2 steps · 1 failed');
+  // 36a: the bot went on past the failure, so it reads "retried"; ended on it, it reads "failed".
+  assert.equal(o.activitySummary({ steps: FAILED_THEN_OK, dropped: 0 }), '2 steps · 1 retried');
+  assert.equal(o.activitySummary({ steps: [FAILED_THEN_OK[1], FAILED_THEN_OK[0]], dropped: 0 }), '2 steps · 1 failed');
 });
 
 test('ReplyMeta: the folded toggle names the outcome; open, it reads Details', () => {
@@ -121,10 +123,13 @@ test('ReplyCheckLine: only for a step that didn\'t run or failed for good, with 
   assert.equal(ui.line({ outcome: null, onDetails: () => {} }), '');
 });
 
-test('Steps list: a failed step keeps "Failed" and an unanswered one says "Not approved in time", even after a success', () => {
+test('Steps list: a failed step says "Retried" after a success (36a), "Failed" when the turn ends on it; an unanswered one says "Not approved in time"', () => {
   const rec = ui.steps({ activity: { steps: FAILED_THEN_OK, dropped: 0 }, idBase: 'a', defaultOpen: true });
-  assert.match(rec, /data-step-mark="failed"[^>]*>Failed</);
-  assert.match(rec, /aria-label="Failed"/, 'the icon still names it for screen readers');
+  assert.match(rec, /data-step-mark="retried"[^>]*>Retried</);
+  assert.match(rec, /aria-label="Retried"/, 'the icon names it for screen readers');
+  const end = ui.steps({ activity: { steps: [FAILED_THEN_OK[1], FAILED_THEN_OK[0]], dropped: 0 }, idBase: 'a', defaultOpen: true });
+  assert.match(end, /data-step-mark="failed"[^>]*>Failed</);
+  assert.match(end, /aria-label="Failed"/);
   // Mira's design check: the step Details lands on shows a visible ring, and its detail never splits a word on a phone
   assert.match(rec, /focus-visible:outline-sky-400[^"]*"[^>]*data-step-status|data-step-status="[^"]*"[^>]*class="[^"]*focus-visible:outline-sky-400/);
   assert.match(rec, /\[overflow-wrap:anywhere\]/);

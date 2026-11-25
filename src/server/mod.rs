@@ -26,6 +26,7 @@ pub mod spend_stop;
 pub mod bot_budget;
 pub mod scheduler;
 pub mod turns;
+pub mod lost_turns;
 pub mod delegation;
 pub mod continue_chat;
 pub mod keep_going;
@@ -117,6 +118,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::{broadcast, Mutex};
 
+/// Events the live channel keeps for its slowest reader. One busy reply streams hundreds of text
+/// deltas, so 128 let an app that paused for a moment fall behind (stuck-getting-started, 0.9.51).
+/// A reader that falls further behind than this gets its stream closed (see [`sse::sse_handler`]).
+pub const EVENT_BUFFER: usize = 1024;
+
 #[derive(Clone)]
 pub struct AppState {
     pub config: Config,
@@ -200,7 +206,7 @@ impl AppState {
         broker: PermissionBroker,
         router: LayaRouter,
     ) -> Self {
-        let (event_sender, _) = broadcast::channel(128);
+        let (event_sender, _) = broadcast::channel(EVENT_BUFFER);
         let config_data_dir = config.data_dir.clone();
         let sandbox_manager = Arc::new(SandboxManager::new());
         let browser_controllers = Arc::new(Mutex::new(HashMap::new()));

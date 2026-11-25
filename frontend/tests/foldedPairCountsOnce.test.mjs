@@ -53,7 +53,8 @@ test('the 28s reply reads "8 steps · 1 didn’t run · you said no to 1", over 
 
 test('a run with no approvals counts as before', () => {
   const a = parse([tool('t1', 'ok', 'Read a.ts', 0, undefined, 'Read'), tool('t2', 'failed', 'Running `npm test`', 1), note('n1', 1.5), tool('t3', 'ok', 'Edit a.ts', 2, undefined, 'Edit')]);
-  assert.equal(m.activitySummary(a), 'Worked 2:30 · 3 steps · 1 failed', 'the note still doesn’t count');
+  // 36a: the edit after the failed test run shows the bot went on, so it reads "retried".
+  assert.equal(m.activitySummary(a), 'Worked 2:30 · 3 steps · 1 retried', 'the note still doesn’t count');
 });
 
 test('an approval with no matching command still counts once; a command and its unanswered card count once (fails on 5195ef80)', () => {

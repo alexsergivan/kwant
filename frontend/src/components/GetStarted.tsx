@@ -70,6 +70,7 @@ const KEY_PROVIDERS = [
   { card: 'anthropic_api', label: 'Anthropic', note: 'Paid per use on your Anthropic account.' },
   { card: 'openai_api', label: 'OpenAI', note: 'Paid per use on your OpenAI account.' },
   { card: 'xai_api', label: 'xAI', note: 'Paid per use on your xAI account.' },
+  { card: 'mistral_api', label: 'Mistral', note: "Paid per use on your Mistral account. Mistral's free plan is too limited for bots." },
 ] as const;
 
 /** Where kwant runs, for "on {host}" (§10): the address the page was opened on, unless it's this computer. */
