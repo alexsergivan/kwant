@@ -253,6 +253,8 @@ Type=simple
 User=kwnt
 ExecStart=/usr/local/bin/kwnt serve --host 0.0.0.0 --port 8799
 Restart=always
+# Stop and restart only kwnt itself: programs a bot left running in the background keep running
+KillMode=process
 Environment=KWNT_DATA_DIR=/var/lib/kwnt
 
 [Install]
@@ -263,6 +265,8 @@ WantedBy=multi-user.target
 systemctl daemon-reload
 systemctl enable --now kwnt
 ```
+
+`KillMode=process` means an update or a restart stops only kwnt, not programs a bot deliberately started in the background (a dev server, a long build); kwant itself still stops a command that times out or a turn you cancel, with everything it started. Without that line, systemd stops every program kwnt ever started. `systemctl status kwnt` lists the ones still running; stop one with `kill <pid>`.
 
 </details>
 

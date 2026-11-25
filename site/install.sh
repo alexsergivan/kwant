@@ -230,6 +230,8 @@ Environment=PATH=$run_path
 EnvironmentFile=-%h/.kwnt/kwnt.env
 Restart=on-failure
 RestartSec=5
+# Stop and restart only kwnt itself: programs a bot left running in the background keep running
+KillMode=process
 
 [Install]
 WantedBy=default.target

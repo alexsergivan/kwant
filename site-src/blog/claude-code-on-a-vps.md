@@ -71,7 +71,7 @@ Once you are signed in, open Settings → Signed-in devices and choose Add a pho
 
 ### Keep it running
 
-The guide includes a systemd unit that runs `kwnt serve` as its own user with `Restart=always` and `KWNT_DATA_DIR=/var/lib/kwnt`, so kwant starts again after a reboot.
+The guide includes a systemd unit that runs `kwnt serve` as its own user with `Restart=always` and `KWNT_DATA_DIR=/var/lib/kwnt`, so kwant starts again after a reboot. Its `KillMode=process` line means a restart doesn't stop programs a bot deliberately left running in the background.
 
 ## Security checklist for a server that runs a coding agent
 

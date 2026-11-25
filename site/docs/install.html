@@ -20,7 +20,7 @@
 <meta property="og:image:height" content="630">
 <meta property="og:image:alt" content="Install &amp; run: On your own computer, on a VPS with systemd, or with Docker Compose.">
 <meta property="article:published_time" content="2026-10-22">
-<meta property="article:modified_time" content="2026-11-17">
+<meta property="article:modified_time" content="2026-11-25">
 <meta name="twitter:card" content="summary_large_image">
 <meta name="twitter:site" content="@kwantbot">
 <meta name="twitter:title" content="Install kwnt: self-host AI agents on a VPS or Docker · kwant">
@@ -197,6 +197,8 @@ Type=simple
 User=kwnt
 ExecStart=/usr/local/bin/kwnt serve --host 0.0.0.0 --port 8799
 Restart=always
+<span class="c"># Stop and restart only kwnt itself: programs a bot left running in the background keep running</span>
+KillMode=process
 Environment=KWNT_DATA_DIR=/var/lib/kwnt
 Environment=LAYA_URL=http://127.0.0.1:8000
 
@@ -204,6 +206,7 @@ Environment=LAYA_URL=http://127.0.0.1:8000
 WantedBy=multi-user.target</code></pre>
 <pre><code>systemctl daemon-reload
 systemctl enable --now kwnt</code></pre>
+<p><code>KillMode=process</code> means an update or a restart stops only kwnt, not programs a bot deliberately started in the background (a dev server, a long build). kwant itself still stops a command that times out or a turn you cancel, with everything it started. Without that line, systemd stops every program kwnt ever started. <code>systemctl status kwnt</code> lists the ones still running; stop one with <code>kill &lt;pid&gt;</code>.</p>
 
 <h2 id="docker">VPS in 5 minutes with Docker Compose</h2>
 <p>One command starts kwnt, Laya (with its model baked in) and a private Chromium for the bots, so VM mode works without mounting the Docker socket. You need Docker with Compose and about 4 GB of free RAM.</p>
@@ -322,7 +325,7 @@ docker compose exec kwnt kwnt doctor</code></pre>
 </footer>
 <script src="../assets/js/site.js?v=02a491b838" defer></script>
 <script src="../assets/js/pixel.js?v=0a1a3bf1e2" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/install#article","headline":"Install kwnt: self-host AI agents on a VPS or Docker","description":"Build the kwnt binary and run your AI bots on your laptop, on a VPS with systemd, or with Docker Compose behind an HTTPS reverse proxy.","url":"https://kwant.si/docs/install","mainEntityOfPage":"https://kwant.si/docs/install","image":"https://kwant.si/assets/og/docs-install.png?v=8675f78476","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-17","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Install & run","item":"https://kwant.si/docs/install"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"TechArticle","@id":"https://kwant.si/docs/install#article","headline":"Install kwnt: self-host AI agents on a VPS or Docker","description":"Build the kwnt binary and run your AI bots on your laptop, on a VPS with systemd, or with Docker Compose behind an HTTPS reverse proxy.","url":"https://kwant.si/docs/install","mainEntityOfPage":"https://kwant.si/docs/install","image":"https://kwant.si/assets/og/docs-install.png?v=8675f78476","inLanguage":"en","datePublished":"2026-10-22","dateModified":"2026-11-25","author":{"@id":"https://kwant.si/#org"},"publisher":{"@id":"https://kwant.si/#org"},"about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Docs","item":"https://kwant.si/docs/quickstart"},{"@type":"ListItem","position":3,"name":"Install & run","item":"https://kwant.si/docs/install"}]},{"@type":"Organization","@id":"https://kwant.si/#org","name":"kwant","alternateName":"kwnt","url":"https://kwant.si/","logo":"https://kwant.si/apple-touch-icon.png","sameAs":["https://github.com/alexsergivan/kwant"]}]}</script>
 <script type="application/json" id="cf-beacon">{"token": "7f6ed395033a43eea3885ad0943890c2"}</script>
 </body>
 </html>
