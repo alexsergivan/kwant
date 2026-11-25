@@ -424,7 +424,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
             <p className="font-mono text-[11px] text-zinc-300">{usedLine(b)}</p>
             <p className={`text-[11px] ${b.state === 'paused' || b.state === 'warn' ? 'text-amber-300' : 'text-zinc-400'}`}>{stateLine(b)}</p>
             {b.cost_unreported && b.budget_usd > 0 && (
-              <p className="text-[11px] text-zinc-500">This bot’s engine reports no cost, so the dollar limit can’t count its use. Set a token limit too.</p>
+              <p className="text-[11px] text-zinc-500">This bot’s AI reports no cost, so the dollar limit can’t count its use. Set a limit in tokens too.</p>
             )}
           </div>
 
@@ -490,7 +490,7 @@ export const BotBudgetSection: React.FC<{ kwantId: string; kwantName: string; se
                   className={field(!!uErr)}
                 />
                 <p id="bot-budget-usd-hint" className={`text-[11px] ${uErr ? 'text-rose-300' : 'text-zinc-500'}`}>
-                  {uErr ?? 'Like 20 or 2.50. Counts only engines that report a cost.'}
+                  {uErr ?? 'Like 20 or 2.50. Counts only AIs that report a cost.'}
                 </p>
               </div>
             </div>

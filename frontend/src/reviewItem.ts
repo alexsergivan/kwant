@@ -65,7 +65,7 @@ export function checkerMeta(i: Pick<ReviewItem, 'verdict' | 'risk'>): string | n
   if (!v.checker || v.result === 'none') return null;
   const at = atClock(v.checked_at ?? null);
   const parts: string[] = [];
-  if (v.checker.tier_note === 'different_tier') parts.push(`Checked on a different tier of ${v.checker.engine} (no other engine set up)`);
+  if (v.checker.tier_note === 'different_tier') parts.push(`Checked by a different size of ${v.checker.engine} (no other AI is set up)`);
   else parts.push(`Checked by fresh eyes on ${v.checker.engine}${at ? ` ${at}` : ''}`);
   if (isNum(v.steps_run) && isNum(v.steps_total) && v.steps_total > 0) {
     if (v.steps_run === v.steps_total) parts.push(i.risk.level === 'high' ? `all ${v.steps_total} steps, because it’s high risk` : `all ${v.steps_total} steps`);

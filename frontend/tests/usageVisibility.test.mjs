@@ -130,7 +130,7 @@ test('a paused chain shows one notice with Continue', () => {
   const html = m.notice({ messageId: 'n1', text, meta, onContinue: async () => {} });
   assert.match(html, /data-budget-paused/);
   assert.match(html, /Paused before handing on to Bob/);
-  assert.match(html, /212k of 200k fresh tokens/);
+  assert.match(html, /212k of 200k tokens/);
   assert.match(html, /<button[^>]*type="button"[^>]*>.*Continue<\/span><\/button>/s);
   // Already continued: the button says so and is disabled
   const done = m.notice({ messageId: 'n1', text, meta: { ...meta, resumed: true }, onContinue: async () => {} });

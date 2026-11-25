@@ -71,7 +71,7 @@ test('reply meta: a failed step shows on the folded toggle; no toggle without de
 });
 
 test('engineTip: the engine goes in the tooltip, Auto says Laya picks', () => {
-  assert.equal(m.engineTip('auto'), 'Laya picks the model');
+  assert.equal(m.engineTip('auto'), 'kwant picks the AI');
   assert.match(m.engineTip('claude'), /^Runs on /);
 });
 
