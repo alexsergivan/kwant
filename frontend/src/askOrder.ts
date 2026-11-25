@@ -1,5 +1,5 @@
 /**
- * The composer's "Ask:" row in a team chat: the team's lead first, then everyone else in the order they
+ * Team members in a team chat (the header's faces, the member list; the Ask row went in composer-diet): the team's lead first, then everyone else in the order they
  * came (roster order), so the row reads like the team home does (15e). No lead, or a lead who isn't in
  * the list, leaves the order as it is. Never drops or repeats anyone.
  */

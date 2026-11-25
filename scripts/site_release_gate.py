@@ -13,7 +13,7 @@ Reads the newest `## [Mac X.Y.Z]` heading in CHANGELOG.md and checks site-src/, 
 5. README.md has a `## New in X.Y` section for the release's minor version, and that section names the release
    (0.7.2 as "(0.7.2)" on a bullet, say). A small fix release with no bullet of its own can be named in an HTML
    comment in the section: `<!-- covers: 0.7.3 -->`.
-6. frontend/src/whatsnew/X.Y.Z.json exists and keeps the limits of the in-app "What's new" sheet: 2-6 highlights
+6. frontend/src/whatsnew/X.Y.Z.json exists and keeps the limits of the in-app "What's new" sheet: 1-6 highlights
    (title 60 characters or fewer, text 200 or fewer, image null or a .webp of 80 KB or less in
    frontend/public/whatsnew/X.Y.Z/, open null or an in-app place such as "settings/teams") and 0-15 fixes of 140
    characters or fewer. frontend/src/whatsNewSheet.ts checks the same limits in the app.
@@ -86,7 +86,7 @@ def media_files(name):
 
 
 # The "What's new" limits, as in frontend/src/whatsNewSheet.ts (LIMITS).
-WN_HIGHLIGHTS = (2, 6)
+WN_HIGHLIGHTS = (1, 6)
 WN_TITLE, WN_TEXT, WN_FIXES, WN_FIX = 60, 200, 15, 140
 WN_IMAGE_BYTES = 80 * 1024
 WN_TOP = {"inbox", "inbox/loose-ends", "board", "parallel", "dev", "jar", "settings/app"}
@@ -105,7 +105,7 @@ def whatsnew_gaps(version, root=ROOT):
     path = root / rel
     if not path.exists():
         return [f"{rel} is missing: write the in-app \"What's new in kwant {version}\" from the CHANGELOG entry "
-                f"(2-6 highlights and the fixes; see next-076/whats-new/spec.md)"]
+                f"(1-6 highlights and the fixes; see next-076/whats-new/spec.md)"]
     try:
         e = json.loads(path.read_text())
     except ValueError as err:

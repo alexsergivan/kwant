@@ -14,7 +14,7 @@ import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
 import { focusPhoneApp } from './components/PhoneAppTip';
-import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, recordMovedForNewPerson, ringDevSettings } from './firstScreen';
+import { focusDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
@@ -423,22 +423,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab(tab);
     playSfx('click');
   };
-  // First-screen A: the "moved" pointer under the space header, until Open or ✕ (0.9.8 and 0.9.9).
-  const [movedHidden, setMovedHidden] = useState(movedSeen);
-  const hideMoved = () => {
-    markMovedSeen();
-    setMovedHidden(true);
-  };
   // The suggestion's Turn on: Settings › This space › General, the Dev mode card (first there) in view and
   // focused. It doesn't switch Dev mode on: the person presses the button on the card.
   const openDevSuggest = () => {
     openSpaceSettings('general');
     focusDevSettings();
-  };
-  const openMoved = () => {
-    openSpaceSettings('general');
-    ringDevSettings();
-    hideMoved();
   };
   // Settings › All spaces: what applies to every space and to the app.
   const openAppSettings = () => {
@@ -4308,8 +4297,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         bots={kwants}
         engines={engines.engines}
         reloadEngines={engines.reload}
-        // Someone who finishes Get started in 0.9.8 never saw the old sidebar controls: no "moved" pointer.
-        onDismissed={hideMoved}
         spaceName={space.name}
         onImported={reloadAfterImport}
         mainSpace={space.is_default}
@@ -4489,9 +4476,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         playSfx('click');
       }}
       onConnectDevGitHub={connectDevGitHub}
-      movedPointer={movedPointerShows({ established: whatsNewEstablished, seen: movedHidden })}
-      onOpenMoved={openMoved}
-      onHideMoved={hideMoved}
       ideaJarCount={ideaJarCount}
       ideaJarActive={page === 'jar'}
       onOpenIdeaJar={() => {
@@ -4755,6 +4739,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           routingState={isCurrentContextStreaming ? routingState : null}
           onCancelDiscussion={handleCancelDiscussion}
           teamMembers={currentTeamMembers}
+          teamLeadId={currentTeam?.lead_kwant_id ?? null}
           teamId={activeSandboxId}
           teamName={activeSandboxName}
           workspacePath={currentTeam?.workspace_path}
@@ -5004,11 +4989,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     wroteHere,
     getStartedShowing: getStartedEligible,
   });
-  // 29v: a brand-new person never gets the "moved" pointer: record it as seen once they're known to be new
-  // (false, never null), the way What's new records its version, so it can't pin after their first message.
-  useEffect(() => {
-    if (recordMovedForNewPerson({ established: whatsNewEstablished, seen: movedHidden })) hideMoved();
-  }, [whatsNewEstablished, movedHidden]);
   const readyBots = useMemo(() => kwants.map((k) => ({ id: k.id, name: k.name, role: k.avatar_sprite })), [kwants]);
 
   return (

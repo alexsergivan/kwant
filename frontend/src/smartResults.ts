@@ -497,6 +497,8 @@ export interface DeskGuest {
   msgs: number;
   /** "2026-12-14": when this guest's chat is deleted; null before they write. */
   delete_on: string | null;
+  /** pa13b, a booking desk's hand-off that names a time the host hasn't listed ("2026-12-01T18:00"); else null. */
+  ask_slot_start?: string | null;
 }
 export type DeskFrom = 'guest' | 'bot' | 'host' | 'note';
 /** One message in a guest's conversation (`?view=guest:<id>` → `conversation.messages`). */
@@ -505,7 +507,37 @@ export interface DeskMessage {
   from: DeskFrom;
   text: string;
   at: string;
-  note: 'handoff' | 'host_away' | 'daily_cap' | null;
+  note: 'handoff' | 'host_away' | 'daily_cap' | 'booking_requested' | 'booking_confirmed' | 'booked_by_host' | 'booking_declined' | 'booking_cancelled' | null;
+  /** pa13b booking notes: the slot's wall-clock start ("2026-12-02T10:00"). */
+  start?: string | null;
+}
+
+/** pa13b: one person on a slot (host view). `name` is null once that guest's chat is deleted. */
+export interface DeskSlotPerson {
+  guest: string;
+  name: string | null;
+  note: string | null;
+  at: string | null;
+  by: 'guest' | 'host' | null;
+}
+/** pa13b: one time on a booking desk. `start` is the studio's wall-clock time, never converted. */
+export interface DeskSlot {
+  /** The server's id; null for a time the host just added and hasn't saved. */
+  id: string | null;
+  start: string;
+  minutes: number;
+  label: string | null;
+  seats: number;
+  requested: DeskSlotPerson[];
+  confirmed: DeskSlotPerson[];
+}
+/** pa13b: the booking part of a desk (`spec.mode: "booking"`). */
+export interface DeskBooking {
+  slots: DeskSlot[];
+  open_left: number;
+  requests: number;
+  booked_upcoming: number;
+  booked_total: number;
 }
 
 /**
@@ -532,6 +564,10 @@ export interface DeskInfo {
   needs_address: boolean;
   /** Stopped: the day it stopped, and when the last chat goes. Totals fall back to counts. */
   ended: { at: string | null; deletes_on: string | null; days: number | null; bot_replies: number | null; host_replies: number | null; messages: number | null } | null;
+  /** pa13b: "guide" (pa13a, the default) or "booking". */
+  mode?: 'guide' | 'booking';
+  /** pa13b: the times, when mode is "booking"; else null. */
+  booking?: DeskBooking | null;
 }
 
 /**
