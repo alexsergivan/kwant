@@ -2737,7 +2737,7 @@ pub async fn interrupt_running_turns(state: &AppState) -> usize {
 
 /// Whether a turn a restart cut off asks the person in Needs you: a person's own chat. A row from
 /// an older kwnt doesn't say: every chat but a hand-off's thread, which the Inbox reports.
-async fn restart_asks(state: &AppState, t: &crate::db::continuity::RunningTurn) -> bool {
+pub(super) async fn restart_asks(state: &AppState, t: &crate::db::continuity::RunningTurn) -> bool {
     match (t.asks, &t.thread_id) {
         (Some(a), _) => a,
         (None, Some(tid)) => state.db.delegation_for_thread(tid).await.ok().flatten().is_none(),
