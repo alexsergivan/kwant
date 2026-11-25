@@ -140,7 +140,8 @@ pub async fn sweep(state: &AppState, cancelled: &mut HashSet<String>, now: DateT
                 }
                 tracing::warn!(turn_id = %turn.turn_id, kwant_id = %turn.kwant_id, secs = silence.as_secs(), "a running turn went silent; stopping it");
                 post_line(state, turn, silence).await;
-                if state.turns.cancel(Some(&turn.turn_id)) == 0 {
+                // Marked as the sweep's cancel, so the turn saves no "You stopped this reply." under this line
+                if state.turns.cancel_lost(&turn.turn_id) == 0 {
                     force_end(state, turn).await;
                 } else {
                     cancelled.insert(turn.turn_id.clone());
@@ -203,19 +204,23 @@ async fn force_end(state: &AppState, turn: &ActiveTurn) {
     });
 }
 
-/// Posts [`silent_line`] where the turn's reply would have gone (its restart record says where).
-/// A turn without one (it never got that far) gets no line; its working status still clears.
+/// Posts [`silent_line`] where the turn's reply would have gone (its restart record says where),
+/// and asks the person to resume it in Needs you when the record says the turn asks (a person's
+/// own chat; hand-offs, routine runs and missions don't). The sweep posts once per turn: a turn it
+/// cancelled is ended by force at the next sweep, never judged again, so one item per stop.
+/// A turn without a record (it never got that far) gets no line; its working status still clears.
 async fn post_line(state: &AppState, turn: &ActiveTurn, silence: Duration) {
     let Ok(Some(rt)) = state.db.running_turn(&turn.turn_id).await else {
         tracing::info!(turn_id = %turn.turn_id, "a silent turn has no record of its chat; ending it without a line");
         return;
     };
+    let text = silent_line(&rt.kwant_name, silence);
     let msg = NewMessage {
         channel_id: rt.channel_id.clone(),
         direct_kwant_id: rt.direct_kwant_id.clone(),
         sender_role: "system".into(),
         sender_id: "kwnt".into(),
-        text: silent_line(&rt.kwant_name, silence),
+        text: text.clone(),
         reasoning_content: None,
         tool_calls: None,
         tokens_used: 0,
@@ -233,6 +238,17 @@ async fn post_line(state: &AppState, turn: &ActiveTurn, silence: Duration) {
                 let _ = state.db.touch_thread(tid).await;
             }
             let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or(Value::Null) });
+            // …and in Needs you, for a person's own chat, as a Stop or a restart does
+            // (silent-stop-asks). The line's own words: it has no Retry, the person asks again.
+            if super::routes::restart_asks(state, &rt).await {
+                let place = super::stopped::Place {
+                    kwant_id: rt.kwant_id.clone(),
+                    channel_id: rt.channel_id.clone(),
+                    direct_kwant_id: rt.direct_kwant_id.clone(),
+                    thread_id: rt.thread_id.clone(),
+                };
+                super::stopped::ask(state, &place, Some(saved.id.as_str()), &text, super::stopped::Resume::ResendMessage).await;
+            }
         }
         Err(e) => tracing::warn!(error = %e, turn_id = %turn.turn_id, "could not post the line of a silent turn"),
     }

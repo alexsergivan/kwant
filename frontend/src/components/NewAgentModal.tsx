@@ -342,7 +342,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               {isEdit ? <Pencil size={14} /> : <Sparkles size={15} />}
             </div>
             <h3 id="agent-modal-title" className="text-sm font-semibold text-zinc-100">
-              {isEdit ? `Edit ${initial?.name}` : joinTeamName ? `New bot for @${joinTeamName}` : 'New kwant bot'}
+              {isEdit ? `Edit ${initial?.name}` : joinTeamName ? `New bot for @${joinTeamName}` : 'New bot'}
             </h3>
           </div>
           <button
@@ -474,7 +474,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
             >
               <span className="text-xs font-medium text-zinc-300">More options</span>
               <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500">
-                · {isEdit ? 'title, avatar, engine and more' : 'persona, avatar, engine and more'}
+                · {isEdit ? 'title, avatar, AI and more' : 'persona, avatar, AI and more'}
               </span>
               <ChevronRight
                 size={13}
@@ -620,12 +620,12 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
                       </option>
                     ))}
                     {profileId && !engineProfiles.some((p) => p.id === profileId) && (
-                      <option value={profileId}>Another engine's account (cleared on save)</option>
+                      <option value={profileId}>From another AI (cleared on save)</option>
                     )}
                   </select>
                   <label className="mt-1.5 flex items-start gap-2 text-[11px] text-zinc-400">
                     <input type="checkbox" checked={failover} onChange={(e) => setFailover(e.target.checked)} className="mt-0.5 accent-sky-500" />
-                    <span>Switch to the engine's next account when this one runs out of usage or is signed out</span>
+                    <span>Switch to this AI’s next account when this one runs out of usage or is signed out</span>
                   </label>
                 </div>
               )}

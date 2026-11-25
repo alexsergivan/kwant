@@ -87,7 +87,7 @@ export const RouteChoiceCard: React.FC<RouteChoiceCardProps> = ({ meta, messageI
         <div className="px-4 pt-3 pb-2 space-y-1">
           <span className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-400">
             <MessagesSquare size={12} className="text-info" aria-hidden="true" />
-            <span className="text-zinc-200">Laya</span> · router
+            Picking who answers
           </span>
           <h3 id={headingId} className="text-sm font-semibold text-zinc-100 leading-snug">
             Who should answer this?
