@@ -452,7 +452,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                   <>
                     <div className="flex flex-wrap items-center gap-x-2 gap-y-1" data-sheet-who>
                       {chosenBots.length > 0 && (
-                        <span aria-hidden="true" className="inline-flex shrink-0 -space-x-1.5" data-sheet-who-faces>
+                        <span aria-hidden="true" className="inline-flex shrink-0 -space-x-1" data-sheet-who-faces>
                           {chosenBots.slice(0, 5).map((k) => (
                             <span key={k.id} className="inline-flex rounded-full ring-2 ring-zinc-900 bg-zinc-800">
                               <ModernAvatar role={k.avatar_sprite} name={k.name} size={20} kwantId={k.id} />
