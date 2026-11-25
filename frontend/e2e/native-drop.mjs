@@ -103,7 +103,9 @@ async function newPage() {
 }
 
 const openChat = async (page, label) => {
-  await page.getByText(label, { exact: true }).first().click();
+  // The row's own text sits behind its focus/click button (an `absolute inset-0` overlay, a11y-basics
+  // #1186's fix for "a button can't nest another interactive element"), so click the button, not the text.
+  await page.getByRole('button', { name: new RegExp(`^${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).first().click();
   await page.locator('[data-drop-target="chat"]').first().waitFor({ timeout: 10000 });
   await page.waitForTimeout(600);
 };

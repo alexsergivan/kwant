@@ -101,7 +101,8 @@ try {
   await page.locator('[data-main-pane]').first().waitFor({ timeout: 10000 });
   await axeCheck('first-run', 'first load: main pane, skip link and sidebar are on screen');
 
-  await page.getByText('Wren', { exact: true }).first().click();
+  // The row's own text sits behind its focus/click button (a11y-basics #1186's overlay button fix).
+  await page.getByRole('button', { name: /^Wren/ }).first().click();
   await page.locator('[data-composer-form]').first().waitFor({ timeout: 10000 });
   await page.locator('textarea').first().click();
   await page.keyboard.type('a message with a ```js\ncode fence\n``` block', { delay: 5 });
