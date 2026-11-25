@@ -3,7 +3,7 @@ use kwnt::{config::Config, db::Database};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
-#[command(name = "kwnt", author, version, about = "kwant bots: your team of AI bots")]
+#[command(name = "kwnt", author, version, about = "kwant: your team of AI bots")]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Option<Commands>,
@@ -266,7 +266,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(Commands::McpEchoServer { .. }) => unreachable!("handled before config loading"),
         Some(Commands::McpOauthMockServer { .. }) => unreachable!("handled before config loading"),
         None => {
-            println!("⚡ kwant bots: your team of super-intelligent bots");
+            println!("⚡ kwant: your team of super-intelligent bots");
             println!("Run `kwnt serve` to start the server, or `kwnt --help` for options.");
         }
     }
@@ -289,7 +289,7 @@ fn print_status(config: &Config) {
         format!("{} (absent)", config_path.display())
     };
 
-    println!("kwant bots");
+    println!("kwant");
     println!("  host       {}", config.host);
     println!("  port       {}", config.port);
     println!("  data dir   {}", config.data_dir.display());

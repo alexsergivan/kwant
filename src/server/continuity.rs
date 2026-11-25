@@ -2341,7 +2341,7 @@ pub async fn turn_ended(state: &AppState, kwant_id: &str, context_id: Option<&st
     if outcome == "failed" {
         return Some(
             turn_note(state, "turn_stopped", kwant_id, context_id, |name, where_| {
-                (format!("{name} stopped"), format!("{name} couldn't finish in {where_}. Open kwant bots to retry."))
+                (format!("{name} stopped"), format!("{name} couldn't finish in {where_}. Open kwant to retry."))
             })
             .await,
         );
@@ -2415,7 +2415,7 @@ fn approval_body(name: &str, tool_name: &str, details: &serde_json::Value) -> St
     };
     match bot_description(details) {
         Some(said) => format!("{name} wants to {action}: {said}"),
-        None => format!("{name} wants to {action}. Open kwant bots to allow or deny it."),
+        None => format!("{name} wants to {action}. Open kwant to allow or deny it."),
     }
 }
 
