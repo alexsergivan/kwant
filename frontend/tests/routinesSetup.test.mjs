@@ -72,7 +72,7 @@ test('Settings scrolls the open tab into view (phone tab strip), without motion'
   const { readFileSync } = await import('node:fs');
   const s = readFileSync(new URL('../src/components/SpaceSettings.tsx', import.meta.url), 'utf8');
   assert.match(s, /ref=\{tab === t\.id \? currentTabRef : undefined\}\s*aria-current=\{tab === t\.id \? 'page'/);
-  assert.match(s, /currentTabRef\.current\?\.scrollIntoView\?\.\(\{ block: 'nearest', inline: 'nearest' \}\);\s*\}, \[tab, scope\]\)/);
+  assert.match(s, /currentTabRef\.current\?\.scrollIntoView\?\.\(\{ block: 'nearest', inline: 'nearest' \}\);\s*\}, \[tab, scope, appPage\]\)/);
 });
 
 const kwants = [{ id: 'k1', name: 'Ben' }];

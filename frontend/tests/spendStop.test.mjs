@@ -139,7 +139,7 @@ test('the notice meta and the Needs-you item parse; the detail is the server’s
   assert.equal(m.parseSpendStopped(JSON.stringify({ kind: 'budget_paused' })), null);
   assert.equal(m.parseSpendStopped('not json'), null);
   const meta = m.parseSpendStopped(JSON.stringify(META));
-  assert.equal(m.stoppedDetail(meta), '17.4k of 10k fresh tokens today');
+  assert.equal(m.stoppedDetail(meta), '17.4k of 10k tokens today');
   assert.equal(m.stoppedDetail({ ...meta, over: 'usd', stop_usd: 0.5 }), '$0.84 of $0.50 today');
   const it = m.spendStoppedItem({ items: [{ kind: 'approval' }, { ...META, id: 'spend_stopped:2026-11-07', text: 'Today’s spending limit is reached.' }] });
   assert.equal(it.id, 'spend_stopped:2026-11-07');

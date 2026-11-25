@@ -8,8 +8,42 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.52] - 2026-11-25
+
+kwant 0.9.52: one working scene instead of a strip and a steps card, plain words for AIs and AI use, plain words on the sign-in, team and update screens, a shorter New routine form, plain words in the folder picker and the thinking note, silent stops show up in Needs you, four short Settings pages and "AI" instead of "engine" on the New bot form.
+
+### Changed
+- While a bot works, the chat shows one thing: the bot at its laptop saying what it's doing, with the time, a step count and its steps one tap away, instead of a separate working strip and steps card (#1192)
+- Settings, the AI picker, the New bot form and the usage panel now say "AI", "kwant picks" and "AI use" instead of Laya, engine and fresh tokens (#1196)
+- The sign-in, team, update and phone-app screens now say "kwant", "Team folder" and "your team of AI bots" instead of "kwant bots", "Team Workspace" and Laya (#1197)
+- A new routine asks for a name, what to do and when; the bot and where it posts sit on one line under it, with Change to pick others (#1200)
+- The folder picker on Mac and Linux asks for "a folder on this computer for your team" instead of "Select Team Workspace Folder", and the thinking note says "This AI" instead of "This engine" (#1201)
+- Settings › All spaces is split into four short pages, General, Bots on their own, Usage and Notifications, with one Save, and Find a setting looks across all four (#1204)
+- The New bot form, the steps list and Apps & accounts now say "AI" instead of "engine" (#1205)
+
 ### Fixed
-- Keyboard and screen-reader users can now jump past the sidebar with a "Skip to conversation" link, the content pane is a `<main>` landmark, sidebar rows no longer nest a button inside a button, small sidebar icon buttons have a bigger tap target, long code blocks are keyboard-reachable, and the background goes inert while the New bot modal is open (#1186)
+- When kwant stops a reply because the bot went silent too long, it now also shows up once in Needs you, so you see it was stopped (#1202)
+
+## [Mac 0.9.51] - 2026-11-25
+
+kwant 0.9.51: a grey Retried on steps the bot recovered from, a Stopped line in the chat when you press Stop, one line that says which bot answers, Telegram that still gets every question and approval when kwant is busy, push and webhook notices that still say a bot waits for you when kwant is busy, a New bot form that asks for a name and a job, space icons drawn in kwant's pixel style, a chat that stops saying "getting started" once the reply has ended, a Connect sheet that ticks every bot in the space for you, a Skip to conversation link and cleaner keyboard paths and Mistral as an AI you connect with your own key.
+
+### Added
+- Mistral is now one of the AIs you can connect: paste your own Mistral API key in Get started or Settings, and bots can run on Mistral Small, Medium or Large, paid per use on your Mistral account (#1132)
+
+### Changed
+- A step the bot recovered from says Retried in grey instead of Failed in red; command steps say what they did in plain words, and the exact command is one tap away under Show command (#1175)
+- When you ask a team, the big router card is now one line that says which bot got your message and why; Who else shows the other bots that could answer (#1180)
+- The New bot form now asks only for a name and what the bot should do; the avatar follows the job, and persona, model, personality and the rest are under More options (#1188)
+- Space icons are now drawn in kwant's pixel style, in each space's own colour, in the sidebar, the space switcher and both icon pickers; stored icons stay as they are (#1189)
+- Connecting an app for the first time now ticks every bot in the space, turned on; Choose bots lets you pick fewer (#1191)
+
+### Fixed
+- Pressing Stop now leaves a short "Stopped" line in the chat, with the steps the bot had taken, so a stopped question no longer looks answered (#1178)
+- Telegram no longer misses a bot's question or approval, or leaves live buttons on a closed card, when kwant gets busy (#1185)
+- When the server was busy, a push or webhook notice that a bot waits for your approval could be lost; it is now sent once kwant catches up (#1187)
+- A chat no longer stays on "getting started" after the app missed the end of a reply; the app catches up when it reconnects, and a bot stuck for minutes is stopped with a short line saying so (#1181)
+- Keyboard and screen-reader users can skip past the sidebar to the conversation; sidebar rows are one button each, long code blocks can be reached with the keyboard, and the app behind New bot can't be clicked while it is open (#1186)
 
 ## [Mac 0.9.50] - 2026-11-25
 

@@ -388,7 +388,7 @@ test('Advanced’s Composio card offers Choose bots instead of Turn on in Tools,
   );
   assert.ok(html.includes('Choose bots to turn it on'));
   assert.ok(!html.includes('Turn on in Tools'));
-  assert.ok(!html.includes('Engine accounts'));
+  assert.ok(!html.includes('AI accounts'));
 });
 
 // ── Old addresses ────────────────────────────────────────────────────────────────────────────
