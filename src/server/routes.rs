@@ -26,6 +26,9 @@ pub struct HealthResponse {
     pub version: &'static str,
     pub laya_url: String,
     pub laya: crate::router::sidecar::LayaStatus,
+    /// 0.9.53: whether the background loop (routines, follow-ups, missions…) is still going.
+    /// Reported only: `status` stays "ok" and the answer stays 200 either way.
+    pub scheduler: super::scheduler_heartbeat::HeartbeatStatus,
 }
 
 pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
@@ -35,6 +38,7 @@ pub async fn health(State(state): State<AppState>) -> impl IntoResponse {
         version: env!("CARGO_PKG_VERSION"),
         laya_url: state.config.laya_url.clone(),
         laya: state.router.status(),
+        scheduler: state.scheduler_heartbeat.check(),
     })
 }
 
