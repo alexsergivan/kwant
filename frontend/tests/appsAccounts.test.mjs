@@ -449,7 +449,7 @@ test('F4: bot chips show the bot’s face and step 3 says Composio is one connec
   const chip = html.slice(html.indexOf('data-sheet-bot="k1"'), html.indexOf('data-sheet-bot="k2"'));
   assert.match(chip, /aria-hidden="true"/);
   assert.match(chip, /min-h-\[44px\]/);
-  assert.match(html, /data-sheet-one-connection="true">Composio is one connection: the bots you tick can use every app on it, not only Gmail\./);
+  assert.match(html, /data-sheet-one-connection="true">Composio is one connection: the bots that get it can use every app on it, not only Gmail\./);
 });
 
 test('F5: the key error sits right under the field and is read with it; an added key ticks step 1', async () => {
@@ -631,4 +631,21 @@ test('36f: bots that arrive after the sheet opens are ticked too, until the pers
   assert.deepEqual(ticks(document.body), ['k2', 'k3'], 'a changed pick is kept');
   root.unmount();
   host.remove();
+});
+
+test('36f (Mira FIX 1-3): with the fold, 4 or more of N picked says "n of N"; Choose bots sits on its own row', async () => {
+  const many = Array.from({ length: 13 }, (_, i) => ({ id: `b${i}`, name: `Bot${i}`, approvals_effective: 'ask' }));
+  const host = await mount(m.ConnectSheet, sheetProps({ kwants: many }));
+  const line = () => text(host.querySelector('[data-sheet-who-line]'));
+  assert.equal(line(), 'All 13 bots in Home get it, turned on.');
+  await click(host.querySelector('[data-sheet-choose]'));
+  await click(host.querySelector('[data-sheet-bot="b1"] input'));
+  assert.equal(line(), '12 of 13 bots get it, turned on.');
+  for (const id of ['b0', 'b2', 'b3', 'b4', 'b5', 'b6', 'b7', 'b8', 'b9']) await click(host.querySelector(`[data-sheet-bot="${id}"] input`));
+  assert.equal(line(), 'Bot10, Bot11 and Bot12 get it, turned on.', '1 to 3 picked are named');
+  const who = host.querySelector('[data-sheet-who]');
+  assert.match(who.className, /flex-col/);
+  assert.equal(host.querySelector('[data-sheet-choose]').parentElement, who, 'the button is its own row');
+  assert.ok(!host.querySelector('[data-sheet-choose]').previousElementSibling.contains(host.querySelector('[data-sheet-choose]')));
+  assert.match(text(host.querySelector('[data-sheet-one-connection]')), /the bots that get it can use every app on it, not only Gmail\./);
 });

@@ -197,7 +197,9 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
         : 'None until you tick one.'
       : fold && chosenBots.length === kwants.length
         ? `All ${kwants.length} bots in ${spaceName} get it, turned on.`
-        : `${listNames(chosenBots.map((k) => k.name))} ${chosenBots.length === 1 ? 'gets' : 'get'} it, turned on.`;
+        : fold && chosenBots.length > 3
+          ? `${chosenBots.length} of ${kwants.length} bots get it, turned on.`
+          : `${listNames(chosenBots.map((k) => k.name))} ${chosenBots.length === 1 ? 'gets' : 'get'} it, turned on.`;
   const approval = approvalLine(app?.acts ?? 'Send, post or change things', chosenBots, spaceMode);
   const toggle = (kid: string) => (
     setTouched(true), setPicked((p) => (p.includes(kid) ? p.filter((x) => x !== kid) : [...p, kid])), setError((x) => (x?.step === 3 ? null : x))
@@ -450,19 +452,21 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                   <p className="text-[11px] text-zinc-400">{spaceName} has no bots yet. Make one first, then come back.</p>
                 ) : fold ? (
                   <>
-                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1" data-sheet-who>
-                      {chosenBots.length > 0 && (
-                        <span aria-hidden="true" className="inline-flex shrink-0 -space-x-1" data-sheet-who-faces>
-                          {chosenBots.slice(0, 5).map((k) => (
-                            <span key={k.id} className="inline-flex rounded-full ring-2 ring-zinc-900 bg-zinc-800">
-                              <ModernAvatar role={k.avatar_sprite} name={k.name} size={20} kwantId={k.id} />
-                            </span>
-                          ))}
-                        </span>
-                      )}
-                      <p className="min-w-0 text-xs text-zinc-200" aria-live="polite" data-sheet-who-line>
-                        {whoLine}
-                      </p>
+                    <div className="flex flex-col items-start gap-1" data-sheet-who>
+                      <div className="flex items-center gap-2">
+                        {chosenBots.length > 0 && (
+                          <span aria-hidden="true" className="inline-flex shrink-0 -space-x-1" data-sheet-who-faces>
+                            {chosenBots.slice(0, 5).map((k) => (
+                              <span key={k.id} className="inline-flex rounded-full ring-2 ring-zinc-900 bg-zinc-800">
+                                <ModernAvatar role={k.avatar_sprite} name={k.name} size={20} kwantId={k.id} />
+                              </span>
+                            ))}
+                          </span>
+                        )}
+                        <p className="min-w-0 text-xs text-zinc-200" aria-live="polite" data-sheet-who-line>
+                          {whoLine}
+                        </p>
+                      </div>
                       <button
                         type="button"
                         className={linkBtn}
@@ -484,7 +488,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                 )}
                 {!fold && <p className="text-[11px] text-zinc-400">{whoLine}</p>}
                 <p className="text-[11px] text-zinc-300" data-sheet-one-connection>
-                  Composio is one connection: the bots you tick can use every app on it{app ? `, not only ${app.name}` : ''}.
+                  Composio is one connection: the bots that get it can use every app on it{app ? `, not only ${app.name}` : ''}.
                 </p>
               </Step>
             </ol>
