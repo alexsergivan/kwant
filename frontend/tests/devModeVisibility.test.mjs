@@ -46,7 +46,7 @@ const m = await loadBundled(`
   export { DevModeSettings } from './src/components/DevModeSettings';
   export { DevModeSuggestion } from './src/components/DevModeSuggestion';
   export * from './src/devSuggest';
-  export { ringDevSettings, focusDevSettings } from './src/firstScreen';
+  export { focusDevSettings } from './src/firstScreen';
 `);
 const { React, createRoot } = m;
 const h = React.createElement;

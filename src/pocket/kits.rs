@@ -15,6 +15,10 @@ pub const DEFAULT_MAX_PLAYERS: usize = 60;
 /// [`DEFAULT_MAX_PLAYERS`] is never offered a quick tunnel: it needs an address that stays the
 /// same (own https, Funnel or Same Wi-Fi).
 pub const STABLE_MAX_PLAYERS: usize = 120;
+/// The most players the core lets any kit take (pa11b): a queue's `max_waiting` 200 plus room for
+/// guests whose finished tickets the sweep hasn't taken yet. Over [`DEFAULT_MAX_PLAYERS`], so it
+/// is never offered a quick tunnel.
+pub const MAX_CEILING: usize = super::queue::PLAYER_CEILING;
 
 /// How long a kit keeps guest data (plan section 8 rule 11). The sweeper deletes the pocket, its
 /// players, keys and events once `expires_at` passes; deleting is final.
@@ -193,14 +197,21 @@ pub trait Kit: Send + Sync + 'static {
         false
     }
     /// The most players this spec may take (pa11): [`DEFAULT_MAX_PLAYERS`], or up to
-    /// [`STABLE_MAX_PLAYERS`] for a kit that allows more (a class quiz). The core clamps
-    /// `rules().max_players` to it, and a pocket over 60 gets no quick tunnel.
+    /// [`STABLE_MAX_PLAYERS`] for a kit that allows more (a class quiz), or [`MAX_CEILING`] for a
+    /// queue (pa11b). The core clamps `rules().max_players` to it (and to [`MAX_CEILING`]), and a
+    /// pocket over 60 gets no quick tunnel.
     fn player_ceiling(&self, _spec: &Value) -> usize {
         DEFAULT_MAX_PLAYERS
     }
     /// `true` when joining takes a first name or nickname only (pa11 class quiz, plan rule 9):
     /// [`super::words::first_name_only`] refuses longer names and email or phone shapes.
     fn first_names_only(&self, _spec: &Value) -> bool {
+        false
+    }
+    /// `true` when a guest joins with no name at all (pa11b queue): the core ignores any name,
+    /// avatar or team in the join body and gives the player an empty name, so a key needs nothing
+    /// typed. A kit that asks for a first name keeps it in its own state.
+    fn nameless_join(&self) -> bool {
         false
     }
     /// A plain line the guest page and the person's card show before anyone types (plan rules 9
@@ -282,13 +293,14 @@ pub fn kit(id: &str) -> Option<&'static dyn Kit> {
         super::gather::ID => Some(&super::gather::Gather),
         super::wall::ID => Some(&super::wall::Wall),
         super::desk::ID => Some(&super::desk::Desk),
+        super::queue::ID => Some(&super::queue::Queue),
         _ => None,
     }
 }
 
 /// Every kit id this build can make a pocket with.
 pub fn kit_ids() -> Vec<&'static str> {
-    ["test", crate::kits::quiz::KIT_ID, super::santa::ID, super::gather::ID, super::wall::ID, super::desk::ID].into_iter().filter(|id| kit(id).is_some()).collect()
+    ["test", crate::kits::quiz::KIT_ID, super::santa::ID, super::gather::ID, super::wall::ID, super::desk::ID, super::queue::ID].into_iter().filter(|id| kit(id).is_some()).collect()
 }
 
 fn test_kit_allowed() -> bool {
