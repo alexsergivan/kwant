@@ -455,6 +455,16 @@ async fn a_screen_session_sees_nothing_private() {
     let poll = host_state(&t, &code, &session, Some("screen")).await.body;
     for (label, v) in [("sign-in", &r.body), ("poll", &poll)] {
         let s = v.to_string();
-        assert!(!s.contains(SECRET) && !s.contains("pin_hash") && !s.contains("salt") && !s.contains("key") && !s.contains(&tok), "{label}: {s}");
+        // "key" is checked on field names only: a random code or player id can spell "key" by chance.
+        assert!(!s.contains(SECRET) && !s.contains("pin_hash") && !s.contains("salt") && !field_names(v).iter().any(|n| n.contains("key")) && !s.contains(&tok), "{label}: {s}");
+    }
+}
+
+/// Every object field name in `v`, at any depth.
+fn field_names(v: &Value) -> Vec<String> {
+    match v {
+        Value::Object(m) => m.iter().flat_map(|(k, v)| std::iter::once(k.clone()).chain(field_names(v))).collect(),
+        Value::Array(a) => a.iter().flat_map(field_names).collect(),
+        _ => vec![],
     }
 }

@@ -342,7 +342,7 @@ export const LimitEditor: React.FC<{
             {saveLabel}
           </button>
           <p id={hintId} className={`basis-full text-[11px] ${custom.trim() && err ? 'text-rose-300' : 'text-zinc-500'}`}>
-            {custom.trim() && err ? err : 'Tokens, like 300k or 2M.'}
+            {custom.trim() && err ? err : 'In tokens, like 300k or 2M.'}
           </p>
         </form>
       )}
@@ -443,9 +443,9 @@ export const InsightsStrip: React.FC<{
         }
       : { label: 'Blocked now', value: String(insights.blocked_now), hint: 'Tasks that can’t move until something changes', tone: insights.blocked_now > 0 ? 'rose' : undefined },
     {
-      label: 'Tokens per verified',
+      label: 'AI use per verified task',
       value: insights.tokens_per_verified_7d === null ? '—' : formatTokens(insights.tokens_per_verified_7d),
-      hint: `${formatTokens(insights.tokens_7d)} tokens used in the last 7 days`,
+      hint: `${formatTokens(insights.tokens_7d)} tokens of AI use in the last 7 days`,
     },
   ];
   const af = insights.autofix_7d;
@@ -631,7 +631,7 @@ export const MissionSummary: React.FC<{
             {costText(m.spent_tokens, m.budget_tokens)}
           </span>
         </div>
-        {m.budget_tokens > 0 && <SpendBar spent={m.spent_tokens} budget={m.budget_tokens} label="Mission token limit used" />}
+        {m.budget_tokens > 0 && <SpendBar spent={m.spent_tokens} budget={m.budget_tokens} label="Mission AI use limit used" />}
         {onSetBudget && m.status !== 'done' && m.status !== 'cancelled' && (
           <div className="flex justify-end">
             <LimitEditor budget={m.budget_tokens} spent={m.spent_tokens} scope="mission" disabled={busy} onSet={onSetBudget} />
@@ -2390,7 +2390,7 @@ export const TaskDetailBody: React.FC<{
           </span>
           {t.budget_tokens > 0 && (
             <span className="block mt-1">
-              <SpendBar spent={t.spent_tokens} budget={t.budget_tokens} label="Task token limit used" />
+              <SpendBar spent={t.spent_tokens} budget={t.budget_tokens} label="Task AI use limit used" />
             </span>
           )}
           {onSetBudget && !limitHit && t.state !== 'verified' && t.state !== 'cancelled' && (
@@ -2455,7 +2455,7 @@ export const TaskDetailBody: React.FC<{
                             : n.kind === 'check_approval'
                               ? 'Check to allow'
                               : n.kind === ENGINE_CANT_SANDBOX
-                                ? 'Engine can’t be sandboxed'
+                                ? 'Its AI can’t be sandboxed'
                                 : n.kind === 'check_timed_out'
                                   ? 'Stopped waiting'
                                   : 'Question'}

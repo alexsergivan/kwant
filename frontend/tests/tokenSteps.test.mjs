@@ -21,8 +21,8 @@ test('the default view: the one-time link and how to make one, the token box fol
   const html = m.form();
   const t = text(html);
   assert.match(t, /^ ?Sign in /);
-  assert.match(t, /Open the one-time sign-in link kwant bots printed when it started, or scan its QR code with your phone/);
-  assert.match(t, /Used or lost it\? Make a new one on the machine running kwant bots: kwnt signin-link/);
+  assert.match(t, /Open the one-time sign-in link kwant printed when it started, or scan its QR code with your phone/);
+  assert.match(t, /Used or lost it\? Make a new one on the machine running kwant: kwnt signin-link/);
   assert.match(html, /<details class="[^"]*">/, 'closed by default');
   // The token stays as the fallback, inside the fold, after the link
   const fold = html.slice(html.indexOf('<details'));
@@ -31,7 +31,7 @@ test('the default view: the one-time link and how to make one, the token box fol
   assert.match(text(fold), /cat ~\/\.kwnt\/api-token/);
   assert.ok(t.indexOf('kwnt signin-link') < t.indexOf('Other setups'));
   assert.match(t, /Stays signed in for a year\. Anyone with a sign-in link or the token controls this server\./);
-  assert.ok(!/Where does kwant bots run|On a server|type="radio"/.test(html));
+  assert.ok(!/Where does kwant run|On a server|type="radio"/.test(html));
   assert.ok(!t.includes(m.OWN_TOKEN_HINT.slice(0, 30)), 'the own-token hint only shows with a wrong token');
 });
 
@@ -88,7 +88,7 @@ test('pasting the whole sign-in link works as well as the token', () => {
 });
 
 test('a token from another computer: the error says where it has to come from', () => {
-  assert.match(m.WRONG_TOKEN, /machine running kwant bots, as the user running it/);
+  assert.match(m.WRONG_TOKEN, /machine running kwant, as the user running it/);
   assert.match(m.OWN_TOKEN_HINT, /one copied from another computer won't work here/);
 });
 

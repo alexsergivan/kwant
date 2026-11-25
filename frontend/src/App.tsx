@@ -8,7 +8,7 @@ import { Sidebar, Kwant, Channel, Team, memberIdsOf, realAskCount } from './comp
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import type { MessageTarget } from './components/DoneDetail';
-import { AppsSection, InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
+import { AppSettingsPage, AppsSection, InboxTab, SettingsScope, SpaceView, appSettingsPageForRow, viewSegment } from './nav';
 import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
@@ -135,6 +135,8 @@ import {
   writingBadge,
   threadsApi,
   turnsIn,
+  rereadDue,
+  unlistedLive,
   upsertThread,
 } from './threads';
 import { createStreamText, NO_STREAM } from './streamText';
@@ -400,6 +402,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     initialView?.kind === 'settings' ? (initialView.scope === 'space' ? initialView.tab : 'general') : null,
   );
   const [settingsScope, setSettingsScope] = useState<SettingsScope>(() => (initialView?.kind === 'settings' ? initialView.scope : 'space'));
+  // 36e: the open Settings › All spaces page (General, Bots on their own, Usage, Notifications); it shows in the address.
+  const [appSettingsPage, setAppSettingsPage] = useState<AppSettingsPage>(() =>
+    initialView?.kind === 'settings' && initialView.scope === 'app' ? initialView.page ?? 'general' : 'general',
+  );
   // Bumped when Space settings closes, so open bot forms read account status again.
   const [settingsClosedCount, setSettingsClosedCount] = useState(0);
   // Set when Accounts opens from a "Sign in with Claude" hint, to focus that button.
@@ -428,7 +434,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     focusDevSettings();
   };
   // Settings › All spaces: what applies to every space and to the app.
-  const openAppSettings = () => {
+  const openAppSettings = (page: AppSettingsPage = 'general') => {
+    setAppSettingsPage(page);
     setSettingsScope('app');
     setSpaceSettingsTab((t) => t ?? 'general');
     playSfx('click');
@@ -437,12 +444,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Settings › All spaces › Usage, at the daily spending stop's fields.
   const openUsageSettings = () => {
     setSettingsFocusRow('spend-stop');
-    openAppSettings();
+    openAppSettings(appSettingsPageForRow('spend-stop'));
   };
   // Isolation notices: App settings at the Computer card, "Run Claude inside the VM" focused.
   const openComputerSettings = () => {
     setSettingsFocusRow('claude-isolation');
-    openAppSettings();
+    openAppSettings(appSettingsPageForRow('claude-isolation'));
   };
   // 34h: a "Sign in again" from a chat line or the Inbox opens Advanced on that connection's row.
   const [connectionFocus, setConnectionFocus] = useState<{ id: string; seq: number } | null>(null);
@@ -1095,35 +1102,66 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       });
     }, () => undefined);
     try {
-      const { turns: list } = await threadsApi.turns();
-      const map = hydrateTurns(list);
-      setDeciding(hydrateDeciding(list));
-      for (const t of Object.values(map)) if (t.thread_id) knownThreadsRef.current.add(t.thread_id);
-      turnsRef.current = map;
-      setTurns(map);
-      resetTurns(Object.values(map).filter((t) => t.state === 'running'));
-      // A page opened (or back) mid-turn: what each running bot is doing now, not "getting started".
-      let seeded = activityRef.current;
-      for (const t of Object.values(map)) {
-        const next = t.state === 'running' ? seedActivity(seeded[t.turn_id], t.turn_id, t.activity) : null;
-        if (next) seeded = { ...seeded, [t.turn_id]: { ...next, ctx: t.context_id } };
-      }
-      if (seeded !== activityRef.current) setActivityMap(seeded);
-      const busy = new Set(Object.values(map).map((t) => t.context_id));
-      for (const ctx of Object.keys(liveRef.current)) {
-        if (!busy.has(ctx) && !discussionInProgressRef.current) clearLive(ctx);
-      }
-      // The strip names the bot that is replying: queued turns first, so a running one in the same chat wins.
-      for (const t of liveNamingOrder(Object.values(map))) markLiveKwant(t.context_id, t.kwant_id);
-      // Titles for the "working on" badges
-      for (const t of Object.values(map)) {
-        if (t.thread_id && !threadsByKwantRef.current[t.kwant_id]) loadThreads(t.kwant_id);
-      }
+      await rereadTurns();
     } catch {
       clearAllTurns();
     }
     setTurnsHydrated((n) => n + 1);
   };
+
+  /** Bumped by every live turn event, so a re-read that a newer event overtook is dropped. */
+  const turnEventsRef = useRef(0);
+  /**
+   * The running turns from the server; chats no longer listed stop showing a reply. On every connect,
+   * and (stuck-getting-started, 0.9.51) when the window comes back and after Stop: a `turn_ended` the
+   * app missed left a chat "getting started" for hours. `fresh`: dropped when a live turn event came
+   * in while it loaded (that event is newer than the list).
+   */
+  const rereadTurns = async (fresh = false) => {
+    const seen = turnEventsRef.current;
+    const { turns: list } = await threadsApi.turns();
+    if (fresh && turnEventsRef.current !== seen) return;
+    const map = hydrateTurns(list);
+    setDeciding(hydrateDeciding(list));
+    for (const t of Object.values(map)) if (t.thread_id) knownThreadsRef.current.add(t.thread_id);
+    turnsRef.current = map;
+    setTurns(map);
+    resetTurns(Object.values(map).filter((t) => t.state === 'running'));
+    // A page opened (or back) mid-turn: what each running bot is doing now, not "getting started".
+    let seeded = activityRef.current;
+    for (const t of Object.values(map)) {
+      const next = t.state === 'running' ? seedActivity(seeded[t.turn_id], t.turn_id, t.activity) : null;
+      if (next) seeded = { ...seeded, [t.turn_id]: { ...next, ctx: t.context_id } };
+    }
+    if (seeded !== activityRef.current) setActivityMap(seeded);
+    for (const ctx of unlistedLive(liveRef.current, map)) {
+      if (!discussionInProgressRef.current) clearLive(ctx);
+    }
+    // The strip names the bot that is replying: queued turns first, so a running one in the same chat wins.
+    for (const t of liveNamingOrder(Object.values(map))) markLiveKwant(t.context_id, t.kwant_id);
+    // Titles for the "working on" badges
+    for (const t of Object.values(map)) {
+      if (t.thread_id && !threadsByKwantRef.current[t.kwant_id]) loadThreads(t.kwant_id);
+    }
+  };
+  const rereadTurnsRef = useRef(rereadTurns);
+  rereadTurnsRef.current = rereadTurns;
+  // Back to the window (focus, or the tab shown again): what runs now, at most every few seconds.
+  useEffect(() => {
+    let last = 0;
+    const onBack = () => {
+      const now = Date.now();
+      if (!rereadDue(last, now, document.visibilityState === 'hidden')) return;
+      last = now;
+      rereadTurnsRef.current(true).catch(() => undefined);
+    };
+    window.addEventListener('focus', onBack);
+    document.addEventListener('visibilitychange', onBack);
+    return () => {
+      window.removeEventListener('focus', onBack);
+      document.removeEventListener('visibilitychange', onBack);
+    };
+  }, []);
 
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
   useSettingsCover(!!spaceSettingsTab || isNewAgentOpen, contentRef);
@@ -1378,6 +1416,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
     const setTurnMap = (next: TurnMap) => {
       if (next === turnsRef.current) return;
+      turnEventsRef.current += 1;
       turnsRef.current = next;
       setTurns(next);
     };
@@ -1742,7 +1781,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               contextId: ctx || targetId || undefined,
               candidates: event.data?.candidates || [],
             });
-            markLive(ctx || targetId, 'Laya');
+            markLive(ctx || targetId);
             break;
           }
           case 'routing_decided':
@@ -2044,9 +2083,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setRoutingState(null);
       streamingContextIdRef.current = null;
     }
-    refreshContext(ctx).then(() => {
-      if (turnsIn(turnsRef.current, ctx).length === 0) clearLive(ctx);
-    });
+    // stuck-getting-started (0.9.51): the running turns again first. A turn whose end the app missed
+    // stayed in its list, so Stop never cleared the chat
+    refreshContext(ctx)
+      .then(() => rereadTurns(true))
+      .catch(() => undefined)
+      .then(() => {
+        if (turnsIn(turnsRef.current, ctx).length === 0) clearLive(ctx);
+      });
   };
 
   const handleSendMessage = async (text: string, attachments: AttachmentRef[] = [], opts: SendOptions = {}): Promise<boolean | string> => {
@@ -3054,7 +3098,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
     const name = kwants.find((k) => k.id === kwantId)?.name;
     if (!name) return 'That bot is gone.';
-    if (!(await handleSendMessage(`@${name} ${question.text}`))) return `Routing learned, but ${name} wasn’t asked. Send it again with @${name}.`;
+    if (!(await handleSendMessage(`@${name} ${question.text}`))) return `Saved: ${name} answers these from now on. It wasn’t asked this time, so send it again with @${name}.`;
   };
 
   const renderDelegation = (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => {
@@ -3184,7 +3228,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         body: JSON.stringify(kwantData),
       });
       if (res.status === 409) return (await serverError(res)) ?? `Another bot in ${space.name} is already named "${agentData.name}".`;
-      if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen engine.';
+      if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen AI.';
       if (!res.ok) return (await serverError(res)) ?? `Couldn't save the bot (HTTP ${res.status}).`;
 
       const updated: Kwant = await res.json();
@@ -3261,7 +3305,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         return;
       }
       if (res.status === 409) return (await serverError(res)) ?? `Another bot in ${space.name} is already named "${agentData.name}".`;
-      if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen engine.';
+      if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen AI.';
       return (await serverError(res)) ?? `Couldn't create the bot (HTTP ${res.status}).`;
     } catch (err) {
       console.error('Failed creating bot:', err);
@@ -4853,7 +4897,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Back and Forward). The board stays the view while its setting loads; the pane shows a chat if it's off.
   const currentView: SpaceView | null = spaceSettingsTab
     ? settingsScope === 'app'
-      ? { kind: 'settings', scope: 'app' }
+      ? { kind: 'settings', scope: 'app', page: appSettingsPage }
       : { kind: 'settings', scope: 'space', tab: spaceSettingsTab }
     : page === 'inbox'
       ? { kind: 'inbox', tab: inboxTab }
@@ -4875,7 +4919,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setPage('chat');
       return;
     }
-    if (v.kind === 'settings') return v.scope === 'app' ? openAppSettings() : openSpaceSettings(v.tab, v.section);
+    if (v.kind === 'settings') return v.scope === 'app' ? openAppSettings(v.page) : openSpaceSettings(v.tab, v.section);
     showPage(v.kind, v.kind === 'inbox' ? v.tab : 'new');
   };
   useEffect(() => {
@@ -4895,7 +4939,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
       onOpenSettings={() => {
         setSettingsFocusRow('idea-jar');
-        openAppSettings();
+        openAppSettings(appSettingsPageForRow('idea-jar'));
       }}
     />
   );
@@ -5164,12 +5208,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onOpenTools={() => setIsMcpOpen(true)}
           scope={settingsScope}
           onScope={setSettingsScope}
+          appPage={appSettingsPage}
+          onAppPage={setAppSettingsPage}
           onOpenArchived={onOpenArchived}
           connections={connectionsPage}
           appsSection={appsSection}
           toolNoteOpen={!!toolNoteFocus}
           connectApp={connectApp}
-          appSettings={
+          appSettings={(page) => (
             <Suspense
               fallback={
                 <p className="flex items-center gap-2 text-xs text-zinc-400">
@@ -5185,9 +5231,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 onOpenApiKeys={() => openSpaceSettings('apps', 'accounts')}
                 focusRow={settingsFocusRow}
                 onOpenBotBudget={raiseBudget}
+                page={page}
               />
             </Suspense>
-          }
+          )}
           routineFocus={routineFocus}
           onOpenRunResult={openRunResult}
           onOpenRunCard={openRunCard}

@@ -115,7 +115,7 @@ export function spaceSummary(c: SpaceCounts | undefined): string {
 /** The long form, for the subtitle's tooltip. */
 export function spaceSummaryTitle(c: SpaceCounts | undefined): string {
   if (!c) return '';
-  const bots = `${c.bots} kwant ${c.bots === 1 ? 'bot' : 'bots'}`;
+  const bots = `${c.bots} ${c.bots === 1 ? 'bot' : 'bots'}`;
   const accounts = c.ready_accounts === 0 ? 'no account signed in yet' : `${c.ready_accounts} ${c.ready_accounts === 1 ? 'account' : 'accounts'} ready to use`;
   return `${bots} · ${accounts}`;
 }

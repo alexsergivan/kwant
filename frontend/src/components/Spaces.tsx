@@ -19,10 +19,30 @@ import { SAVE_FIRST, acceptRiskText } from '../passwordStore';
 import { MoveToBitwardenFirst, usePasswordStore } from './PasswordStorePanel';
 import { devApi, devStore } from '../devMode';
 import { DevBadge } from './DevModeSwitch';
+import { glyphPx, pixelIconFor } from '../spaceIcons';
 
 const badge = (n: number) => (n > 99 ? '99+' : String(n));
 
-/** A space's emoji on its colour; `dev` adds the Dev mode `</>` badge bottom-right. */
+/** 36j: a space icon as a 9x9 pixel glyph. Main tone is the space colour lifted 35% toward white; the detail is
+ * the creatures' eye ink (--kw-wa-screen), so a space tile and a bot face read as one sprite sheet. */
+export const SpaceGlyph: React.FC<{ rows: readonly string[]; px: number; colour: string }> = ({ rows, px, colour }) => {
+  const main = `color-mix(in srgb, ${colour} 65%, white)`;
+  const cells: React.ReactNode[] = [];
+  rows.forEach((row, y) => {
+    for (let x = 0; x < row.length; x++) {
+      const ch = row[x];
+      if (ch === '#' || ch === 'o') cells.push(<rect key={`${x}-${y}`} x={x} y={y} width={1} height={1} fill={ch === 'o' ? 'var(--kw-wa-screen)' : main} />);
+    }
+  });
+  return (
+    <svg viewBox="0 0 9 9" width={px} height={px} shapeRendering="crispEdges" aria-hidden="true" focusable="false" data-space-glyph>
+      {cells}
+    </svg>
+  );
+};
+
+/** A space's icon on its colour (a pixel glyph for the 8 picker icons, else the emoji); `dev` adds the Dev mode
+ * `</>` badge bottom-right. */
 export const SpaceTile: React.FC<{ space: Pick<Space, 'id' | 'icon' | 'color'>; size?: number; className?: string; dev?: boolean; devBehind?: string }> = ({
   space,
   size = 40,
@@ -30,13 +50,16 @@ export const SpaceTile: React.FC<{ space: Pick<Space, 'id' | 'icon' | 'color'>; 
   dev = false,
   devBehind,
 }) => {
+  const c = spaceColor(space);
+  const emoji = spaceIcon(space);
+  const g = pixelIconFor(emoji);
   const tile = (
     <span
       aria-hidden="true"
       className={`inline-flex items-center justify-center shrink-0 rounded-xl ${dev ? '' : className}`}
-      style={{ width: size, height: size, background: `${spaceColor(space)}33`, boxShadow: `inset 0 0 0 1px ${spaceColor(space)}66`, fontSize: size * 0.5 }}
+      style={{ width: size, height: size, background: `${c}33`, boxShadow: `inset 0 0 0 1px ${c}66`, ...(g ? {} : { fontSize: size * 0.5 }) }}
     >
-      {spaceIcon(space)}
+      {g ? <SpaceGlyph rows={g.rows} px={glyphPx(size)} colour={c} /> : emoji}
     </span>
   );
   if (!dev) return tile;
@@ -46,6 +69,12 @@ export const SpaceTile: React.FC<{ space: Pick<Space, 'id' | 'icon' | 'color'>; 
       <DevBadge behind={devBehind} />
     </span>
   );
+};
+
+/** An icon picker button's face: the glyph at 18 px in the colour picked in the same form, so it previews the tile. */
+export const PickerGlyph: React.FC<{ icon: string; colour: string }> = ({ icon, colour }) => {
+  const g = pixelIconFor(icon);
+  return g ? <SpaceGlyph rows={g.rows} px={18} colour={colour} /> : <>{icon}</>;
 };
 
 /** The rail shows the badge on every Dev space, but the spaces list has no dev_mode field: ask each once. */
@@ -343,13 +372,13 @@ export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCrea
                 key={i}
                 type="button"
                 aria-pressed={icon === i}
-                aria-label={`Icon ${i}`}
+                aria-label={`Icon: ${pixelIconFor(i)?.name ?? i}`}
                 onClick={() => setIcon(i)}
                 className={`w-11 h-11 sm:w-9 sm:h-9 rounded-lg text-lg flex items-center justify-center border transition-colors ${
                   icon === i ? 'border-sky-400 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-600'
                 }`}
               >
-                {i}
+                <PickerGlyph icon={i} colour={color} />
               </button>
             ))}
           </div>

@@ -96,7 +96,7 @@ const type = async (input, value) => {
 
 test('lines: used / limit and when it starts over, in plain words', () => {
   const b = m.parseBudget(B());
-  assert.equal(m.usedLine(b), '1.6M of 2M fresh tokens in November');
+  assert.equal(m.usedLine(b), '1.6M of 2M tokens in November');
   assert.equal(m.resetDay(b), 'December 1');
   assert.equal(m.stateLine(b), '80% used. At 100% it finishes what it’s doing and starts nothing new until December 1.');
   assert.equal(m.stateLine(m.parseBudget(B({ state: 'under', percent: 30 }))), 'The count starts over on December 1.');
@@ -104,7 +104,7 @@ test('lines: used / limit and when it starts over, in plain words', () => {
   assert.equal(m.meterPercent(p), 100, 'the meter stops at full');
   assert.match(m.stateLine(p), /^Paused: monthly budget reached\. Juno starts nothing new until you raise the limit, continue this month, or December 1\.$/);
   assert.equal(m.usedLine(m.parseBudget(B({ budget_tokens: 0, budget_usd: 20, used_usd: 16.4, percent: 82 }))), '$16.40 of $20.00 in November');
-  assert.equal(m.usedLine(m.parseBudget({ ...OFF })), '3k fresh tokens in November');
+  assert.equal(m.usedLine(m.parseBudget({ ...OFF })), '3k tokens in November');
   assert.match(m.usedLine(m.parseBudget(B({ estimated: true }))), /^about /);
   assert.equal(m.stateLine(m.parseBudget(OFF)), 'No budget: Lin can use as much as it needs.');
   assert.equal(m.parseBudget(B({ cost_reported: false })).cost_unreported, true);
@@ -249,7 +249,7 @@ test('paused banner: the line, used / limit, Raise the limit and Continue this m
   const raised = [];
   const { host, unmount } = await mount(h(m.BudgetPausedBanner, { budget: m.parseBudget(PAUSED), onRaise: (id) => raised.push(id), send }));
   assert.match(host.textContent, /Paused: monthly budget reached/);
-  assert.match(host.textContent, /2\.1M of 2M fresh tokens in November/);
+  assert.match(host.textContent, /2\.1M of 2M tokens in November/);
   await click(host.querySelector('[data-budget-raise]'));
   assert.deepEqual(raised, ['k1']);
   const go = host.querySelector('[data-budget-continue]');
@@ -504,7 +504,7 @@ test('0.9.8 #2: the 80% line keeps the numbers it was posted with, not the live 
     h('div', null, h(m.BudgetNotice, { messageId: 'w', text: 'Juno has used 80% of its monthly budget.', meta, onRaise: () => {} }), h(m.BudgetNotice, { messageId: 'o', text: 'older', meta: older })),
   );
   const [line, old] = host.querySelectorAll('[data-budget-notice]');
-  assert.match(line.textContent, /3k of 3\.8k fresh tokens in November/);
+  assert.match(line.textContent, /3k of 3\.8k tokens in November/);
   assert.doesNotMatch(line.textContent, /6k of/);
   assert.match(old.textContent, /about 3k of 3\.8k/, 'falls back to the server’s words');
   m.budgetStore.put(m.parseBudget({ ...live, used_tokens: 9000 }));

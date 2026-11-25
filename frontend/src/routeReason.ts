@@ -95,3 +95,68 @@ export function routeWhyText(r: RouteReasonInput, routerName: string = ROUTER_NA
   if (said && !/^laya picked\b/i.test(said)) return /[.!?]$/.test(said) ? said : `${said}.`;
   return `${routerName} picked ${name} for this.`;
 }
+
+/**
+ * 36c router-one-line: who the bot is, said once, in words ("the team lead", "the only bot here", or its title).
+ * Null when nothing adds to the name (no title, or a title that only repeats it).
+ */
+export function routeRole(r: { kwantName?: string; kwantTitle?: string; basis?: string; mode?: string }): string | null {
+  if (r.mode === 'discuss') return null;
+  switch (r.basis) {
+    case 'lead':
+    case 'several':
+    case 'team':
+    case 'discuss':
+      return 'the team lead';
+    case 'only':
+      return 'the only bot here';
+    case 'concierge':
+      return null;
+  }
+  const title = r.kwantTitle?.trim();
+  if (!title || title.toLowerCase() === (r.kwantName ?? '').trim().toLowerCase()) return null;
+  return title;
+}
+
+/** Drops the router's own name and its offline note from a server sentence: those stay in Details and Settings. */
+const withoutRouter = (s: string) =>
+  s
+    .replace(/[.;,]?\s*Laya is offline[^.;]*[.;]?/gi, '')
+    .replace(/[.;,]?\s*Laya (picked|matched)[^.;]*[.;]?/gi, '')
+    .trim();
+
+/**
+ * 36c router-one-line: the short why after the name on the chat's routing line. Never names the router and never
+ * says it was offline (that stays in Details via routeWhyText, and in Settings). Never repeats the name with its
+ * role. Null when the line already says it all.
+ */
+export function routeLineWhy(r: RouteReasonInput & { mode?: string }): string | null {
+  const picked = pickedLine(r);
+  if (picked) return picked;
+  const terms = (r.matchedTerms ?? []).filter(Boolean).slice(0, 4);
+  const mentions = terms.length ? `Your message mentions ${terms.join(', ')}.` : null;
+  const named = /\bwas (named|@mentioned)\b/i.test(r.reason ?? '');
+  if (r.mode === 'discuss' || r.basis === 'discuss') return 'This needs several points of view.';
+  switch (r.basis) {
+    case 'last':
+      return 'No role was named, so the bot that spoke last carries on.';
+    case 'lead':
+      return 'No one’s role matched this.';
+    case 'several':
+      return 'It touches several roles, so the lead answers or hands parts on.';
+    case 'team':
+      return 'It asks for a team, so the lead proposes one for you to approve.';
+    case 'only':
+      return null;
+    case 'skills':
+      if (named) return 'You named them in your message.';
+      return mentions ?? 'Their role fits this.';
+    case 'keywords':
+      if (named) return 'You named them in your message.';
+      return mentions ?? 'Words in your message matched their role.';
+  }
+  if (r.fallback) return mentions ?? 'Words in your message matched their role.';
+  const own = r.reason ? withoutRouter(r.reason) : '';
+  if (!own) return null;
+  return /[.!?]$/.test(own) ? own : `${own}.`;
+}

@@ -1,0 +1,40 @@
+{
+  "version": "0.9.52",
+  "date": "2026-11-25",
+  "highlights": [
+    {
+      "id": "one-status-strip",
+      "title": "One place to see what your bot is doing",
+      "text": "While a bot works, the chat shows it at its laptop with one line on what it's doing, how long it has been at it and how many steps it took. Tap Steps to see them all.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "plain-words-b",
+      "title": "kwant now says what it means",
+      "text": "Settings, the AI picker, the New bot form and the usage panel say \"AI\", \"kwant picks\" and \"AI use\" instead of Laya, engine and fresh tokens. Nothing you set changes.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "routine-three-fields",
+      "title": "New routines ask for three things",
+      "text": "A new routine asks for a name, what to do and when. The bot and where it posts sit on one line under it; press Change to pick others.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "settings-short-pages",
+      "title": "Settings for all spaces, in four short pages",
+      "text": "General, Bots on their own, Usage and Notifications each have their own page, with one Save. Find a setting looks across all four.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "The sign-in, team and update screens say \"kwant\" and \"Team folder\" instead of \"kwant bots\", \"Team Workspace\" and Laya.",
+    "The folder picker asks for \"a folder for your team\" instead of a \"Team Workspace Folder\", and the thinking note says \"AI\", not \"engine\".",
+    "When kwant stops a reply because the bot went silent, it now also shows up once in Needs you, so you don't miss it.",
+    "The New bot form and Apps & accounts now say \"AI\" instead of \"engine\"."
+  ]
+}

@@ -1,8 +1,8 @@
 // Engines: whether each way of running a model (a CLI, an API key, Ollama) can run right now, from
 // GET /api/engines, and the shared Engine → Model choice stored in a kwant's preferred_model.
-import { hasUsageLimits, usageSummary, type Profile } from './profiles';
+import { hasUsageLimits, isMistralModel, usageSummary, type Profile } from './profiles';
 
-export type EngineId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'ollama' | 'custom_api';
+export type EngineId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'mistral_api' | 'ollama' | 'custom_api';
 export type EngineKind = 'cli' | 'api' | 'local';
 export type EngineStatus = 'ready' | 'signed_out' | 'not_installed' | 'error' | 'checking' | 'disabled';
 export type Tier = 'fast' | 'balanced' | 'deep';
@@ -33,7 +33,7 @@ export interface EngineInfo {
 }
 
 /** What a kwant picks: the model family, whichever of its engines (CLI or key) can run it. */
-export type Family = 'claude' | 'codex' | 'grok' | 'ollama' | 'custom';
+export type Family = 'claude' | 'codex' | 'grok' | 'mistral' | 'ollama' | 'custom';
 
 export const FAMILY_OF: Record<EngineId, Family> = {
   claude: 'claude',
@@ -42,6 +42,7 @@ export const FAMILY_OF: Record<EngineId, Family> = {
   openai_api: 'codex',
   grok: 'grok',
   xai_api: 'grok',
+  mistral_api: 'mistral',
   ollama: 'ollama',
   custom_api: 'custom',
 };
@@ -50,6 +51,7 @@ export const FAMILIES: Array<{ id: Family; label: string }> = [
   { id: 'claude', label: 'Claude' },
   { id: 'codex', label: 'Codex (OpenAI)' },
   { id: 'grok', label: 'Grok (xAI)' },
+  { id: 'mistral', label: 'Mistral' },
   { id: 'ollama', label: 'Ollama (local)' },
   { id: 'custom', label: 'Custom API' },
 ];
@@ -170,9 +172,11 @@ export function parsePick(value: string | null | undefined): KwantPick {
     ? 'claude'
     : s.includes('grok')
       ? 'grok'
-      : s.includes('codex') || s.includes('gpt') || s.includes('openai')
-        ? 'codex'
-        : null;
+      : isMistralModel(s)
+        ? 'mistral'
+        : s.includes('codex') || s.includes('gpt') || s.includes('openai')
+          ? 'codex'
+          : null;
   return { family, model: v };
 }
 
@@ -276,7 +280,7 @@ export function pickLabel(value: string, engines: EngineInfo[] | null = null): s
 
 /** A bot's engine in words, for its tooltip in the bot list: "Laya picks the model", "Runs on Claude · Sonnet". */
 export function engineTip(value: string, engines: EngineInfo[] | null = null): string {
-  return parsePick(value).family === 'auto' ? 'Laya picks the model' : `Runs on ${pickLabel(value, engines)}`;
+  return parsePick(value).family === 'auto' ? 'kwant picks the AI' : `Runs on ${pickLabel(value, engines)}`;
 }
 
 /** "Claude Haiku (latest)" → "Haiku" when shown after the family name. */
@@ -471,20 +475,20 @@ export function modelBadgeFor(
     const label = liveTurn.picked_by === 'fallback'
       ? `Moved to ${what} for this reply`
       : auto
-        ? `Laya picked ${what} for this reply`
+        ? `kwant picked ${what} for this reply`
         : `Runs on ${what}`;
     return { mark: family, resting: false, auto, cantRun: null, label, key: `${family}:${liveTurn.model ?? ''}` };
   }
   if (auto) {
     const last = kwant.last_ran_on;
     const family = last ? familyOfRun(last) : null;
-    if (!last || !family) return { mark: 'laya', resting: false, auto, cantRun: null, label: 'Laya picks the model', key: 'laya' };
+    if (!last || !family) return { mark: 'laya', resting: false, auto, cantRun: null, label: 'kwant picks the AI', key: 'laya' };
     return {
       mark: family,
       resting: true,
       auto,
       cantRun: null,
-      label: `Laya picks the model. Last reply: ${runsOnLabel(last, engines)}`,
+      label: `kwant picks the AI. Last reply: ${runsOnLabel(last, engines)}`,
       key: `${family}:${last.model ?? ''}:rest`,
     };
   }

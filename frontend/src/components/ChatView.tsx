@@ -3,6 +3,7 @@ import { parseWatchMeta, type WatchMeta } from '../missionWatch';
 import { flushSync } from 'react-dom';
 import { createStreamText, useStreamPart, useStreamThinking, useStreamWriting, type StreamText, type StreamView } from '../streamText';
 import { queuedText } from '../claudeVm';
+import { stepsWho } from '../toolLabel';
 import { QueuedBeside } from './QueuedBeside';
 import { WaitingBanner } from './WaitingBanner';
 import { answerPlaceholder, isTeamTurn, onlyAskOpen, turnRail, waitingStopLabel } from '../waitingState';
@@ -84,7 +85,7 @@ import { replyCostWords, replyTokens } from '../modelUsage';
 import { parseRoutingMeta, ranOnAccount } from '../spaces';
 import { SetupNeededCard, parseSetupMeta } from './SetupNeededCard';
 import { ConnectionSuggestionMeta, parseConnectionMeta } from '../connectionSuggestions';
-import { routeReasonText, routeWhyText } from '../routeReason';
+import { routeLineWhy, routeRole, routeWhyText } from '../routeReason';
 import { useInbox } from '../inboxStore';
 import { doneItemsOf, doneOf } from '../replyDone';
 import { APPROVE_TEXT, approveRowId, changePlaceholder, refocusAfterApprove } from '../approvalAsk';
@@ -241,6 +242,8 @@ function SenderLetter({ name }: { name: string }) {
 const REPLY_AVATAR_PHONE = 20;
 const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
 const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
+/** 36d: the live bubble while the scene shows: the same card, its parts pad themselves (scene row, steps, words). */
+const REPLY_BUBBLE_SCENE = 'rounded-2xl text-sm leading-relaxed shadow-sm w-full overflow-hidden';
 // 25b: a customer's or a bot's chat-API message, on the left. Outline only: not yours (filled, lighter), not a bot reply (filled); never violet.
 const OTHER_BUBBLE = 'bg-transparent text-zinc-200 rounded-tl-sm border border-zinc-700';
 
@@ -490,78 +493,90 @@ export const renderFormattedText = (text: string): React.ReactNode => {
   });
 };
 
-const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> = ({ routing, spaceName }) => {
+/**
+ * 36c router-one-line: who answers, as one quiet line. "✦ Sent to Quant, the team lead · Why · Change".
+ * The short why shows inline from md up and behind "Why" on phones; "Change" opens the candidates in place.
+ * The router's own name and its offline note never show here: Details (routeWhyText) and Settings keep them.
+ */
+export const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> = ({ routing }) => {
+  const [whyOpen, setWhyOpen] = useState(false);
+  const [othersOpen, setOthersOpen] = useState(false);
   const deciding = routing.phase === 'deciding';
   const isDiscuss = routing.mode === 'discuss';
-  const why = routeReasonText(routing);
-  const pool = routing.candidateCount ?? (routing.candidates.length || null);
-  const where = spaceName ? ` in ${spaceName}` : '';
+  const role = routeRole(routing);
+  const why = routeLineWhy(routing);
+  const others = routing.candidates;
+  const ids = `kw-route-${routing.contextId ?? 'live'}`;
+  const link =
+    'inline-flex items-center min-h-[44px] -my-3 px-1.5 rounded-md text-sky-300 font-medium hover:text-sky-200 md:min-h-0 md:my-0 md:py-0.5 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 focus-visible:outline-offset-2';
 
   return (
-    <div className="flex items-start gap-3.5 w-full max-w-5xl" aria-live="polite">
-      <div className="w-[34px] h-[34px] flex-shrink-0 rounded-full bg-sky-500/15 border border-sky-500/40 flex items-center justify-center shadow-sm shadow-sky-500/10">
-        <Sparkles size={16} className={`text-info ${deciding ? 'animate-pulse' : ''}`} />
+    <div className="flex flex-col items-start w-full max-w-5xl pl-1 text-[13px] leading-5 text-zinc-400" data-route-line>
+      <div className="flex items-center gap-x-2 gap-y-1 flex-wrap min-w-0" aria-live="polite">
+        <Sparkles size={14} aria-hidden="true" className={`text-sky-300 flex-shrink-0 ${deciding ? 'motion-safe:animate-pulse' : ''}`} />
+        {deciding ? (
+          <span className="inline-flex items-center gap-1.5">
+            <span>Choosing who answers</span>
+            <span className="inline-flex gap-0.5" aria-hidden="true">
+              {[0, 1, 2].map((i) => (
+                <span key={i} className="w-1 h-1 rounded-full bg-sky-300 motion-safe:animate-bounce" style={{ animationDelay: `${i * 150}ms` }} />
+              ))}
+            </span>
+          </span>
+        ) : (
+          <>
+            <span className="min-w-0">
+              {isDiscuss ? 'Team discussion led by ' : 'Sent to '}
+              <b className="font-semibold text-zinc-200">{routing.kwantName}</b>
+              {role && `, ${role}`}
+              {why && <span className="hidden md:inline"> · {why}</span>}
+            </span>
+            {why && (
+              <button type="button" className={`${link} md:hidden`} aria-expanded={whyOpen} aria-controls={`${ids}-why`} onClick={() => setWhyOpen((o) => !o)}>
+                Why
+              </button>
+            )}
+            {others.length > 1 && (
+              <button type="button" className={link} aria-expanded={othersOpen} aria-controls={`${ids}-others`} onClick={() => setOthersOpen((o) => !o)}>
+                Who else
+              </button>
+            )}
+          </>
+        )}
       </div>
-      <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
-        <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium">
-          <span className="text-zinc-200">Laya</span>
-          <span className="text-zinc-500">· router</span>
+      {!deciding && why && whyOpen && (
+        <p id={`${ids}-why`} className="md:hidden mt-1 pl-[22px] text-xs text-zinc-400 motion-safe:animate-[kw-opacity-in_160ms_ease-out_both]">
+          {why}
+        </p>
+      )}
+      {!deciding && othersOpen && others.length > 1 && (
+        <div
+          id={`${ids}-others`}
+          role="group"
+          aria-label="Who else could answer"
+          className="mt-2 pl-[22px] flex flex-col gap-1.5 motion-safe:animate-[kw-opacity-in_160ms_ease-out_both]"
+        >
+          <div className="flex items-center gap-1.5 flex-wrap">
+            {others.map((c) => {
+              const chosen = c.id === routing.kwantId;
+              return (
+                <span
+                  key={c.id}
+                  title={c.title && c.title !== c.name ? `${c.name}, ${c.title}` : c.name}
+                  className={`flex items-center gap-1.5 pl-0.5 pr-2.5 py-0.5 rounded-full border text-[11px] ${
+                    chosen ? 'border-sky-400/60 bg-sky-500/20 text-sky-100' : 'border-transparent bg-transparent text-zinc-400 cursor-default'
+                  }`}
+                >
+                  <ModernAvatar role={c.name} name={c.name} size={18} mood="idle" />
+                  <span>{c.name}</span>
+                  {chosen && <Check size={11} className="text-info" aria-label="answering" />}
+                </span>
+              );
+            })}
+          </div>
+          <span className="text-xs text-zinc-400">After {routing.kwantName} replies, tap “Wrong bot?” in its Details to send your message to one of them.</span>
         </div>
-        <div className="px-4 py-3 rounded-2xl rounded-tl-sm bg-sky-950/20 border border-sky-500/20 text-sm text-zinc-200 shadow-sm w-full">
-          {deciding ? (
-            <div className="flex items-center gap-2">
-              <span>
-                {pool ? `Choosing from ${pool} ${pool === 1 ? 'bot' : 'bots'}${where}` : `Choosing who's best to answer${where}`}
-              </span>
-              <span className="inline-flex gap-0.5" aria-hidden="true">
-                {[0, 1, 2].map((i) => (
-                  <span
-                    key={i}
-                    className="w-1 h-1 rounded-full bg-sky-300 animate-bounce"
-                    style={{ animationDelay: `${i * 150}ms` }}
-                  />
-                ))}
-              </span>
-            </div>
-          ) : (
-            <div className="flex flex-col gap-0.5">
-              <div className="flex items-center gap-1.5 flex-wrap">
-                <span>{isDiscuss ? 'Starting a team discussion led by' : 'Sending your question to'}</span>
-                <span className="font-semibold text-sky-200">{routing.kwantName}</span>
-                {routing.kwantTitle && <span className="text-zinc-400 text-xs">({routing.kwantTitle})</span>}
-              </div>
-              {why && <span className="text-xs text-zinc-400">{why}</span>}
-              {routing.fallback && <span className="text-xs text-amber-300/90">Picked by keywords (Laya is offline)</span>}
-            </div>
-          )}
-
-          {routing.candidates.length > 0 && (
-            <div className="mt-2.5 flex items-center gap-1.5 flex-wrap">
-              {routing.candidates.map((c, i) => {
-                const chosen = !deciding && c.id === routing.kwantId;
-                return (
-                  <div
-                    key={c.id}
-                    title={`${c.name} — ${c.title}`}
-                    className={`flex items-center gap-1.5 pl-0.5 pr-2.5 py-0.5 rounded-full border text-[11px] transition-all duration-300 ${
-                      chosen
-                        ? 'border-sky-400/60 bg-sky-500/20 text-sky-100 scale-105'
-                        : deciding
-                          ? 'border-zinc-700/60 bg-zinc-900/60 text-zinc-300 animate-pulse'
-                          : 'border-zinc-800 bg-zinc-900/40 text-zinc-500 opacity-50'
-                    }`}
-                    style={deciding ? { animationDelay: `${i * 200}ms` } : undefined}
-                  >
-                    <ModernAvatar role={c.name} name={c.name} size={18} />
-                    <span>{c.name}</span>
-                    {chosen && <Check size={11} className="text-info" />}
-                  </div>
-                );
-              })}
-            </div>
-          )}
-        </div>
-      </div>
+      )}
     </div>
   );
 };
@@ -578,11 +593,8 @@ const StreamPart = React.memo(function StreamPart({ stream, part, onGrow }: { st
   const streamingText = useStreamPart(stream, part);
   useEffect(onGrow, [streamingText, onGrow]);
   if (part === 'thinking') return <>{streamingText}</>;
-  return (
-    <div className="kw-wa-in kw-wa-hold">
-      <StreamMarkdown content={shownWords(streamingText)} />
-    </div>
-  );
+  // 36d: the words stream under the scene (behind its hairline); the scene stays, so nothing holds its height.
+  return <StreamMarkdown content={shownWords(streamingText)} />;
 });
 
 /** 33j: one empty list, so a chat without reroute targets doesn't hand the rows a new array on every render. */
@@ -912,6 +924,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const liveSpeaker = streamingSpeakerName || title;
   // Who the live row shows: the current speaker in a discussion, else the replying bot.
   const liveName = discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : liveSpeaker;
+  // 36a: who the live steps' words name; never the team or room chat's title (stepsWho).
+  const stepsName = stepsWho({
+    discussing: discussionState?.inProgress,
+    currentSpeaker: discussionState?.currentSpeaker,
+    streamingSpeakerName,
+    title,
+    direct: home?.kind === 'bot',
+  });
   const livePages = useMemo(() => pagesOfReply(liveActivity?.steps), [liveActivity?.steps]);
   const savedTrail = useMemo((): { id: string; bot: string; pages: ReplyPage[] } | null => {
     const from = (m: ChatMessage) => {
@@ -1149,6 +1169,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const stripWaitsOn = isStreaming ? waitingOn({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser }) : null;
   // What the live bubble holds before its first words: a pending approval reads as "waiting for your OK", not loading.
   const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing });
+  // 36d: the scene is the one working status: getting started, a step, writing. Queued and waiting on the person stay plain.
+  // A step that waits on the person while words stream keeps today's open steps card (an ask never hides, 18f).
+  const sceneShown = bubble === 'starting' || (bubble === 'text' && !liveActivity?.steps.some((st) => st.status === 'waiting'));
   // The strip's "Answer ↑": the open question card, else the approval card, fully in view.
   const showWaitingCard = (on: 'question' | 'approval') => {
     if (on === 'approval') return showApproval();
@@ -1895,6 +1918,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
     return repeats;
   }, [listed, renderDelegation]);
   const liveNote = isStreaming ? liveSwitchNote(switchNotes ?? [], switchNoteFor, streamingSpeakerName || title) : null;
+  // 36d (working-scene/design.md §5): the scene's region goes with the scene, so the end of the turn is said once
+  // here: "Quant replied." or, after the composer's Stop, "Quant stopped.". Not on opening another chat.
+  const [turnEndSaid, setTurnEndSaid] = useState('');
+  const liveTurnRef = useRef<{ name: string; key: string | undefined } | null>(null);
+  const stopPressedRef = useRef(false);
+  useEffect(() => {
+    if (isStreaming) {
+      liveTurnRef.current = { name: streamingSpeakerName || title, key: contextKey };
+      setTurnEndSaid('');
+      return;
+    }
+    const was = liveTurnRef.current;
+    liveTurnRef.current = null;
+    const stopped = stopPressedRef.current;
+    stopPressedRef.current = false;
+    if (!was || was.key !== contextKey) return;
+    setTurnEndSaid(`${was.name} ${stopped ? 'stopped' : 'replied'}.`);
+    const id = window.setTimeout(() => setTurnEndSaid(''), 5000);
+    return () => window.clearTimeout(id);
+  }, [isStreaming, contextKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
   const freshTrack = useRef<{ key: string | undefined; seen: Set<string> | null; fresh: Set<string>; streamEnded: number; wasStreaming: boolean }>({
@@ -2245,7 +2288,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             >
               {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
               {savedActivity && (
-                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`} openRequest={detailsAsk[msg.id]} focusStep={outcome?.stepId ?? null}>
+                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`} openRequest={detailsAsk[msg.id]} focusStep={outcome?.stepId ?? null} who={displayName}>
                   {msg.tool_calls && (
                     <div className="border-t border-zinc-800/60 p-2">
                       <ToolCallsList raw={msg.tool_calls} />
@@ -2773,6 +2816,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       idBase={`live-${liveActivity.turnId}`}
       compact={phone}
       folded={stepsBelow}
+      who={stepsName}
       lead={
         livePages.length > 0 ? (
           <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
@@ -2838,7 +2882,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {(workspacePath || repoUrl) && (
             <div
               className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono text-zinc-300 bg-zinc-900 border border-zinc-700/60 max-w-[200px] truncate"
-              title={workspacePath ? `Workspace directory: ${workspacePath}` : `Git Repository: ${repoUrl}`}
+              title={workspacePath ? `Team folder: ${workspacePath}` : `Team repo: ${repoUrl}`}
             >
               {workspacePath ? (
                 <Folder size={12} className="text-amber-400 flex-shrink-0" />
@@ -3049,6 +3093,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         )}
 
+        {/* 36d: "Quant replied." / "Quant stopped." once, after the scene (and its region) goes */}
+        <p className="sr-only" role="status" aria-live="polite" data-turn-end-said="">{turnEndSaid}</p>
+
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
         {isStreaming && !deciding && routingState?.phase !== 'deciding' && !askOnly && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl" data-live-row="">
@@ -3081,9 +3128,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 ) : null /* "Generating" would repeat the working strip */}
               </div>
 
-              {liveNote && <FailoverNote text={liveNote} />}
+              {/* 36d: while the scene shows, the steps and the engine note are under its Steps toggle; a turn that
+                  waits on the person (or in line) keeps them here, above its plain line, as before. */}
+              {!sceneShown && liveNote && <FailoverNote text={liveNote} />}
 
-              {liveActivity && !stepsBelow && liveStepsList}
+              {!sceneShown && liveActivity && !stepsBelow && liveStepsList}
 
               {thinking && (
                 <div className="mb-2 p-2.5 rounded-xl bg-sky-950/20 border border-sky-500/20 text-xs text-sky-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
@@ -3092,28 +3141,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </div>
               )}
 
-              {/* On a phone the strip says "working" and "waiting": no skeleton, no "Paused on…" bubble. */}
-              {(!phone || queued || writing) && (
-              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${REPLY_BUBBLE_BOT} kw-live-in`} data-live-bubble-body="">
-                {queued ? (
-                  <p className="text-zinc-300" role="status">
-                    {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
-                    {queuedText(queued.reason, queued.slots)}
-                  </p>
-                ) : writing ? (
-                  /* The scene's 62 px holds under the first words (kw-wa-hold, in StreamPart), so the bubble does not jump; they come up from half, never from nothing (32e). */
-                  <StreamPart stream={stream} part="text" onGrow={onStreamGrow} />
-                ) : awaitingAnswer ? (
-                  <p className="text-zinc-400" role="status">
-                    {awaitingBrowser
-                      ? 'Paused on the browser step above. Do it in the browser panel and press Done; this reply carries on from it.'
-                      : 'Paused on the question above. Answer it there; this reply carries on from it.'}
-                  </p>
-                ) : bubble === 'approval' ? (
-                  <p className="text-zinc-400" role="status" data-live-bubble="approval">
-                    Paused on the approval below. Allow or deny it there; this reply carries on from it.
-                  </p>
-                ) : (
+              {/* 36d: the scene is the one working status, on a phone too. On a phone the strip still says "waiting" (with Answer ↑), so no "Paused on…" bubble there. */}
+              {sceneShown ? (
+                <div className={`${REPLY_BUBBLE_SCENE} ${REPLY_BUBBLE_BOT} kw-live-in`} data-live-bubble-body="">
                   <WorkingAvatar
                     name={
                       discussionState?.inProgress && discussionState.currentSpeaker
@@ -3121,13 +3151,47 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         : streamingSpeakerName || title
                     }
                     audit={liveAudit}
-                  />
+                    live={liveActivity}
+                    writing={writing}
+                    phone={phone}
+                    footer={liveNote}
+                    who={stepsName}
+                    onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
+                    idBase={liveActivity ? `live-${liveActivity.turnId}` : undefined}
+                    lead={
+                      liveActivity && livePages.length > 0 ? (
+                        <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
+                      ) : undefined
+                    }
+                  >
+                    {writing ? <StreamPart stream={stream} part="text" onGrow={onStreamGrow} /> : null}
+                  </WorkingAvatar>
+                </div>
+              ) : (!phone || queued || writing) && (
+              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${REPLY_BUBBLE_BOT} kw-live-in`} data-live-bubble-body="">
+                {queued ? (
+                  <p className="text-zinc-300" role="status">
+                    {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
+                    {queuedText(queued.reason, queued.slots)}
+                  </p>
+                ) : writing ? (
+                  <StreamPart stream={stream} part="text" onGrow={onStreamGrow} />
+                ) : awaitingAnswer ? (
+                  <p className="text-zinc-400" role="status">
+                    {awaitingBrowser
+                      ? 'Paused on the browser step above. Do it in the browser panel and press Done; this reply carries on from it.'
+                      : 'Paused on the question above. Answer it there; this reply carries on from it.'}
+                  </p>
+                ) : (
+                  <p className="text-zinc-400" role="status" data-live-bubble="approval">
+                    Paused on the approval below. Allow or deny it there; this reply carries on from it.
+                  </p>
                 )}
               </div>
               )}
 
               {/* 18f: once words stream, the steps row sits below the bubble, where the landed action row goes */}
-              {liveActivity && stepsBelow && liveStepsList}
+              {!sceneShown && liveActivity && stepsBelow && liveStepsList}
 
               {!queued && <QueuedBeside items={queuedBeside} />}
             </div>
@@ -3438,7 +3502,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {isStreaming && !askOnly && (
             <button
               type="button"
-              onClick={onCancelDiscussion}
+              onClick={() => {
+                stopPressedRef.current = true;
+                onCancelDiscussion?.();
+              }}
               className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
               title={discussionState?.inProgress && discussionState.kind !== 'handoff' ? 'Stop Discussion' : 'Stop'}
               aria-label={discussionState?.inProgress && discussionState.kind !== 'handoff' ? 'Stop discussion' : 'Stop'}

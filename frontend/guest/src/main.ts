@@ -66,10 +66,13 @@ async function main(): Promise<void> {
     const still = w.matchMedia?.('(prefers-reduced-motion: reduce)');
     const tvEnv = { ...env, origin: w.location.origin, still: () => !!still?.matches };
     // pa14: a Wall's big screen is the photo slideshow, its own chunk; every other kit keeps the quiz screen.
+    const tk = await kit(b);
     const tv =
-      (await kit(b)) === 'wall'
+      tk === 'wall'
         ? new (await import('./wall/screen-wall')).WallTV(root, tvEnv, code, screen || undefined)
-        : new (await import('./screen/screen')).ScreenApp(root, tvEnv, code, screen || undefined);
+        : tk === 'queue'
+          ? new (await import('./queue/screen-queue')).QueueTV(root, tvEnv, code, screen || undefined)
+          : new (await import('./screen/screen')).ScreenApp(root, tvEnv, code, screen || undefined);
     const fit = () => tv.fit(w.innerWidth, w.innerHeight);
     fit();
     w.addEventListener('resize', fit);
@@ -92,6 +95,11 @@ async function main(): Promise<void> {
     } else if (k === 'desk') {
       const { DeskApp } = await import('./desk/desk');
       app = new DeskApp(root, { ...env, store: store() }, code);
+    } else if (k === 'queue') {
+      // pa11b: the Queue ticket's own chunk; the buzz panel reads this window (vibrate, sound, wake lock).
+      const { QueueApp } = await import('./queue/queue');
+      const still = w.matchMedia?.('(prefers-reduced-motion: reduce)');
+      app = new QueueApp(root, { ...env, still: () => !!still?.matches, buzz: w as never }, code);
     } else app = new GuestApp(root, env, code);
   }
   void app.start(b);

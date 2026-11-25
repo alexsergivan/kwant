@@ -1,6 +1,6 @@
 // The slim "Bot is <step> · 0:42" strip above the composer. Pure helpers; the component only draws them.
 import { ActivityStep, LiveActivity, formatClock, isOpenStep, plainTitle } from './activity';
-import { readableStepTitle } from './toolLabel';
+import { plainShellTitle, readableStepTitle } from './toolLabel';
 
 export interface WorkingState {
   live?: LiveActivity | null;
@@ -21,7 +21,8 @@ export function workingLabel(s: WorkingState): string {
   // An approval: the card says what it is for; the strip only says whose move it is.
   if (open?.kind === 'approval' && open.status === 'waiting') return 'waiting for your OK';
   if (open) {
-    const t = readableStepTitle(plainTitle(open.title).trim());
+    // 36d: a shell step says where it runs ("running a command on 203.0.113.66"), as its row does (36a).
+    const t = plainShellTitle(open)?.text ?? readableStepTitle(plainTitle(open.title).trim());
     if (t) return lower(t);
   }
   if (s.writing) return 'writing the reply';
@@ -40,6 +41,18 @@ export function stripSentence(name: string, s: WorkingState, auditLine?: string 
   const label = workingLabel(s);
   if (auditLine && (label === 'getting started' || label === 'working on it')) return { audit: true, text: auditLine };
   return { audit: false, text: `${name} is ${label}` };
+}
+
+/**
+ * 36d: the working scene's line 1 (working-scene/design.md §3): the strip's sentence, plus what to set bright
+ * (the host of a shell command) and whether the laptop shows the command glyph (the open step is a shell command).
+ */
+export function sceneLine(name: string, s: WorkingState, auditLine?: string | null): { audit: boolean; text: string; host: string | null; command: boolean } {
+  const sentence = stripSentence(name, s, auditLine);
+  // The same open step workingLabel reads (a waiting approval isn't a scene state: the bubble says Paused then).
+  const open = s.queued || s.awaitingAnswer ? undefined : [...(s.live?.steps ?? [])].reverse().find(isOpenStep);
+  const shell = open && open.kind !== 'approval' && !sentence.audit ? plainShellTitle(open) : null;
+  return { ...sentence, host: shell?.host ?? null, command: !!shell };
 }
 
 /**

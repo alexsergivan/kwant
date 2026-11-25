@@ -35,9 +35,11 @@ test('words, the queue and questions win over the approval line', () => {
 
 test('ChatView draws the approval line before it falls back to the bot at work', () => {
   const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
-  const line = chat.indexOf("bubble === 'approval' ? (");
-  const skel = chat.indexOf('<WorkingAvatar');
-  assert.ok(line > 0 && skel > line, 'the approval branch comes before the bot at work');
+  // 36d: the scene shows only for 'starting' and 'text'; an approval, a question and the queue keep their plain line.
+  assert.match(chat, /const sceneShown = bubble === 'starting' \|\| \(bubble === 'text' && /);
+  const scene = chat.indexOf('{sceneShown ? (');
+  const line = chat.indexOf('Paused on the approval below.');
+  assert.ok(scene > 0 && line > scene, 'the plain lines are the other branch of the scene');
   assert.match(chat, /Paused on the approval below\. Allow or deny it there; this reply carries on from it\./);
   assert.match(chat, /bubble === 'approval' \? 'Waiting for your OK'/);
 });
