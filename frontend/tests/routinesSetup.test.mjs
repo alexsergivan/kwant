@@ -114,11 +114,12 @@ test('the sidebar has a Routines row after Mission board only when it can open t
     created_at: '', general_channel_id: null, counts: { bots: 0, ready_accounts: 0, unread: 0 } };
   const base = { space, spaces: [space], onSwitchSpace: noop, onCreateSpace: noop, onOpenSpaceSettings: noop, onOpenArchived: noop,
     onOpenSearch: noop, kwants: [], channels: [], teams: [], selectedId: '', isChannel: true, onSelectKwant: noop, onSelectChannel: noop,
-    onSelectTeam: noop, onSummonKwant: noop, onCreateTeam: noop, onOpenInbox: noop, missionBoard: true, onOpenMissions: noop };
+    onSelectTeam: noop, onSummonKwant: noop, onCreateTeam: noop, onOpenInbox: noop, missionBoard: true, onOpenMissions: noop,
+    missionsActive: true }; // 36i: an open Mission board sits at the top, so the order is checked
   assert.doesNotMatch(ui.sidebar(base), /data-routines-row/);
   const h = ui.sidebar({ ...base, onOpenRoutines: noop });
   assert.match(h, /data-routines-row/);
   const row = h.slice(h.indexOf('data-routines-row') - 300, h.indexOf('data-routines-row') + 600);
   assert.doesNotMatch(row.slice(row.lastIndexOf('<button')), /aria-current/);
-  assert.ok(h.indexOf('Mission board') < h.indexOf('>Routines<'), 'after Mission board');
+  assert.ok(h.indexOf('Mission board') > 0 && h.indexOf('Mission board') < h.indexOf('>Routines<'), 'after Mission board');
 });
