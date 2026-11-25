@@ -1,6 +1,6 @@
 // API keys and the Ollama address: one per provider, shared by every space. They live in
 // Settings › This space › Apps & accounts, next to the accounts that use them, and are saved on their
-// own: only these four fields are sent, so nothing else in App settings changes.
+// own: only these five fields are sent, so nothing else in App settings changes.
 import React, { useEffect, useState } from 'react';
 import { AlertTriangle, Check, ChevronDown, ChevronRight, Globe, Key, Loader2 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
@@ -12,6 +12,7 @@ interface Keys {
   anthropic_api_key: string;
   xai_api_key: string;
   openai_api_key: string;
+  mistral_api_key: string;
   ollama_url: string;
 }
 
@@ -19,6 +20,7 @@ const FIELDS: { key: Exclude<keyof Keys, 'ollama_url'>; label: string; placehold
   { key: 'anthropic_api_key', label: 'Anthropic API Key', placeholder: 'sk-ant-api03-...' },
   { key: 'xai_api_key', label: 'xAI Grok API Key', placeholder: 'xai-...' },
   { key: 'openai_api_key', label: 'OpenAI API Key', placeholder: 'sk-...' },
+  { key: 'mistral_api_key', label: 'Mistral API Key', placeholder: 'Your Mistral key' },
 ];
 
 const input =
@@ -46,6 +48,7 @@ export const ApiKeysPanel: React.FC<{ onSaved?: () => void; defaultOpen?: boolea
           anthropic_api_key: d.anthropic_api_key ?? '',
           xai_api_key: d.xai_api_key ?? '',
           openai_api_key: d.openai_api_key ?? '',
+          mistral_api_key: d.mistral_api_key ?? '',
           ollama_url: d.ollama_url || DEFAULT_OLLAMA,
         };
         setKeys(k);

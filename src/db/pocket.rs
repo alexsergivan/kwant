@@ -280,6 +280,20 @@ impl Database {
         Ok(done.rows_affected() > 0)
     }
 
+    /// pa10c: forgets every player of a pocket for good (the host deleted the answers): rows
+    /// (removed ones too), guest keys and every event about a player, in one transaction.
+    /// Returns the ids that went; the pocket and its own events stay.
+    pub async fn pocket_forget_all_players(&self, code: &str) -> Result<Vec<String>, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let ids: Vec<(String,)> = sqlx::query_as("SELECT id FROM pocket_players WHERE pocket_code = ?").bind(code).fetch_all(&mut *tx).await?;
+        sqlx::query("DELETE FROM pocket_events WHERE pocket_code = ? AND player_id IS NOT NULL").bind(code).execute(&mut *tx).await?;
+        for table in ["pocket_guest_keys", "pocket_players"] {
+            sqlx::query(&format!("DELETE FROM {table} WHERE pocket_code = ?")).bind(code).execute(&mut *tx).await?;
+        }
+        tx.commit().await?;
+        Ok(ids.into_iter().map(|r| r.0).collect())
+    }
+
     pub async fn pocket_counts(&self, code: &str) -> Result<PocketCounts, DbError> {
         let (players, removed): (i64, i64) = sqlx::query_as(
             "SELECT COALESCE(SUM(removed_at IS NULL), 0), COALESCE(SUM(removed_at IS NOT NULL), 0) \
