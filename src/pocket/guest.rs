@@ -447,14 +447,32 @@ pub struct ActionRequest {
     pub body: Value,
 }
 
-async fn action(State(state): State<AppState>, Path(code): Path<String>, headers: HeaderMap, Json(req): Json<ActionRequest>) -> PResult<Response> {
-    pocket(&state, &code).await?;
+async fn action(
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+    ci: Option<ConnectInfo<SocketAddr>>,
+    headers: HeaderMap,
+    Json(req): Json<ActionRequest>,
+) -> PResult<Response> {
+    let s = pocket(&state, &code).await?;
     let p = guest(&state, &code, &headers).await?.ok_or_else(signed_out)?;
     if !state.pocket.limits.action(&code, &p.id) {
         return Err(PocketError::new(StatusCode::TOO_MANY_REQUESTS, "slow_down", "Slow down a little."));
     }
-    let viewer = Viewer::Guest(p.id);
+    // pa11b: a queue ticket is 3 an hour per guest key and 30 per address. A guest who already
+    // holds one gets the kit's has_ticket answer instead, and only a take that worked counts
+    let take_ip = (s.row.kit == super::queue::ID && req.name == "take" && !super::queue::has_live_ticket(&s.kit_state, &p.id)).then(|| client_ip(peer(ci), &headers));
+    if let Some(ip) = take_ip {
+        // The body says which limit it was, so the page can say "this phone" or "this network"
+        if let Err(hit) = state.pocket.limits.may_take(&code, &p.id, ip) {
+            return Err(PocketError::new(StatusCode::TOO_MANY_REQUESTS, "slow_down", hit.message()).with(json!({ "limit": hit.as_str() })));
+        }
+    }
+    let viewer = Viewer::Guest(p.id.clone());
     super::act(&state, &code, &viewer, &req.name, &req.body).await?;
+    if let Some(ip) = take_ip {
+        state.pocket.limits.took(&code, &p.id, ip);
+    }
     let s = pocket(&state, &code).await?;
     Ok(Json(super::view_json(&s, &viewer, Utc::now())).into_response())
 }
