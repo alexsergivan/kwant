@@ -301,7 +301,7 @@ export const App: React.FC = () => {
       <a
         href="#main-pane"
         data-skip-link
-        className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-50 focus:rounded-lg focus:bg-sky-500 focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-200"
+        className="sr-only focus:not-sr-only focus:fixed focus:top-[calc(env(safe-area-inset-top)_+_0.5rem)] focus:left-[calc(env(safe-area-inset-left)_+_0.5rem)] focus:z-50 focus:rounded-lg focus:bg-sky-500 focus:px-3 focus:py-2 focus:text-sm focus:font-semibold focus:text-zinc-950 focus:outline-none focus:ring-2 focus:ring-sky-200 focus:shadow-raised"
         onClick={(e) => {
           e.preventDefault();
           // A waiting card (an approval or question) wins over the plain conversation pane: it's
