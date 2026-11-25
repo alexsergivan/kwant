@@ -63,7 +63,17 @@ export const WorkingAvatar: React.FC<WorkingAvatarProps> = ({ name, audit, live,
   const stepsName = `Steps, ${work}${retried ? `, ${retried} retried` : ''}`;
   // 16b: on a phone an audit shows its short line ("Double-checking “Weekly report”"); the region says the full one.
   const sentence = line.audit ? (
-    (phone && audit?.short) || line.text
+    phone && audit?.short ? (
+      audit.short
+    ) : line.text.startsWith(name) ? (
+      // Mira's 36d fix 3: the bot's name is bright in C as in A and B.
+      <>
+        <span className="font-medium text-zinc-50">{name}</span>
+        {line.text.slice(name.length)}
+      </>
+    ) : (
+      line.text
+    )
   ) : (
     <>
       <span className="font-medium text-zinc-50">{name}</span>
@@ -117,7 +127,7 @@ export const WorkingAvatar: React.FC<WorkingAvatarProps> = ({ name, audit, live,
         <p className="kw-wa-now line-clamp-2 text-sm leading-5 text-zinc-300 [overflow-wrap:anywhere]" aria-hidden="true" data-scene-line="">
           {sentence}
         </p>
-        <div className="kw-wa-meta flex min-w-0 items-center gap-x-1.5 whitespace-nowrap text-zinc-400" data-scene-meta="">
+        <div className="kw-wa-meta flex min-w-0 items-center gap-x-2 whitespace-nowrap text-zinc-400" data-scene-meta="">
           <Clock live={live} />
           {hasList && (
             <>
@@ -129,7 +139,7 @@ export const WorkingAvatar: React.FC<WorkingAvatarProps> = ({ name, audit, live,
                 aria-controls={listId}
                 aria-label={stepsName}
                 data-scene-steps=""
-                className={`${phone ? 'min-h-11' : 'min-h-7'} -ml-2 inline-flex items-center gap-1.5 rounded-md px-2 text-zinc-300 hover:bg-surface-overlay hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff]`}
+                className={`${phone ? 'min-h-11' : 'min-h-7'} -mx-2 inline-flex items-center gap-2 rounded-md px-2 text-zinc-300 hover:bg-surface-overlay hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[#b8adff]`}
               >
                 <span>Steps {work}</span>
                 {retried > 0 && (

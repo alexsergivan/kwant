@@ -272,7 +272,11 @@
 .kw-wa-card[data-phone] .kw-wa-scene { width: 72px; height: 36px; }
 .kw-wa-card[data-phone] .kw-wa-now { align-self: center; }
 .kw-wa-card[data-phone] .kw-wa-meta { grid-column: 1 / -1; font-size: 13px; line-height: 18px; }
-.kw-wa-card[data-phone] .kw-wa-meta [data-scene-steps] { margin-left: 0; }
+/* Mira 36d fix 2: the row is the 44 px Steps target's height before the first step too, so the card never grows. */
+.kw-wa-card[data-phone] .kw-wa-meta { min-height: 44px; }
+/* Mira 36d fix 4: the phone meta row is 13 px throughout (Watch only inside the scene). */
+.kw-wa-card[data-phone] .kw-wa-open,
+.kw-wa-card[data-phone] .kw-wa-meta [data-watch-button] { font-size: 13px; line-height: 18px; }
 .kw-wa-lead { padding: 0 14px 10px; }
 /* B · writing: the words stream under the scene, behind the hairline; the scene never swaps out (no kw-wa-hold). */
 .kw-wa-words { padding: 12px 14px; }

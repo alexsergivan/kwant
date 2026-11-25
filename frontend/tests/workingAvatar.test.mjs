@@ -126,3 +126,15 @@ test('light theme tokens exist for every dark token', () => {
     assert.ok(keys(dark).includes(k) && keys(light).includes(k), k);
   }
 });
+
+test('36d design-check fixes: even dots, steady phone card, bright name in C, 13 px phone row', () => {
+  const live = { turnId: 't1', thinking: {}, steps: [{ id: 's1', kind: 'tool', status: 'ok', title: 'Reading `a.md`', started_at: '2026-11-25T00:00:00Z' }] };
+  const html = scene('Builder', { live, audit: { line: 'Builder is double-checking Scout’s work', short: 'Double-checking', onOpenTask: () => {} } });
+  assert.match(html, /class="kw-wa-meta flex min-w-0 items-center gap-x-2 /);
+  assert.match(html, /data-scene-steps="" class="min-h-7 -mx-2 /);
+  assert.match(html, /data-scene-line=""><span class="font-medium text-zinc-50">Builder<\/span> is double-checking Scout’s work<\/p>/);
+  assert.match(scene('Builder', { live, phone: true, audit: { line: 'Builder is double-checking Scout’s work', short: 'Double-checking' } }), /data-scene-line="">Double-checking<\/p>/);
+  assert.doesNotMatch(css, /\[data-scene-steps\] \{ margin-left: 0; \}/);
+  assert.match(css, /\.kw-wa-card\[data-phone\] \.kw-wa-meta \{ min-height: 44px; \}/);
+  assert.match(css, /\.kw-wa-card\[data-phone\] \.kw-wa-open,\n\.kw-wa-card\[data-phone\] \.kw-wa-meta \[data-watch-button\] \{ font-size: 13px;/);
+});

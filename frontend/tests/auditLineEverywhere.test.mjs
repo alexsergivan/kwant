@@ -28,7 +28,8 @@ test('an audit turn: the live bubble says the audit line and links to the task, 
   const html = ui.scene({ name: 'Writer', audit: { line, onOpenTask: open } });
   const esc = (x) => x.replace(/"/g, '&quot;');
   assert.ok(html.includes(`data-scene-said="">${esc(line)}.</p>`), 'the polite region says the audit line (36d: no fixed aria-label)');
-  assert.ok(html.includes(`data-scene-line="">${esc(line)}</p>`), 'line 1 is the audit line');
+  // 36d design check fix 3: the bot's name is bright, as in A and B.
+  assert.ok(html.includes(`data-scene-line=""><span class="font-medium text-zinc-50">Writer</span>${esc(line.slice('Writer'.length))}</p>`), 'line 1 is the audit line');
   assert.ok(html.includes('data-audit=""'));
   assert.doesNotMatch(html, /is working on it/);
   // 36d: "Open the task" sits in line 2, after the clock (design C).
@@ -75,7 +76,7 @@ test('the phone scene says the short line; the region keeps the full line, and d
   assert.ok(phone.includes(`data-scene-line="">${esc(short)}</p>`), 'phone text is the short line');
   assert.ok(phone.includes(`data-scene-said="">${esc(line)}.</p>`), 'the region says the full line');
   const desk = ui.scene({ name: 'Writer', audit: { line, short, onOpenTask: open } });
-  assert.ok(desk.includes(`data-scene-line="">${esc(line)}</p>`), 'desktop text stays the full line');
+  assert.ok(desk.includes(`data-scene-line=""><span class="font-medium text-zinc-50">Writer</span>${esc(line.slice('Writer'.length))}</p>`), 'desktop text stays the full line');
   assert.match(read('src/App.tsx'), /short: auditShortLine\(auditHere, kwantNames\)/);
 });
 
