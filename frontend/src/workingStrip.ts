@@ -1,6 +1,6 @@
 // The slim "Bot is <step> · 0:42" strip above the composer. Pure helpers; the component only draws them.
 import { ActivityStep, LiveActivity, formatClock, isOpenStep, plainTitle } from './activity';
-import { readableStepTitle } from './toolLabel';
+import { plainShellTitle, readableStepTitle } from './toolLabel';
 
 export interface WorkingState {
   live?: LiveActivity | null;
@@ -21,6 +21,10 @@ export function workingLabel(s: WorkingState): string {
   // An approval: the card says what it is for; the strip only says whose move it is.
   if (open?.kind === 'approval' && open.status === 'waiting') return 'waiting for your OK';
   if (open) {
+    // specific-step-titles: a shell step says the same words as its row ("fetching shop.example.com"), never the
+    // raw command, which can carry a URL's query or a token.
+    const shell = plainShellTitle(open);
+    if (shell) return lower(shell.text);
     const t = readableStepTitle(plainTitle(open.title).trim());
     if (t) return lower(t);
   }

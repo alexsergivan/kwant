@@ -23,6 +23,7 @@ const m = await loadBundled(`
   import { renderToStaticMarkup } from 'react-dom/server.browser';
   import { SavedActivityList } from './src/components/ActivityList';
   export { plainShellTitle, readableStepTitle, toolLabel, toolAction } from './src/toolLabel';
+  export { workingLabel } from './src/workingStrip';
   export const saved = (props) => renderToStaticMarkup(React.createElement(SavedActivityList, props));
 `);
 
@@ -258,4 +259,15 @@ test("Oleks's 4 rows: four different readable titles; the command stays under Sh
   assert.doesNotMatch(t, /Running a command|Using ToolSearch/);
   assert.doesNotMatch(t, /key=abc|health/, 'the URL path and query stay in the command, not the title');
   assert.equal((html.match(/Show command/g) ?? []).length, 3, 'each shell row keeps its Show command');
+});
+
+test('the working strip says the open shell step in words, never its raw command (fails on 1dec00eb)', () => {
+  const cmd = 'curl -s -o /dev/null -w "%{http_code}" https://shop.example.com/health?key=abc';
+  const live = (c) => ({ turnId: 't', thinking: {}, steps: [{ id: 's', kind: 'tool', tool: 'Bash', status: 'running', title: titleOf(c), detail: c }] });
+  const line = m.workingLabel({ live: live(cmd) });
+  assert.equal(line, 'fetching shop.example.com');
+  assert.doesNotMatch(line, /key=abc|health|curl/);
+  assert.equal(m.workingLabel({ live: live('ssh root@203.0.113.66 "sudo systemctl restart trailhead-shop"') }), 'restarting trailhead-shop on 203.0.113.66');
+  // Other steps keep their words.
+  assert.equal(m.workingLabel({ live: { turnId: 't', thinking: {}, steps: [{ id: 'w', kind: 'tool', tool: 'WebSearch', status: 'running', title: 'Using WebSearch' }] } }), 'searching the web');
 });
