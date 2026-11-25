@@ -3,17 +3,20 @@ import {
   AlertTriangle,
   Archive,
   ArrowLeft,
+  Bell,
   Bot,
   CalendarClock,
   Check,
   Download,
   FileText,
   FileUp,
+  Gauge,
   Globe,
   LayoutGrid,
   Loader2,
   Pencil,
   Plus,
+  Search,
   Settings2,
   Sparkles,
   Users,
@@ -40,14 +43,23 @@ import { SpaceApprovalsSetting } from './ApprovalsSetting';
 import { DevModeSettings } from './DevModeSettings';
 import { SpaceDocsTab } from './SpaceDocsTab';
 
-import type { AppsSection, SettingsScope, SpaceSettingsTab } from '../nav';
+import type { AppSettingsPage, AppsSection, SettingsScope, SpaceSettingsTab } from '../nav';
+import { filterSettingRows } from '../settingsFilter';
 import { AppsAccounts } from './AppsAccounts';
 import { PhoneAppCard } from './PhoneAppCard';
 import { editorProps, useEscapeLayer } from '../escape';
 import { devTeamRefs } from '../devMode';
 import type { NotifiedChat } from '../chatTarget';
 
-export type { SettingsScope, SpaceSettingsTab };
+export type { AppSettingsPage, SettingsScope, SpaceSettingsTab };
+
+/** 36e: Settings › All spaces as four short pages under the same left nav as This space. */
+export const APP_PAGES: Array<{ id: AppSettingsPage; label: string; icon: React.ReactNode }> = [
+  { id: 'general', label: 'General', icon: <Settings2 size={15} /> },
+  { id: 'bots', label: 'Bots on their own', icon: <Sparkles size={15} /> },
+  { id: 'usage', label: 'Usage', icon: <Gauge size={15} /> },
+  { id: 'notifications', label: 'Notifications', icon: <Bell size={15} /> },
+];
 
 const TABS: Array<{ id: SpaceSettingsTab; label: string; icon: React.ReactNode }> = [
   { id: 'general', label: 'General', icon: <Settings2 size={15} /> },
@@ -78,8 +90,11 @@ interface Props {
   toolNoteOpen?: boolean;
   /** A bot's "suggests a connection" card: Apps & accounts opens the Connect <App> sheet with these bots ticked (seq: a fresh sheet per press). */
   connectApp?: { slug: string; name?: string; initial: { picked: string[] }; seq: number } | null;
-  /** All spaces: the app-wide settings. */
-  appSettings: React.ReactNode;
+  /** All spaces: the app-wide settings, given the page to show (null while "Find a setting" has words: every page). */
+  appSettings: React.ReactNode | ((page: AppSettingsPage | null) => React.ReactNode);
+  /** All spaces: the open page (General when not given) and a way to change it (it shows in the address). */
+  appPage?: AppSettingsPage;
+  onAppPage?: (page: AppSettingsPage) => void;
   onOpenArchived: () => void;
   kwants: Kwant[];
   channels: Channel[];
@@ -144,9 +159,26 @@ export const SpaceSettings: React.FC<Props> = (p) => {
   // Phone: the tab strip scrolls sideways, so bring the open tab into view (from the sidebar's
   // Routines row it would sit off the right edge; scroll-mx-6 keeps it clear of the edge fade). Instant: no motion.
   const currentTabRef = useRef<HTMLButtonElement>(null);
+  const appPage = p.appPage ?? 'general';
   useEffect(() => {
     currentTabRef.current?.scrollIntoView?.({ block: 'nearest', inline: 'nearest' });
-  }, [tab, scope]);
+  }, [tab, scope, appPage]);
+  // All spaces › "Find a setting": words typed show the matching rows of every page; empty, the open page again.
+  const [find, setFind] = useState('');
+  const findRef = useRef<HTMLInputElement>(null);
+  const finding = scope === 'app' && find.trim() !== '';
+  const contentRef = useRef<HTMLDivElement>(null);
+  const [found, setFound] = useState<number | null>(null);
+  // After every render while finding: rows load late (settings, usage), so the filter runs again on each.
+  useEffect(() => {
+    const el = contentRef.current;
+    if (!el) return;
+    const n = filterSettingRows(el, finding ? find : '');
+    setFound((prev) => (finding ? (prev === n ? prev : n) : null));
+  });
+  const pageLabel = APP_PAGES.find((x) => x.id === appPage)?.label ?? 'General';
+  const appBody = typeof p.appSettings === 'function' ? p.appSettings(finding ? null : appPage) : p.appSettings;
+  const showGeneral = finding || appPage === 'general';
 
   return (
     // A full-screen dialog on phones. On desktop it fills the space's area beside the space rail,
@@ -217,13 +249,80 @@ export const SpaceSettings: React.FC<Props> = (p) => {
             ))}
           </ScrollRow>
         )}
+        {scope === 'app' && (
+          <>
+            <div className="relative mx-3 md:mx-2 mb-2" role="search">
+              <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500 pointer-events-none" aria-hidden="true" />
+              <input
+                ref={findRef}
+                type="search"
+                value={find}
+                onChange={(e) => setFind(e.target.value)}
+                onKeyDown={(e) => {
+                  // Escape clears the words first; a second Escape closes Settings.
+                  if (e.key === 'Escape' && find) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    setFind('');
+                  }
+                }}
+                placeholder="Find a setting"
+                aria-label="Find a setting"
+                aria-describedby={finding ? 'settings-find-count' : undefined}
+                autoComplete="off"
+                spellCheck={false}
+                data-settings-find
+                className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-7 pr-9 py-1.5 text-xs text-zinc-100 placeholder-zinc-500 focus:border-sky-500 focus:outline-none [&::-webkit-search-cancel-button]:appearance-none"
+              />
+              {find && (
+                <button
+                  type="button"
+                  aria-label="Clear"
+                  data-settings-find-clear
+                  onClick={() => {
+                    setFind('');
+                    findRef.current?.focus();
+                  }}
+                  className="absolute right-0.5 top-1/2 -translate-y-1/2 kw-hit kw-focus flex items-center justify-center w-7 h-7 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800"
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              )}
+            </div>
+            <ScrollRow as="nav" aria-label="All spaces settings" className="kw-scroll-row flex flex-wrap md:flex-col gap-1 px-3 pb-3 md:px-2" data-app-settings-nav>
+              {APP_PAGES.map((t) => {
+                const on = !finding && appPage === t.id;
+                return (
+                  <button
+                    key={t.id}
+                    type="button"
+                    ref={on ? currentTabRef : undefined}
+                    aria-current={on ? 'page' : undefined}
+                    data-app-page-link={t.id}
+                    onClick={() => {
+                      playSfx('click');
+                      setFind('');
+                      p.onAppPage?.(t.id);
+                    }}
+                    className={`shrink-0 scroll-mx-6 flex items-center gap-2 px-3 py-1.5 md:py-2 rounded-full md:rounded-lg text-xs font-medium transition-colors ${
+                      on ? 'bg-zinc-800 text-zinc-100 border border-zinc-700/60' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50 border border-transparent'
+                    }`}
+                  >
+                    <span className={on ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true">{t.icon}</span>
+                    {t.label}
+                  </button>
+                );
+              })}
+            </ScrollRow>
+          </>
+        )}
       </div>
 
       <div className="flex-1 min-w-0 overflow-y-auto">
-        <div className="max-w-2xl mx-auto p-4 sm:p-6 space-y-5">
+        <div ref={contentRef} className="max-w-2xl mx-auto p-4 sm:p-6 space-y-5" data-app-page={scope === 'app' ? (finding ? 'find' : appPage) : undefined}>
           <div className="flex items-center justify-between gap-3">
             <div>
-              <h3 className="text-base font-semibold">{scope === 'app' ? 'All spaces' : TABS.find((t) => t.id === tab)?.label}</h3>
+              <h3 className="text-base font-semibold">{scope === 'app' ? (finding ? 'Find a setting' : pageLabel) : TABS.find((t) => t.id === tab)?.label}</h3>
               <p className="text-[11px] text-zinc-500">
                 {scope === 'app' ? 'Applies to every space and to this app' : `Only affects this space (${space.name})`}
               </p>
@@ -232,10 +331,17 @@ export const SpaceSettings: React.FC<Props> = (p) => {
               <X size={18} />
             </button>
           </div>
+          {finding && (
+            <p id="settings-find-count" role="status" className="text-[11px] text-zinc-400" data-settings-find-count>
+              {found === 0 ? `Nothing matches “${find.trim()}”. Try another word, or clear the field.` : found === null ? '' : `${found} ${found === 1 ? 'setting matches' : 'settings match'} “${find.trim()}”.`}
+            </p>
+          )}
           {scope === 'app' ? (
             <>
-              <PhoneAppCard phone={p.isPhone} />
-              <div className={`${card} p-4 space-y-3`} data-all-spaces-spaces>
+              <div hidden={!showGeneral} data-settings-page="general" data-setting-row>
+                <PhoneAppCard phone={p.isPhone} />
+              </div>
+              <div hidden={!showGeneral} className={`${card} p-4 space-y-3`} data-all-spaces-spaces data-settings-page="general" data-setting-row>
                 <p className="text-xs font-medium text-zinc-200">Spaces</p>
                 <p className="text-[11px] text-zinc-500">Switch spaces on the left rail (Ctrl or ⌘ with 1–9). Archived spaces keep their bots and chats until you restore them.</p>
                 <div className="flex flex-wrap gap-2">
@@ -244,7 +350,7 @@ export const SpaceSettings: React.FC<Props> = (p) => {
                   </button>
                 </div>
               </div>
-              {p.appSettings}
+              {appBody}
             </>
           ) : (
             <>
@@ -577,7 +683,7 @@ const BotsTab: React.FC<TabProps> = ({ space, kwants, onNewBot, onEditBot, onOpe
   <div className="space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="text-xs text-zinc-400">
-        {kwants.length} {kwants.length === 1 ? 'bot' : 'bots'} in {space.name}. Laya only picks from these.
+        {kwants.length} {kwants.length === 1 ? 'bot' : 'bots'} in {space.name}. Only these can be picked to answer.
       </p>
       <div className="flex gap-2">
         <button type="button" onClick={onOpenImport} className={rowBtn}>

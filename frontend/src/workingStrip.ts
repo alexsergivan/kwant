@@ -21,11 +21,9 @@ export function workingLabel(s: WorkingState): string {
   // An approval: the card says what it is for; the strip only says whose move it is.
   if (open?.kind === 'approval' && open.status === 'waiting') return 'waiting for your OK';
   if (open) {
-    // specific-step-titles: a shell step says the same words as its row ("fetching shop.example.com"), never the
-    // raw command, which can carry a URL's query or a token.
-    const shell = plainShellTitle(open);
-    if (shell) return lower(shell.text);
-    const t = readableStepTitle(plainTitle(open.title).trim());
+    // specific-step-titles + 36d: a shell step says the same words as its row ("fetching shop.example.com",
+    // "running a command on 203.0.113.66"), never the raw command, which can carry a URL's query or a token.
+    const t = plainShellTitle(open)?.text ?? readableStepTitle(plainTitle(open.title).trim());
     if (t) return lower(t);
   }
   if (s.writing) return 'writing the reply';
@@ -44,6 +42,18 @@ export function stripSentence(name: string, s: WorkingState, auditLine?: string 
   const label = workingLabel(s);
   if (auditLine && (label === 'getting started' || label === 'working on it')) return { audit: true, text: auditLine };
   return { audit: false, text: `${name} is ${label}` };
+}
+
+/**
+ * 36d: the working scene's line 1 (working-scene/design.md §3): the strip's sentence, plus what to set bright
+ * (the host of a shell command) and whether the laptop shows the command glyph (the open step is a shell command).
+ */
+export function sceneLine(name: string, s: WorkingState, auditLine?: string | null): { audit: boolean; text: string; host: string | null; command: boolean } {
+  const sentence = stripSentence(name, s, auditLine);
+  // The same open step workingLabel reads (a waiting approval isn't a scene state: the bubble says Paused then).
+  const open = s.queued || s.awaitingAnswer ? undefined : [...(s.live?.steps ?? [])].reverse().find(isOpenStep);
+  const shell = open && open.kind !== 'approval' && !sentence.audit ? plainShellTitle(open) : null;
+  return { ...sentence, host: shell?.host ?? null, command: !!shell };
 }
 
 /**
