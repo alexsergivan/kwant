@@ -254,15 +254,100 @@
   "note": "33g QA Finding 3: an MCP card named Bash with an empty server; the push and Telegram name it (use Bash), never claude's Bash"
  },
  {
-  "tool": "Task",
-  "ing": "using Task",
-  "base": "use Task",
-  "push": false
- },
- {
   "tool": "",
   "ing": "using a tool",
   "base": "use a tool",
+  "push": false
+ },
+ {
+  "tool": "ToolSearch",
+  "ing": "finding the right tool",
+  "base": "find the right tool",
+  "push": false
+ },
+ {
+  "tool": "TodoWrite",
+  "ing": "updating its to-do list",
+  "base": "update its to-do list",
+  "push": false
+ },
+ {
+  "tool": "Glob",
+  "ing": "looking for files",
+  "base": "look for files",
+  "push": false
+ },
+ {
+  "tool": "Grep",
+  "ing": "searching the files",
+  "base": "search the files",
+  "push": false
+ },
+ {
+  "tool": "LS",
+  "ing": "listing files",
+  "base": "list files",
+  "push": false
+ },
+ {
+  "tool": "Task",
+  "ing": "asking a helper",
+  "base": "ask a helper",
+  "push": false
+ },
+ {
+  "tool": "Agent",
+  "ing": "asking a helper",
+  "base": "ask a helper",
+  "push": false
+ },
+ {
+  "tool": "Skill",
+  "ing": "using a skill",
+  "base": "use a skill",
+  "push": false
+ },
+ {
+  "tool": "NotebookEdit",
+  "ing": "changing a notebook",
+  "base": "change a notebook",
+  "push": false
+ },
+ {
+  "tool": "BashOutput",
+  "ing": "checking a running command",
+  "base": "check a running command",
+  "push": false
+ },
+ {
+  "tool": "KillShell",
+  "ing": "stopping a running command",
+  "base": "stop a running command",
+  "push": false
+ },
+ {
+  "tool": "ExitPlanMode",
+  "ing": "sharing its plan",
+  "base": "share its plan",
+  "push": false
+ },
+ {
+  "tool": "apply_patch",
+  "ing": "changing files",
+  "base": "change files",
+  "push": false
+ },
+ {
+  "tool": "update_plan",
+  "ing": "updating its plan",
+  "base": "update its plan",
+  "push": false
+ },
+ {
+  "tool": "task",
+  "server": "linear",
+  "ing": "using task (linear)",
+  "base": "use task (linear)",
   "push": false
  }
 ]
