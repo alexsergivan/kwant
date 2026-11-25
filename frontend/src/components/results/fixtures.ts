@@ -1259,3 +1259,85 @@ export const WALL_HOST_VIEWS: Record<keyof typeof WALL_FIXTURES, Record<string, 
   shown: view(WALL_FIXTURES.shown, [], wallOf(212, best30)),
   shownByHost: view(WALL_FIXTURES.shownByHost, [], wallOf(212, best30)),
 };
+
+const QUEUE_CLOSE_TEXT = "Sorry, we've closed for today. Thanks for waiting, and see you next time!";
+// ---- pa11b: the queue ticket (Tine's Bakery, Sat Dec 5 2026; times on the box's clock, shown in UTC by the shots)
+const QUEUE_FUNNEL = 'https://tine-mac.tail5e2c.ts.net/p/bakery';
+const QUEUE_WIFI = 'http://192.168.1.31:7480/p/bakery';
+const qAt = (h: number, m: number, s = 0) => `2026-12-05T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}Z`;
+const qTicket = (number: number, h: number, m: number, extra: Record<string, unknown> = {}) => ({
+  number,
+  name: null,
+  state: 'waiting',
+  taken_at: qAt(h, m),
+  called_at: null,
+  call_ends_at: null,
+  recall_until: null,
+  ...extra,
+});
+const queueBase = {
+  spec: { title: "Tine's Bakery", line: 'Pick up at the side counter', hours: { until: '13:00' }, call_minutes: 3, ask_name: false, max_waiting: 200, host_name: 'Tine' },
+  state: 'open',
+  pause_text: null,
+  close_text: null,
+  paused_at: null,
+  closed_at: null,
+  auto_closed: false,
+  closed_waiting: 0,
+  hours_until: '13:00',
+  now_serving: 23,
+  counter: 28,
+  next_number: 29,
+  tickets: [qTicket(24, 10, 17), qTicket(25, 10, 21), qTicket(26, 10, 24), qTicket(27, 10, 26), qTicket(28, 10, 29)],
+  summary: { served_today: 22, skipped_today: 1, left_today: 2, waiting: 5, avg_minutes: 3, calls_today: 24, longest_wait_minutes: 14, days: 1, served_total: 22, avg_total_minutes: 3 },
+  now: qAt(10, 31, 19),
+  join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: QUEUE_FUNNEL, wifi_url: QUEUE_WIFI },
+};
+const queueFixture = (reply: string, state: 'writing' | 'live' | 'ended', queue: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: 'pocket:bakery' },
+    code: 'bakery',
+    kit: 'queue',
+    name: "Tine's Bakery",
+    when: null,
+    state,
+    santa: null,
+    queue: { ...queueBase, ...queue },
+  });
+const qEmpty = { now_serving: null, counter: 0, next_number: 1, tickets: [], summary: { ...queueBase.summary, served_today: 0, skipped_today: 0, left_today: 0, waiting: 0, avg_minutes: null, calls_today: 0, longest_wait_minutes: null, served_total: 0, avg_total_minutes: null }, now: qAt(7, 2) };
+const qCalled = {
+  tickets: [qTicket(24, 10, 17, { state: 'called', called_at: qAt(10, 31), call_ends_at: qAt(10, 34) }), ...queueBase.tickets.slice(1)],
+  summary: { ...queueBase.summary, waiting: 4, longest_wait_minutes: 10 },
+};
+export const QUEUE_FIXTURES = {
+  setup: queueFixture("Here's the queue for the bakery. Check it, then open it; the counter sign prints from the card.", 'writing', { state: null, now: qAt(6, 48), now_serving: null, tickets: [], summary: undefined }),
+  empty: queueFixture("Your queue is open. Print the counter sign and put it by the till.", 'live', qEmpty),
+  waiting: queueFixture('Five people are waiting. #24 is next.', 'live', {}),
+  called: queueFixture('#24 is called. Their phone buzzes and shows the counter.', 'live', qCalled),
+  skipped: queueFixture("#24 didn't come, so it was skipped. You can bring it back for 10 minutes.", 'live', {
+    tickets: [qTicket(24, 10, 17, { state: 'skipped', called_at: qAt(10, 31), recall_until: qAt(10, 44) }), ...queueBase.tickets.slice(1)],
+    summary: { ...queueBase.summary, waiting: 4, skipped_today: 2, longest_wait_minutes: 13 },
+    now: qAt(10, 34, 30),
+  }),
+  paused: queueFixture('The queue is paused. Five people keep their place.', 'live', { state: 'paused', pause_text: 'Back in 10 minutes', paused_at: qAt(10, 40), now: qAt(10, 41) }),
+  close: queueFixture('Five people are waiting. #24 is next.', 'live', {}),
+  closed: queueFixture('The queue closed at 1 PM, as set. Here is the day.', 'live', {
+    state: 'closed',
+    closed_at: qAt(13, 0),
+    auto_closed: true,
+    closed_waiting: 2,
+    close_text: QUEUE_CLOSE_TEXT,
+    now_serving: null,
+    tickets: [],
+    summary: { ...queueBase.summary, served_today: 61, skipped_today: 4, left_today: 5, waiting: 0, avg_minutes: 3, longest_wait_minutes: null },
+    now: qAt(13, 2),
+  }),
+  ended: queueFixture('The queue has ended. The counts stay here.', 'ended', {
+    state: 'ended',
+    ended_at: '2026-12-19T13:05:00Z',
+    now_serving: null,
+    tickets: [],
+    summary: { ...queueBase.summary, waiting: 0, days: 3, served_total: 174, avg_total_minutes: 4 },
+    now: '2026-12-19T13:05:00Z',
+  }),
+} satisfies Record<string, Fixture>;

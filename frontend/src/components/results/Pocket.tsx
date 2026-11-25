@@ -48,6 +48,7 @@ import { SantaCard, findMatchLike, validSanta } from './PocketSanta';
 import { WallCard, validWall } from './PocketWall';
 import { GatherCard, findBallotPair, validGather } from './PocketGather';
 import { DeskCard, validDesk } from './PocketDesk';
+import { QueueCard, validQueue } from './PocketQueue';
 import type { RendererProps } from './registry';
 
 // ---------------------------------------------------------------------------------------------------
@@ -214,6 +215,12 @@ export function validPocket(raw: unknown): PocketBlock | null {
   if (desk && (santa || gather || results)) return null;
   if (desk && !['writing', 'live', 'ended'].includes(state)) return null;
   if (desk && b.join !== undefined && b.join !== null) return null;
+  // Queue ticket (pa11b): `queue` is Vega's host view plus its own join; set-up is "writing", then "live", then "ended".
+  const queue = b.queue === undefined || b.queue === null ? null : validQueue(b.queue, b.name as string, state as string);
+  if (queue === undefined || (b.kit === 'queue') !== !!queue) return null;
+  if (queue && (santa || gather || desk || results)) return null;
+  if (queue && !['writing', 'live', 'ended'].includes(state as string)) return null;
+  if (queue && b.join !== undefined && b.join !== null) return null;
   return {
     id: b.id,
     type: 'pocket',
@@ -242,6 +249,7 @@ export function validPocket(raw: unknown): PocketBlock | null {
     santa,
     gather,
     desk,
+    ...(queue ? { queue } : {}),
     ...(wall ? { wall } : {}),
     ...(notice ? { notice } : {}),
   };
@@ -286,7 +294,7 @@ export function withCard(b: PocketBlock, c: DraftCard): PocketBlock {
 const NUM = new Intl.NumberFormat('en');
 const num = (n: number) => NUM.format(n);
 const usd = (n: number) => `$${n < 0.01 && n > 0 ? '0.01' : n.toFixed(2)}`;
-const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa', wall: 'Photo wall', gather: 'Sign-up', desk: 'Guest Guide' };
+const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa', wall: 'Photo wall', gather: 'Sign-up', desk: 'Guest Guide', queue: 'Queue ticket' };
 export const kitLabel = (kit: string, mode?: string) => (kit === 'desk' && mode === 'booking' ? 'Booking Desk' : null) ?? KIT_LABEL[kit] ?? kit.charAt(0).toUpperCase() + kit.slice(1).replace(/_/g, ' ');
 
 export function budgetLine(b: PocketBlock): string {
@@ -1106,6 +1114,8 @@ export const Pocket: React.FC<RendererProps<PocketBlock>> = (props) =>
     <WallCard block={props.block} ask={props.ask} join={<WallJoin block={props.block} />} />
   ) : props.block.desk ? (
     <DeskCard block={props.block} ask={props.ask} />
+  ) : props.block.queue ? (
+    <QueueCard block={props.block} ask={props.ask} />
   ) : (
     <QuizPocket {...props} />
   );

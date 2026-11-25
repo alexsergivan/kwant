@@ -1125,3 +1125,31 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
   .kw-needs-fade { animation: kw-needs-fade 120ms var(--kw-ease, ease-out); }
   .kw-needs-leave { opacity: 0; transition: opacity 120ms var(--kw-ease, ease-out); }
 }
+
+/* pa11b: the queue's counter sign. Print only (A6 portrait), black on white; on screen it never shows unless a
+   fixture asks for the preview. Printing the sign hides the rest of the app for that one page. */
+.kw-print-sign { display: none; }
+.kw-print-sign--preview,
+.kw-print-sign {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 3mm;
+  color: black;
+  background: white;
+  font-family: var(--kw-font-sans, system-ui, sans-serif);
+}
+.kw-print-sign--preview { display: flex; width: 105mm; min-height: 148mm; padding: 9mm 8mm; box-sizing: border-box; }
+.kw-print-sign .kw-sign-name { font-size: 15pt; font-weight: 700; margin: 0; }
+.kw-print-sign .kw-sign-head { font-size: 26pt; font-weight: 800; line-height: 1.05; margin: 0; }
+.kw-print-sign .kw-sign-qr { width: 58mm; padding: 2mm; border: 0.6mm solid black; border-radius: 3mm; }
+.kw-print-sign .kw-sign-qr svg { display: block; width: 100%; height: auto; }
+.kw-print-sign .kw-sign-how { font-size: 11pt; line-height: 1.3; margin: 0; max-width: 80mm; }
+.kw-print-sign .kw-sign-line { font-size: 10pt; font-weight: 600; margin: 0; }
+.kw-print-sign .kw-sign-foot { font-size: 8.5pt; margin: auto 0 0; color: black; opacity: 0.75; }
+@page sign { size: A6 portrait; margin: 9mm 8mm; }
+@media print {
+  body:has(> .kw-print-sign) > *:not(.kw-print-sign) { display: none !important; }
+  body:has(> .kw-print-sign) { background: white !important; }
+  body > .kw-print-sign { display: flex !important; page: sign; break-inside: avoid; }
+}
