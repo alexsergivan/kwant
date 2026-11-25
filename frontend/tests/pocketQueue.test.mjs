@@ -422,6 +422,44 @@ test('a read that started before an action does not paint over it', async () => 
   assert.ok(v.$('[data-action="served-call-next"]'), 'the late read of the waiting queue is ignored');
 });
 
+test('a read that starts during an action and lands after it does not paint over it', async () => {
+  // Catch the 10 s poll so the test can fire it while Call next is in flight.
+  const polls = [];
+  const realSet = g.window.setInterval;
+  g.window.setInterval = (fn, ms, ...a) => {
+    if (ms === m.QUEUE_POLL_MS) polls.push(fn);
+    return realSet.call(g.window, fn, ms, ...a);
+  };
+  try {
+    stub(raw('waiting').queue, () => raw('called').queue);
+    const inner = g.fetch;
+    let releasePost, releaseGet;
+    const postGate = new Promise((r) => (releasePost = r));
+    const getGate = new Promise((r) => (releaseGet = r));
+    let holdGet = false;
+    g.fetch = async (url, init = {}) => {
+      const method = init.method ?? 'GET';
+      if (method === 'POST') await postGate;
+      else if (holdGet) await getGate;
+      return inner(url, init);
+    };
+    const v = await card('waiting');
+    assert.ok(polls.length, 'the card polls');
+    await click(v.$('[data-action="call-next"]'));
+    holdGet = true;
+    polls.at(-1)();
+    await settle();
+    releasePost();
+    await settle();
+    assert.ok(v.$('[data-action="served-call-next"]'), 'called after the action');
+    releaseGet();
+    await settle();
+    assert.ok(v.$('[data-action="served-call-next"]'), 'the poll that started mid-action is ignored');
+  } finally {
+    g.window.setInterval = realSet;
+  }
+});
+
 test('Closed: Open again sends reopen; End asks first, then ends the pocket', async () => {
   stub(raw('closed').queue, () => raw('empty').queue);
   const v = await card('closed');

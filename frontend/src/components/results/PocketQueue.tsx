@@ -461,7 +461,8 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
   // Numbers this card skipped by hand (so the callout doesn't say they didn't come).
   const skippedByHost = useRef(new Map<number, string>());
 
-  // Each action bumps this, so a read that started before it can't paint over the newer state.
+  // Each action bumps this when it starts and again when it ends, so a read that started before or during it
+  // can't paint over the newer state.
   const actSeq = useRef(0);
   // Reads that failed in a row (polls back off), and a 404: the pocket is gone, so polling stops.
   const fails = useRef(0);
@@ -483,6 +484,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
     actSeq.current += 1;
     setBusy(true);
     setDone(null);
+    let failed = false;
     try {
       const next = queueFromRead(q, await pocketApi.queueAction(code, name, body));
       if (next) setFresh(next);
@@ -490,10 +492,13 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
       return true;
     } catch (e) {
       setDone({ kind: 'error', text: errorLine(e) });
-      void refresh();
+      failed = true;
       return false;
     } finally {
+      actSeq.current += 1;
       setBusy(false);
+      // Re-read after the bump, so this read is newer than the action and counts.
+      if (failed) void refresh();
     }
   };
 
@@ -509,6 +514,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
           setDone({ kind: 'error', text: `Couldn't remove #${n}: ${errorLine(e)}` });
         }
       } finally {
+        actSeq.current += 1;
         setHidden((h) => h.filter((x) => x !== n));
       }
     },
