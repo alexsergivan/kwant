@@ -140,7 +140,8 @@ pub async fn sweep(state: &AppState, cancelled: &mut HashSet<String>, now: DateT
                 }
                 tracing::warn!(turn_id = %turn.turn_id, kwant_id = %turn.kwant_id, secs = silence.as_secs(), "a running turn went silent; stopping it");
                 post_line(state, turn, silence).await;
-                if state.turns.cancel(Some(&turn.turn_id)) == 0 {
+                // Marked as the sweep's cancel, so the turn saves no "You stopped this reply." under this line
+                if state.turns.cancel_lost(&turn.turn_id) == 0 {
                     force_end(state, turn).await;
                 } else {
                     cancelled.insert(turn.turn_id.clone());

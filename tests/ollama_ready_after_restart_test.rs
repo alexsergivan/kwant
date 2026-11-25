@@ -347,6 +347,7 @@ async fn a_bot_pinned_to_ollama_runs_once_ollama_is_back_and_the_space_counts_it
         "ANTHROPIC_API_KEY",
         "OPENAI_API_KEY",
         "XAI_API_KEY",
+        "MISTRAL_API_KEY",
         "OLLAMA_MODEL",
         "CLAUDE_CONFIG_DIR",
     ] {

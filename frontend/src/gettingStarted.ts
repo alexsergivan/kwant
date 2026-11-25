@@ -18,16 +18,16 @@ export const CHOICES: Array<{ id: AiChoice; name: string; line: string }> = [
   { id: 'claude', name: 'Claude', line: 'Claude Pro or Max plan' },
   { id: 'codex', name: 'ChatGPT', line: 'Your ChatGPT plan, through Codex' },
   { id: 'grok', name: 'Grok', line: 'Your Grok account' },
-  { id: 'key', name: 'API key', line: 'Anthropic, OpenAI or xAI' },
+  { id: 'key', name: 'API key', line: 'Anthropic, OpenAI, xAI or Mistral' },
 ];
 
 export const choiceName = (c: AiChoice) => CHOICES.find((x) => x.id === c)?.name ?? c;
 /** What the CLI is called while it is being got ready ("Getting Claude ready…"). */
 export const cliName = (c: LoginEngine) => (c === 'codex' ? 'Codex' : c === 'grok' ? 'Grok' : 'Claude');
 
-const KEY_ENGINES: EngineId[] = ['anthropic_api', 'openai_api', 'xai_api'];
+const KEY_ENGINES: EngineId[] = ['anthropic_api', 'openai_api', 'xai_api', 'mistral_api'];
 /** Today's engine order, for "already signed in" when several are (design §5.1). */
-const ORDER: EngineId[] = ['claude', 'codex', 'grok', 'anthropic_api', 'openai_api', 'xai_api'];
+const ORDER: EngineId[] = ['claude', 'codex', 'grok', 'anthropic_api', 'openai_api', 'xai_api', 'mistral_api'];
 
 /** The tile an engine belongs to. Ollama and custom APIs aren't tiles; they still count as "can run". */
 export const choiceOf = (id: EngineId): AiChoice | null =>

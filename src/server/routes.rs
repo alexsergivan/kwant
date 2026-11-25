@@ -760,6 +760,8 @@ pub(super) async fn get_configured_key(db: &crate::db::Database, target_model: &
         db.get_setting("anthropic_api_key").await.ok().flatten()
     } else if target_model.contains("grok") {
         db.get_setting("xai_api_key").await.ok().flatten()
+    } else if crate::profiles::Engine::from_model(target_model) == Some(crate::profiles::Engine::Mistral) {
+        db.get_setting("mistral_api_key").await.ok().flatten()
     } else if target_model.contains("openai") || target_model.contains("codex") || target_model.contains("gpt") {
         db.get_setting("openai_api_key").await.ok().flatten()
     } else {
@@ -798,6 +800,15 @@ fn stop_asks(scope: &TurnScope, opts: &TurnOpts) -> bool {
         opts.rehearse.is_some(),
         opts.source.as_ref().is_some_and(|s| s.kind == "routine"),
     )
+}
+
+/// The line a Stop the person pressed leaves in the chat (meta kind `stopped_by_person`).
+pub const STOPPED_BY_PERSON: &str = "Stopped. You stopped this reply.";
+
+/// A Stop the person pressed saves [`STOPPED_BY_PERSON`] only in a turn that would save a reply:
+/// not a quiet or unsaved one (kwnt's own checks, drafts, audits and decide-first views).
+fn stop_leaves_a_line(opts: &TurnOpts) -> bool {
+    !opts.quiet_failure && !opts.unsaved
 }
 
 /// Longest driver error kept in a saved `turn_failed` message, in bytes.
@@ -4053,6 +4064,21 @@ async fn run_kwant_turn_inner(
                 event_broadcast.send(e);
             }
             event_broadcast.send(RuntimeEvent::ThinkingDelta("⏹️ Cancelled by user".into()));
+            // A Stop the person pressed leaves one line under their question, with the steps the
+            // turn took (stop-leaves-a-line, 0.9.51). They chose it: no Needs-you ask, no
+            // notification and no Retry, unlike [`super::stopped`]. A turn that saves no reply
+            // (quiet or unsaved) saves no line either, nor does a silent turn the sweep stopped:
+            // it already has its `turn_lost` line ([`super::lost_turns`]) and nobody pressed Stop.
+            if stop_leaves_a_line(&opts) && !state.turns.cancelled_as_lost(&scope.job_id) {
+                let msg = NewMessage {
+                    reasoning_content: with_notices(opts.label.clone()),
+                    ..scope.message("kwant", &target_kwant.name, STOPPED_BY_PERSON.into())
+                };
+                let meta = with_failure_meta(Some(json!({"kind": "stopped_by_person"})), &opts.failure_meta);
+                if let Some(saved) = scope.save(&msg, super::activity::with_activity(meta, activity)).await {
+                    let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&saved).unwrap_or_default() });
+                }
+            }
             return Err("stopped by the user".into());
         } else if let Some(text) = gave_up {
             if !opts.quiet_failure {
@@ -5507,6 +5533,7 @@ pub struct SettingsResponse {
     pub anthropic_api_key: String,
     pub xai_api_key: String,
     pub openai_api_key: String,
+    pub mistral_api_key: String,
     pub ollama_url: String,
     pub claude_cli_found: bool,
     pub claude_cli_path: Option<String>,
@@ -5611,6 +5638,7 @@ pub struct SaveSettingsPayload {
     pub anthropic_api_key: Option<String>,
     pub xai_api_key: Option<String>,
     pub openai_api_key: Option<String>,
+    pub mistral_api_key: Option<String>,
     pub ollama_url: Option<String>,
     /// https only; "" removes it, the mask keeps it.
     pub notify_webhook_url: Option<String>,
@@ -5668,6 +5696,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
     let anthropic = state.db.get_setting("anthropic_api_key").await.unwrap_or(None).unwrap_or_default();
     let xai = state.db.get_setting("xai_api_key").await.unwrap_or(None).unwrap_or_default();
     let openai = state.db.get_setting("openai_api_key").await.unwrap_or(None).unwrap_or_default();
+    let mistral = state.db.get_setting("mistral_api_key").await.unwrap_or(None).unwrap_or_default();
     let ollama = state.db.get_setting("ollama_url").await.unwrap_or(None).unwrap_or_else(|| "http://localhost:11434/v1".to_string());
 
     let claude_bin = find_cli_binary("claude");
@@ -5679,6 +5708,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         anthropic_api_key: if anthropic.is_empty() { String::new() } else { "••••••••".into() },
         xai_api_key: if xai.is_empty() { String::new() } else { "••••••••".into() },
         openai_api_key: if openai.is_empty() { String::new() } else { "••••••••".into() },
+        mistral_api_key: if mistral.is_empty() { String::new() } else { "••••••••".into() },
         ollama_url: ollama,
         claude_cli_found: claude_bin.is_some(),
         claude_cli_path: claude_bin,
@@ -5845,6 +5875,14 @@ pub async fn save_settings(
         Some(raw) => Some(crate::drivers::clean_location(raw)),
         None => None,
     };
+    // 35a: checked like an account's key (no spaces, 8 to 512 characters) before anything is kept
+    let mistral_key = match payload.mistral_api_key.as_deref() {
+        Some(key) if !key.starts_with('•') && !key.trim().is_empty() => match crate::profiles::clean_key(key) {
+            Ok(k) => Some(k),
+            Err(e) => return bad(e.replace("api_key", "mistral_api_key")),
+        },
+        _ => None,
+    };
     if let Err(e) =
         super::continuity::save_notify_settings(&state, payload.notify_webhook_url, payload.notify_on).await
     {
@@ -5869,6 +5907,10 @@ pub async fn save_settings(
             let _ = state.db.set_setting("openai_api_key", &key).await;
             engines_changed = true;
         }
+    }
+    if let Some(key) = mistral_key {
+        let _ = state.db.set_setting("mistral_api_key", &key.0).await;
+        engines_changed = true;
     }
     if let Some(url) = payload.ollama_url {
         if !url.is_empty() {
@@ -7727,7 +7769,8 @@ mod tests {
     }
 
     use super::{
-        is_persons, is_reply_by, person_words, scrub_urls, turn_failed_text, turn_plan, with_failure_meta, Carried, TurnOpts,
+        is_persons, is_reply_by, person_words, scrub_urls, stop_leaves_a_line, turn_failed_text, turn_plan, with_failure_meta,
+        Carried, TurnOpts, STOPPED_BY_PERSON,
     };
     use crate::db::models::Message;
     use crate::router::delivery::{keyword_plan, Deliverable, DeliveryPlan, PlanSource};
@@ -7760,6 +7803,20 @@ mod tests {
     /// A person-started turn's plan, as the turn makes it (see [`turn_plan`]).
     fn person_turn() -> TurnOpts {
         TurnOpts { nav_prompt: Some("(the person's message)".into()), ..Default::default() }
+    }
+
+    /// stop-leaves-a-line: a person's chat, a hand-off, a routine run or a discussion round gets the
+    /// Stopped line; a quiet or unsaved turn (kwnt's own checks and drafts) saves nothing.
+    #[test]
+    fn a_stop_leaves_a_line_only_where_a_reply_would_be_saved() {
+        assert!(stop_leaves_a_line(&person_turn()));
+        assert!(stop_leaves_a_line(&TurnOpts { delegation_id: Some("d1".into()), ..Default::default() }));
+        assert!(stop_leaves_a_line(&TurnOpts { label: Some("Routine".into()), ..Default::default() }));
+        assert!(!stop_leaves_a_line(&TurnOpts { quiet_failure: true, ..person_turn() }));
+        assert!(!stop_leaves_a_line(&TurnOpts { unsaved: true, ..person_turn() }));
+        // As kwnt's own checks set them (work_ahead, missions, decide-first)
+        assert!(!stop_leaves_a_line(&TurnOpts { unsaved: true, quiet_failure: true, purpose: Some("check".into()), ..Default::default() }));
+        assert_eq!(STOPPED_BY_PERSON, "Stopped. You stopped this reply.");
     }
 
     fn plan_of(opts: &TurnOpts, m: &Message, git_repo: bool) -> Option<DeliveryPlan> {

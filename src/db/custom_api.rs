@@ -43,6 +43,22 @@ const LLM_PROFILES_V2: &str = "CREATE TABLE llm_profiles__spaces_new (
     UNIQUE (space_id, engine, name COLLATE NOCASE)
 )";
 
+/// 35a: `llm_profiles` also takes engine `mistral` (Mistral API keys, kind `api_key`). Same
+/// table otherwise; the stored CREATE statement saying `'mistral'` marks it done.
+const LLM_PROFILES_MISTRAL: &str = "CREATE TABLE llm_profiles__spaces_new (
+    id TEXT PRIMARY KEY,
+    engine TEXT NOT NULL CHECK (engine IN ('claude', 'codex', 'grok', 'custom', 'mistral')),
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('system', 'cli_home', 'api_key', 'custom_api')),
+    home_dir TEXT UNIQUE,
+    priority INTEGER NOT NULL DEFAULT 100,
+    enabled INTEGER NOT NULL DEFAULT 1,
+    is_default INTEGER NOT NULL DEFAULT 0,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    space_id TEXT NOT NULL DEFAULT 'spc_default',
+    UNIQUE (space_id, engine, name COLLATE NOCASE)
+)";
+
 const AFTER_REBUILD: [&str; 2] = [
     "CREATE UNIQUE INDEX llm_profiles_one_default ON llm_profiles (space_id, engine) WHERE is_default = 1",
     "CREATE INDEX llm_profiles_by_space ON llm_profiles (space_id, engine)",
@@ -85,6 +101,46 @@ impl Database {
                 Ok(false)
             }
         }
+    }
+
+    /// 35a: lets `llm_profiles` hold Mistral accounts. Runs after [`Self::migrate_custom_api`]
+    /// and only on its schema; SQLite can't widen a CHECK, so the table is rebuilt once with every
+    /// row and index. The schema version stays as it is: a release without Mistral still starts
+    /// and, as with `custom` rows before it, lists a `mistral` row under no engine and never
+    /// routes to it. Never fails startup: an error is logged and Mistral accounts can't be added.
+    pub(super) async fn migrate_mistral_engine(&self) -> Result<bool, DbError> {
+        if !self.custom_api_ready().await {
+            return Ok(false);
+        }
+        if self.mistral_ready().await {
+            return Ok(true);
+        }
+        let mut conn = self.pool.acquire().await?;
+        // Off, or dropping the old table would cascade to secrets, state and endpoints
+        sqlx::query("PRAGMA foreign_keys = OFF").execute(&mut *conn).await?;
+        let result = mistral_in_transaction(&mut conn).await;
+        sqlx::query("PRAGMA foreign_keys = ON").execute(&mut *conn).await?;
+        match result {
+            Ok(()) => {
+                tracing::info!("Database ready for Mistral accounts");
+                Ok(true)
+            }
+            Err(e) => {
+                tracing::error!(
+                    "Mistral accounts are unavailable: the schema change failed and was rolled back ({e})"
+                );
+                Ok(false)
+            }
+        }
+    }
+
+    /// Whether Mistral accounts can be stored (the `llm_profiles` CHECK names `mistral`).
+    pub async fn mistral_ready(&self) -> bool {
+        let sql: Result<Option<(String,)>, _> =
+            sqlx::query_as("SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'llm_profiles'")
+                .fetch_optional(&self.pool)
+                .await;
+        matches!(sql, Ok(Some((sql,))) if sql.contains("'mistral'"))
     }
 
     /// Whether Custom API accounts can be stored (the migration ran).
@@ -153,6 +209,22 @@ async fn custom_api_in_transaction(conn: &mut SqliteConnection) -> Result<(), Db
     sqlx::query(&format!("PRAGMA user_version = {CUSTOM_API_SCHEMA_VERSION}"))
         .execute(&mut *tx)
         .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn mistral_in_transaction(conn: &mut SqliteConnection) -> Result<(), DbError> {
+    let before = foreign_key_violations(conn).await?;
+    let mut tx = conn.begin().await?;
+    rebuild(&mut tx, "llm_profiles", LLM_PROFILES_MISTRAL, &AFTER_REBUILD).await?;
+    let after = foreign_key_violations(&mut tx).await?;
+    let new: Vec<_> = after
+        .iter()
+        .filter(|(key, n)| **n > before.get(*key).copied().unwrap_or(0))
+        .collect();
+    if !new.is_empty() {
+        return Err(DbError::Migration(format!("foreign key check failed: {new:?}")));
+    }
     tx.commit().await?;
     Ok(())
 }
