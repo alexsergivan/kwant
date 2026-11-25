@@ -325,7 +325,7 @@ export function accountState(p: Profile, now = Date.now()): AccountState {
     return { label: 'Ready', tone: 'ok', detail: p.account_label };
   }
   if (p.signed_in === false) return { label: 'Needs sign-in', tone: 'warn', detail: null };
-  return { label: 'Unknown', tone: 'muted', detail: p.kind === 'system' ? 'Uses this computer’s login' : 'Couldn’t check the sign-in (is the CLI installed?)' };
+  return { label: 'Unknown', tone: 'muted', detail: p.kind === 'system' ? 'Uses this computer’s login' : 'Couldn’t check the sign-in (is it installed on this computer?)' };
 }
 
 /** The format and key note under a Custom API account's name; "key refused" once the server turned the key down. */

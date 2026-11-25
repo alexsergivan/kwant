@@ -166,24 +166,24 @@ const hostAction = (e: EngineInfo, api: EnginesApi, onSignedIn: () => void, focu
 function headline(engines: EngineInfo[], profiles: Profile[] | null, now: number): string {
   const ready = engines.filter(isUsable).length;
   if (ready > 0) {
-    return `${ready} ready${onlyCliReady(engines) ? ', all through your signed-in CLIs, so no API keys are needed' : ''}. Bots only use engines that are ready.`;
+    return `${ready} ready${onlyCliReady(engines) ? ', all through AIs signed in on this computer, so no API keys are needed' : ''}. Bots only use AIs that are ready.`;
   }
   // An engine that's off but has an account ready is the quickest fix.
   for (const e of sortEngines(engines)) {
     if (e.enabled !== false || !profiles) continue;
     const s = engineSummary(e, summaryAccounts(accountsForCard(profiles, e.id), now));
-    if (s.text.startsWith('Off · Turn on to use ') && !s.text.endsWith(' it')) return `No engine can run right now. ${e.name} is off: turn it on to use ${s.text.slice('Off · Turn on to use '.length)}.`;
+    if (s.text.startsWith('Off · Turn on to use ') && !s.text.endsWith(' it')) return `No AI can run right now. ${e.name} is off: turn it on to use ${s.text.slice('Off · Turn on to use '.length)}.`;
   }
   return claudeNeedsSignIn(engines)
-    ? 'No engine can run right now. Sign in with Claude below, or add an account.'
-    : 'No engine can run right now. Turn on an engine and sign in to one of its accounts below.';
+    ? 'No AI can run right now. Sign in with Claude below, or add an account.'
+    : 'No AI can run right now. Turn on an AI and sign in to one of its accounts below.';
 }
 
 /** The answer to "what will run my next kwant?": engine → account → model per family, and the fallback. */
 export const RouteSummary: React.FC<{ rows: RouteRow[]; pending: boolean }> = ({ rows, pending }) => (
   <div data-route-summary className="rounded-xl border border-sky-500/25 bg-gradient-to-b from-sky-500/[0.07] to-transparent p-3 space-y-2.5">
     <h4 className="flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-sky-200">
-      <Route size={13} aria-hidden="true" /> What runs your kwant bots
+      <Route size={13} aria-hidden="true" /> What runs your bots
     </h4>
     <ul className="space-y-2.5">
       {rows.map((r) => (
@@ -292,9 +292,9 @@ export const EnginesPanel: React.FC<{
       ) : (
         <p className="text-[11px] text-zinc-400 leading-relaxed" aria-live="polite">
           {engines === null
-            ? 'Checking which engines can run…'
+            ? 'Checking which AIs can run…'
             : engines.length === 0
-              ? 'This server doesn’t report engine status yet.'
+              ? 'This server doesn’t report AI status yet.'
               : picking
                 ? 'Nothing can answer yet. Pick one way to start:'
                 : headline(engines, profiles, now)}
@@ -328,7 +328,7 @@ export const EnginesPanel: React.FC<{
       )}
 
       {present.length > 0 && (
-        <ul className="grid grid-cols-1 gap-2.5" aria-label="Engines on this computer">
+        <ul className="grid grid-cols-1 gap-2.5" aria-label="AIs on this computer">
           {present.map(card)}
         </ul>
       )}
