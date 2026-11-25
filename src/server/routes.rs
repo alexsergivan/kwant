@@ -6132,7 +6132,7 @@ pub async fn select_folder() -> Result<Json<SelectFolderResponse>, StatusCode> {
     {
         let res = tokio::process::Command::new("osascript")
             .arg("-e")
-            .arg("POSIX path of (choose folder with prompt \"Select Team Workspace Folder:\")")
+            .arg("POSIX path of (choose folder with prompt \"Choose a folder on this computer for your team:\")")
             .output()
             .await;
 
@@ -6168,7 +6168,7 @@ pub async fn select_folder() -> Result<Json<SelectFolderResponse>, StatusCode> {
         let res = tokio::process::Command::new("zenity")
             .arg("--file-selection")
             .arg("--directory")
-            .arg("--title=Select Team Workspace Folder")
+            .arg("--title=Choose a folder for your team")
             .output()
             .await;
 
