@@ -21,6 +21,7 @@ pub mod kits;
 pub mod limits;
 pub mod listener;
 pub mod photo;
+pub mod queue;
 pub mod quiz_kit;
 pub mod santa;
 pub mod schedule;
@@ -96,6 +97,11 @@ impl Snapshot {
 
     pub fn rules(&self) -> Option<KitRules> {
         self.kit().map(|k| effective_rules(k, &self.spec))
+    }
+
+    /// How many took part: the players, or the count a kit kept after forgetting them (pa10c).
+    pub fn player_count(&self) -> usize {
+        self.kit().and_then(|k| k.kept_players(&self.kit_state)).unwrap_or(self.players.len())
     }
 }
 
@@ -228,7 +234,7 @@ pub type PResult<T> = Result<T, PocketError>;
 
 fn effective_rules(kit: &dyn Kit, spec: &Value) -> KitRules {
     let mut r = kit.rules(spec);
-    r.max_players = r.max_players.clamp(1, kit.player_ceiling(spec).min(kits::STABLE_MAX_PLAYERS));
+    r.max_players = r.max_players.clamp(1, kit.player_ceiling(spec).min(kits::MAX_CEILING));
     r
 }
 
@@ -283,7 +289,7 @@ pub fn pocket_json(s: &Snapshot) -> Value {
         "closes_at": s.row.closes_at,
         "ended_at": s.row.ended_at,
         "expires_at": s.row.expires_at,
-        "players": s.players.len(),
+        "players": s.player_count(),
         "max_players": rules.as_ref().map(|r| r.max_players),
         "needs_pin": rules.as_ref().is_some_and(|r| r.needs_pin),
         "retention": rules.as_ref().map(|r| r.retention.describe()),
@@ -368,6 +374,10 @@ pub async fn create(state: &AppState, mut req: CreateRequest) -> PResult<(Arc<Sn
     let spec_text = serde_json::to_string(&req.spec).map_err(|_| PocketError::internal())?;
     if spec_text.len() > MAX_SPEC_BYTES {
         return Err(PocketError::new(StatusCode::PAYLOAD_TOO_LARGE, "spec_too_big", "The spec is bigger than 256 KB."));
+    }
+    // pa13b: a booking desk's slots have their own error, with the first bad slot's index
+    if kit.id() == desk::ID {
+        desk::check_spec_slots(&req.spec).map_err(kit_refusal)?;
     }
     kit.validate_spec(&req.spec).map_err(|m| PocketError::new(StatusCode::BAD_REQUEST, "bad_spec", m))?;
     if let (Some(o), Some(c)) = (req.opens_at, req.closes_at) {
@@ -666,17 +676,28 @@ fn open_check(s: &Snapshot, now: DateTime<Utc>) -> PResult<()> {
 
 /// A new player: returns the player and the guest key for the cookie.
 pub async fn join(state: &AppState, code: &str, req: JoinRequest) -> PResult<(PlayerRow, String)> {
-    let (name, name_key) = words::clean_name(&req.name).map_err(|e| PocketError::new(StatusCode::BAD_REQUEST, e.code(), e.message()))?;
-    let avatar = clean_avatar(req.avatar.as_deref())?;
-    let team = clean_team(req.team.as_deref())?;
+    let cleaned = words::clean_name(&req.name).map_err(|e| PocketError::new(StatusCode::BAD_REQUEST, e.code(), e.message()));
+    let avatar = clean_avatar(req.avatar.as_deref());
+    let team = clean_team(req.team.as_deref());
     let lock = state.pocket.lock_for(code);
     let _g = lock.lock().await;
-    let s = snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
+    let s = snapshot(state, code).await?;
+    let id = keys::new_player_id();
+    // A nameless kit (the queue, pa11b): the guest sends nothing and gets a key; whatever came in
+    // the body is dropped, and the player's name key is its own id so it never collides
+    let nameless = s.as_ref().and_then(|s| s.kit()).is_some_and(|k| k.nameless_join());
+    let (name, name_key, avatar, team) = if nameless {
+        (String::new(), id.clone(), String::new(), None)
+    } else {
+        let (name, name_key) = cleaned?;
+        (name, name_key, avatar?, team?)
+    };
+    let s = s.ok_or_else(PocketError::not_found)?;
     let kit = s.kit().ok_or_else(PocketError::not_found)?;
     let rules = effective_rules(kit, &s.spec);
     let now = Utc::now();
     open_check(&s, now)?;
-    if kit.first_names_only(&s.spec) {
+    if !nameless && kit.first_names_only(&s.spec) {
         words::first_name_only(&name).map_err(|e| PocketError::new(StatusCode::BAD_REQUEST, e.code(), e.message()))?;
     }
     let pin = match (rules.needs_pin, req.pin.as_deref()) {
@@ -684,18 +705,19 @@ pub async fn join(state: &AppState, code: &str, req: JoinRequest) -> PResult<(Pl
         (true, _) => return Err(PocketError::new(StatusCode::BAD_REQUEST, "pin_required", "Pick a 4-digit PIN.")),
         (false, _) => None,
     };
-    if let Some(existing) = state.db.pocket_player_by_name(code, &name_key).await? {
-        return Err(if existing.removed_at.is_some() {
-            PocketError::new(StatusCode::FORBIDDEN, "removed", "The host removed this name.")
-        } else {
-            PocketError::new(StatusCode::CONFLICT, "name_taken", "Someone already joined with that name. If it's you, open your page again.")
-        });
+    if !nameless {
+        if let Some(existing) = state.db.pocket_player_by_name(code, &name_key).await? {
+            return Err(if existing.removed_at.is_some() {
+                PocketError::new(StatusCode::FORBIDDEN, "removed", "The host removed this name.")
+            } else {
+                PocketError::new(StatusCode::CONFLICT, "name_taken", "Someone already joined with that name. If it's you, open your page again.")
+            });
+        }
     }
     if s.players.len() >= rules.max_players {
         return Err(PocketError::new(StatusCode::CONFLICT, "full", "It's full.").with(json!({ "max_players": rules.max_players })));
     }
     kit.admit(&KitCtx::new(&s.spec, &s.players, now), &s.kit_state, &name_key).map_err(kit_refusal)?;
-    let id = keys::new_player_id();
     let salt = keys::new_salt();
     let pin_hash = pin.map(|p| keys::hash_secret(p, &salt));
     state
@@ -881,8 +903,9 @@ pub async fn act(state: &AppState, code: &str, actor: &Viewer, name: &str, body:
     if !allowed.contains(&name) {
         return Err(PocketError::new(StatusCode::BAD_REQUEST, "unknown_action", "That action isn't one this pocket knows.").with(json!({ "actions": allowed })));
     }
-    // pa14b: a few host actions still work while an ended pocket's data is kept (the wall's
-    // `set_best`, so the host can show the next morning's best 30)
+    // pa14b, pa10c: a few host actions still work while an ended pocket's data is kept (the
+    // wall's `set_best`, so the host can show the next morning's best 30; Gather's
+    // `delete_answers`, so the host may delete the answers before the deletion date)
     if s.row.state == ENDED && !(*actor == Viewer::Host && kit.host_actions_after_end().contains(&name)) {
         return Err(PocketError::new(StatusCode::GONE, "ended", "This pocket app has ended."));
     }
@@ -892,6 +915,18 @@ pub async fn act(state: &AppState, code: &str, actor: &Viewer, name: &str, body:
     kit.act(&mut ctx, &mut kit_state, actor, name, body).map_err(kit_refusal)?;
     let snap_shown = ctx.events.iter().any(|e| e.kind == wall::SNAP_SHOWN_EVENT);
     save(state, code, &kit_state, ctx, now).await?;
+    // pa10c: answers deleted: every player goes (removed ones too, names and all), with their
+    // guest keys and events. After the save, so a failure here is repaired by the host's retry.
+    if matches!(actor, Viewer::Host) && kit.forgets_everyone(&kit_state) {
+        let ids = state.db.pocket_forget_all_players(code).await?;
+        if !ids.is_empty() {
+            for id in ids {
+                state.pocket.signal(code, Signal::Revoked(id));
+            }
+            state.db.pocket_bump(code).await?;
+            changed(state, code).await?;
+        }
+    }
     if snap_shown {
         wall_pick::say_shown(state, code).await;
     }
@@ -1077,8 +1112,11 @@ pub async fn sweep(state: &AppState, now: DateTime<Utc>) -> Swept {
         return out;
     }
     tick_unwatched(state, now).await;
-    // pa13a: front desk guests whose data has expired, then turns a restart left queued
-    for code in state.db.pocket_codes_of_kit(desk::ID).await.unwrap_or_default() {
+    // pa13a: front desk guests whose data has expired (pa11b: and queue guests whose ticket is
+    // done), then turns a restart left queued
+    let mut codes = state.db.pocket_codes_of_kit(desk::ID).await.unwrap_or_default();
+    codes.extend(state.db.pocket_codes_of_kit(queue::ID).await.unwrap_or_default());
+    for code in codes {
         match forget_idle(state, &code, now).await {
             Ok(n) if n > 0 => tracing::info!(count = n, "pocket apps: deleted expired guests' data"),
             Ok(_) => {}

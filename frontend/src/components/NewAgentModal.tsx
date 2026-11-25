@@ -175,7 +175,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
     unsaved,
     // Opened from a menu that has gone: back to the bot in the sidebar, or the composer.
     fallback: () =>
-      [kwantId ? `[data-bot-row="${kwantId}"]` : '', '[data-composer]']
+      [kwantId ? `[data-bot-row="${kwantId}"] button` : '', '[data-composer]']
         .map((sel) => (sel ? document.querySelector<HTMLElement>(sel) : null))
         .find((el) => el && !el.closest('[inert]')),
   });

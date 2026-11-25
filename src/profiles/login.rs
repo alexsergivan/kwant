@@ -176,6 +176,9 @@ impl LoginManager {
             Engine::Custom => {
                 return Err(StartError::Failed("Custom API accounts use an API key, not a sign-in".into()))
             }
+            Engine::Mistral => {
+                return Err(StartError::Failed("Mistral accounts use an API key, not a sign-in".into()))
+            }
         };
         if home.is_dir() {
             cmd.current_dir(home);

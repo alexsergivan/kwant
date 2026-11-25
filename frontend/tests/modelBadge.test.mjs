@@ -327,7 +327,10 @@ test('0.9.8 #7: a bot pinned to a signed-out engine with failover off gets no gr
   // The sidebar row passes it to the dot: can't run (grey) with the badge's tip instead of the green Available
   const side = readFileSync(new URL('../src/components/Sidebar.tsx', import.meta.url), 'utf8');
   assert.match(side, /const pinnedTip = pinnedCantRun\(k, engines\.engines\);\n\s+const status = asked \? 'needs_you' : statusOf\(k\.id, botStatus, pinnedTip \? false : canRun\);/);
-  assert.match(side, /title=\{status === 'cant_run' \? pinnedTip \?\? "Can't run yet: no account works here"/);
+  // Pixel's FIX on #1186: the same ternary now also feeds the row button's hover title (avatarStatusTitle),
+  // so it is hoisted into a const the avatar span reads instead of repeating the expression inline.
+  assert.match(side, /const avatarStatusTitle = status === 'cant_run' \? pinnedTip \?\? "Can't run yet: no account works here" : statusText\(k\.name, status\);/);
+  assert.match(side, /title=\{avatarStatusTitle\}/);
 });
 
 // ---- account-usage: the hover's usage line for the account the next turn would use ----

@@ -109,7 +109,7 @@ pub fn card(s: &Snapshot) -> Value {
     c["owner_kwant_id"] = json!(s.row.owner_kwant_id);
     c["path"] = json!(format!("/p/{}", s.row.code));
     // pa13a: the person's own card counts a front desk's guests (guests never see it)
-    c["players"] = json!(s.players.len());
+    c["players"] = json!(s.player_count());
     c
 }
 

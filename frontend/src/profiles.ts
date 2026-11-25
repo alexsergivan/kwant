@@ -1,6 +1,6 @@
 // LLM profiles: one account per engine (a work and a personal Claude, say). Keys are write-only.
 
-export type Engine = 'claude' | 'codex' | 'grok' | 'custom';
+export type Engine = 'claude' | 'codex' | 'grok' | 'mistral' | 'custom';
 import { dateClock, timeText } from './clock';
 export type ProfileKind = 'system' | 'cli_home' | 'api_key' | 'custom_api';
 
@@ -82,6 +82,7 @@ export const ENGINES: Array<{ id: Engine; label: string }> = [
   { id: 'claude', label: 'Claude' },
   { id: 'codex', label: 'Codex (OpenAI)' },
   { id: 'grok', label: 'Grok (xAI)' },
+  { id: 'mistral', label: 'Mistral' },
   { id: 'custom', label: 'Custom API' },
 ];
 
@@ -126,12 +127,21 @@ export function customKeyRequired(baseUrl: string): boolean {
   return !!url && CUSTOM_PRESETS.some((p) => p.needsKey && Object.values(p.urls).some((u) => u === url));
 }
 
+/** Mistral's model names, like the server's `is_mistral_model`: "mistral-small-latest", "devstral-medium", "magistral-…". */
+const MISTRAL_WORDS = ['mistral', 'mixtral', 'magistral', 'devstral', 'codestral', 'ministral', 'pixtral', 'voxtral'];
+export const isMistralModel = (model: string) => {
+  const m = model.toLowerCase();
+  return MISTRAL_WORDS.some((w) => m.includes(w));
+};
+
 /** The engine a kwant's model runs on, like the server's `Engine::from_model`; null for auto and Ollama. */
 export function engineOfModel(model: string | null | undefined): Engine | null {
   if (!model) return null;
   if (model === 'custom' || model.startsWith('custom:') || model.startsWith('custom/')) return 'custom';
   if (model.includes('claude')) return 'claude';
   if (model.includes('grok')) return 'grok';
+  // Ollama's own "mistral" runs on this computer, not on a Mistral account
+  if (isMistralModel(model) && model !== 'local_ollama' && !model.startsWith('ollama/')) return 'mistral';
   if (model.includes('codex') || model.includes('gpt') || model.includes('openai')) return 'codex';
   return null;
 }
@@ -439,13 +449,18 @@ export function describeProfileSwitch(e: ProfileSwitchedEvent, kwantName: string
 
 // ---- Accounts on the "Engines & accounts" cards ----
 
-type EngineCardId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'ollama' | 'custom_api';
+type EngineCardId = 'claude' | 'codex' | 'grok' | 'anthropic_api' | 'openai_api' | 'xai_api' | 'mistral_api' | 'ollama' | 'custom_api';
 type KeyedEngine = Exclude<Engine, 'custom'>;
-const API_CARD: Record<KeyedEngine, EngineCardId> = { claude: 'anthropic_api', codex: 'openai_api', grok: 'xai_api' };
+const API_CARD: Record<KeyedEngine, EngineCardId> = { claude: 'anthropic_api', codex: 'openai_api', grok: 'xai_api', mistral: 'mistral_api' };
 
-/** The engine card an account sits on: API-key accounts on the API engine, Custom API on its own, the rest on the CLI. */
+/** The engine card an account sits on: API-key accounts on the API engine, Custom API on its own, the rest on the CLI.
+ *  Mistral has no CLI card (35a), so its accounts always sit on the API card. */
 export const cardOf = (p: Pick<Profile, 'engine' | 'kind'>): EngineCardId =>
-  p.engine === 'custom' ? 'custom_api' : p.kind === 'api_key' ? API_CARD[p.engine] : p.engine;
+  p.engine === 'custom'
+    ? 'custom_api'
+    : p.kind === 'api_key' || p.engine === 'mistral'
+      ? API_CARD[p.engine]
+      : p.engine;
 
 export type NewAccountSpec = { engine: Engine; kind: 'cli_home' | 'api_key' | 'custom_api' };
 

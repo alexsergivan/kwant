@@ -14,7 +14,7 @@ export const FAILOVER_CAPTION = 'When one runs out, kwant moves to the next that
 export const orderIntro = (space: string) =>
   `Your bots in ${space} use the first account that’s ready. If it runs out, they switch to the next one by themselves.`;
 
-export const ENGINE_NAMES: Record<Engine, string> = { claude: 'Claude', codex: 'Codex', grok: 'Grok', custom: 'Custom API' };
+export const ENGINE_NAMES: Record<Engine, string> = { claude: 'Claude', codex: 'Codex', grok: 'Grok', mistral: 'Mistral', custom: 'Custom API' };
 
 /** The engine and kind in plain words: "Claude", "Claude API key", "Custom API". */
 export function engineLabel(p: Pick<Profile, 'engine' | 'kind'>): string {

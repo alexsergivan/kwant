@@ -70,6 +70,7 @@ const KEY_PROVIDERS = [
   { card: 'anthropic_api', label: 'Anthropic', note: 'Paid per use on your Anthropic account.' },
   { card: 'openai_api', label: 'OpenAI', note: 'Paid per use on your OpenAI account.' },
   { card: 'xai_api', label: 'xAI', note: 'Paid per use on your xAI account.' },
+  { card: 'mistral_api', label: 'Mistral', note: "Paid per use on your Mistral account. Mistral's free plan is too limited for bots." },
 ] as const;
 
 /** Where kwant runs, for "on {host}" (§10): the address the page was opened on, unless it's this computer. */
@@ -947,7 +948,7 @@ export interface GetStartedProps {
   /** Reads /api/engines again (after an install or a sign-in). */
   reloadEngines: () => void;
   /** The card goes for good ("Keep the starter bots" after step 2). */
-  onDismissed: () => void;
+  onDismissed?: () => void;
   loginApiOverride?: LoginApi;
   /** For tests and shots: the address it's opened on. */
   hostOverride?: string | null;
@@ -1040,7 +1041,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
   const keep = () => {
     if (v.done2) {
       dismiss(space);
-      onDismissed();
+      onDismissed?.();
     } else markStarted(space, 'kept');
   };
   // Start with @team: today's Keep, then the composer, so the next thing is the first ask.
@@ -1053,7 +1054,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
   const importedBots = () => {
     if (v.done2) {
       dismiss(space);
-      onDismissed();
+      onDismissed?.();
     } else markStarted(space, 'imported');
   };
 
@@ -1105,7 +1106,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
         <h3 id={stepIds[n - 1]} tabIndex={-1} className={`min-w-0 text-sm ${state === 'open' ? 'font-semibold text-zinc-100' : state === 'done' ? 'font-medium text-zinc-200' : 'font-medium text-zinc-400'} focus:outline-none`}>
           <span className="sr-only">{`Step ${n} of 3, `}</span>
           {title}
-          <span className="sr-only">{`, ${said}`}</span>
+          <span className="sr-only">{`, ${said}${value ? ',' : ''}`}</span>
           {value ? <span className="ml-2 text-xs font-normal text-zinc-400">{value}</span> : null}
         </h3>
         {extra}

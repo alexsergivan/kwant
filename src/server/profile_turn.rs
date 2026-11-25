@@ -124,7 +124,7 @@ pub async fn unusable_engines(state: &AppState, space: &SpaceId) -> HashSet<Engi
         return HashSet::new();
     };
     let now = chrono::Utc::now();
-    [Engine::Claude, Engine::Codex, Engine::Grok, Engine::Custom]
+    [Engine::Claude, Engine::Codex, Engine::Grok, Engine::Custom, Engine::Mistral]
         .into_iter()
         .filter(|f| {
             let mine: Vec<&LlmProfile> = profiles
@@ -341,7 +341,7 @@ pub async fn profile_engines(state: &AppState, space: &SpaceId) -> HashSet<Engin
     let Some((profiles, avail)) = accounts(state, space).await else {
         return HashSet::new();
     };
-    [Engine::Claude, Engine::Codex, Engine::Grok, Engine::Custom]
+    [Engine::Claude, Engine::Codex, Engine::Grok, Engine::Custom, Engine::Mistral]
         .into_iter()
         .filter(|f| !own_accounts(state, &profiles, *f, &avail, SignInBar::NotSignedOut).is_empty())
         .collect()
@@ -580,13 +580,14 @@ pub fn give_up_notice(
     format!("⚠️ [{kwant_name}] {which} {}. {fix}", reason(failure))
 }
 
-/// How a person names an account's engine: "Claude", "Codex", "Grok", or a Custom API
+/// How a person names an account's engine: "Claude", "Codex", "Grok", "Mistral", or a Custom API
 /// account by its own name ("Maestro").
 pub fn engine_label(p: &LlmProfile) -> String {
     match Engine::parse(&p.engine) {
         Some(Engine::Claude) => "Claude".into(),
         Some(Engine::Codex) => "Codex".into(),
         Some(Engine::Grok) => "Grok".into(),
+        Some(Engine::Mistral) => "Mistral".into(),
         _ => p.name.clone(),
     }
 }

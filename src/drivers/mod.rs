@@ -901,6 +901,12 @@ pub async fn detect_available_models(
             "direct code generation, standard algorithms, regex, JSON transforms",
             "direct code generation, standard algorithms, regex, JSON transforms",
         ),
+        // API only (35b adds its CLI): both descriptions are the API's
+        (
+            Engine::Mistral,
+            "everyday questions, writing in many languages, coding",
+            "everyday questions, writing in many languages, coding",
+        ),
     ];
     for (family, api_desc, cli_desc) in families {
         let key = db.get_setting(family.key_setting()).await.ok().flatten();
@@ -925,13 +931,15 @@ pub async fn detect_available_models(
             Engine::Claude => "Claude",
             Engine::Grok => "Grok",
             Engine::Codex => "OpenAI Codex",
+            Engine::Mistral => "Mistral",
             Engine::Custom => unreachable!("Custom API is offered below"),
         };
         available.push(ModelDescriptor {
             id: family.as_str().into(),
             display_name: model.unwrap_or_else(|| fallback_name.into()),
             capability_desc: if engine == Some(api) { api_desc } else { cli_desc }.into(),
-            is_cli: engine != Some(api),
+            // A family without a CLI runs on its API even through accounts alone
+            is_cli: cli != api && engine != Some(api),
         });
     }
 

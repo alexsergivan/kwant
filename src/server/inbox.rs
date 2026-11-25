@@ -583,9 +583,11 @@ pub fn desk_item(at: DateTime<Utc>, mut v: Value, last_seen: Option<DateTime<Utc
     let name = v["kwant_name"].as_str().unwrap_or("").to_string();
     let id = v["id"].as_str().unwrap_or("").to_string();
     let title = format!("{} needs you", v["guest_name"].as_str().unwrap_or("A guest"));
+    // pa13b: a Booking Desk's item says so
+    let kind = if v["mode"] == "booking" { "Booking Desk" } else { "Guest Guide" };
     let summary = match v["pocket_title"].as_str().unwrap_or("") {
-        "" => "Guest Guide".to_string(),
-        place => format!("{place} · Guest Guide"),
+        "" => kind.to_string(),
+        place => format!("{place} · {kind}"),
     };
     v["title"] = json!(title);
     v["summary"] = json!(summary);

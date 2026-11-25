@@ -62,18 +62,20 @@ test('(3) exactly one aria-current="page": the lit channel, team or bot row in a
   assert.deepEqual(here(ch), [channelRow(ch)]);
   assert.equal(channelRow(ch, 'random').getAttribute('aria-current'), null);
 
+  // aria-current sits on the row's one real button, not the data-team-row/data-bot-row div around it
+  // (Pixel's FIX on #1186: that div isn't focusable or clickable, so it isn't what's "current").
   const tm = doc({ teams: [team], channels: [], selectedId: 't1', selectedTeamId: 't1', isChannel: true, onChat: true });
-  assert.deepEqual(here(tm), [tm.querySelector('[data-team-row="t1"]')]);
+  assert.deepEqual(here(tm), [tm.querySelector('[data-team-row="t1"] > button')]);
 
   const bt = doc({ selectedId: 'iri', onChat: true });
-  assert.deepEqual(here(bt), [bt.querySelector('[data-bot-row="iri"]')]);
+  assert.deepEqual(here(bt), [bt.querySelector('[data-bot-row="iri"] > button')]);
 
   // A bot pinned under Needs you shows twice; only its own row says "here"
   const ask = { kwant: kwants[1], rank: 1, line: 'Wants your OK', item: { kind: 'approval', id: 'a-pix', kwant_id: 'pix', kwant_name: 'pix',
     title: 'Deploy', summary: '', status: 'waiting', timestamp: new Date().toISOString(), link: {} } };
   const pinned = doc({ selectedId: 'pix', onChat: true, attention: [ask] });
   assert.ok(pinned.querySelector('[data-pin-row="pix"]'), 'the pinned copy renders');
-  assert.deepEqual(here(pinned), [pinned.querySelector('[data-bot-row="pix"]')]);
+  assert.deepEqual(here(pinned), [pinned.querySelector('[data-bot-row="pix"] > button')]);
 
   const inbox = doc({ selectedId: 'c1', isChannel: true, onChat: false, inboxActive: true });
   const h = here(inbox);

@@ -14,7 +14,7 @@ import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
 import { focusPhoneApp } from './components/PhoneAppTip';
-import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, recordMovedForNewPerson, ringDevSettings } from './firstScreen';
+import { focusDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
@@ -135,6 +135,8 @@ import {
   writingBadge,
   threadsApi,
   turnsIn,
+  rereadDue,
+  unlistedLive,
   upsertThread,
 } from './threads';
 import { createStreamText, NO_STREAM } from './streamText';
@@ -421,22 +423,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab(tab);
     playSfx('click');
   };
-  // First-screen A: the "moved" pointer under the space header, until Open or ✕ (0.9.8 and 0.9.9).
-  const [movedHidden, setMovedHidden] = useState(movedSeen);
-  const hideMoved = () => {
-    markMovedSeen();
-    setMovedHidden(true);
-  };
   // The suggestion's Turn on: Settings › This space › General, the Dev mode card (first there) in view and
   // focused. It doesn't switch Dev mode on: the person presses the button on the card.
   const openDevSuggest = () => {
     openSpaceSettings('general');
     focusDevSettings();
-  };
-  const openMoved = () => {
-    openSpaceSettings('general');
-    ringDevSettings();
-    hideMoved();
   };
   // Settings › All spaces: what applies to every space and to the app.
   const openAppSettings = () => {
@@ -514,9 +505,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     else setPhoneView('chat');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPhone, loaded, canRun, channels]);
-  // The sidebar and chat under Settings: inert while it's open (the space rail stays usable).
+  // The sidebar and chat under Settings or the New bot modal: inert while either is open (the space rail stays usable).
   const contentRef = useRef<HTMLDivElement>(null);
-  useSettingsCover(!!spaceSettingsTab, contentRef);
   // Moving between Settings tabs drops the card's sheet too: Apps & accounts remounts on the way back and
   // would open it again by itself (Rigel's 32x QA defect 1).
   const changeSpaceSettingsTab = (tab: SpaceSettingsTab) => {
@@ -1107,37 +1097,69 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       });
     }, () => undefined);
     try {
-      const { turns: list } = await threadsApi.turns();
-      const map = hydrateTurns(list);
-      setDeciding(hydrateDeciding(list));
-      for (const t of Object.values(map)) if (t.thread_id) knownThreadsRef.current.add(t.thread_id);
-      turnsRef.current = map;
-      setTurns(map);
-      resetTurns(Object.values(map).filter((t) => t.state === 'running'));
-      // A page opened (or back) mid-turn: what each running bot is doing now, not "getting started".
-      let seeded = activityRef.current;
-      for (const t of Object.values(map)) {
-        const next = t.state === 'running' ? seedActivity(seeded[t.turn_id], t.turn_id, t.activity) : null;
-        if (next) seeded = { ...seeded, [t.turn_id]: { ...next, ctx: t.context_id } };
-      }
-      if (seeded !== activityRef.current) setActivityMap(seeded);
-      const busy = new Set(Object.values(map).map((t) => t.context_id));
-      for (const ctx of Object.keys(liveRef.current)) {
-        if (!busy.has(ctx) && !discussionInProgressRef.current) clearLive(ctx);
-      }
-      // The strip names the bot that is replying: queued turns first, so a running one in the same chat wins.
-      for (const t of liveNamingOrder(Object.values(map))) markLiveKwant(t.context_id, t.kwant_id);
-      // Titles for the "working on" badges
-      for (const t of Object.values(map)) {
-        if (t.thread_id && !threadsByKwantRef.current[t.kwant_id]) loadThreads(t.kwant_id);
-      }
+      await rereadTurns();
     } catch {
       clearAllTurns();
     }
     setTurnsHydrated((n) => n + 1);
   };
 
+  /** Bumped by every live turn event, so a re-read that a newer event overtook is dropped. */
+  const turnEventsRef = useRef(0);
+  /**
+   * The running turns from the server; chats no longer listed stop showing a reply. On every connect,
+   * and (stuck-getting-started, 0.9.51) when the window comes back and after Stop: a `turn_ended` the
+   * app missed left a chat "getting started" for hours. `fresh`: dropped when a live turn event came
+   * in while it loaded (that event is newer than the list).
+   */
+  const rereadTurns = async (fresh = false) => {
+    const seen = turnEventsRef.current;
+    const { turns: list } = await threadsApi.turns();
+    if (fresh && turnEventsRef.current !== seen) return;
+    const map = hydrateTurns(list);
+    setDeciding(hydrateDeciding(list));
+    for (const t of Object.values(map)) if (t.thread_id) knownThreadsRef.current.add(t.thread_id);
+    turnsRef.current = map;
+    setTurns(map);
+    resetTurns(Object.values(map).filter((t) => t.state === 'running'));
+    // A page opened (or back) mid-turn: what each running bot is doing now, not "getting started".
+    let seeded = activityRef.current;
+    for (const t of Object.values(map)) {
+      const next = t.state === 'running' ? seedActivity(seeded[t.turn_id], t.turn_id, t.activity) : null;
+      if (next) seeded = { ...seeded, [t.turn_id]: { ...next, ctx: t.context_id } };
+    }
+    if (seeded !== activityRef.current) setActivityMap(seeded);
+    for (const ctx of unlistedLive(liveRef.current, map)) {
+      if (!discussionInProgressRef.current) clearLive(ctx);
+    }
+    // The strip names the bot that is replying: queued turns first, so a running one in the same chat wins.
+    for (const t of liveNamingOrder(Object.values(map))) markLiveKwant(t.context_id, t.kwant_id);
+    // Titles for the "working on" badges
+    for (const t of Object.values(map)) {
+      if (t.thread_id && !threadsByKwantRef.current[t.kwant_id]) loadThreads(t.kwant_id);
+    }
+  };
+  const rereadTurnsRef = useRef(rereadTurns);
+  rereadTurnsRef.current = rereadTurns;
+  // Back to the window (focus, or the tab shown again): what runs now, at most every few seconds.
+  useEffect(() => {
+    let last = 0;
+    const onBack = () => {
+      const now = Date.now();
+      if (!rereadDue(last, now, document.visibilityState === 'hidden')) return;
+      last = now;
+      rereadTurnsRef.current(true).catch(() => undefined);
+    };
+    window.addEventListener('focus', onBack);
+    document.addEventListener('visibilitychange', onBack);
+    return () => {
+      window.removeEventListener('focus', onBack);
+      document.removeEventListener('visibilitychange', onBack);
+    };
+  }, []);
+
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
+  useSettingsCover(!!spaceSettingsTab || isNewAgentOpen, contentRef);
   // Team that a newly created bot should join (set by a team's "Add member")
   const [newAgentTeam, setNewAgentTeam] = useState<Team | null>(null);
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
@@ -1389,6 +1411,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
     const setTurnMap = (next: TurnMap) => {
       if (next === turnsRef.current) return;
+      turnEventsRef.current += 1;
       turnsRef.current = next;
       setTurns(next);
     };
@@ -2055,9 +2078,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setRoutingState(null);
       streamingContextIdRef.current = null;
     }
-    refreshContext(ctx).then(() => {
-      if (turnsIn(turnsRef.current, ctx).length === 0) clearLive(ctx);
-    });
+    // stuck-getting-started (0.9.51): the running turns again first. A turn whose end the app missed
+    // stayed in its list, so Stop never cleared the chat
+    refreshContext(ctx)
+      .then(() => rereadTurns(true))
+      .catch(() => undefined)
+      .then(() => {
+        if (turnsIn(turnsRef.current, ctx).length === 0) clearLive(ctx);
+      });
   };
 
   const handleSendMessage = async (text: string, attachments: AttachmentRef[] = [], opts: SendOptions = {}): Promise<boolean | string> => {
@@ -4269,8 +4297,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         bots={kwants}
         engines={engines.engines}
         reloadEngines={engines.reload}
-        // Someone who finishes Get started in 0.9.8 never saw the old sidebar controls: no "moved" pointer.
-        onDismissed={hideMoved}
         spaceName={space.name}
         onImported={reloadAfterImport}
         mainSpace={space.is_default}
@@ -4450,9 +4476,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         playSfx('click');
       }}
       onConnectDevGitHub={connectDevGitHub}
-      movedPointer={movedPointerShows({ established: whatsNewEstablished, seen: movedHidden })}
-      onOpenMoved={openMoved}
-      onHideMoved={hideMoved}
       ideaJarCount={ideaJarCount}
       ideaJarActive={page === 'jar'}
       onOpenIdeaJar={() => {
@@ -4716,6 +4739,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           routingState={isCurrentContextStreaming ? routingState : null}
           onCancelDiscussion={handleCancelDiscussion}
           teamMembers={currentTeamMembers}
+          teamLeadId={currentTeam?.lead_kwant_id ?? null}
           teamId={activeSandboxId}
           teamName={activeSandboxName}
           workspacePath={currentTeam?.workspace_path}
@@ -4965,11 +4989,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     wroteHere,
     getStartedShowing: getStartedEligible,
   });
-  // 29v: a brand-new person never gets the "moved" pointer: record it as seen once they're known to be new
-  // (false, never null), the way What's new records its version, so it can't pin after their first message.
-  useEffect(() => {
-    if (recordMovedForNewPerson({ established: whatsNewEstablished, seen: movedHidden })) hideMoved();
-  }, [whatsNewEstablished, movedHidden]);
   const readyBots = useMemo(() => kwants.map((k) => ({ id: k.id, name: k.name, role: k.avatar_sprite })), [kwants]);
 
   return (
@@ -5005,16 +5024,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                     )}
                   </>
                 ) : phoneTab === 'jar' ? (
-                  <div className="flex-1 min-h-0 flex" data-main-pane>{jarPage}</div>
+                  <main id="main-pane" tabIndex={-1} className="flex-1 min-h-0 flex focus:outline-none" data-main-pane>{jarPage}</main>
                 ) : (
                   sidebar(phoneTab === 'bots' ? 'bots' : 'chats')
                 )}
               </div>
             ) : (
-              <div className={`relative flex-1 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
+              <main id="main-pane" tabIndex={-1} className={`relative flex-1 min-h-0 flex focus:outline-none ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
                 {mainPane}
                 <DropPillHost />
-              </div>
+              </main>
             )}
             {(showPhoneList || needsSetup) && (
               <PhoneTabBar
@@ -5045,10 +5064,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         ) : (
           <>
             {sidebar('all')}
-            <div className={`relative flex-1 min-w-0 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
+            <main id="main-pane" tabIndex={-1} className={`relative flex-1 min-w-0 min-h-0 flex focus:outline-none ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
               {mainPane}
               <DropPillHost />
-            </div>
+            </main>
           </>
         )}
       </div>
