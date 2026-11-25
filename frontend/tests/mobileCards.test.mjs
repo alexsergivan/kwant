@@ -152,7 +152,9 @@ const live = (steps) => ({ turnId: 't1', thinking: {}, steps });
 const step = (over = {}) => ({ id: 's1', kind: 'tool', status: 'running', title: 'Using `web_search`', started_at: '2026-11-05T10:00:00Z', ...over });
 
 test('on a phone the strip is one quiet line: no card, 28 px, 12 px text, 16 px avatar, 8 px above the box', () => {
-  const html = m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), phone: true });
+  // 36d: only while the bot waits on the person; while it works the scene in the stream says so.
+  assert.equal(m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), phone: true }), '');
+  const html = m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step({ kind: 'approval', status: 'waiting', title: 'Waiting for your approval: Using `web_search`' })]), phone: true, onAnswer: noop });
   const wrap = /<div class="(kws-strip[^"]*)"/.exec(html)[1];
   // 0.8.1 F4: inside the composer section like desktop, so the same column and edges as the box below:
   // 21 px in (the avatar starts where the placeholder does), 9 px on the right, 8 px to the box.
@@ -166,9 +168,8 @@ test('on a phone the strip is one quiet line: no card, 28 px, 12 px text, 16 px 
   assert.match(html, /style="width:16px;height:16px"/);
   assert.match(html, /class="min-w-0 flex-1 truncate text-xs leading-4 text-zinc-400" role="status" aria-live="polite"/);
   assert.match(html, /<span class="font-medium text-zinc-300">Architect<\/span>/);
-  assert.match(html, /tabular-nums text-xs leading-4 text-zinc-500/);
-  assert.match(html, /class="shrink-0 inline-flex kw-avatar-working"/, 'the working pulse stays');
-  assert.match(text(html), /Architect is searching the web/);
+  assert.match(html, /class="shrink-0 inline-flex "/, 'waiting: no working pulse');
+  assert.match(text(html), /Architect is waiting for your OK/);
   assert.doesNotMatch(text(html), /_/);
 });
 
@@ -213,8 +214,10 @@ test('waiting on a question, the strip says so and offers Answer, which goes to 
 });
 
 test('desktop strip is the composer status line: no card, 28 px, 20 px avatar, edges on the box below (0.8.0)', () => {
-  const html = m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), onWatch: noop, phone: false });
-  const wrap = /<div class="(kws-strip[^"]*)" data-working-strip="">/.exec(html)[1].split(' ');
+  // 36d: only while the bot waits on the person (desktop: a question); never while it works.
+  assert.equal(m.strip({ active: true, name: 'Architect', title: 'Architect', live: live([step()]), onWatch: noop, phone: false }), '');
+  const html = m.strip({ active: true, name: 'Architect', title: 'Architect', awaitingAnswer: true, onAnswer: noop, onWatch: noop, phone: false });
+  const wrap = /<div class="(kws-strip[^"]*)" data-working-strip=""/.exec(html)[1].split(' ');
   // Same column as the composer box; 21 px = its 1 px border + 8 px padding + the field's 12 px inset,
   // 9 px = border + padding up to the Stop square; 8 px to the box below.
   for (const c of ['kws-strip-line', 'mx-auto', 'max-w-4xl', 'h-7', 'gap-2', 'pl-[21px]', 'pr-[9px]', 'mb-2']) assert.ok(wrap.includes(c), c);
@@ -222,11 +225,10 @@ test('desktop strip is the composer status line: no card, 28 px, 20 px avatar, e
   assert.match(html, /style="width:20px;height:20px"/);
   assert.match(html, /role="status" aria-live="polite"/);
   assert.match(html, /<span class="font-medium text-zinc-200">Architect<\/span> is/);
-  assert.match(html, /class="shrink-0 tabular-nums text-xs leading-4 text-zinc-500"[^>]*data-working-elapsed=""/);
-  // Watch is the right-most item: 28 px, and its word ends where the Stop square does.
-  const watch = /<button[^>]*data-watch-button=""[^>]*>/.exec(html)[0];
-  for (const c of ['h-7', ' -mr-2 ', 'text-xs', 'text-[#b8adff]']) assert.ok(watch.includes(c), c);
-  assert.doesNotMatch(watch, /min-h-8/);
+  // Answer is the one thing on the right: no clock, no Watch behind it (Watch is in the scene, 36d).
+  assert.doesNotMatch(html, /data-working-elapsed|data-watch-button/);
+  const answer = /<button[^>]*data-strip-answer=""[^>]*>/.exec(html)[0];
+  for (const c of ['h-7', '-mr-2 ', 'text-xs', 'text-amber-200']) assert.ok(answer.includes(c), c);
 });
 
 test('ChatView puts the strip inside the composer section, right above the box, on a phone and on desktop (0.8.1 F4)', () => {
@@ -255,7 +257,7 @@ test('on a phone the steps panel is one 44 px row, the engine note behind an inf
   assert.match(b[0].label, /^Steps · 1/);
   assert.match(b[0].attrs, /min-h-\[44px\]|h-11/);
   assert.match(b[0].attrs, /aria-expanded="false"/);
-  const info = b.find((x) => /aria-label="About this engine/.test(x.attrs));
+  const info = b.find((x) => /aria-label="About this AI/.test(x.attrs));
   assert.ok(info, 'info button');
   assert.match(info.attrs, /w-11 h-11|h-11 w-11/);
 });

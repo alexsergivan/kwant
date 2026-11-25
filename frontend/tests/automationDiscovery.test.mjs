@@ -232,7 +232,7 @@ test('every blocked reason and every skip reason has plain words', () => {
 test('the habit, permissions and stats lines read naturally', () => {
   assert.equal(m.habitLine(offer().evidence), 'You asked for this 3 times, every week, usually between 09:02 and 09:10.');
   assert.equal(m.habitLine({ ...offer().evidence, pattern: 'daily', time_spread: '18:00', matched: 7, time_varies: true }), 'You asked for this 7 times, every day, usually around 18:00 (the time varies).');
-  assert.equal(m.pastText({ external: 0, workspace: 3, needed_ok: 1 }), 'In past runs: 3 workspace changes; needed your OK once.');
+  assert.equal(m.pastText({ external: 0, workspace: 3, needed_ok: 1 }), 'In past runs: 3 file changes; needed your OK once.');
   assert.equal(m.pastText({ external: 0, workspace: 0, needed_ok: 0 }), 'In past runs it changed nothing outside its chat, and never needed your OK.');
   assert.equal(m.approvalText('smart'), 'Asks you only when an action is risky');
   assert.equal(m.statsLine(STATS), 'Last 30 days: 2 suggested, 1 added, 0 dismissed. Still on 14 days after adding: 1 of 1.');

@@ -157,7 +157,7 @@ test('off (404 or supported=false) shows the version, Check again and the latest
     assert.match(html, /href="https:\/\/github\.com\/alexsergivan\/kwant\/releases\/latest"[^>]*>Get the latest version/);
     assert.doesNotMatch(html, /latest version<\/span>|Update<\/button>/);
     assert.doesNotMatch(html, /All releases on GitHub/, 'off has one GitHub link, not two');
-    if (answer.status === 200) assert.match(html, /kwant bots <span[^>]*>0\.1\.2<\/span>/, 'the version from the answer');
+    if (answer.status === 200) assert.match(html, /kwant <span[^>]*>0\.1\.2<\/span>/, 'the version from the answer');
     // Asked again after 10 s, 60 s, then every 30 minutes
     assert.deepEqual(h.live().map((t) => t.ms), [10_000]);
     await h.tick(10_000);
@@ -184,7 +184,7 @@ test('off, then supported: the card and the banner come back (the Mac updater re
     assert.equal(m.unsupported, false);
     assert.equal(u.versionLine(m).kind, 'available');
     assert.equal(u.bannerView(m, null)?.kind, 'available');
-    assert.match(ui.card({ model: m }), /kwant bots 0\.1\.3 is available/);
+    assert.match(ui.card({ model: m }), /kwant 0\.1\.3 is available/);
     assert.deepEqual(h.live().map((t) => t.ms), [30 * 60 * 1000], 'back on the normal poll');
     // Off again later starts the short retries over
     n = 0;
@@ -361,7 +361,7 @@ test('a failed download shows the error with Try again and Download manually; th
   assert.equal(h.ctrl.get().phase, 'idle');
   assert.equal(h.store.m.has(u.UPDATE_PENDING_KEY), false);
   const html = ui.banner({ view: v, onUpdate() {}, onDismiss() {} });
-  assert.match(html, /kwant bots 0\.1\.3 didn’t install\./);
+  assert.match(html, /kwant 0\.1\.3 didn’t install\./);
   assert.match(html, /The signature check failed\./);
   assert.match(html, /This version keeps working/);
   assert.match(html, /Try again/);
@@ -433,7 +433,7 @@ test('the relaunch gives up after 3 minutes and says so', async () => {
 
 test('banner markup: buttons, notes, progress and dismiss', () => {
   const avail = ui.banner({ view: u.bannerView(model(status()), null), onUpdate() {}, onDismiss() {} });
-  assert.match(avail, /kwant bots 0\.1\.3 is ready\./);
+  assert.match(avail, /kwant 0\.1\.3 is ready\./);
   assert.match(avail, /Update and restart/);
   assert.match(avail, /aria-expanded="false"[^>]*>What’s new/);
   assert.match(avail, /hidden=""[^>]*>.*In-app updates/s, 'notes are collapsed until What’s new');
@@ -441,11 +441,11 @@ test('banner markup: buttons, notes, progress and dismiss', () => {
   const noNotes = ui.banner({ view: { ...u.bannerView(model(status()), null), notes: '' }, onUpdate() {}, onDismiss() {} });
   assert.doesNotMatch(noNotes, /What’s new/);
   const dl = ui.banner({ view: { kind: 'downloading', version: '0.1.3', progress: 0.43 }, onUpdate() {}, onDismiss() {} });
-  assert.match(dl, /Downloading kwant bots 0\.1\.3… 43%/);
+  assert.match(dl, /Downloading kwant 0\.1\.3… 43%/);
   assert.match(dl, /role="progressbar"[^>]*aria-valuenow="43"/);
   assert.doesNotMatch(dl, /Update and restart|aria-label="Hide/);
   assert.match(ui.banner({ view: { kind: 'restarting', version: '0.1.3' }, onUpdate() {}, onDismiss() {} }), /Restarting the app to finish the update…/);
-  assert.match(ui.banner({ view: { kind: 'updated', version: '0.1.3' }, onUpdate() {}, onDismiss() {} }), /Updated to kwant bots 0\.1\.3\./);
+  assert.match(ui.banner({ view: { kind: 'updated', version: '0.1.3' }, onUpdate() {}, onDismiss() {} }), /Updated to kwant 0\.1\.3\./);
 });
 
 test('version line: one of latest, available, checking, couldn’t check — never a wrong latest', () => {
@@ -485,7 +485,7 @@ test('checked ago, in plain words', () => {
 test('kwant card: the version, one status line, What’s new, All releases — no earlier versions', () => {
   const latest = ui.card({ model: model(status({ state: 'idle', available: null })) });
   assert.match(latest, /data-version-card="latest"/);
-  assert.match(latest, /kwant bots <span[^>]*>0\.1\.2<\/span>/);
+  assert.match(latest, /kwant <span[^>]*>0\.1\.2<\/span>/);
   assert.match(latest, /You’re on the latest version/);
   assert.match(latest, /Check again/);
   assert.match(latest, /Checked 2 min ago/);
@@ -493,7 +493,7 @@ test('kwant card: the version, one status line, What’s new, All releases — n
   assert.doesNotMatch(latest, /Earlier versions|Update<|is available/);
 
   const mac = ui.card({ model: model(status()) });
-  assert.match(mac, /kwant bots 0\.1\.3 is available/);
+  assert.match(mac, /kwant 0\.1\.3 is available/);
   assert.match(mac, /data-version-update[^>]*>.*Update<\/button>/s);
   assert.doesNotMatch(mac, /aria-expanded/, 'on the Mac, Update installs');
   assert.match(mac, /What’s new in 0\.1\.3/, 'the newer version’s notes');
@@ -509,7 +509,7 @@ test('kwant card: the version, one status line, What’s new, All releases — n
   assert.match(closed, /aria-expanded="false"/);
   assert.doesNotMatch(closed, /How to update/);
   const win = ui.card({ model: model(status({ can_install: false, how: { kind: 'windows', command: null } })), howOpen: true });
-  assert.match(win, /Download kwant bots 0\.1\.3/);
+  assert.match(win, /Download kwant 0\.1\.3/);
   assert.match(win, /href="https:\/\/github\.com\/alexsergivan\/kwant\/releases\/tag\/mac-v0\.1\.3"/);
 
   const cant = ui.card({ model: model(status({ state: 'error', available: null, error: 'Couldn’t check for updates: GitHub couldn’t be reached.' })) });
@@ -520,11 +520,11 @@ test('kwant card: the version, one status line, What’s new, All releases — n
   assert.doesNotMatch(cant, /latest version/);
 
   const failed = ui.card({ model: model(status({ state: 'error', error: 'The signature check failed.' })) });
-  assert.match(failed, /kwant bots 0\.1\.3 didn’t install\./);
+  assert.match(failed, /kwant 0\.1\.3 didn’t install\./);
   assert.match(failed, /Download manually/);
 
   const dl = ui.card({ model: model(status({ state: 'downloading', progress: 0.43 })) });
-  assert.match(dl, /Downloading kwant bots 0\.1\.3… 43%/);
+  assert.match(dl, /Downloading kwant 0\.1\.3… 43%/);
   assert.match(dl, /role="progressbar"[^>]*aria-valuenow="43"/);
 
   // The current version’s sheet, in the What’s new card’s look, when this app bundles one
