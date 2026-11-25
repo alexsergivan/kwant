@@ -88,7 +88,12 @@ const CodeBlock: React.FC<CodeBlockProps> = ({ language, value }) => {
         </span>
       </div>
       <div className="relative">
-        <pre className={`p-3.5 overflow-x-auto text-xs font-mono text-zinc-200 leading-relaxed${folded ? ' max-h-80 overflow-y-hidden' : ''}`}>
+        <pre
+          tabIndex={0}
+          role="region"
+          aria-label={`Code, ${lineCount} line${lineCount === 1 ? '' : 's'}`}
+          className={`p-3.5 overflow-x-auto text-xs font-mono text-zinc-200 leading-relaxed focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400${folded ? ' max-h-80 overflow-y-hidden' : ''}`}
+        >
           <code>{value}</code>
         </pre>
         {folded && (
