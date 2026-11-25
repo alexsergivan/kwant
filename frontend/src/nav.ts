@@ -12,6 +12,28 @@ export type SpaceSettingsTab = (typeof SPACE_SETTINGS_TABS)[number];
 
 export type SettingsScope = 'space' | 'app';
 
+/** Settings › All spaces pages (36e). `settings/app` is General; the others are `settings/app/<page>`. */
+export const APP_SETTINGS_PAGES = ['general', 'bots', 'usage', 'notifications'] as const;
+export type AppSettingsPage = (typeof APP_SETTINGS_PAGES)[number];
+
+/** The All spaces page that holds a focusRow target, so a deep link opens that page first. */
+const ROW_PAGES: Record<string, AppSettingsPage> = {
+  'idea-jar': 'bots',
+  'decide-first': 'bots',
+  'work-ahead': 'bots',
+  'mission-board': 'bots',
+  autofix: 'bots',
+  lessons: 'bots',
+  'flight-school': 'bots',
+  auditor: 'bots',
+  'automation-discovery': 'bots',
+  'spend-stop': 'usage',
+  'claude-isolation': 'general',
+};
+export function appSettingsPageForRow(row: string | null | undefined): AppSettingsPage {
+  return (row && ROW_PAGES[row]) || 'general';
+}
+
 /** Where Apps & accounts opens; the address stays settings/apps. */
 export type AppsSection = 'apps' | 'accounts' | 'advanced';
 
@@ -25,7 +47,7 @@ export type SpaceView =
   | { kind: 'dev' }
   | { kind: 'jar' }
   | { kind: 'settings'; scope: 'space'; tab: SpaceSettingsTab; section?: AppsSection }
-  | { kind: 'settings'; scope: 'app' };
+  | { kind: 'settings'; scope: 'app'; page?: AppSettingsPage };
 
 /** The address segment after /s/<space>/ for a view. */
 export function viewSegment(v: SpaceView): string {
@@ -41,7 +63,8 @@ export function viewSegment(v: SpaceView): string {
     case 'jar':
       return 'jar';
     case 'settings':
-      return v.scope === 'app' ? 'settings/app' : `settings/${v.tab}`;
+      if (v.scope === 'space') return `settings/${v.tab}`;
+      return v.page && v.page !== 'general' ? `settings/app/${v.page}` : 'settings/app';
   }
 }
 
@@ -57,7 +80,7 @@ const LEGACY: Record<string, SpaceView> = {
   'parallel-universe': { kind: 'parallel' },
   'idea-jar': { kind: 'jar' },
   ideas: { kind: 'jar' },
-  'app-settings': { kind: 'settings', scope: 'app' },
+  'app-settings': { kind: 'settings', scope: 'app', page: 'general' },
 };
 
 /**
@@ -69,6 +92,12 @@ export function parseView(segment: string): { view: SpaceView; legacy: boolean }
   if (!s) return null;
   if (LEGACY[s]) return { view: LEGACY[s], legacy: true };
   const [head, sub, ...rest] = s.split('/');
+  // settings/app/<page>: an All spaces page; settings/all/<page> and settings/app/general are rewritten.
+  if (head === 'settings' && (sub === 'app' || sub === 'all') && rest.length === 1) {
+    const page = rest[0] as AppSettingsPage;
+    if (!(APP_SETTINGS_PAGES as readonly string[]).includes(page)) return null;
+    return { view: { kind: 'settings', scope: 'app', page }, legacy: sub !== 'app' || page === 'general' };
+  }
   if (rest.length) return null;
   if (head === 'inbox') {
     if (!sub || sub === 'new') return { view: { kind: 'inbox', tab: 'new' }, legacy: !!sub };
@@ -81,7 +110,7 @@ export function parseView(segment: string): { view: SpaceView; legacy: boolean }
   if (head === 'jar' && !sub) return { view: { kind: 'jar' }, legacy: false };
   if (head === 'settings') {
     if (!sub) return { view: { kind: 'settings', scope: 'space', tab: 'general' }, legacy: true };
-    if (sub === 'app' || sub === 'all') return { view: { kind: 'settings', scope: 'app' }, legacy: sub !== 'app' };
+    if (sub === 'app' || sub === 'all') return { view: { kind: 'settings', scope: 'app', page: 'general' }, legacy: sub !== 'app' };
     if ((SPACE_SETTINGS_TABS as readonly string[]).includes(sub)) {
       return { view: { kind: 'settings', scope: 'space', tab: sub as SpaceSettingsTab }, legacy: false };
     }
