@@ -242,6 +242,8 @@ function SenderLetter({ name }: { name: string }) {
 const REPLY_AVATAR_PHONE = 20;
 const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
 const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
+/** 36d: the live bubble while the scene shows: the same card, its parts pad themselves (scene row, steps, words). */
+const REPLY_BUBBLE_SCENE = 'rounded-2xl text-sm leading-relaxed shadow-sm w-full overflow-hidden';
 // 25b: a customer's or a bot's chat-API message, on the left. Outline only: not yours (filled, lighter), not a bot reply (filled); never violet.
 const OTHER_BUBBLE = 'bg-transparent text-zinc-200 rounded-tl-sm border border-zinc-700';
 
@@ -591,11 +593,8 @@ const StreamPart = React.memo(function StreamPart({ stream, part, onGrow }: { st
   const streamingText = useStreamPart(stream, part);
   useEffect(onGrow, [streamingText, onGrow]);
   if (part === 'thinking') return <>{streamingText}</>;
-  return (
-    <div className="kw-wa-in kw-wa-hold">
-      <StreamMarkdown content={shownWords(streamingText)} />
-    </div>
-  );
+  // 36d: the words stream under the scene (behind its hairline); the scene stays, so nothing holds its height.
+  return <StreamMarkdown content={shownWords(streamingText)} />;
 });
 
 /** 33j: one empty list, so a chat without reroute targets doesn't hand the rows a new array on every render. */
@@ -1170,6 +1169,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const stripWaitsOn = isStreaming ? waitingOn({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser }) : null;
   // What the live bubble holds before its first words: a pending approval reads as "waiting for your OK", not loading.
   const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing });
+  // 36d: the scene is the one working status: getting started, a step, writing. Queued and waiting on the person stay plain.
+  // A step that waits on the person while words stream keeps today's open steps card (an ask never hides, 18f).
+  const sceneShown = bubble === 'starting' || (bubble === 'text' && !liveActivity?.steps.some((st) => st.status === 'waiting'));
   // The strip's "Answer ↑": the open question card, else the approval card, fully in view.
   const showWaitingCard = (on: 'question' | 'approval') => {
     if (on === 'approval') return showApproval();
@@ -1916,6 +1918,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
     return repeats;
   }, [listed, renderDelegation]);
   const liveNote = isStreaming ? liveSwitchNote(switchNotes ?? [], switchNoteFor, streamingSpeakerName || title) : null;
+  // 36d (working-scene/design.md §5): the scene's region goes with the scene, so the end of the turn is said once
+  // here: "Quant replied." or, after the composer's Stop, "Quant stopped.". Not on opening another chat.
+  const [turnEndSaid, setTurnEndSaid] = useState('');
+  const liveTurnRef = useRef<{ name: string; key: string | undefined } | null>(null);
+  const stopPressedRef = useRef(false);
+  useEffect(() => {
+    if (isStreaming) {
+      liveTurnRef.current = { name: streamingSpeakerName || title, key: contextKey };
+      setTurnEndSaid('');
+      return;
+    }
+    const was = liveTurnRef.current;
+    liveTurnRef.current = null;
+    const stopped = stopPressedRef.current;
+    stopPressedRef.current = false;
+    if (!was || was.key !== contextKey) return;
+    setTurnEndSaid(`${was.name} ${stopped ? 'stopped' : 'replied'}.`);
+    const id = window.setTimeout(() => setTurnEndSaid(''), 5000);
+    return () => window.clearTimeout(id);
+  }, [isStreaming, contextKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
   const freshTrack = useRef<{ key: string | undefined; seen: Set<string> | null; fresh: Set<string>; streamEnded: number; wasStreaming: boolean }>({
@@ -3071,6 +3093,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </div>
         )}
 
+        {/* 36d: "Quant replied." / "Quant stopped." once, after the scene (and its region) goes */}
+        <p className="sr-only" role="status" aria-live="polite" data-turn-end-said="">{turnEndSaid}</p>
+
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
         {isStreaming && !deciding && routingState?.phase !== 'deciding' && !askOnly && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl" data-live-row="">
@@ -3103,9 +3128,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 ) : null /* "Generating" would repeat the working strip */}
               </div>
 
-              {liveNote && <FailoverNote text={liveNote} />}
+              {/* 36d: while the scene shows, the steps and the engine note are under its Steps toggle; a turn that
+                  waits on the person (or in line) keeps them here, above its plain line, as before. */}
+              {!sceneShown && liveNote && <FailoverNote text={liveNote} />}
 
-              {liveActivity && !stepsBelow && liveStepsList}
+              {!sceneShown && liveActivity && !stepsBelow && liveStepsList}
 
               {thinking && (
                 <div className="mb-2 p-2.5 rounded-xl bg-sky-950/20 border border-sky-500/20 text-xs text-sky-300/90 flex items-center gap-2 animate-pulse motion-reduce:animate-none max-w-full">
@@ -3114,28 +3141,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 </div>
               )}
 
-              {/* On a phone the strip says "working" and "waiting": no skeleton, no "Paused on…" bubble. */}
-              {(!phone || queued || writing) && (
-              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${REPLY_BUBBLE_BOT} kw-live-in`} data-live-bubble-body="">
-                {queued ? (
-                  <p className="text-zinc-300" role="status">
-                    {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
-                    {queuedText(queued.reason, queued.slots)}
-                  </p>
-                ) : writing ? (
-                  /* The scene's 62 px holds under the first words (kw-wa-hold, in StreamPart), so the bubble does not jump; they come up from half, never from nothing (32e). */
-                  <StreamPart stream={stream} part="text" onGrow={onStreamGrow} />
-                ) : awaitingAnswer ? (
-                  <p className="text-zinc-400" role="status">
-                    {awaitingBrowser
-                      ? 'Paused on the browser step above. Do it in the browser panel and press Done; this reply carries on from it.'
-                      : 'Paused on the question above. Answer it there; this reply carries on from it.'}
-                  </p>
-                ) : bubble === 'approval' ? (
-                  <p className="text-zinc-400" role="status" data-live-bubble="approval">
-                    Paused on the approval below. Allow or deny it there; this reply carries on from it.
-                  </p>
-                ) : (
+              {/* 36d: the scene is the one working status, on a phone too. On a phone the strip still says "waiting" (with Answer ↑), so no "Paused on…" bubble there. */}
+              {sceneShown ? (
+                <div className={`${REPLY_BUBBLE_SCENE} ${REPLY_BUBBLE_BOT} kw-live-in`} data-live-bubble-body="">
                   <WorkingAvatar
                     name={
                       discussionState?.inProgress && discussionState.currentSpeaker
@@ -3143,13 +3151,47 @@ export const ChatView: React.FC<ChatViewProps> = ({
                         : streamingSpeakerName || title
                     }
                     audit={liveAudit}
-                  />
+                    live={liveActivity}
+                    writing={writing}
+                    phone={phone}
+                    footer={liveNote}
+                    who={stepsName}
+                    onWatch={onWatchBrowser && !vmOpen ? onWatchBrowser : undefined}
+                    idBase={liveActivity ? `live-${liveActivity.turnId}` : undefined}
+                    lead={
+                      liveActivity && livePages.length > 0 ? (
+                        <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />
+                      ) : undefined
+                    }
+                  >
+                    {writing ? <StreamPart stream={stream} part="text" onGrow={onStreamGrow} /> : null}
+                  </WorkingAvatar>
+                </div>
+              ) : (!phone || queued || writing) && (
+              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${REPLY_BUBBLE_BOT} kw-live-in`} data-live-bubble-body="">
+                {queued ? (
+                  <p className="text-zinc-300" role="status">
+                    {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
+                    {queuedText(queued.reason, queued.slots)}
+                  </p>
+                ) : writing ? (
+                  <StreamPart stream={stream} part="text" onGrow={onStreamGrow} />
+                ) : awaitingAnswer ? (
+                  <p className="text-zinc-400" role="status">
+                    {awaitingBrowser
+                      ? 'Paused on the browser step above. Do it in the browser panel and press Done; this reply carries on from it.'
+                      : 'Paused on the question above. Answer it there; this reply carries on from it.'}
+                  </p>
+                ) : (
+                  <p className="text-zinc-400" role="status" data-live-bubble="approval">
+                    Paused on the approval below. Allow or deny it there; this reply carries on from it.
+                  </p>
                 )}
               </div>
               )}
 
               {/* 18f: once words stream, the steps row sits below the bubble, where the landed action row goes */}
-              {liveActivity && stepsBelow && liveStepsList}
+              {!sceneShown && liveActivity && stepsBelow && liveStepsList}
 
               {!queued && <QueuedBeside items={queuedBeside} />}
             </div>
@@ -3460,7 +3502,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {isStreaming && !askOnly && (
             <button
               type="button"
-              onClick={onCancelDiscussion}
+              onClick={() => {
+                stopPressedRef.current = true;
+                onCancelDiscussion?.();
+              }}
               className="w-11 h-11 sm:w-9 sm:h-9 rounded-xl flex items-center justify-center transition-colors flex-shrink-0 bg-rose-500/20 hover:bg-rose-500/30 text-rose-300 border border-rose-400/30 cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-400"
               title={discussionState?.inProgress && discussionState.kind !== 'handoff' ? 'Stop Discussion' : 'Stop'}
               aria-label={discussionState?.inProgress && discussionState.kind !== 'handoff' ? 'Stop discussion' : 'Stop'}

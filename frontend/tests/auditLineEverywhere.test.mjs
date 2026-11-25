@@ -26,10 +26,13 @@ const open = () => {};
 test('an audit turn: the live bubble says the audit line and links to the task, not "is working on it"', () => {
   assert.match(line, /^Writer is double-checking Researcher’s routine run/);
   const html = ui.scene({ name: 'Writer', audit: { line, onOpenTask: open } });
-  assert.ok(html.includes(`aria-label="${line.replace(/"/g, '&quot;')}"`), 'the status label is the audit line');
+  const esc = (x) => x.replace(/"/g, '&quot;');
+  assert.ok(html.includes(`data-scene-said="">${esc(line)}.</p>`), 'the polite region says the audit line (36d: no fixed aria-label)');
+  assert.ok(html.includes(`data-scene-line="">${esc(line)}</p>`), 'line 1 is the audit line');
   assert.ok(html.includes('data-audit=""'));
   assert.doesNotMatch(html, /is working on it/);
-  assert.match(html, /<button type="button" class="kw-wa-open" data-open-audited-task="">Open the task<\/button>/);
+  // 36d: "Open the task" sits in line 2, after the clock (design C).
+  assert.match(html, /data-scene-meta=""><span class="tabular-nums"[^>]*>Working · [\d:]+<\/span><span class="text-zinc-600" aria-hidden="true">·<\/span><button type="button" class="kw-wa-open" data-open-audited-task="">Open the task<\/button>/);
   assert.match(html, /<svg class="kw-wa-scene"/, 'the scene (avatar, animation) stays');
 });
 
@@ -40,8 +43,8 @@ test('an audit turn with no board: the line, no link', () => {
 
 test('a plain turn: the live bubble is unchanged', () => {
   const html = ui.scene({ name: 'Writer' });
-  assert.match(html, /<span class="kw-wa-name">Writer<\/span> is working on it/);
-  assert.match(html, /aria-label="Writer is working on the answer"/);
+  assert.match(html, /data-scene-line=""><span class="font-medium text-zinc-50">Writer<\/span> is getting started<\/p>/);
+  assert.match(html, /data-scene-said="">Writer is getting started\.<\/p>/);
   assert.doesNotMatch(html, /data-audit|Open the task/);
 });
 
@@ -54,28 +57,25 @@ test('the strip: the audit line replaces "getting started" / "working on it", ne
   assert.deepEqual(m.stripSentence('Writer', {}, null), { audit: false, text: 'Writer is getting started' });
 });
 
-test('the strip on desktop and phone: the audit line, with "Open the task" on the phone (its live bubble is hidden)', () => {
-  const desk = ui.strip({ name: 'Writer', phone: false, audit: { line, onOpenTask: open } });
-  assert.ok(desk.includes('data-strip-audit=""'));
-  assert.doesNotMatch(desk, /is getting started/);
-  const phone = ui.strip({ name: 'Writer', phone: true, audit: { line, onOpenTask: open } });
-  assert.match(phone, /data-open-audited-task=""[^>]*>Open the task<\/button>/);
-  assert.match(phone, /data-working-elapsed=""/);
-  assert.match(phone, /hidden min-\[400px\]:inline/, 'below 400 px the clock gives way to the link');
-  const plain = ui.strip({ name: 'Writer', phone: true });
-  assert.match(plain, /<span class="font-medium text-zinc-300">Writer<\/span> is getting started/);
-  assert.doesNotMatch(plain, /Open the task|data-strip-audit/);
+test('36d: while an audit turn works the strip stays away on desktop and phone; the scene carries the line and Open the task', () => {
+  for (const phone of [false, true]) {
+    assert.equal(ui.strip({ name: 'Writer', phone, audit: { line, onOpenTask: open } }), '', `phone=${phone}: no strip while working`);
+    assert.equal(ui.strip({ name: 'Writer', phone }), '');
+  }
+  const ph = ui.scene({ name: 'Writer', phone: true, audit: { line, onOpenTask: open } });
+  assert.match(ph, /data-open-audited-task="">Open the task<\/button>/);
+  assert.match(ph, /data-working-elapsed=""/);
 });
 
-test('the phone strip says the short line; the full line stays as its title, and desktop keeps the full line', () => {
+test('the phone scene says the short line; the region keeps the full line, and desktop shows the full line', () => {
   const short = m.auditShortLine(audit, names);
   assert.match(short, /^Double-checking “Weekly report”/);
   const esc = (x) => x.replace(/"/g, '&quot;');
-  const phone = ui.strip({ name: 'Writer', phone: true, audit: { line, short, onOpenTask: open } });
-  assert.ok(phone.includes(`data-strip-audit="">${short}</p>`), 'phone text is the short line');
-  assert.ok(phone.includes(`title="${esc(line)}"`), 'phone title is the full line');
-  const desk = ui.strip({ name: 'Writer', phone: false, audit: { line, short, onOpenTask: open } });
-  assert.ok(desk.includes(`data-strip-audit="">${line}</p>`), 'desktop text stays the full line');
+  const phone = ui.scene({ name: 'Writer', phone: true, audit: { line, short, onOpenTask: open } });
+  assert.ok(phone.includes(`data-scene-line="">${esc(short)}</p>`), 'phone text is the short line');
+  assert.ok(phone.includes(`data-scene-said="">${esc(line)}.</p>`), 'the region says the full line');
+  const desk = ui.scene({ name: 'Writer', audit: { line, short, onOpenTask: open } });
+  assert.ok(desk.includes(`data-scene-line="">${esc(line)}</p>`), 'desktop text stays the full line');
   assert.match(read('src/App.tsx'), /short: auditShortLine\(auditHere, kwantNames\)/);
 });
 

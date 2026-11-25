@@ -8,7 +8,7 @@ const ui = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
   import { WorkingAvatar } from './src/components/WorkingAvatar';
-  export const scene = (name) => renderToStaticMarkup(React.createElement(WorkingAvatar, { name }));
+  export const scene = (name, props = {}) => renderToStaticMarkup(React.createElement(WorkingAvatar, { name, ...props }));
 `);
 const scene = ui.scene;
 const read = (p) => readFileSync(new URL(`../${p}`, import.meta.url), 'utf8');
@@ -19,14 +19,40 @@ const chat = read('src/components/ChatView.tsx');
 const body = (html) => html.match(/<rect x="7" y="9" width="12" height="7" fill="([^"]+)"/)?.[1];
 const paw = (html) => html.match(/<rect x="13" y="14" width="3" height="1" fill="([^"]+)" data-paw=""/)?.[1];
 
-test('the wrapper is the status with the full label; the scene and the visible line are hidden from screen readers', () => {
+test('36d: one polite region says line 1 as a sentence; the scene, line 1 and the clock are hidden from screen readers', () => {
   const html = scene('Builder');
-  assert.match(html, /^<div class="kw-wa" role="status" aria-label="Builder is working on the answer"/);
+  assert.match(html, /^<div class="kw-wa-card" data-working-avatar="">/);
+  assert.doesNotMatch(html, /aria-label="Builder is working on the answer"/, 'no fixed label any more');
+  assert.equal((html.match(/role="status"/g) ?? []).length, 1, 'one region per turn');
+  assert.match(html, /<p class="sr-only" role="status" aria-live="polite" data-scene-said="">Builder is getting started\.<\/p>/);
   assert.match(html, /<svg class="kw-wa-scene"[^>]*aria-hidden="true"[^>]*focusable="false"/);
-  assert.match(html, /<p class="kw-wa-text" aria-hidden="true"><span class="kw-wa-name">Builder<\/span> is working on it<span class="kw-wa-dots">/);
-  assert.match(html, /<span class="sr-only">Builder is working on the answer<\/span><\/div>$/);
-  assert.doesNotMatch(html, /tabindex|<a |<button|<input/, 'nothing inside takes focus');
-  assert.equal((html.match(/class="kw-mood-dot/g) ?? []).length, 3, 'three dots on the mood glyph timing');
+  assert.doesNotMatch(html, /role="img"/);
+  assert.match(html, /<p class="kw-wa-now[^"]*" aria-hidden="true" data-scene-line=""><span class="font-medium text-zinc-50">Builder<\/span> is getting started<\/p>/);
+  assert.match(html, /<span class="tabular-nums" aria-hidden="true" data-working-elapsed="">Working · 0:0\d<\/span>/);
+  assert.doesNotMatch(html, /kw-mood-dot|kw-wa-dots/, 'the three dots go: line 1 ends in a real object');
+  assert.doesNotMatch(html, /<button/, 'no steps yet: nothing to open');
+});
+
+test('36d: a shell step names the host in bright type, draws the command glyph, and the Steps toggle controls its list', () => {
+  const live = { turnId: 't1', thinking: {}, steps: [
+    { id: 's1', kind: 'tool', status: 'failed', title: 'Running `ssh root@203.0.113.66 uptime`', started_at: '2026-11-25T00:00:00Z' },
+    { id: 's2', kind: 'tool', status: 'running', title: 'Running `ssh root@203.0.113.66 ls state/`', started_at: '2026-11-25T00:00:03Z' },
+  ] };
+  const html = scene('Quant', { live, idBase: 'live-t1', footer: 'Runs on Claude Code CLI · this machine' });
+  assert.match(html, /data-scene-line=""><span class="font-medium text-zinc-50">Quant<\/span> is running a command on <span class="font-medium text-zinc-50">203\.0\.113\.66<\/span><\/p>/);
+  assert.match(html, /data-scene-said="">Quant is running a command on 203\.0\.113\.66\.<\/p>/);
+  assert.match(html, /data-glyph="command"/);
+  for (const [x, y] of [[19, 8], [20, 9], [19, 10]]) assert.match(html, new RegExp(`<rect x="${x}" y="${y}" width="1" height="1" fill="var\\(--kw-wa-type\\)"`));
+  assert.match(html, /class="kw-wa-l kw-wa-l1" x="22" y="9" width="9"/);
+  assert.match(html, /class="kw-wa-l kw-wa-l3" x="19" y="12" width="7"/);
+  assert.match(html, /<button type="button" aria-expanded="false" aria-controls="live-t1-steps" aria-label="Steps, 2, 1 retried" data-scene-steps="" class="min-h-7 /);
+  assert.match(html, /<div id="live-t1-steps" hidden="" class="border-t border-hairline" data-scene-steps-list="">/);
+  assert.match(html, /data-scene-footer="">Runs on Claude Code CLI · this machine<\/p>/, 'the engine note is the list footer');
+  const phone = scene('Quant', { live, phone: true });
+  assert.match(phone, /width="72" height="36"/);
+  assert.match(phone, /class="min-h-11 /, 'Steps taps at 44 px on a phone');
+  const plain = scene('Quant', { live: { ...live, steps: [{ id: 'r', kind: 'tool', status: 'running', title: 'Using `Read` (notes.md)', started_at: '2026-11-25T00:00:00Z' }] } });
+  assert.match(plain, /data-glyph="lines"/);
 });
 
 test('the bot is the real creature, without its ground shadow, and the paw wears its body colour', () => {
@@ -45,28 +71,35 @@ test('a different speaker draws a different bot (team discussions follow the cur
   assert.match(chat, /<WorkingAvatar\s+name=\{\s+discussionState\?\.inProgress && discussionState\.currentSpeaker\s+\? discussionState\.currentSpeaker\s+: streamingSpeakerName \|\| title\s+\}/);
 });
 
-test('the scene replaces the grey lines; the first words keep its height and fade in once', () => {
+test('36d: writing keeps the scene on top and the words stream under its hairline (no hold, no swap)', () => {
   assert.doesNotMatch(chat, /kws-skel|Waiting for the first words/);
-  // 15a: the live reply renders through StreamMarkdown (a block at a time), with the same cleaned text.
   assert.match(chat, /const shownWords = \(text: string\): string => hideStreamingDecisions\(stripDiscussionMarkers\(text\)\);/);
-  assert.match(chat, /<div className="kw-wa-in kw-wa-hold">\s+<StreamMarkdown content=\{shownWords\(streamingText\)\} \/>/);
-  assert.match(css, /\.kw-wa-hold \{ min-height: 62px; \}/);
-  assert.match(css, /\.kw-wa \{[^}]*height: 62px;/);
+  assert.match(chat, /return <StreamMarkdown content=\{shownWords\(streamingText\)\} \/>;/);
+  assert.doesNotMatch(chat + css, /kw-wa-hold \{|className="[^"]*kw-wa-hold/);
+  assert.match(chat, /\{writing \? <StreamPart stream=\{stream\} part="text" onGrow=\{onStreamGrow\} \/> : null\}\s+<\/WorkingAvatar>/);
+  const html = scene('Writer', { writing: true, children: 'Hello' });
+  assert.match(html, /is writing the reply/);
+  assert.match(html, /<div class="kw-wa-words border-t border-hairline" data-scene-words="">Hello<\/div><\/div>$/);
+  assert.match(css, /\.kw-wa-stage \{[^}]*width: 120px;[^}]*height: 64px;[^}]*background: var\(--kw-surface-main\);[^}]*box-shadow: inset 0 0 0 1px var\(--kw-hairline\);/);
   assert.match(css, /\.kw-wa-scene \{[^}]*flex: none;[^}]*height: 54px;/);
+  assert.match(css, /\.kw-wa-card\[data-phone\] \.kw-wa-stage \{[^}]*width: 84px; height: 46px;/);
 });
 
-test('queued and paused bubbles keep their text and do not hold the scene height', () => {
+test('queued and paused bubbles keep their text; the phone shows the scene, not the paused bubble', () => {
   for (const s of [
     'Paused on the browser step above. Do it in the browser panel and press Done; this reply carries on from it.',
     'Paused on the question above. Answer it there; this reply carries on from it.',
     'Paused on the approval below. Allow or deny it there; this reply carries on from it.',
   ]) assert.ok(chat.includes(s), s);
-  assert.equal((chat.match(/kw-wa-hold/g) ?? []).length, 2, 'only the first-words wrapper (and its comment) name the hold');
-  assert.match(chat, /\{\(!phone \|\| queued \|\| writing\) && \(/, 'phones keep the strip, no bubble');
+  assert.match(chat, /const sceneShown = bubble === 'starting' \|\| \(bubble === 'text' && !liveActivity\?\.steps\.some\(\(st\) => st\.status === 'waiting'\)\);/);
+  assert.match(chat, /\{sceneShown \? \(/);
+  assert.match(chat, /\) : \(!phone \|\| queued \|\| writing\) && \(/, 'phones keep the strip for a wait, no paused bubble');
 });
 
 test('motion is CSS keyframes on transform and opacity only, no JS timers, a 2.4 s loop', () => {
   assert.doesNotMatch(tsx, /setTimeout|setInterval|requestAnimationFrame|useEffect|canvas/);
+  // 36d: the glyph reuses the scene's keyframes; nothing new moves.
+  assert.doesNotMatch(css, /@keyframes kw-wa-(?:cmd|glyph|chev)/);
   const frames = [...css.matchAll(/@keyframes (kw-wa-[\w-]+) \{([\s\S]*?)\n?\}\n/g)];
   assert.ok(frames.length >= 8, `found ${frames.length} keyframes`);
   for (const [, name, b] of frames) {
@@ -76,9 +109,10 @@ test('motion is CSS keyframes on transform and opacity only, no JS timers, a 2.4
   for (const m of css.matchAll(/\.kw-wa-(?:bob|l1|l2|l3|paw) \{ animation: [\w-]+ ([\d.]+)s/g)) assert.ok(Number(m[1]) <= 2.4, m[0]);
 });
 
-test('reduced motion stops every animation and leaves the still frame (lines shown, spark hidden, dots "…")', () => {
-  const rm = css.match(/@media \(prefers-reduced-motion: reduce\) \{\s+\.kw-wa, \.kw-wa-in, \.kw-live-in, \.kw-wa-scene \*, \.kw-wa-dots > \* \{ animation: none !important; \}\s+\.kw-wa-dots > \* \{ opacity: 0\.8; \}\s+\}/);
-  assert.ok(rm, 'reduced-motion block covers the wrapper, the fades (32e: the bubble too), every scene part and the dots');
+test('reduced motion stops every animation and leaves the still frame (lines shown, spark hidden, no fade)', () => {
+  const rm = css.match(/@media \(prefers-reduced-motion: reduce\) \{\s+\.kw-wa-in, \.kw-live-in, \.kw-wa-scene \* \{ animation: none !important; \}\s+\}/);
+  assert.ok(rm, 'reduced-motion block covers the fades (32e: the bubble too) and every scene part');
+  assert.doesNotMatch(css, /\.kw-wa \{[^}]*animation/, 'the scene row itself never moves');
   assert.match(css, /\.kw-wa-spark rect \{ opacity: 0; \}/);
   const html = scene('Writer');
   for (const w of [11, 9, 6]) assert.match(html, new RegExp(`class="kw-wa-l kw-wa-l\\d" x="19" y="\\d+" width="${w}"`), `line of ${w} cells drawn at rest`);
