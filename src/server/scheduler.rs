@@ -8,6 +8,7 @@
 use super::continuity::{notify, Notification};
 use super::spaces::Scope;
 use super::AppState;
+use super::scheduler_heartbeat::Step;
 use crate::db::continuity::{NewRoutine, RoutineRow, RoutineRun};
 use crate::drivers::events::RuntimeEvent;
 use crate::routines::Schedule;
@@ -1216,6 +1217,10 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
     state.scheduler_heartbeat.spawned();
     spawn_heartbeat_watch(state.clone(), shutdown.clone());
     tokio::spawn(async move {
+        // scheduler-step-watchdog: name each awaited call before awaiting it, so a stall says where.
+        // Stamps only: nothing here is cancelled or timed out (several steps take, then act).
+        let hb = state.scheduler_heartbeat.clone();
+        hb.step(Step::StartupFailInterruptedRuns);
         if let Ok(n) = state.db.fail_interrupted_runs().await {
             if n > 0 {
                 tracing::info!(
@@ -1224,25 +1229,40 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
                 );
             }
         }
+        hb.step(Step::StartupDeleteOrphanRoutines);
         let _ = state.db.delete_orphan_routines().await;
+        hb.step(Step::StartupLoadTurnLimits);
         super::routes::load_turn_limits(&state).await;
+        hb.step(Step::StartupInterruptOpen);
         super::delegation::interrupt_open(&state).await;
+        hb.step(Step::StartupRescheduleAll);
         reschedule_all(&state, Utc::now()).await;
         loop {
-            state.scheduler_heartbeat.pass_started();
+            hb.pass_started();
+            hb.step(Step::Routines);
             tick(&state, Utc::now()).await;
+            hb.step(Step::FollowUps);
             super::delegation::follow_ups(&state, Utc::now()).await;
             // G2: bots whose budget pause ended on its own (a new month) start what they held
+            hb.step(Step::BudgetRelease);
             super::bot_budget::release_due(&state).await;
+            hb.step(Step::Parked);
             super::parked::run_due(&state, Utc::now()).await;
             // 0.9.5: an approval card nobody answered in time tells its chat, with Retry
+            hb.step(Step::ApprovalExpiry);
             super::mcp_runtime::expire_unanswered(&state).await;
+            hb.step(Step::Waiting);
             super::waiting::run_due(&state, Utc::now()).await;
+            hb.step(Step::WorkAhead);
             super::work_ahead::scan(&state, Utc::now(), false).await;
+            hb.step(Step::IdeaJar);
             super::idea_jar::scan(&state, Utc::now(), false).await;
+            hb.step(Step::Missions);
             super::missions::runner::tick(&state).await;
+            hb.step(Step::Goals);
             super::goals_remediation::tick(&state).await;
-            state.scheduler_heartbeat.pass_finished();
+            hb.pass_finished();
+            hb.step(Step::NextDue);
             let next = [
                 state.db.next_routine_due().await.ok().flatten(),
                 state.db.next_parked_due().await.ok().flatten(),
@@ -1251,6 +1271,7 @@ pub fn spawn(state: AppState, shutdown: CancellationToken) -> tokio::task::JoinH
             .into_iter()
             .flatten()
             .min();
+            hb.idle();
             let sleep = match next {
                 Some(at) => (at - Utc::now())
                     .to_std()
