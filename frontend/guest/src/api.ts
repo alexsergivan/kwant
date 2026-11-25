@@ -15,9 +15,10 @@ export interface Env {
 
 /**
  * A failed call keeps what pa1 and the kits say about it: `error` (code), `message` (plain words to show as is),
- * `tries_left` (wrong PIN) and `until` (PIN lock).
+ * `tries_left` (wrong PIN), `until` (PIN lock) and `retry_at` (a kit's own slow_down, the front desk's 429).
  */
-export type Fail = { ok: false; status: number; error?: string; message?: string; tries_left?: number; until?: string };
+/** `body`: the whole error JSON, for a kit that reads more of it (pa13b's slot_taken carries fresh slots). */
+export type Fail = { ok: false; status: number; error?: string; message?: string; tries_left?: number; until?: string; retry_at?: string; body?: Record<string, unknown> };
 export type Reply<V = GuestView> = { ok: true; view?: V } | Fail;
 /** Reads one v1 state into the page's own view (the quiz's `fromState`, Santa's `santaFrom`). */
 export type Parse<V> = (json: unknown) => { view: V; version?: number } | undefined;
@@ -65,6 +66,8 @@ export function fromState(json: unknown): { view: GuestView; version?: number } 
     max_players: most ?? kv.max_players,
     player_count: kv.player_count ?? players,
     retention: retentionFrom(pocket.retention) ?? kv.retention,
+    notice: str(pocket.notice) ?? kv.notice,
+    first_names_only: pocket.first_names_only === true || kv.first_names_only === true,
     deletes_on: kv.deletes_on ?? (expires && /^\d{4}-\d{2}-\d{2}/.test(expires) ? expires.slice(0, 10) : undefined),
     me: me
       ? {
@@ -77,6 +80,8 @@ export function fromState(json: unknown): { view: GuestView; version?: number } 
       : undefined,
   };
   if (!me) delete view.me;
+  if (!view.notice) delete view.notice;
+  if (!view.first_names_only) delete view.first_names_only;
   return { view, version: num(j.version) };
 }
 
@@ -121,7 +126,7 @@ export class Api<V = GuestView> {
     }
     if (!res.ok) {
       const e = obj(json);
-      return { ok: false, status: res.status, error: str(e?.error), message: str(e?.message), tries_left: num(e?.tries_left), until: str(e?.until) };
+      return { ok: false, status: res.status, error: str(e?.error), message: str(e?.message), tries_left: num(e?.tries_left), until: str(e?.until), retry_at: str(e?.retry_at), body: e };
     }
     return { ok: true, view: this.take(json) };
   }
@@ -155,6 +160,8 @@ export class Live<V = GuestView> {
   private wsFailed = 0;
   private stopped = true;
   isAway = false;
+  /** How often `state` is asked without a socket (the front desk asks every 15 s). */
+  pollMs = POLL_MS;
 
   constructor(
     private env: Env,
@@ -249,7 +256,7 @@ export class Live<V = GuestView> {
         this.poll();
       } else if (r.status === 0 || r.status >= 500) this.lost();
       else this.on.gone(r.status, r.error);
-    }, POLL_MS);
+    }, this.pollMs);
   }
 
   private async retry(): Promise<void> {

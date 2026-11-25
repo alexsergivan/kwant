@@ -356,6 +356,73 @@ test("v1: name_taken offers That's me, which rejoins by name and says so", async
   t.app.stop();
 });
 
+// ---------- pa11 class quiz (Lin's #1143) ----------
+
+test('pa11: a class quiz says its line before the name box, in place of the privacy line, and asks for a first name', async () => {
+  const t = await open('join-class');
+  assert.equal(t.screen(), 'join');
+  const notice = t.root.querySelector('[data-notice]');
+  assert.equal(notice.textContent, 'First names or nicknames only. Everything about players is deleted when the quiz ends. Nothing is shared.');
+  // Before the name box, in reading order.
+  assert.ok(notice.compareDocumentPosition(t.root.querySelector('#name')) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING);
+  // Never said twice: no at_end privacy line under the button.
+  assert.equal(t.root.querySelector('[data-privacy]'), null);
+  assert.ok(!t.text().includes('Your name and answers are deleted when the quiz ends.'));
+  assert.equal(t.root.querySelector('#name-hint').textContent, 'First name or nickname');
+  assert.equal(t.root.querySelector('#name').getAttribute('aria-describedby'), 'name-hint');
+  // The box refuses a full name: its own line, inline on the name field, like name_too_long.
+  type(t.root.querySelector('#name'), 'Mia Rose Jones');
+  submit(t.root.querySelector('form'));
+  await flush();
+  assert.equal(t.root.querySelector('[data-err]').textContent, 'First name or nickname only, please: no surname, email or phone number.');
+  assert.equal(t.root.querySelector('#name').getAttribute('aria-invalid'), 'true');
+  // Typing clears it; a nickname joins.
+  type(t.root.querySelector('#name'), 'Big Sam');
+  assert.equal(t.root.querySelector('[data-err]').textContent, '');
+  submit(t.root.querySelector('form'));
+  await flush();
+  assert.equal(t.calls.at(-1).body.name, 'Big Sam');
+  assert.equal(t.screen(), 'lobby');
+  t.app.stop();
+});
+
+test('pa11: name_first_only without words from the box still says the plain line; the client keeps only its 20-letter check', async () => {
+  const t = await open('join-solo');
+  t.box.joinError = 'name_first_only';
+  type(t.root.querySelector('#name'), 'Ana');
+  submit(t.root.querySelector('form'));
+  await flush();
+  // The fake box's own message wins when it sends one ("Fake guest port."): the server owns the words.
+  assert.equal(t.root.querySelector('[data-err]').textContent, 'Fake guest port.');
+  t.box.joinError = null;
+  // No word rules in the client: three words go to the box on a normal quiz.
+  type(t.root.querySelector('#name'), 'Mia Rose Jones');
+  submit(t.root.querySelector('form'));
+  await flush();
+  assert.equal(t.calls.at(-1).body.name, 'Mia Rose Jones');
+  t.app.stop();
+});
+
+test('pa11: a normal quiz is unchanged: no notice, the 1-20 letters hint, the privacy line under Join', async () => {
+  for (const name of ['join', 'join-solo']) {
+    const t = await open(name);
+    assert.equal(t.root.querySelector('[data-notice]'), null, name);
+    assert.equal(t.root.querySelector('#name-hint').textContent, '1-20 letters', name);
+    assert.ok(t.root.querySelector('[data-privacy]'), name);
+    t.app.stop();
+  }
+  const { view } = m.fromState({ pocket: { kit: 'quiz', retention: { kind: 'at_end' }, first_names_only: false, notice: null } });
+  assert.equal('notice' in view, false);
+  assert.equal('first_names_only' in view, false);
+  const cls = m.fromState({ pocket: { kit: 'quiz', first_names_only: true, notice: 'Line.' } }).view;
+  assert.equal(cls.notice, 'Line.');
+  assert.equal(cls.first_names_only, true);
+  // Junk is dropped, never shown.
+  const junk = m.fromState({ pocket: { kit: 'quiz', first_names_only: 'yes', notice: 42 } }).view;
+  assert.equal('notice' in junk, false);
+  assert.equal('first_names_only' in junk, false);
+});
+
 test('v1: join errors from pa1 are plain words', async () => {
   const t = await open('join-solo');
   type(t.root.querySelector('#name'), 'Ana');
@@ -842,7 +909,18 @@ test('built: phone files at most 80 KB gzipped (JS + CSS + HTML + font); the big
     else phone += gz;
     rows.push(`${f} ${buf.length} B raw, ${gz} B gz`);
   }
-  console.log(`guest bundle: phone ${phone} B gzipped, big screen ${screen} B gzipped, host remote ${remote} B gzipped, total ${phone + screen + remote}\n  ${rows.join('\n  ')}`);
+  // A phone loads one kit: the entry lazily imports each kit's own chunk (Secret Santa, gather, the Wall, the front desk), and only the
+  // pocket's kit is fetched. So the budget counts every phone file except the other kits' JS chunks: all of them minus
+  // the lazy kit chunks, plus the largest one. CSS and shared chunks still count in full, which keeps it on the safe side.
+  const entry = readFileSync(new URL('index.html', dist), 'utf8').match(/g-[\w-]+\.js/)?.[0];
+  const lazy = [...readFileSync(new URL(entry, dist), 'utf8').matchAll(/import\("\.\/(g-[\w-]+\.js)"\)/g)]
+    .map((m) => m[1])
+    .filter((f) => !f.startsWith('g-screen-') && !f.startsWith('g-remote-'));
+  const kitGz = lazy.map((f) => gzipSync(readFileSync(new URL(f, dist)), { level: 9 }).length);
+  const all = phone;
+  phone = all - kitGz.reduce((a, b) => a + b, 0) + Math.max(0, ...kitGz);
+  console.log(`guest bundle: phone ${phone} B gzipped (all phone files ${all}; kit chunks ${lazy.map((f, i) => `${f} ${kitGz[i]}`).join(', ')}), big screen ${screen} B gzipped, host remote ${remote} B gzipped, total ${all + screen + remote}\n  ${rows.join('\n  ')}`);
+  assert.ok(lazy.length >= 1, 'the entry lazily imports the kit chunks');
   assert.ok(phone <= 80 * 1024, `guest page is ${phone} B gzipped, budget 81920`);
   assert.ok(screen > 0 && screen <= 40 * 1024, `big screen chunk is ${screen} B gzipped, budget 40960`);
   assert.ok(remote > 0 && remote <= 40 * 1024, `host remote chunk is ${remote} B gzipped, budget 40960`);

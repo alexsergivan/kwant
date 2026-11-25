@@ -1,7 +1,7 @@
 // pa5 guest page in a real Chrome under exactly pa1's pocket CSP (guest/fake/views.mjs CSP), from the fake guest port.
 // Fails on: any securitypolicyviolation or CSP console error, a page error, any request that is not same-origin,
 // a missing or different CSP header, sideways scrolling at 390 px, or a visible tap target under 44 px.
-// Also walks Secret Santa's G1-G11 (pa10a) from the fake santa box. Writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
+// Also walks Secret Santa's G1-G11 (pa10a) from the fake santa box, gather's G1-G11 (pa10b) from the fake gather box, the Wall's G1-G8 and TV1-TV4 (pa14) from the fake wall box, and the front desk's G1-G12 (pa13) and the Booking Desk's K1-K11 (pa13b) from the fake desk box. Writes a 390 px shot of every state and measures first paint on throttled networks (reported, not gated).
 // Usage: PW_CORE=<playwright-core/index.mjs> CHROMIUM=<chrome> node guest/e2e/csp.mjs <out dir>
 // Needs the built page in frontend/dist/pocket (npm run build:guest).
 import fs from 'node:fs';
@@ -9,6 +9,8 @@ import path from 'node:path';
 import { startFake } from '../fake/server.mjs';
 import { CSP, order } from '../fake/views.mjs';
 import { santaScenarios } from '../fake/santa.mjs';
+import { deskScenarios } from '../fake/desk.mjs';
+import { gatherScenarios } from '../fake/gather.mjs';
 
 const pw = await import(process.env.PW_CORE || 'playwright-core');
 const out = path.resolve(process.argv[2] || 'guest-shots');
@@ -22,8 +24,10 @@ const browser = await pw.chromium.launch({ executablePath: process.env.CHROMIUM 
 const problems = [];
 const results = { csp: CSP, states: {}, timing: {} };
 
-async function newPage({ throttle } = {}) {
-  const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true, locale: 'en-US', timezoneId: 'Europe/Ljubljana' });
+async function newPage({ throttle, wide = false } = {}) {
+  const phone = { viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, isMobile: true, hasTouch: true };
+  const desk = { viewport: { width: 1440, height: 900 }, deviceScaleFactor: 1, isMobile: false, hasTouch: false };
+  const ctx = await browser.newContext({ ...(wide ? desk : phone), locale: 'en-US', timezoneId: 'Europe/Ljubljana' });
   await ctx.addInitScript(() => {
     window.__violations = [];
     document.addEventListener('securitypolicyviolation', (e) => window.__violations.push(`${e.violatedDirective} ${e.blockedURI || ''} ${e.sourceFile || ''}:${e.lineNumber || ''}`.trim()));
@@ -41,7 +45,8 @@ async function newPage({ throttle } = {}) {
   page.on('pageerror', (e) => log.push(`pageerror: ${e.message}`));
   page.on('request', (r) => {
     const u = r.url();
-    if (!u.startsWith(`http://127.0.0.1:`) && !u.startsWith('ws://127.0.0.1:') && !u.startsWith('data:')) log.push(`third-party request: ${u}`);
+    // blob: of this origin is the Wall's own preview of a photo the guest picked (URL.createObjectURL), never a fetch out.
+    if (!u.startsWith(`http://127.0.0.1:`) && !u.startsWith('ws://127.0.0.1:') && !u.startsWith('data:') && !u.startsWith('blob:http://127.0.0.1:')) log.push(`third-party request: ${u}`);
   });
   if (throttle) {
     const cdp = await ctx.newCDPSession(page);
@@ -70,9 +75,9 @@ async function check(name, page, log) {
       const f = r.getAttribute('fill');
       return f !== 'currentColor' && !/^#[0-9a-f]{6}$/i.test(f ?? '');
     }).length;
-    return { scrollWidth: document.documentElement.scrollWidth, small, unfilled };
+    return { scrollWidth: document.documentElement.scrollWidth, width: window.innerWidth, small, unfilled };
   });
-  if (layout.scrollWidth > 390) problems.push(`${name}: scrolls sideways at 390 (${layout.scrollWidth} px)`);
+  if (layout.scrollWidth > layout.width) problems.push(`${name}: scrolls sideways at ${layout.width} (${layout.scrollWidth} px)`);
   if (layout.unfilled) problems.push(`${name}: ${layout.unfilled} svg rect(s) whose fill isn't currentColor or #rrggbb (would draw black)`);
   for (const s of layout.small) problems.push(`${name}: tap target under 44 px: ${s}`);
 }
@@ -308,6 +313,295 @@ for (const name of order) {
   }
 }
 
+// pa14 the Wall's guest page, G1-G8 (pa14/guest-brief.md), from the fake wall box (fake/wall.mjs) in Juno's wall.rs
+// shapes. Same checks as the quiz screens; shots named wall-g<N>-<what>. Uploads are real files through a real XHR.
+{
+  // Real small JPEGs drawn in Chrome (no image tools on the runner), one colour each, so the previews show.
+  const jpegBytes = [];
+  {
+    const p = await newPage();
+    for (const [i, c] of ['#c07a5a', '#5a7ac0', '#7ac05a', '#c05a9a', '#c0b05a'].entries()) {
+      const b64 = await p.page.evaluate(([c, i]) => {
+        const k = document.createElement('canvas');
+        k.width = 120;
+        k.height = 160;
+        const g = k.getContext('2d');
+        g.fillStyle = c;
+        g.fillRect(0, 0, 120, 160);
+        g.fillStyle = '#f4f1ff';
+        g.beginPath();
+        g.arc(40 + i * 10, 50, 22, 0, 7);
+        g.fill();
+        return k.toDataURL('image/jpeg', 0.8).split(',')[1];
+      }, [c, i]);
+      jpegBytes.push(Buffer.from(b64, 'base64'));
+    }
+    await p.ctx.close();
+  }
+  let jn = 0;
+  const jpeg = (name) => ({ name, mimeType: 'image/jpeg', buffer: jpegBytes[jn++ % jpegBytes.length] });
+  const heic = (name) => ({ name, mimeType: 'image/heic', buffer: Buffer.from('fake heic'.padEnd(400, '.')) });
+  const wallShot = async (page, log, file) => {
+    await page.evaluate(() => document.querySelector('.toast')?.remove());
+    // The wall's photos load lazily: scroll through once so a full-page shot has them all, then back to where it was.
+    const y = await page.evaluate(() => window.scrollY);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await page.waitForTimeout(400);
+    await page.evaluate((y) => window.scrollTo(0, y), y);
+    await page.waitForFunction(() => [...document.querySelectorAll('[data-wall] img, [data-mine] img')].every((i) => i.complete), null, { timeout: 5000 }).catch(() => {});
+    await shot(page, file);
+    await check(file, page, log);
+    results.states[file] = { screen: await page.getAttribute('[data-screen]', 'data-screen') };
+    // The page root must stay a block: a stray grid (Santa's .wl once matched it) stretches the bar on short screens.
+    const barH = await page.evaluate(() => document.querySelector('.g > .bar')?.getBoundingClientRect().height ?? 0);
+    if (!barH || barH > 64) problems.push(`${file}: the header is ${Math.round(barH)} px tall (at most 64)`);
+    if (!file.startsWith('wall-g6') && (await page.$('.kw-sticker-holo'))) problems.push(`${file}: holo off the Picked screen`);
+    // CSSOM setProperty of a custom property (the upload bar's --p) is allowed under the CSP, and Chrome leaves an empty
+    // style="" on inputs it may autofill; anything else is not.
+    const style = await page.evaluate(() => [...document.querySelectorAll('[style]')].map((e) => `${e.tagName.toLowerCase()}.${e.className} "${e.getAttribute('style')}"`).filter((x) => !/""$/.test(x) && !/"(\s*--[\w-]+:\s*[\d.]+;?)+\s*"$/.test(x)));
+    for (const x of style) problems.push(`${file}: a style that is not a CSSOM custom property: ${x}`);
+  };
+  const wgo = async (code, screen, { base = origin } = {}) => {
+    const p = await newPage();
+    const res = await p.page.goto(`${base}/p/${code}`);
+    if (res.headers()['content-security-policy'] !== CSP) problems.push(`${code}: wrong CSP header`);
+    await p.page.waitForSelector(`main.wall[data-screen="${screen}"]`, { timeout: 25000 });
+    await p.page.waitForTimeout(300);
+    return p;
+  };
+  const files = (page) => page.locator('input[type=file]').first();
+
+  // G1 join (keep line, limits), files picked before joining wait, then join sends them (G2) and the thanks shows.
+  {
+    const { ctx, page, log } = await wgo('wall-join', 'join');
+    await wallShot(page, log, 'wall-g1-join');
+    await files(page).setInputFiles([jpeg('a.jpg'), jpeg('b.jpg')]);
+    await page.waitForSelector('text=They send once you join');
+    await page.fill('#w-name', 'Sam');
+    await page.click('#w-pin');
+    await page.keyboard.type('1234');
+    await page.focus('#w-name');
+    await wallShot(page, log, 'wall-g1-join-filled');
+    await page.locator('form button[type=submit]').first().click();
+    await page.waitForSelector('main.wall[data-screen="wall"]', { timeout: 10000 });
+    await page.waitForSelector('text=Thanks, Sam!', { timeout: 10000 });
+    await wallShot(page, log, 'wall-g2-sent');
+    await ctx.close();
+  }
+  // G2 and G4: one at a time, refused rows in place with a fix, the rest go up.
+  {
+    const { ctx, page, log } = await wgo('wall-refuse', 'wall');
+    // The page refuses the HEIC itself, before sending, so the box's own "heic" answer would land on the next file.
+    fake.push('wall-refuse', (b) => (b.s = { ...b.s, uploads: b.s.uploads.filter((u) => u.error !== 'heic') }));
+    await files(page).setInputFiles([jpeg('ok-1.jpg'), heic('IMG_0042.heic'), jpeg('big.jpg'), jpeg('ok-2.jpg'), jpeg('ok-3.jpg')]);
+    await page.waitForSelector('.sending', { timeout: 5000 });
+    await page.waitForTimeout(400);
+    await wallShot(page, log, 'wall-g2-sending');
+    await page.waitForSelector('[data-refused]', { timeout: 20000 });
+    await page.waitForTimeout(3500);
+    await wallShot(page, log, 'wall-g4-refused');
+    const txt = await page.textContent('main');
+    if (/\d+(\.\d+)? ?(KB|MB) (of|sent)|\d%/.test(txt)) problems.push('wall-g4: a size or percentage shows');
+    await ctx.close();
+  }
+  // G4 with Try again: the box answers 400 broken_photo; the row's Try again resends and it goes up.
+  {
+    const { ctx, page, log } = await wgo('wall-broken', 'wall');
+    await files(page).setInputFiles([jpeg('ok-1.jpg')]);
+    await page.waitForSelector('li[data-state="refused"] button.retry', { timeout: 20000 });
+    await page.waitForTimeout(300);
+    await wallShot(page, log, 'wall-g4-try-again');
+    await page.click('li[data-state="refused"] button.retry');
+    await page.waitForFunction(() => !document.querySelector('li[data-state="refused"]'), null, { timeout: 20000 });
+    await ctx.close();
+  }
+  // G3 the live wall: yours first, newest first, 12 then Show more; a new approved photo waits behind the pill.
+  {
+    const { ctx, page, log } = await wgo('wall-live', 'wall');
+    await wallShot(page, log, 'wall-g3-live');
+    const n = await page.$$eval('[data-wall] .ph', (x) => x.length);
+    if (n !== 12) problems.push(`wall-g3: ${n} tiles, not 12`);
+    if (/\b15 photos\b/.test(await page.textContent('main'))) problems.push('wall-g3: shows a count of others');
+    fake.push('wall-live', (b) => b.approve({ id: 'new1', by_name: 'Zoe', caption: 'Cake time', caption_removed: false, at: '2026-11-28T21:40:00Z', w: 1200, h: 1600, rotate: 0, best: false }));
+    await page.waitForSelector('.newpill', { timeout: 8000 }).catch(() => problems.push('wall-g3: no new-photo pill after a push'));
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await wallShot(page, log, 'wall-g3-new-pill');
+    await ctx.close();
+  }
+  // G5 back: the rejoin form.
+  {
+    const { ctx, page, log } = await wgo('wall-join', 'join');
+    await page.click("text=I've joined before");
+    await page.waitForSelector('main.wall[data-screen="rejoin"]');
+    await wallShot(page, log, 'wall-g5-rejoin');
+    await ctx.close();
+  }
+  // G7 closed with a seat, then G6 the best: one holo Picked sticker.
+  {
+    const { ctx, page, log } = await wgo('wall-best', 'closed');
+    await wallShot(page, log, 'wall-g7-closed-seated');
+    await page.click('text=See the best');
+    await page.waitForSelector('main.wall[data-screen="best"]');
+    await page.waitForTimeout(300);
+    await wallShot(page, log, 'wall-g6-best');
+    if ((await page.$$('.kw-sticker-holo')).length !== 0) problems.push('wall-g6: a holo sticker on a host-picked best set');
+    await ctx.close();
+  }
+  // G7 closed, never joined.
+  {
+    const { ctx, page, log } = await wgo('wall-closed', 'closed');
+    await wallShot(page, log, 'wall-g7-closed');
+    await ctx.close();
+  }
+  // G8 page notes: the wall is full, the guest max.
+  for (const [code, file] of [['wall-full', 'wall-g8-full'], ['wall-max', 'wall-g8-max']]) {
+    const { ctx, page, log } = await wgo(code, 'wall');
+    await files(page).setInputFiles([jpeg('a.jpg')]);
+    await page.waitForSelector('[data-note]', { timeout: 10000 });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await wallShot(page, log, file);
+    await ctx.close();
+  }
+  // Empty wall, ended, away (served with the boot facts, as pa1 does).
+  for (const [code, file, base] of [['wall-empty', 'wall-empty', origin], ['wall-ended', 'wall-ended', origin], ['wall-away', 'wall-away', bootOrigin]]) {
+    const p = await newPage();
+    await p.page.goto(`${base}/p/${code}`);
+    const ok = await p.page.waitForSelector('[data-screen]:not([data-screen="loading"])', { timeout: 25000 }).catch(() => null);
+    if (!ok) problems.push(`${file}: never left loading`);
+    else {
+      await p.page.waitForTimeout(code === 'wall-away' ? 6000 : 300);
+      await wallShot(p.page, p.log, file);
+    }
+    await p.ctx.close();
+  }
+}
+
+// pa10b gather (Sign-up, RSVP and Vote), G1-G11 (pa10b/guest-brief.md), from the fake gather box (fake/gather.mjs) in
+// Lin's gather.rs names-so-far. Same checks as above; shots named gather-g<N>-<what>. The gather chunk loads lazily from
+// the kit in the public facts, so the walk fails if the quiz or Santa screens show instead.
+{
+  const gaShot = async (page, log, file) => {
+    await page.evaluate(() => document.querySelector('.toast')?.remove());
+    // Counted before the shot: Playwright's screenshot hides the caret by writing an empty style on inputs.
+    const style = await page.evaluate(() => document.querySelectorAll('[style]').length);
+    if (style) problems.push(`${file}: ${style} style attributes`);
+    await shot(page, file);
+    await check(file, page, log);
+    results.states[file] = { screen: await page.getAttribute('[data-screen]', 'data-screen') };
+  };
+  const holo = (page) => page.evaluate(() => document.querySelectorAll('.kw-sticker-holo').length);
+  const go = async (code, screen, { base = origin, reduced = false } = {}) => {
+    const p = await newPage();
+    if (reduced) await p.page.emulateMedia({ reducedMotion: 'reduce' });
+    if (typeof gatherScenarios[code]?.state === 'object') {
+      await p.ctx.addCookies([{ name: `kp_${code}`, value: 'fake', domain: '127.0.0.1', path: `/api/pocket/${code}`, httpOnly: true, sameSite: 'Strict' }]);
+    }
+    const res = await p.page.goto(`${base}/p/${code}`);
+    if (res.headers()['content-security-policy'] !== CSP) problems.push(`${code}: wrong CSP header`);
+    await p.page.waitForSelector(`main.ga[data-screen="${screen}"]`, { timeout: 20000 });
+    return p;
+  };
+
+  // G1 RSVP, filled (Yes, +1, vegetarian), then G2 You're in
+  {
+    const { ctx, page, log } = await go('gather-rsvp', 'join');
+    await gaShot(page, log, 'gather-g1-rsvp');
+    await page.fill('#g-name', 'Ana');
+    await page.click('label.opt:has(input[value="yes"])');
+    await page.click('[data-k="plus-more"]');
+    await page.click('.tchips label:has([data-k="food-vegetarian"])');
+    await page.fill('#g-pin', '1234');
+    await gaShot(page, log, 'gather-g1-rsvp-filled');
+    await page.click('button[data-send]');
+    await page.waitForSelector('main.ga[data-screen="in"]', { timeout: 10000 });
+    await gaShot(page, log, 'gather-g2-in');
+    if (await holo(page)) problems.push('gather-g2: holo on You\'re in');
+    await ctx.close();
+  }
+  // G2 with the host's paid tick, and with counts only
+  for (const [code, file] of [['gather-rsvp-in', 'gather-g2-in-paid'], ['gather-rsvp-counts', 'gather-g2-in-counts']]) {
+    const { ctx, page, log } = await go(code, 'in');
+    await gaShot(page, log, file);
+    await ctx.close();
+  }
+  // G3 sign-up pick (the full slot picked: Join the waiting list)
+  {
+    const { ctx, page, log } = await go('gather-signup', 'join');
+    await gaShot(page, log, 'gather-g3-signup');
+    await page.click('label.gslot:has(input[value="2"])');
+    const b = await page.textContent('button[data-send]');
+    if (b !== 'Join the waiting list') problems.push(`gather-g3: full slot button says "${b}"`);
+    await gaShot(page, log, 'gather-g3-signup-full');
+    await ctx.close();
+  }
+  // Sign-up in, G4 waiting, G5 moved up (ink New, never holo)
+  for (const [code, screen, file] of [['gather-signup-in', 'in', 'gather-signup-in'], ['gather-waiting', 'waiting', 'gather-g4-waiting'], ['gather-moved', 'moved', 'gather-g5-moved']]) {
+    const { ctx, page, log } = await go(code, screen);
+    await gaShot(page, log, file);
+    if (await holo(page)) problems.push(`${file}: holo`);
+    if (code === 'gather-moved' && !(await page.$('[data-sticker="ink"]'))) problems.push('gather-g5: no ink New');
+    await ctx.close();
+  }
+  // G6 one pick
+  {
+    const { ctx, page, log } = await go('gather-vote', 'join');
+    await page.click('label.ans:has(input[value="0"])');
+    await gaShot(page, log, 'gather-g6-one-pick');
+    await ctx.close();
+  }
+  // G7 ranked: three ranked, one left out; moving keeps focus on the moved row
+  {
+    const { ctx, page, log } = await go('gather-ranked', 'join');
+    await gaShot(page, log, 'gather-g7-ranked-empty');
+    for (const o of [0, 1, 2]) await page.click(`[data-k="add-${o}"]`);
+    await page.focus('[data-k="up-1"]');
+    await page.keyboard.press('Enter');
+    const f = await page.evaluate(() => document.activeElement?.getAttribute('data-k'));
+    if (f !== 'up-1') problems.push(`gather-g7: focus went to ${f} after a move`);
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForTimeout(300);
+    await gaShot(page, log, 'gather-g7-ranked');
+    await ctx.close();
+  }
+  // G8 voted with the live count, G9 result (the one holo) and tie, G11 closed
+  for (const [code, screen, file] of [['gather-voted', 'voted', 'gather-g8-voted'], ['gather-result', 'result', 'gather-g9-result'], ['gather-tie', 'result', 'gather-g9-tie'], ['gather-closed', 'closed', 'gather-g11-closed']]) {
+    const { ctx, page, log } = await go(code, screen);
+    await page.waitForTimeout(300);
+    await gaShot(page, log, file);
+    const n = await holo(page);
+    if (n !== (code === 'gather-result' ? 1 : 0)) problems.push(`${file}: ${n} holo stickers`);
+    await ctx.close();
+  }
+  // G10 rejoin with a wrong PIN
+  {
+    const { ctx, page, log } = await go('gather-wrongpin', 'join');
+    await page.click('button[data-to-rejoin]');
+    await page.waitForSelector('main.ga[data-screen="rejoin"]');
+    await gaShot(page, log, 'gather-g10-rejoin');
+    await page.fill('#g-bname', 'Mia');
+    await page.fill('#g-bpin', '0000');
+    await page.click('button[data-rejoin]');
+    await page.waitForSelector('[data-problem]');
+    await gaShot(page, log, 'gather-g10-wrong-pin');
+    await ctx.close();
+  }
+  // Host asleep (served with the boot facts, as pa1 does)
+  {
+    const { ctx, page, log } = await go('gather-away', 'away', { base: bootOrigin });
+    await gaShot(page, log, 'gather-away');
+    await ctx.close();
+  }
+  // Reduced motion: no pick settle, no bar transition, no holo drift
+  {
+    const { ctx, page, log } = await go('gather-result', 'result', { reduced: true });
+    const r = await page.evaluate(() => ({ bar: getComputedStyle(document.querySelector('.vb .tr i')).transitionDuration, holo: getComputedStyle(document.querySelector('.kw-sticker-holo'), '::before').animationName }));
+    if (r.bar !== '0s') problems.push(`gather reduced motion: bar transition ${r.bar}`);
+    if (r.holo !== 'none') problems.push(`gather reduced motion: holo drifts (${r.holo})`);
+    await check('gather-reduced-motion', page, log);
+    await ctx.close();
+  }
+}
+
 // pa5b: the big screen at 1920x1080 (and letterboxed at 4:3), same CSP checks, from the fake screen box
 // (fake/screen.mjs). Each load opens /p/screen-<scene>#screen=<token>: the token must be gone from the address bar
 // before the page's first request, the screen must never call a host write, and no text may render under 32 px.
@@ -487,6 +781,64 @@ for (const name of order) {
       await ctx.close();
     }
   }
+  // pa14 the Wall's big screen, TV1-TV4 at 1920 (pa14/guest-brief.md), from the fake wall box in its screen view.
+  {
+    const tvShot = async (page, log, file, code, srv = fake) => {
+      await page.waitForTimeout(400);
+      await screenCheck(file, page, log);
+      await page.screenshot({ path: path.join(out, `${file}.png`) });
+      results.screen[file] = { screen: await page.getAttribute('.tv[data-screen]', 'data-screen') };
+      const b = srv.box(code);
+      if (b.writes?.length) problems.push(`${file}: the screen called a host write: ${b.writes.join(', ')}`);
+    };
+    const tvgo = async (scene, screen, opts = {}) => {
+      const p = await screenPage(opts);
+      await p.page.goto(`${opts.base ?? origin}/p/screen-wall-${scene}#screen=tok-wall-${scene}`);
+      await ready(p.page, screen);
+      return p;
+    };
+    // TV1 slides, then TV2 a new photo arrives (pill and move), from a push.
+    {
+      const { ctx, page, log } = await tvgo('slides', 'slides');
+      await tvShot(page, log, 'wall-tv1-slides', 'screen-wall-slides');
+      fake.push('screen-wall-slides', (b) => b.approve({ id: 'tvnew1', by_name: 'Zoe', caption: 'Cake time', caption_removed: false, at: '2026-11-28T21:40:00Z', w: 1200, h: 1600, rotate: 0, best: false }));
+      await page.waitForSelector('.wnew', { timeout: 8000 }).catch(() => problems.push('wall-tv2: no "New from" pill after a push'));
+      await page.waitForTimeout(250);
+      await tvShot(page, log, 'wall-tv2-arrival', 'screen-wall-slides');
+      const said = await page.evaluate(() => [...document.querySelectorAll('[aria-live]')].map((e) => e.textContent).join(' | '));
+      if (!/New photo from Zoe/.test(said)) problems.push(`wall-tv2: live region says "${said}"`);
+      await ctx.close();
+    }
+    // TV3 waiting: no photos yet, the big code.
+    {
+      const { ctx, page, log } = await tvgo('waiting', 'waiting');
+      await tvShot(page, log, 'wall-tv3-waiting', 'screen-wall-waiting');
+      await ctx.close();
+    }
+    // TV4 reduced motion: the still grid, one slot changes every 8 s, no animation.
+    {
+      const { ctx, page, log } = await tvgo('slides', 'still', { reduced: true });
+      await tvShot(page, log, 'wall-tv4-still', 'screen-wall-slides');
+      const anim = await page.evaluate(() => [...document.querySelectorAll('.wtv *')].map((e) => getComputedStyle(e).animationName).filter((a) => a !== 'none'));
+      if (anim.length) problems.push(`wall-tv4: animates under reduced motion (${anim.join(' ')})`);
+      await ctx.close();
+    }
+    // Ended and away, then the waiting screen letterboxed at 4:3.
+    // Away is served the way pa1 serves it, with the public facts in the page, so the screen knows it is the wall's.
+    for (const [scene, screen, base] of [['ended', 'ended', origin], ['away', 'away', bootOrigin]]) {
+      const { ctx, page, log } = await tvgo(scene, screen, { base });
+      await tvShot(page, log, `wall-tv-${scene}`, `screen-wall-${scene}`, base === bootOrigin ? boot : fake);
+      if (!(await page.$(`.wtv[data-screen="${screen}"]`))) problems.push(`wall-tv-${scene}: not the wall's own ${screen} screen`);
+      await ctx.close();
+    }
+    {
+      const { ctx, page, log } = await tvgo('waiting', 'waiting', { width: 1024, height: 768 });
+      await page.waitForTimeout(300);
+      await screenCheck('wall-tv-letterbox-1024x768', page, log, { width: 1024, height: 768 });
+      await page.screenshot({ path: path.join(out, 'wall-tv-letterbox-1024x768-waiting.png') });
+      await ctx.close();
+    }
+  }
   // Reduced motion: the winners' stars hold still, the timer bar and new players don't move.
   {
     const { ctx, page, log } = await screenPage({ reduced: true });
@@ -505,6 +857,288 @@ const presets = {
   'devtools-slow-4g': { latency: 562.5, downloadThroughput: 180000, uploadThroughput: 84375 },
   'lighthouse-slow-4g': { latency: 150, downloadThroughput: 204800, uploadThroughput: 84375 },
 };
+// pa13 front desk guest chat, G1-G12 (pa13/guest-brief.md), from the fake desk box (fake/desk.mjs) in Lin's impl.md
+// shapes. Same checks as the quiz screens; shots named desk-g<N>-<what>. The kit comes from the public facts, so the
+// desk chunk loads lazily, and the walk fails if the quiz screens show instead.
+{
+  const deskShot = async (page, log, file) => {
+    await shot(page, file);
+    await check(file, page, log);
+    results.states[file] = { screen: await page.getAttribute('[data-screen]', 'data-screen') };
+  };
+  const go = async (code, screen, { reduced = false, wide = false } = {}) => {
+    const p = await newPage({ wide });
+    if (reduced) await p.page.emulateMedia({ reducedMotion: 'reduce' });
+    if (typeof deskScenarios[code]?.state === 'object') {
+      await p.ctx.addCookies([{ name: `kp_${code}`, value: 'fake', domain: '127.0.0.1', path: `/api/pocket/${code}`, httpOnly: true, sameSite: 'Strict' }]);
+    }
+    const res = await p.page.goto(`${origin}/p/${code}`);
+    if (res.headers()['content-security-policy'] !== CSP) problems.push(`${code}: wrong CSP header`);
+    await p.page.waitForSelector(`main.dk[data-screen="${screen}"]`, { timeout: 20000 });
+    return p;
+  };
+  const want = async (page, sel, what) => {
+    try {
+      await page.waitForSelector(sel, { timeout: 8000 });
+    } catch {
+      problems.push(`desk: ${what} (${sel}) not shown`);
+    }
+  };
+  const noText = async (page, re, what) => {
+    const t = await page.evaluate(() => document.body.innerText);
+    if (re.test(t)) problems.push(`desk: ${what}`);
+  };
+
+  // G1 join, then G2 first time with starters; a starter sends and Bell types (G3)
+  {
+    const { ctx, page, log } = await go('desk-join', 'join');
+    await deskShot(page, log, 'desk-g1-join');
+    await page.fill('#d-name', 'Ana');
+    await page.fill('#d-pin', '1234');
+    await page.click('button[data-join]');
+    await page.waitForSelector('main.dk[data-screen="chat"]', { timeout: 10000 });
+    await want(page, '[data-starter]', 'G2 starter chips');
+    await deskShot(page, log, 'desk-g2-first');
+    await page.click('[data-starter]');
+    await want(page, '[data-typing]', 'G3 typing after a starter');
+    const mine = await page.locator('.gm.me').count();
+    if (mine !== 1) problems.push(`desk G3: ${mine} own bubbles after one send (want 1: the outbox bubble swaps for the kept one)`);
+    // The fake's reply arrives over the socket: typing stops, Bell answers.
+    fake.push('desk-join', (v) => {
+      v.bot_typing = false;
+      v.messages.push({ id: 'm900', from: 'bot', text: 'The Wi-Fi is "SeaView-5G", password piran2026.', at: new Date().toISOString() });
+    });
+    await want(page, '.gm[data-id="m900"]', 'G3 the pushed bot reply');
+    await ctx.close();
+  }
+  // G2 first time from a saved seat, G3 typing, G4 hand-off, G5 host, G7 daily cap, G10 host away
+  for (const [code, file, sel] of [
+    ['desk-first', 'desk-g2-first-seat', '[data-starter]'],
+    ['desk-chat', 'desk-g3-typing', '[data-typing]'],
+    ['desk-handoff', 'desk-g4-handoff', '[data-note="handoff"]'],
+    ['desk-host', 'desk-g5-host', '.hosttag'],
+    ['desk-cap', 'desk-g7-cap', '[data-note="daily_cap"]'],
+    ['desk-away', 'desk-g10-away', '[data-note="host_away"]'],
+  ]) {
+    const { ctx, page, log } = await go(code, 'chat');
+    await want(page, sel, file);
+    if (code === 'desk-handoff' || code === 'desk-cap' || code === 'desk-away') await want(page, '[data-waiting]', `${file} waiting pill`);
+    // Never shown to a guest: the hand-off reason, another guest, answer_bot's id.
+    await noText(page, /handoff_reason|answer_bot|undefined|null/, `${file}: internal words on screen`);
+    await deskShot(page, log, file);
+    await ctx.close();
+  }
+  // G6 slow down: the send is refused with retry_at; the text stays in the composer
+  {
+    const { ctx, page, log } = await go('desk-slow', 'chat');
+    await page.fill('#d-say', 'Is there a hair dryer?');
+    await page.click('button[data-send]');
+    await want(page, '[data-slow]', 'G6 slow note');
+    const kept = await page.inputValue('#d-say');
+    if (kept !== 'Is there a hair dryer?') problems.push(`desk G6: composer lost the text on 429 ("${kept}")`);
+    if (!(await page.isDisabled('button[data-send]'))) problems.push('desk G6: send stays on while slowed down');
+    await deskShot(page, log, 'desk-g6-slow');
+    await ctx.close();
+  }
+  // G8 too long: over the limit, send turns off and the field says so
+  {
+    const { ctx, page, log } = await go('desk-long', 'chat');
+    await page.fill('#d-say', 'The sea view is lovely. '.repeat(44));
+    await page.waitForTimeout(100);
+    if (!(await page.isDisabled('button[data-send]'))) problems.push('desk G8: send stays on over 1,000 characters');
+    if ((await page.getAttribute('#d-say', 'aria-invalid')) !== 'true') problems.push('desk G8: field not marked invalid');
+    await deskShot(page, log, 'desk-g8-long');
+    await ctx.close();
+  }
+  // G9 offline: the action fails, the bubble says Not sent, the bar offers Retry
+  {
+    const { ctx, page, log } = await go('desk-offline', 'chat');
+    await page.fill('#d-say', 'Where is the nearest bakery?');
+    await page.click('button[data-send]');
+    await want(page, '[data-try-one]', 'G9 Not sent bubble');
+    await want(page, '[data-offline]', 'G9 offline bar');
+    await deskShot(page, log, 'desk-g9-offline');
+    await ctx.close();
+  }
+  // G1 full: guest_max says the guide is full, no seat
+  {
+    const { ctx, page, log } = await go('desk-full', 'join');
+    await page.fill('#d-name', 'Ana');
+    await page.fill('#d-pin', '1234');
+    await page.click('button[data-join]');
+    await want(page, 'text=This guide is full right now.', 'G1 guest_max copy');
+    await deskShot(page, log, 'desk-g1-full');
+    await ctx.close();
+  }
+  // G11 rejoin: a wrong name first, then the right one opens the chat
+  {
+    const { ctx, page, log } = await go('desk-rejoin', 'join');
+    await page.click('[data-to-rejoin]');
+    await page.waitForSelector('main.dk[data-screen="rejoin"]', { timeout: 5000 });
+    await deskShot(page, log, 'desk-g11-rejoin');
+    await page.fill('#d-bname', 'Anna');
+    await page.fill('#d-bpin', '1234');
+    await page.click('button[data-rejoin]');
+    await want(page, 'text=No chat with that name here.', 'G11 unknown name');
+    await page.fill('#d-bname', 'Ana');
+    await page.fill('#d-bpin', '1234');
+    await page.click('button[data-rejoin]');
+    await page.waitForSelector('main.dk[data-screen="chat"]', { timeout: 10000 });
+    await ctx.close();
+  }
+  // G12 ended
+  {
+    const { ctx, page, log } = await go('desk-ended', 'ended');
+    await want(page, '[data-ended]', 'G12 ended card');
+    await deskShot(page, log, 'desk-g12-ended');
+    await ctx.close();
+  }
+  // Reduced motion: no bubble entrance, no typing dots moving
+  {
+    const { ctx, page, log } = await go('desk-chat', 'chat', { reduced: true });
+    const anims = await page.evaluate(() => [...document.querySelectorAll('main.dk *')].map((e) => getComputedStyle(e).animationName).filter((a) => a && a !== 'none'));
+    if (anims.length) problems.push(`desk reduced motion: ${anims.length} element(s) animate (${[...new Set(anims)].join(', ')})`);
+    await check('desk-reduced-motion', page, log);
+    await ctx.close();
+  }
+
+  // pa13b Booking Desk K1-K11 (pa13/pa13b-guest-brief.md), shots desk-b-k<N>-<what> at 390 and a few at 1440.
+  // The sheet gets the same 44 px and no-sideways-scroll checks while open; focus lands on its title, Esc closes it
+  // and focus goes back to the opener. Times are the box's wall clock: the phone is in Ljubljana, the labels must not move.
+  {
+    const focusId = (page) => page.evaluate(() => document.activeElement?.id || document.activeElement?.getAttribute('data-k') || '');
+    const sheetOpen = async (page, what) => {
+      await want(page, '[data-sheet][role=dialog]', `${what} sheet`);
+      await page.waitForTimeout(450);
+      if ((await focusId(page)) !== 'pk-title') problems.push(`desk ${what}: focus is on "${await focusId(page)}", not the sheet title`);
+    };
+    // K1 join, then the sheet opens by itself (K3); Esc closes it back to the chat (K2) with the pick starter first.
+    for (const wide of [false, true]) {
+      const tag = wide ? '-1440' : '';
+      const { ctx, page, log } = await go('desk-book-pick', 'join', { wide });
+      await want(page, 'button[data-join]', 'K1 join');
+      await deskShot(page, log, `desk-b-k1-join${tag}`);
+      await page.fill('#d-name', 'Emma');
+      await page.fill('#d-pin', '1234');
+      await page.click('button[data-join]');
+      await page.waitForSelector('main.dk[data-screen="chat"]', { timeout: 10000 });
+      await sheetOpen(page, 'K3 after join');
+      await page.click('[data-slot="d1-9"]');
+      await page.fill('#pk-note', 'Short trim, please.');
+      await deskShot(page, log, `desk-b-k3-pick${tag}`);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[data-sheet]', { state: 'detached', timeout: 5000 }).catch(() => problems.push('desk K3: Esc did not close the sheet'));
+      const first = await page.evaluate(() => document.querySelector('.gstart button')?.hasAttribute('data-pick-open'));
+      if (!first) problems.push('desk K2: Pick a time is not the first starter');
+      await deskShot(page, log, `desk-b-k2-chat${tag}`);
+      // Open from the starter: focus to the title, close with the button, focus back to the starter.
+      await page.click('[data-pick-open]');
+      await sheetOpen(page, 'K3 from the starter');
+      // Arrow keys move inside the radiogroup.
+      await page.focus('[role=radio][tabindex="0"]');
+      await page.keyboard.press('ArrowRight');
+      const picked = await page.getAttribute('[role=radio][aria-checked=true]', 'data-slot').catch(() => null);
+      if (picked !== 'd1-10') problems.push(`desk K3: ArrowRight picked ${picked}, want d1-10`);
+      const label = await page.textContent('[role=radio][aria-checked=true]');
+      if (label?.trim() !== '10 AM') problems.push(`desk K3: the 10:00 slot reads "${label}" in Ljubljana (want the box's 10 AM)`);
+      await page.click('[data-pick-close]');
+      await page.waitForTimeout(150);
+      if ((await focusId(page)) !== 'pk-open-start') problems.push(`desk K3: focus went to "${await focusId(page)}" after closing, not the starter`);
+      await page.click('[data-pick-open]');
+      await sheetOpen(page, 'K3 again');
+      await page.click('[data-slot="d1-9"]');
+      await page.click('button[data-ask]');
+      await want(page, '[data-strip=requested]', 'K4 requested strip');
+      await deskShot(page, log, `desk-b-k4-requested${tag}`);
+      await ctx.close();
+    }
+    for (const [code, file, sel] of [
+      ['desk-book-requested', 'desk-b-k4-requested-seat', '[data-strip=requested]'],
+      ['desk-book-confirmed', 'desk-b-k5-confirmed', '[data-strip=booked] .gchip.ok'],
+      ['desk-book-declined', 'desk-b-k6-declined', '[data-pick-again]'],
+      ['desk-book-offers', 'desk-b-k9-offers', '[data-offer]'],
+    ]) {
+      const { ctx, page, log } = await go(code, 'chat');
+      await want(page, sel, file);
+      await noText(page, /undefined|null|NaN/, `${file}: internal words on screen`);
+      await deskShot(page, log, file);
+      if (code === 'desk-book-confirmed' && (await page.locator('.holo, [data-holo]').count())) problems.push('desk K5: holo on Booked');
+      if (code === 'desk-book-offers') {
+        const n = await page.locator('[data-offer]').count();
+        if (n !== 2) problems.push(`desk K9: ${n} offer chips (want 2, the taken one dropped)`);
+        await page.click('[data-offer="d2-11"]');
+        await sheetOpen(page, 'K9 offer');
+        const p2 = await page.getAttribute('[role=radio][aria-checked=true]', 'data-slot').catch(() => null);
+        if (p2 !== 'd2-11') problems.push(`desk K9: the chip opened with ${p2} picked`);
+        await deskShot(page, log, 'desk-b-k9-offer-sheet');
+      }
+      await ctx.close();
+    }
+    {
+      const { ctx, page, log } = await go('desk-book-confirmed', 'chat', { wide: true });
+      await want(page, '[data-strip=booked]', 'K5 at 1440');
+      await deskShot(page, log, 'desk-b-k5-confirmed-1440');
+      await ctx.close();
+    }
+    // K7 cancel: inline confirm, then cancelled.
+    {
+      const { ctx, page, log } = await go('desk-book-cancel', 'chat');
+      await page.click('[data-cancel]');
+      await want(page, '[data-strip=cancel][role=alertdialog]', 'K7 confirm');
+      await deskShot(page, log, 'desk-b-k7-cancel');
+      await page.click('[data-cancel-yes]');
+      await page.waitForSelector('[data-strip]', { state: 'detached', timeout: 5000 }).catch(() => problems.push('desk K7: strip stayed after cancel'));
+      await want(page, '[data-pick-open]', 'K7 starter back');
+      await deskShot(page, log, 'desk-b-k7-cancelled');
+      await ctx.close();
+    }
+    // K8 nothing open.
+    {
+      const { ctx, page, log } = await go('desk-book-none', 'chat');
+      await page.click('[data-pick-open]');
+      await sheetOpen(page, 'K8');
+      await want(page, '[data-pick-none]', 'K8 empty state');
+      await deskShot(page, log, 'desk-b-k8-none');
+      await page.click('[data-pick-write]');
+      await page.waitForTimeout(150);
+      if ((await focusId(page)) !== 'd-say') problems.push('desk K8: Write to did not put the cursor in the composer');
+      await ctx.close();
+    }
+    // K10 just taken.
+    {
+      const { ctx, page, log } = await go('desk-book-taken', 'chat');
+      await page.click('[data-pick-open]');
+      await sheetOpen(page, 'K10');
+      await page.click('[data-slot="d1-9"]');
+      await page.click('button[data-ask]');
+      await want(page, '[data-taken][role=alert]', 'K10 taken notice');
+      if (await page.locator('[data-slot="d1-9"]').count()) problems.push('desk K10: the taken time is still offered');
+      if (!(await page.evaluate(() => !!document.querySelector('[data-sheet]')?.contains(document.activeElement)))) problems.push('desk K10: focus left the sheet after the refusal');
+      await deskShot(page, log, 'desk-b-k10-taken');
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(150);
+      if (await page.locator('[data-sheet]').count()) problems.push('desk K10: Esc did not close the sheet after the refusal');
+      await ctx.close();
+    }
+    // K11 closed, still booked.
+    {
+      const { ctx, page, log } = await go('desk-book-ended-booked', 'ended');
+      await want(page, '[data-strip=booked]', 'K11 booked strip');
+      await deskShot(page, log, 'desk-b-k11-ended-booked');
+      await ctx.close();
+    }
+    // Reduced motion with the sheet open: nothing slides or pops.
+    {
+      const r = await go('desk-book-none', 'chat', { reduced: true });
+      await r.page.click('[data-pick-open]');
+      await r.page.waitForSelector('[data-sheet]');
+      const anims = await r.page.evaluate(() => [...document.querySelectorAll('main.dk *')].map((e) => getComputedStyle(e).animationName).filter((a) => a && a !== 'none'));
+      if (anims.length) problems.push(`desk K reduced motion: ${anims.length} element(s) animate (${[...new Set(anims)].join(', ')})`);
+      await check('desk-b-reduced-motion', r.page, r.log);
+      await r.ctx.close();
+    }
+  }
+}
 for (const [label, throttle] of Object.entries(presets)) {
   for (const [how, base] of [['fetch-state', origin], ['boot-json', `http://127.0.0.1:${boot.port}`]]) {
     const runs = [];

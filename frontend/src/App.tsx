@@ -14,7 +14,7 @@ import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
 import { GetStarted, GetStartedBanner } from './components/GetStarted';
 import { focusPhoneApp } from './components/PhoneAppTip';
-import { focusDevSettings, markMovedSeen, movedPointerShows, movedSeen, recordMovedForNewPerson, ringDevSettings } from './firstScreen';
+import { focusDevSettings } from './firstScreen';
 import { dismiss as dismissGetStarted, isDismissed as getStartedDismissed, showCard as showGetStarted, wasStarted as getStartedWasStarted, whatsNewEstablished as decideWhatsNewEstablished } from './gettingStarted';
 import { useStartVersion } from './gettingStartedInstall';
 import { SpaceTile } from './components/Spaces';
@@ -49,7 +49,6 @@ import {
 import { noteTitle, notifyBrowserPages, pageTeam, stepPage } from './browserPages';
 import { AUTO_CLOSE_DELAY_MS, PANE_EXIT_MS, PHONE_PANE_QUERY, type PaneOpener, shouldAutoClose, shouldAutoOpen } from './browserPanel';
 import { McpSuggestionCard, type SuggestionSignInResult } from './components/McpSuggestionCard';
-import { isSignInDeadEndCode } from './mcpSignInDeadEnd';
 import { ConnectionSuggestionCard } from './components/ConnectionSuggestionCard';
 import { connectSheetFor, type ConnectionSuggestionMeta } from './connectionSuggestions';
 import { Suggestion, SuggestionMeta, applySuggestion, suggestionsApi } from './mcpSuggestions';
@@ -60,6 +59,7 @@ import { HireCard, type HireDecision } from './components/HireCard';
 import { RouteChoiceCard } from './components/RouteChoiceCard';
 import { RouteChoiceMeta, applyRouteChoice, correctRoute, isAskingReply, rerouteTargetsFor, resolveRouteChoice } from './routeChoice';
 import type { RoutineFocus } from './components/RoutinesPanel';
+import { failedRoutineToastAction, openFailedRoutine, openRoutineHistory, runAgain } from './routineRunAgain';
 import { InboxNew } from './components/InboxNew';
 import { isReview, type InboxItem } from './api/inbox';
 import { inboxCount as foldedInboxCount } from './doneAway';
@@ -179,7 +179,7 @@ import { canInstall, setupApi } from './setupInstall';
 import { claudeNeedsSignIn } from './claudeLogin';
 import { PersonCancelledError, personFetch } from './auth';
 import { ContinueError, continueChatApi, continueErrorLine, continuedLine, forkOf } from './continueChat';
-import { OPEN_ADD_TOOL_EVENT, type OpenAddTool } from './mcp';
+import { OPEN_ADD_TOOL_EVENT, type OpenAddTool, signInToServer } from './mcp';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, placeOfNotification, showDeviceNotification } from './push';
@@ -205,7 +205,6 @@ import { PrepushPointers } from './components/dev/PrepushPointers';
 import { ModernAvatar } from './components/ModernAvatar';
 import { PREPUSH_EVENT, messageNotSent as prepushMessageNotSent, needsYou as prepushNeedsYou, overrideMessage, prepushApi, retryMessage, type PrepushCard as PrepushCardData } from './dev/prepush';
 import { StepReview } from './components/ShowOnce';
-import { inDesktopApp, leaveForSignIn, mcpSignIn, pollUntil, signInChanged } from './externalLinks';
 import type { FloorResolveOpts } from './dev/types';
 
 // Kwant and Tools editors are their own chunks. They stay mounted (rendering nothing while closed),
@@ -422,22 +421,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSpaceSettingsTab(tab);
     playSfx('click');
   };
-  // First-screen A: the "moved" pointer under the space header, until Open or ✕ (0.9.8 and 0.9.9).
-  const [movedHidden, setMovedHidden] = useState(movedSeen);
-  const hideMoved = () => {
-    markMovedSeen();
-    setMovedHidden(true);
-  };
   // The suggestion's Turn on: Settings › This space › General, the Dev mode card (first there) in view and
   // focused. It doesn't switch Dev mode on: the person presses the button on the card.
   const openDevSuggest = () => {
     openSpaceSettings('general');
     focusDevSettings();
-  };
-  const openMoved = () => {
-    openSpaceSettings('general');
-    ringDevSettings();
-    hideMoved();
   };
   // Settings › All spaces: what applies to every space and to the app.
   const openAppSettings = () => {
@@ -456,7 +444,13 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setSettingsFocusRow('claude-isolation');
     openAppSettings();
   };
-  const openConnections = () => openSpaceSettings('apps', 'advanced');
+  // 34h: a "Sign in again" from a chat line or the Inbox opens Advanced on that connection's row.
+  const [connectionFocus, setConnectionFocus] = useState<{ id: string; seq: number } | null>(null);
+  const openConnections = (focusId?: string) => {
+    // Callers wired straight to onClick pass an event: only a string is a row.
+    setConnectionFocus(typeof focusId === 'string' && focusId ? { id: focusId, seq: Date.now() } : null);
+    openSpaceSettings('apps', 'advanced');
+  };
   // A bot's "suggests a connection" card: Apps & accounts with that app's Connect sheet open and the bot ticked.
   const openConnectSheet = (meta: ConnectionSuggestionMeta) => {
     openSpaceSettings('apps', 'apps');
@@ -509,9 +503,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     else setPhoneView('chat');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPhone, loaded, canRun, channels]);
-  // The sidebar and chat under Settings: inert while it's open (the space rail stays usable).
+  // The sidebar and chat under Settings or the New bot modal: inert while either is open (the space rail stays usable).
   const contentRef = useRef<HTMLDivElement>(null);
-  useSettingsCover(!!spaceSettingsTab, contentRef);
   // Moving between Settings tabs drops the card's sheet too: Apps & accounts remounts on the way back and
   // would open it again by itself (Rigel's 32x QA defect 1).
   const changeSpaceSettingsTab = (tab: SpaceSettingsTab) => {
@@ -520,6 +513,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
   const closeSpaceSettings = () => {
     setToolNoteFocus(null);
+    setConnectionFocus(null);
     setSpaceSettingsTab(null);
     setConnectApp(null);
     setSettingsFocusRow(null);
@@ -765,6 +759,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const openPlaceRef = useRef<(n: NotifiedChat) => boolean>(() => false);
   // A tier request or a fact dispute is decided on the board's Needs-you list.
   const openBoardForTier = () => showPage('board');
+  // routine-run-again: the routine_failed toast's Open routine lands on that routine's row in Routines.
+  const openFailedRoutineRef = useRef<(n: NotifyEvent) => Promise<unknown>>(async () => undefined);
   const showNotification = (n: NotifyEvent) => {
     // Another space's news is the shell's to show, with a way to switch there.
     if (n.space_id && n.space_id !== space.id) return;
@@ -785,7 +781,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       const id = ++toastIdRef.current;
       const action =
         n.kind === 'routine_failed'
-          ? undefined
+          ? failedRoutineToastAction(() => void openFailedRoutineRef.current(n))
           : n.kind === 'skill_proposed'
             ? { label: 'Review', onClick: () => openSkillsRef.current(n.kwant_id) }
             : n.kind === 'automation_suggested'
@@ -1130,6 +1126,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
+  useSettingsCover(!!spaceSettingsTab || isNewAgentOpen, contentRef);
   // Team that a newly created bot should join (set by a team's "Add member")
   const [newAgentTeam, setNewAgentTeam] = useState<Team | null>(null);
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
@@ -2856,63 +2853,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       return `Couldn't dismiss it: ${errText(err)}`;
     }
   };
-  // Same flow as the servers screen: the window opens inside the click, the address comes after.
-  // In the Mac app the sign-in opens in the default browser and the server is watched instead.
+  // 34h: the flow lives in mcp.ts (signInToServer), shared with the Connections row's "Sign in again".
   const handleSuggestionSignIn = async (serverId: string): Promise<SuggestionSignInResult> => {
-    const macApp = inDesktopApp();
-    const popup = macApp ? null : window.open('', 'kwnt-mcp-oauth', 'popup,width=520,height=720');
-    const before = macApp ? await mcpSignIn(serverId).catch(() => undefined) : undefined;
-    let url: string;
-    try {
-      const res = await fetch(`/api/mcp/servers/${encodeURIComponent(serverId)}/oauth/start`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ origin: window.location.origin }),
-      });
-      const data = await res.json().catch(() => null);
-      // A code means retrying can't help: the card swaps its button for a next step.
-      if (!res.ok && isSignInDeadEndCode(data?.code)) {
-        popup?.close();
-        return { code: data.code };
-      }
-      if (!res.ok) throw new Error(typeof data?.error === 'string' ? data.error : `Request failed (HTTP ${res.status}).`);
-      if (typeof data?.authorize_url !== 'string' || !/^https?:\/\//.test(data.authorize_url)) throw new Error('The server didn’t return a sign-in page.');
-      url = data.authorize_url;
-    } catch (err) {
-      popup?.close();
-      return `Couldn't start the sign-in: ${errText(err)}`;
-    }
-    if (!popup || popup.closed) {
-      leaveForSignIn(url);
-      if (!macApp) return;
-      const finished = await new Promise<boolean>((resolve) => {
-        pollUntil(async () => signInChanged(before, await mcpSignIn(serverId)), () => resolve(true), {
-          onTimeout: () => resolve(false),
-        });
-      });
-      if (!finished) return 'The sign-in didn’t finish in your browser. Try again.';
-    } else {
-      popup.location.href = url;
-      popup.focus();
-      await new Promise<void>((resolve) => {
-        const t = window.setInterval(() => {
-          if (popup.closed) {
-            window.clearInterval(t);
-            resolve();
-          }
-        }, 500);
-      });
-    }
-    try {
-      const test = await suggestionsApi.testServer(serverId);
-      if (test.ok) {
-        setNeedsSignIn((prev) => ({ ...prev, [serverId]: false }));
-        return;
-      }
-      return test.auth_required ? 'The sign-in didn’t finish.' : test.error || 'The server still isn’t answering.';
-    } catch (err) {
-      return errText(err);
-    }
+    const result = await signInToServer(serverId);
+    if (result === undefined) setNeedsSignIn((prev) => ({ ...prev, [serverId]: false }));
+    return result;
   };
   // 34i: the open chat shows an installed tool suggestion, so its card needs the server's real state.
   const hasInstalledMcpCard = useMemo(() => chatHasInstalledServer(messages, suggestions), [messages, suggestions]);
@@ -2962,10 +2907,24 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   };
 
   // A routine card's Edit or Pause: open Space settings → Routines at that routine.
-  const handleOpenRoutine = (id: string, mode: 'edit' | 'pause') => {
+  const handleOpenRoutine = (id: string, mode: RoutineFocus['mode']) => {
     setRoutineFocus({ id, mode, nonce: Date.now() });
     openSpaceSettings('routines');
   };
+  openFailedRoutineRef.current = (n) =>
+    openFailedRoutine(n, {
+      routines: continuityApi.routines,
+      openRoutines: () => openSpaceSettings('routines'),
+      focusRoutine: (id) => setRoutineFocus({ id, mode: 'run', nonce: Date.now() }),
+    });
+  // routine-row-opens-history: a chat routine row's History. A bot's chat (or its thread) matches by that bot plus the
+  // name; a channel by the name among its routines. No match: Routines opens unfocused.
+  const handleOpenRoutineHistory = (name: string) =>
+    void openRoutineHistory(isChannel ? { channelId: currentChannel?.id ?? null } : { kwantId: currentKwant?.id ?? null }, name, {
+      routines: continuityApi.routines,
+      openRoutines: () => openSpaceSettings('routines'),
+      focusRoutine: (id) => setRoutineFocus({ id, mode: 'history', nonce: Date.now() }),
+    });
   const handleBotActionDecision = async (actionId: string, d: BotActionDecision): Promise<string | void> => {
     try {
       const a = d === 'undo' ? await botActionsApi.undo(actionId) : d === 'confirm' ? await botActionsApi.confirm(actionId) : await botActionsApi.decline(actionId);
@@ -4299,8 +4258,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         bots={kwants}
         engines={engines.engines}
         reloadEngines={engines.reload}
-        // Someone who finishes Get started in 0.9.8 never saw the old sidebar controls: no "moved" pointer.
-        onDismissed={hideMoved}
         spaceName={space.name}
         onImported={reloadAfterImport}
         mainSpace={space.is_default}
@@ -4480,9 +4437,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         playSfx('click');
       }}
       onConnectDevGitHub={connectDevGitHub}
-      movedPointer={movedPointerShows({ established: whatsNewEstablished, seen: movedHidden })}
-      onOpenMoved={openMoved}
-      onHideMoved={hideMoved}
       ideaJarCount={ideaJarCount}
       ideaJarActive={page === 'jar'}
       onOpenIdeaJar={() => {
@@ -4513,6 +4467,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       pickPage(st.page_key);
       setIsVmPaneOpen(true);
       return;
+    }
+    if (action === 'run_again') {
+      // routine-run-again: the routine runs again; the item leaves Needs you once the run starts.
+      // 'skipped' (a run is still going) goes back to the strip, which says so in its hint (Mira's design check).
+      return runAgain(item);
     }
     if (action === 'ask_again') {
       if (item.retry?.type !== 'approval') throw new Error('this ask has no approval to ask again');
@@ -4626,6 +4585,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onOpenLooseEnds={() => showPage('inbox', 'loose')}
       focusNote={toolNoteFocus}
       onClearFocusNote={() => setToolNoteFocus(null)}
+      focusConnection={connectionFocus}
+      onFocusConnectionDone={() => setConnectionFocus(null)}
+      onSignIn={signInToServer}
       onOpenNoteWhere={(w) => {
         if (spaceSettingsTab) closeSpaceSettings();
         openPlace({ channel_id: w.channel_id, kwant_id: w.direct_kwant_id, thread_id: w.thread_id, card_id: w.message_id });
@@ -4685,6 +4647,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         <ChatView
           spaceId={space.id}
           onToast={pushToast}
+          onOpenRoutineHistory={handleOpenRoutineHistory}
           heldNotes={heldNotes}
           dropOff={!!spaceSettingsTab}
           title={chatTitle}
@@ -4737,6 +4700,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           routingState={isCurrentContextStreaming ? routingState : null}
           onCancelDiscussion={handleCancelDiscussion}
           teamMembers={currentTeamMembers}
+          teamLeadId={currentTeam?.lead_kwant_id ?? null}
           teamId={activeSandboxId}
           teamName={activeSandboxName}
           workspacePath={currentTeam?.workspace_path}
@@ -4986,11 +4950,6 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     wroteHere,
     getStartedShowing: getStartedEligible,
   });
-  // 29v: a brand-new person never gets the "moved" pointer: record it as seen once they're known to be new
-  // (false, never null), the way What's new records its version, so it can't pin after their first message.
-  useEffect(() => {
-    if (recordMovedForNewPerson({ established: whatsNewEstablished, seen: movedHidden })) hideMoved();
-  }, [whatsNewEstablished, movedHidden]);
   const readyBots = useMemo(() => kwants.map((k) => ({ id: k.id, name: k.name, role: k.avatar_sprite })), [kwants]);
 
   return (
@@ -5026,16 +4985,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                     )}
                   </>
                 ) : phoneTab === 'jar' ? (
-                  <div className="flex-1 min-h-0 flex" data-main-pane>{jarPage}</div>
+                  <main id="main-pane" tabIndex={-1} className="flex-1 min-h-0 flex focus:outline-none" data-main-pane>{jarPage}</main>
                 ) : (
                   sidebar(phoneTab === 'bots' ? 'bots' : 'chats')
                 )}
               </div>
             ) : (
-              <div className={`relative flex-1 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
+              <main id="main-pane" tabIndex={-1} className={`relative flex-1 min-h-0 flex focus:outline-none ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
                 {mainPane}
                 <DropPillHost />
-              </div>
+              </main>
             )}
             {(showPhoneList || needsSetup) && (
               <PhoneTabBar
@@ -5066,10 +5025,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         ) : (
           <>
             {sidebar('all')}
-            <div className={`relative flex-1 min-w-0 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
+            <main id="main-pane" tabIndex={-1} className={`relative flex-1 min-w-0 min-h-0 flex focus:outline-none ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
               {mainPane}
               <DropPillHost />
-            </div>
+            </main>
           </>
         )}
       </div>

@@ -149,7 +149,7 @@ pub fn clock(t: NaiveDateTime) -> String {
     }
 }
 
-fn short_title(title: &str) -> String {
+pub(super) fn short_title(title: &str) -> String {
     let t = title.trim();
     let t = if t.is_empty() { "Your pocket app" } else { t };
     if t.chars().count() <= TITLE_CHARS {
@@ -373,10 +373,13 @@ pub struct Ran {
     pub results: Vec<String>,
     /// Results messages whose guest names were blanked (the pocket's data expired or was deleted).
     pub names_deleted: usize,
+    /// pa14b: walls whose best-30 pick started a bot turn or proposed all their photos.
+    pub picks: Vec<String>,
 }
 
 /// One run at `now`: end pockets whose kit finished or whose closing time passed, send due
-/// reminders, then post the results of ended pockets. Does nothing while the switch is off.
+/// reminders, then post the results of ended pockets, then start the Wall's due best-30 picks.
+/// Does nothing while the switch is off.
 /// Runs before the sweep, so a pocket that keeps nothing after it ends still gets its results
 /// posted before the sweep deletes it. Blanking guest names in posted results comes first and
 /// runs even with the switch off: it only ever removes data.
@@ -388,7 +391,9 @@ pub async fn run_once(state: &AppState, now: DateTime<Utc>) -> Ran {
     let mut to_end = state.db.pocket_past_closing(now).await.unwrap_or_default();
     for code in state.db.pocket_codes_open().await.unwrap_or_default() {
         if let Ok(Some(s)) = super::snapshot(state, &code).await {
-            if s.kit().is_some_and(|k| k.finished(&s.kit_state)) && !to_end.contains(&code) {
+            // A finished kit, or a pocket that keeps nothing and nobody ended (pa11 qa F1)
+            let done = s.kit().is_some_and(|k| k.finished(&s.kit_state)) || super::abandoned(&s, now);
+            if done && !to_end.contains(&code) {
                 to_end.push(code);
             }
         }
@@ -422,6 +427,8 @@ pub async fn run_once(state: &AppState, now: DateTime<Utc>) -> Ran {
         }
         Err(e) => tracing::warn!("pocket apps: couldn't list ended pockets: {e}"),
     }
+    // pa14b: the Wall's best 30, the morning after it closed (ended walls keep their photos)
+    ran.picks = super::wall_pick::run_due(state, now).await;
     ran
 }
 
@@ -455,7 +462,7 @@ async fn forget_names(state: &AppState, now: DateTime<Utc>) -> usize {
     done
 }
 
-fn origin_of(row: &ScheduleRow) -> Option<Origin> {
+pub(super) fn origin_of(row: &ScheduleRow) -> Option<Origin> {
     row.origin.as_deref().and_then(|o| serde_json::from_str(o).ok())
 }
 
@@ -496,7 +503,9 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
         Some(o) => {
             let mut block = ended_block(&s, row.as_ref(), &zone);
             // Data that is deleted as the pocket ends (or already due) never reaches the chat with names
-            let expiring = s.row.expires_at.is_some_and(|e| e <= now);
+            // (or expires the moment it ended: `AtEnd`, even when this run ended it a moment
+            // after `now`, so the names never show for a tick; pa11 qa F3)
+            let expiring = s.row.expires_at.is_some_and(|e| e <= now || s.row.ended_at.is_some_and(|t| e <= t));
             if expiring {
                 blank_names(&mut block, now);
             }
@@ -525,7 +534,7 @@ async fn sender(state: &AppState, kwant_id: &str) -> String {
 
 /// Posts a card into the origin chat: the message's id, `None` when the chat is gone (the
 /// notification still goes).
-async fn post(state: &AppState, o: &Origin, mut meta: Value, text: String) -> Option<String> {
+pub(super) async fn post(state: &AppState, o: &Origin, mut meta: Value, text: String) -> Option<String> {
     if check_origin(state, o).await.is_err() {
         return None;
     }
@@ -556,7 +565,7 @@ async fn post(state: &AppState, o: &Origin, mut meta: Value, text: String) -> Op
     }
 }
 
-async fn notify(state: &AppState, origin: Option<&Origin>, s: &Snapshot, title: String, body: String) {
+pub(super) async fn notify(state: &AppState, origin: Option<&Origin>, s: &Snapshot, title: String, body: String) {
     let kwant_id = origin.map(|o| o.kwant_id.clone()).or_else(|| s.row.owner_kwant_id.clone()).unwrap_or_default();
     let kwant_name = if kwant_id.is_empty() { "Pocket apps".to_string() } else { sender(state, &kwant_id).await };
     continuity::notify(

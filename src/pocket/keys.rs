@@ -46,6 +46,16 @@ pub fn new_code() -> String {
 }
 
 /// A pocket code as it appears in a path: exactly [`CODE_LEN`] characters of the alphabet.
+/// A Wall photo's id (pa14): `ph_` and 16 characters from the code alphabet. It names the file.
+pub fn new_photo_id() -> String {
+    format!("ph_{}", random_from(CODE_ALPHABET, 16))
+}
+
+/// An id [`new_photo_id`] could have made (checked before an id from a URL is looked up).
+pub fn valid_photo_id(id: &str) -> bool {
+    id.strip_prefix("ph_").is_some_and(|r| r.len() == 16 && r.bytes().all(|b| CODE_ALPHABET.contains(&b)))
+}
+
 pub fn valid_code(code: &str) -> bool {
     code.len() == CODE_LEN && code.bytes().all(|b| CODE_ALPHABET.contains(&b))
 }

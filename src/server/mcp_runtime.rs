@@ -874,10 +874,8 @@ pub async fn resume_late_approval(state: &AppState, ticket_id: &str, decision: A
     let (broker, tool_name) = (state.broker.clone(), approval.tool_name.clone());
     // The same agent and effort as the turn that asked, not what Laya makes of this prompt
     let mut opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
-    // A customer's turn goes on as one: the person allowed this call, not the ones after it
-    if chat["purpose"].as_str() == Some(super::telegram::customers::PURPOSE) {
-        super::telegram::customers::customer_opts(&mut opts);
-    }
+    // A customer's or a guest's turn goes on as one: the person allowed this call, not the ones after it
+    super::outsider_turns::resume_as_outsider(&chat, &mut opts);
     tokio::spawn(async move {
         let _job = job;
         let _ = super::routes::try_kwant_turn(&scope, &target, prompt, opts).await;
@@ -992,10 +990,8 @@ pub async fn retry_expired(state: &AppState, ticket_id: &str) -> Option<Value> {
     let prompt = expired_retry_prompt(&approval.tool_name, &arguments);
     let target = kwant.clone();
     let mut opts = super::routes::TurnOpts::routed_as(chat["agent"].as_str(), chat["effort"].as_str());
-    // A customer's turn goes on as one: the person allowed this call, not the ones after it
-    if chat["purpose"].as_str() == Some(super::telegram::customers::PURPOSE) {
-        super::telegram::customers::customer_opts(&mut opts);
-    }
+    // A customer's or a guest's turn goes on as one: the person allowed this call, not the ones after it
+    super::outsider_turns::resume_as_outsider(&chat, &mut opts);
     tokio::spawn(async move {
         let _job = job;
         let _ = super::routes::try_kwant_turn(&scope, &target, prompt, opts).await;

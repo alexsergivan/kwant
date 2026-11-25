@@ -75,7 +75,7 @@ test('one action per item: the server says it, else it is inferred from the kind
   assert.equal(m.askAction({ ...stopped, action: 'bogus' }), 'retry', 'an unknown action is ignored (older shape)');
   assert.equal(m.askAction({ ...stopped, action: null }), null, 'an explicit null: nothing resolves it but Done');
   assert.equal(m.askAction(item('delegation')), null);
-  assert.deepEqual(Object.values(m.ACTION_LABEL), ['Retry', 'Continue', 'Ask again', 'Go to the question', 'Go to the approval', 'Open the browser step']);
+  assert.deepEqual(Object.values(m.ACTION_LABEL), ['Retry', 'Continue', 'Ask again', 'Go to the question', 'Go to the approval', 'Open the browser step', 'Run again']);
 });
 
 test('the full line: the title whole; a title cut for a row gives way to the summary; an approval its question', () => {
@@ -368,7 +368,8 @@ test('pinned row: hover and focus give the whole ask in a tooltip the row is des
   assert.equal(row.getAttribute('aria-label'), null, 'the row keeps its name');
   const tip = d.getElementById('pin-tip-quant');
   assert.equal(tip.getAttribute('role'), 'tooltip');
-  assert.ok(row.getAttribute('aria-describedby').split(' ').includes('pin-tip-quant'));
+  // aria-describedby lives on the row's one real button, not the div around it (Pixel's FIX on #1186: no duplicate)
+  assert.ok(row.querySelector('button').getAttribute('aria-describedby').split(' ').includes('pin-tip-quant'));
   assert.ok(tip.hasAttribute('hidden'), 'hidden until hover or focus');
   const [top, line] = tip.querySelectorAll('span');
   assert.match(top.textContent, /^Quant · Stopped · /);

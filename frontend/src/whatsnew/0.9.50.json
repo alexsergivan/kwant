@@ -1,0 +1,21 @@
+{
+  "version": "0.9.50",
+  "date": "2026-11-25",
+  "highlights": [
+    {
+      "id": "sent-message-everywhere",
+      "title": "Your message shows on every open screen",
+      "text": "Send from your Mac and your phone shows it right away, above the bot's work. A follow-up you send from your phone shows up on your Mac too.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "composer-diet",
+      "title": "More room to read in every chat",
+      "text": "One chip under the message box now shows who answers. Tap it to pick another bot. The tip line leaves after your first message, and suggestions stay hidden while a bot replies.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}

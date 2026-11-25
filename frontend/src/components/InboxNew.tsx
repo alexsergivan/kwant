@@ -2,7 +2,7 @@
 // that the queue is the page and an item opens as a full page. The queue keeps H5's order and adds
 // To review between Failed or stuck and Finished. Questions, approvals and finished work behave as they
 // did on the old page; review items and the Low-risk card open in the item pane.
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertTriangle,
   Check,
@@ -57,6 +57,9 @@ import {
   inboxStore,
 } from '../inboxStore';
 import { localClock } from '../clock';
+import { runAgain, runAgainId } from '../routineRunAgain';
+import { fixLabel } from '../toolFailures';
+import { type DeskItem, DeskNeedsRow, openDeskItems, useDeskAnswers, useDeskItems, withoutDeskItems } from './results/PocketDesk';
 
 export const WIDE_QUERY = '(min-width: 1024px)';
 
@@ -222,12 +225,14 @@ interface RowProps {
   onResolve: (i: InboxItem, d: ApprovalDecision, withoutBackup?: boolean, reason?: string) => void;
   /** 0.9.5: Retry on a stopped item whose approval expired unanswered. */
   onRetry?: (i: InboxItem, approvalId: string) => void;
+  /** routine-run-again: Run again on a failed routine run that names its routine. */
+  onRunAgain?: (i: InboxItem) => void;
   /** A routine's review task in Done: its run's first line, as the run's own row would show it. */
   doneSummary?: string | null;
   /** The conversation it happened in ("@Spring launch"), said before the bot's name like the mockup. */
   place?: string | null;
-  /** 0.9.5: a connection row's Reconnect opens Settings › Connections. */
-  onOpenConnections?: () => void;
+  /** 0.9.5: a connection row's button opens Settings › Connections; 34h: on that connection's row. */
+  onOpenConnections?: (connectionId?: string) => void;
 }
 
 /** pa4c: a finished quiz's Done meta, "24 players". The end time sits on the row's top line, like every Done row. */
@@ -306,8 +311,9 @@ const PocketRow: React.FC<{ item: InboxItem; selected: boolean; focusable: boole
 
 const QueueRow: React.FC<RowProps> = (props) => (props.item.kind === 'pocket' ? <PocketRow item={props.item} selected={props.selected} focusable={props.focusable} onPick={props.onPick} /> : <AnyRow {...props} />);
 
-const AnyRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, doneSummary, place, onOpenConnections }) => {
+const AnyRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, onRunAgain, doneSummary, place, onOpenConnections }) => {
   const stopped = isReview(item) ? null : stoppedAction(item as AwayItem);
+  const runId = isReview(item) || !onRunAgain ? null : runAgainId(item as AwayItem);
   const review = isReview(item) ? item : null;
   const title = rowTitle(item);
   // The server decides one_tap; an item with no verdict (Not checked yet, Being checked) never gets inline Approve.
@@ -435,6 +441,23 @@ const AnyRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onP
         </div>
       )}
 
+      {runId && onRunAgain && (
+        <div className="px-3 pb-3 pl-[54px]">
+          <button
+            type="button"
+            disabled={disabled}
+            aria-busy={busy === item.id || undefined}
+            aria-label={`Run “${title}” again`}
+            onClick={() => onRunAgain(item)}
+            className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`}
+            data-run-again={item.id}
+          >
+            {busy === item.id ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <RotateCcw size={12} aria-hidden="true" />}
+            Run again
+          </button>
+        </div>
+      )}
+
       {item.kind === 'approval' && (
         <div className="px-3 pb-1 sm:pl-[54px] [&>div]:my-0 [&>div]:mb-2">
           <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} stackWhy onResolve={(_, d, opts) => onResolve(item, d as ApprovalDecision, opts?.withoutBackup, opts?.reason)} />
@@ -443,16 +466,16 @@ const AnyRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onP
 
       {item.kind === 'connection' && onOpenConnections && (
         <div className="px-3 pb-3 pl-[54px]">
-          <button type="button" onClick={onOpenConnections} className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-reconnect={item.id}>
+          <button type="button" onClick={() => onOpenConnections(item.fix?.connection_id ?? undefined)} className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-reconnect={item.id}>
             <Plug size={12} aria-hidden="true" />
-            {item.fix?.label || 'Reconnect'}
+            {fixLabel(item.cause, item.fix?.label)}
           </button>
         </div>
       )}
 
       {busy === item.id && !review && (
         <p className="px-3 pb-3 pl-[54px] inline-flex items-center gap-1.5 text-[11px] text-zinc-400">
-          <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> Sending…
+          <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> {runId ? 'Starting…' : 'Sending…'}
         </p>
       )}
     </li>
@@ -762,8 +785,8 @@ export interface InboxNewProps {
   onApprovalResolved?: (id: string) => void;
   /** Phone: back to the chat list. */
   onBack?: () => void;
-  /** 0.9.5: a connection row's Reconnect opens Settings › Connections. */
-  onOpenConnections?: () => void;
+  /** 0.9.5: a connection row's button opens Settings › Connections; 34h: on that connection's row. */
+  onOpenConnections?: (connectionId?: string) => void;
   /** The back crumb: return to the page the item was opened from. */
   onCrumb?: (c: Exclude<Crumb, null>) => void;
   top?: React.ReactNode;
@@ -782,6 +805,8 @@ export interface InboxNewProps {
   doneApi?: DoneApi;
   /** Tests and screenshots: a done item's details by item id, instead of loading them. */
   doneDetails?: Record<string, DoneDetailData>;
+  /** Tests and screenshots: front desk guests waiting (pa13), instead of reading them. */
+  deskItems?: DeskItem[];
 }
 
 /** Writes `?item=` for the open item; the Shell sets the path first, so this waits a tick. */
@@ -813,11 +838,17 @@ export const InboxNew: React.FC<InboxNewProps> = ({
   placeName,
   doneApi,
   doneDetails,
+  deskItems,
 }) => {
   const st = useInbox();
   const mqWide = useWide();
   const wide = forceWide ?? mqWide;
-  const { data, loading, error, notice, busy, selectedId, crumb } = st;
+  const { data: inbox, loading, error, notice, busy, selectedId, crumb } = st;
+  // pa13: a front desk guest waiting for the host is a Needs-you row of its own, with the Allow card inline.
+  // /api/inbox lists them too (kind pocket_desk, #1150 round 4): they draw only as desk rows, never as plain rows.
+  useDeskAnswers();
+  const desk = openDeskItems(useDeskItems(inbox, noLoad, deskItems));
+  const data = useMemo(() => withoutDeskItems(inbox), [inbox]);
   const listRef = useRef<HTMLDivElement>(null);
   const paneRef = useRef<HTMLDivElement>(null);
   const onCountsRef = useRef(onCounts);
@@ -893,7 +924,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
     [onOpen],
   );
 
-  const act = async (item: InboxItem, run: () => Promise<unknown>, denied = false) => {
+  const act = async (item: InboxItem, run: () => Promise<unknown>, denied = false, said?: (reply: unknown) => { text: string; tone: 'ok' | 'info' }) => {
     if (inboxStore.get().busy) return;
     inboxStore.patch({ busy: item.id, notice: null });
     const title = awayTitle(item as AwayItem);
@@ -901,7 +932,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
       const reply = await run();
       const late = item.kind === 'approval' && !denied ? lateAnswerText(reply, item.kwant_name) : null;
       const done = denied ? 'Denied, nothing ran:' : late ?? `Sent to ${item.kwant_name}:`;
-      inboxStore.patch({ busy: null, notice: { text: `${done} “${title}”`, tone: 'ok' } });
+      inboxStore.patch({ busy: null, notice: said ? said(reply) : { text: `${done} “${title}”`, tone: 'ok' } });
     } catch (err) {
       const n = failureNotice(err, title);
       inboxStore.patch({ busy: null, notice: { text: n.text, tone: n.error ? 'error' : 'info' } });
@@ -912,6 +943,13 @@ export const InboxNew: React.FC<InboxNewProps> = ({
 
   const onAnswer = (item: InboxItem, choice: number) => act(item, () => awayApi.answer(item.id, choice));
   const onRetry = (item: InboxItem, approvalId: string) => act(item, () => awayApi.retryApproval(approvalId));
+  // routine-run-again: "Started." as Routines says it; the row leaves Needs you once the run starts (the reload).
+  const onRunAgain = (item: InboxItem) =>
+    act(item, () => runAgain(item as AwayItem), false, (r) => {
+      const t = `“${awayTitle(item as AwayItem)}”`;
+      // Skipped is news, not success: the info tone (Mira's design check, fix 2).
+      return r === 'skipped' ? { text: `${t} is already running, so nothing new started.`, tone: 'info' } : { text: `Started: ${t}`, tone: 'ok' };
+    });
   const onResolve = (item: InboxItem, decision: ApprovalDecision, withoutBackup?: boolean, reason?: string) =>
     act(
       item,
@@ -952,7 +990,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
 
   const firstRow = sections ? [...sections.needs, ...sections.done][0]?.id : undefined;
   const firstFocusable = selectable.includes(selectedId ?? '') ? selectedId : (firstRow ?? (showBatch ? 'batch' : null));
-  const empty = !!data && data.items.length === 0 && !showBatch;
+  const empty = !!data && data.items.length === 0 && !showBatch && desk.length === 0;
   const header = (
     <div className={`h-14 shrink-0 border-b border-zinc-800/80 ${onBack && !wide ? 'px-2' : 'px-4'} flex items-center justify-between gap-3 select-none`}>
       {onBack && !wide && (
@@ -1018,7 +1056,8 @@ export const InboxNew: React.FC<InboxNewProps> = ({
               const rows = sections[key];
               const reviewsEnd = key === 'done' ? rows.filter((i) => i.group === 'to_review').length : 0;
               const withBatch = key === 'done' && showBatch;
-              const count = rows.length;
+              const deskRows = key === 'needs' ? desk : [];
+              const count = rows.length + deskRows.length;
               const sec = SECTION[key];
               const row = (i: InboxItem) => (
                 <QueueRow
@@ -1032,6 +1071,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
                   onAnswer={onAnswer}
                   onResolve={onResolve}
                   onRetry={onRetry}
+                  onRunAgain={onRunAgain}
                   doneSummary={sections.runFor[i.id]?.summary || null}
                   place={i.link?.channel_id ? (placeName?.(i.link.channel_id) ?? null) : null}
                   onOpenConnections={onOpenConnections}
@@ -1048,6 +1088,9 @@ export const InboxNew: React.FC<InboxNewProps> = ({
                   </h3>
                   {count > 0 || withBatch ? (
                     <ul role="presentation" className="space-y-2">
+                      {deskRows.map((it) => (
+                        <DeskNeedsRow key={it.id} item={it} />
+                      ))}
                       {rows.slice(0, key === 'done' ? reviewsEnd : rows.length).map(row)}
                       {withBatch && (
                         <BatchCard

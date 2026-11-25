@@ -1,0 +1,104 @@
+/* The Wall's guest page (pa14): its own lazy CSS file, loaded only with the wall chunk.
+   Measurements from pa14/pocket.css "guest page" (Mira); colours are guest.css tokens. The block below adds only the
+   holo foil stops and plate for the one earned "Picked" sticker (G6), copied from modern.css and checked by test. */
+
+/* ---- tokens (copied, checked by test) ---- */
+:root {
+  --holo-1: #ff6ec7;
+  --holo-2: #ffd36e;
+  --holo-3: #7dffb0;
+  --holo-4: #5ee0ff;
+  --holo-5: #9b7bff;
+  --sticker-plate: #f4f1ff;
+}
+
+.qm160 { width: 160px; height: 160px; }
+.wall button:focus-visible, .wall input:focus-visible, .wall [tabindex]:focus-visible { outline: 3px solid var(--sky-300); outline-offset: 2px; }
+.wall label:focus-within { outline: 3px solid var(--sky-300); outline-offset: 2px; }
+.wall .hero h1 { font-size: 26px; line-height: 31px; }
+.wall .hero > div:not(.qm) { min-width: 0; flex: 1; }
+.wall .hero > .qm { flex: none; }
+.wall h2.lbl { margin: 0 0 8px; }
+.wall .sub { font-size: 15px; line-height: 21px; margin-top: 4px; }
+.wall .fine { font-size: 13px; line-height: 19px; margin: 0; }
+.wall .gbtn.sm { min-height: 44px; width: auto; font-size: 15px; margin-top: 10px; }
+.wall .acts { display: block; }
+
+/* ---- photos ---- */
+.wall .ph { position: relative; display: block; margin: 0; overflow: hidden; border-radius: 10px; background: var(--kw-surface-main); container-type: size; }
+.wall .ph img { position: absolute; left: 0; top: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+/* The box strips EXIF, so its `rotate` turns the photo here: the turned image fills the tile's own box. */
+.wall .ph img.r90, .wall .ph img.r180, .wall .ph img.r270 { left: 50%; top: 50%; }
+.wall .ph img.r180 { transform: translate(-50%, -50%) rotate(180deg); }
+.wall .ph img.r90, .wall .ph img.r270 { width: 100cqh; height: 100cqw; }
+.wall .ph img.r90 { transform: translate(-50%, -50%) rotate(90deg); }
+.wall .ph img.r270 { transform: translate(-50%, -50%) rotate(270deg); }
+.wall .ph .cap { position: absolute; left: 0; right: 0; bottom: 0; padding: 22px 10px 8px; font-size: 13px; line-height: 17px; color: var(--zinc-50); font-weight: 600; background: linear-gradient(0deg, color-mix(in srgb, var(--kw-surface-rail) 88%, transparent), transparent); overflow-wrap: anywhere; }
+.wall .ph .cap small { display: block; font-weight: 500; color: var(--zinc-200); }
+.wall .ph.pend { outline: 2px dashed var(--zinc-500); outline-offset: -2px; }
+.wall .ph.pend img { opacity: 0.55; }
+.wall .ph .tag { position: absolute; left: 6px; top: 6px; right: 6px; width: max-content; max-width: calc(100% - 12px); display: inline-flex; gap: 5px; align-items: center; height: 24px; padding: 0 8px; border-radius: 999px; font-size: 11.5px; font-weight: 700; background: var(--kw-surface-rail); color: var(--zinc-100); border: 1px solid var(--kw-hairline-strong); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.wall .ph .tag svg.pi { width: 12px; height: 12px; }
+.wall .gwall { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); grid-auto-flow: dense; gap: 8px; }
+.wall .gwall .ph { aspect-ratio: 4 / 5; border-radius: 12px; }
+.wall .gwall .ph.wide { grid-column: 1 / -1; aspect-ratio: 4 / 3; }
+.wall .wallsec { display: flex; flex-direction: column; gap: 10px; }
+.wall .wallsec h2.lbl { margin: 0; }
+.wall .newpill { align-self: center; display: inline-flex; align-items: center; gap: 6px; min-height: 44px; padding: 0 16px; border-radius: 999px; background: var(--sky-600); color: var(--zinc-50); font-weight: 700; font-size: 14px; border: 1px solid var(--sky-400); }
+.wall .newpill svg.pi { width: 14px; height: 14px; }
+.wall .empty { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 10px; padding: 24px 8px; }
+.wall .empty p { margin: 0; }
+
+/* ---- G1: pick and limits ---- */
+.wall .pickbtn { position: relative; min-height: 120px; border-radius: 18px; border: 2px dashed var(--sky-400); background: color-mix(in srgb, var(--sky-500) 12%, transparent); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; font-size: 18px; font-weight: 700; color: var(--zinc-50); cursor: pointer; text-align: center; padding: 12px; }
+.wall .pickbtn small { font-size: 13px; font-weight: 500; color: var(--zinc-300); }
+.wall .pickbtn svg.pi.big { width: 28px; height: 28px; color: var(--sky-200); }
+.wall .limits { display: grid; gap: 6px; font-size: 13.5px; line-height: 19px; color: var(--zinc-300); }
+.wall .limits div { display: flex; gap: 8px; align-items: flex-start; }
+.wall .limits svg.pi { margin-top: 2px; color: var(--zinc-400); }
+.wall label.gbtn { cursor: pointer; }
+.wall .stick { position: sticky; bottom: 12px; z-index: 2; margin-top: auto; }
+.wall .stick .gbtn { box-shadow: 0 4px 0 var(--sky-800), 0 10px 24px color-mix(in srgb, var(--kw-surface-rail) 80%, transparent); }
+
+/* ---- G2, G4, G8: the rows this page sends ---- */
+.wall .sending { display: flex; flex-direction: column; gap: 14px; }
+.wall .sending h2 { font-size: 20px; line-height: 26px; }
+.wall .upl { display: flex; flex-direction: column; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.wall .ur { display: grid; grid-template-columns: 72px minmax(0, 1fr); gap: 12px; padding: 10px; border-radius: 14px; background: var(--kw-surface-raised); border: 1px solid var(--kw-hairline-strong); }
+.wall .ur .ph { width: 72px; height: 72px; border-radius: 10px; }
+.wall .ur .urb { min-width: 0; }
+.wall .ur .st { font-size: 14px; line-height: 20px; color: var(--zinc-200); display: flex; justify-content: space-between; gap: 8px; align-items: center; flex-wrap: wrap; }
+.wall .ur .st b { color: var(--zinc-50); font-weight: 600; display: inline-flex; gap: 6px; align-items: center; min-width: 0; }
+.wall .ur .st b svg.pi { width: 13px; height: 13px; color: var(--kw-ok); }
+.wall .ur .st .fname { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; max-width: 100%; }
+.wall .ur .capin { margin-top: 8px; width: 100%; height: 44px; border-radius: 10px; background: var(--kw-surface-main); border: 1px solid var(--zinc-700); padding: 0 12px; font: inherit; font-size: 16px; color: var(--zinc-50); min-width: 0; }
+.wall .ur .capin::placeholder { color: var(--zinc-400); }
+.wall .ur .capin:disabled { opacity: 0.7; }
+.wall .ur .bar2 { height: 8px; border-radius: 4px; background: var(--kw-surface-main); overflow: hidden; margin-top: 8px; border: 1px solid var(--kw-hairline); }
+.wall .ur .bar2 i { display: block; height: 100%; background: var(--sky-400); transform-origin: left; transform: scaleX(var(--p, 0)); transition: transform 0.2s linear; }
+.wall .ur.err { border-color: color-mix(in srgb, var(--kw-warn) 45%, transparent); }
+.wall .ur.no { border-color: color-mix(in srgb, var(--kw-bad) 40%, transparent); }
+.wall .ur .why { margin: 6px 0 0; font-size: 13.5px; line-height: 19px; color: var(--zinc-200); }
+.wall .ur .retry { margin-top: 8px; min-height: 44px; border-radius: 12px; display: inline-flex; align-items: center; gap: 8px; padding: 0 16px; font-weight: 700; font-size: 15px; border: 1px solid var(--kw-hairline-strong); background: var(--kw-surface-main); color: var(--zinc-50); }
+.wall .ur .noimg { width: 72px; height: 72px; border-radius: 10px; border: 2px dashed var(--zinc-700); display: grid; place-items: center; color: var(--zinc-400); }
+.wall .mid { display: flex; flex-direction: column; align-items: center; text-align: center; gap: 14px; }
+.wall .mid p { margin: 0; }
+
+/* ---- G6: the one earned sticker, the holo plate from modern.css ---- */
+.wall .hero .kw-sticker { align-self: flex-start; transform: rotate(-4deg); }
+.wall .kw-sticker-holo { isolation: isolate; overflow: hidden; background: var(--sticker-plate); }
+.wall .kw-sticker-holo > * { position: relative; z-index: 2; }
+.wall .kw-sticker-holo svg.pi { width: 12px; height: 12px; color: var(--sticker-text); }
+.wall .kw-sticker-holo::before, .wall .kw-sticker-holo::after { content: ''; position: absolute; pointer-events: none; }
+.wall .kw-sticker-holo::before {
+  inset: 0 -50%; z-index: 0; opacity: 0.8; mix-blend-mode: multiply; transform: translateX(5%);
+  background: linear-gradient(105deg, var(--holo-1) 0%, var(--holo-2) 10%, var(--holo-3) 20%, var(--holo-4) 30%, var(--holo-5) 40%, var(--holo-1) 50%, var(--holo-2) 60%, var(--holo-3) 70%, var(--holo-4) 80%, var(--holo-5) 90%, var(--holo-1) 100%);
+}
+.wall .kw-sticker-holo::after {
+  inset: 0; z-index: 1; mix-blend-mode: soft-light;
+  background: linear-gradient(105deg, transparent 16%, rgb(255 255 255 / 0.7) 30%, transparent 44%), repeating-linear-gradient(115deg, transparent 0 3px, rgb(255 255 255 / 0.22) 3px 4px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .wall .ur .bar2 i { transition: none; }
+}

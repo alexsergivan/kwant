@@ -536,6 +536,525 @@ export const SANTA_FIXTURES = {
 /** What host/reset-pin answers for the shots and tests: a one-time code and its expiry (24 h). */
 export const SANTA_RESET_CODE = { code: 'K7QX', expires_at: '2026-12-08T21:41:00+01:00' };
 
+// Pocket apps (pa10b/design.md): Riverside Runners, host Oleks, 22 members, euros. Names, places and creatures are
+// made up. One engine, three faces: RSVP, Sign-up and Vote, states 1-9 plus People, Nudges and the closed results.
+// `gather` is Lin's host view as the box sends it (pa10b/server-shape.md, src/pocket/gather.rs) plus the pocket's
+// title and expires_at: RFC 3339 times (+01:00, Berlin in December), food keys, `{link}` in the drafts.
+const GATHER_FUNNEL = 'https://oleks-mac.tail4b2e.ts.net/p/runclub';
+const GATHER_WIFI = 'http://192.168.1.20:7480/p/runclub';
+const CREATURES = ['beret', 'antenna', 'visor', 'bulb', 'spikes', 'goggles', 'horns', 'ears'];
+const av = (i: number) => CREATURES[i % CREATURES.length];
+const at = (day: number, hm: string) => `2026-12-${String(day).padStart(2, '0')}T${hm}:00+01:00`;
+type P = [name: string, answer: 'yes' | 'maybe' | 'no' | null, plus: number, food: string[], paid: boolean];
+const person = ([name, answer, plus_ones, food, paid]: P, i: number) => ({
+  id: `g${i + 1}`, name, avatar: av(i), answer, plus_ones, food, food_other: null, answered_at: at(1, '18:00'), paid_at: answer === 'yes' && paid ? at(3, '12:00') : null,
+});
+/** RSVP counts as gather.rs builds them from the rows. */
+function rsvpParts(rows: P[]) {
+  const yes = rows.filter((r) => r[1] === 'yes');
+  const plus = yes.reduce((n, r) => n + r[2], 0);
+  const food: Record<string, number> = {};
+  for (const r of yes) for (const k of r[3]) food[k] = (food[k] ?? 0) + 1;
+  return {
+    counts: { yes: yes.length, maybe: rows.filter((r) => r[1] === 'maybe').length, no: rows.filter((r) => r[1] === 'no').length, plus_ones: plus, coming: yes.length + plus },
+    paid: { ticked: yes.filter((r) => r[4]).length, of: yes.length, not_yet: yes.filter((r) => !r[4]).map((r) => r[0]) },
+    food: { counts: food, other: [] },
+  };
+}
+// State 1-3: Yes 14 (+3) · Maybe 4 · No 2 · Paid 10 of 14 (not yet: Ana, Kai, Ravi, Tom) · 2 of 22 haven't answered.
+const RSVP_OPEN_PEOPLE: P[] = [
+  ['Oleks', 'yes', 1, ['vegetarian'], true], ['Mia', 'yes', 1, [], true], ['Priya', 'yes', 0, ['vegan'], true], ['Ana', 'yes', 0, ['nut_allergy'], false],
+  ['Kai', 'yes', 0, [], false], ['Ravi', 'yes', 0, ['vegetarian'], false], ['Tom', 'yes', 0, [], false], ['Leo', 'maybe', 0, [], false], ['Finn', 'no', 0, [], false],
+  ['Jonas', 'yes', 0, [], true], ['Elif', 'yes', 1, ['vegetarian'], true], ['Marta', 'yes', 0, ['gluten_free'], true], ['Ben', 'yes', 0, [], true],
+  ['Lucia', 'yes', 0, [], true], ['Omar', 'yes', 0, [], true], ['Zoe', 'maybe', 0, [], false], ['Nina', 'maybe', 0, [], false], ['Sam', 'maybe', 0, [], false], ['Ida', 'no', 0, [], false], ['Hana', 'yes', 0, [], true],
+];
+const idOf = (rows: P[], name: string) => `g${rows.findIndex((r) => r[0] === name) + 1}`;
+const maybeNote = (n: string) => `Hi ${n}! Still a maybe for the club dinner on Sat at The Old Mill? Answers close Thu at 8 PM so Oleks can book the table. Tap to change it: {link}`;
+const unpaidNote = (n: string) => `Hi ${n}, a quick one: the €35 for Saturday's dinner is still open. Pay Oleks whenever suits you before the dinner. Thanks!`;
+const draft = (rows: P[], to: string, kind: string, text: string, copied_at: string | null = null, next_copy_at: string | null = null) => ({
+  to, player_id: idOf(rows, to), kind, text, copied_at, next_copy_at, can_copy: next_copy_at === null,
+});
+const RSVP_DRAFTS = [
+  draft(RSVP_OPEN_PEOPLE, 'Leo', 'maybe', maybeNote('Leo')),
+  draft(RSVP_OPEN_PEOPLE, 'Zoe', 'maybe', maybeNote('Zoe'), at(9, '21:12'), at(11, '21:12')),
+  draft(RSVP_OPEN_PEOPLE, 'Nina', 'maybe', maybeNote('Nina')),
+  draft(RSVP_OPEN_PEOPLE, 'Sam', 'maybe', maybeNote('Sam')),
+  draft(RSVP_OPEN_PEOPLE, 'Ana', 'not_paid', unpaidNote('Ana')),
+  draft(RSVP_OPEN_PEOPLE, 'Kai', 'not_paid', unpaidNote('Kai'), at(8, '18:40'), at(10, '18:40')),
+  draft(RSVP_OPEN_PEOPLE, 'Ravi', 'not_paid', unpaidNote('Ravi')),
+  draft(RSVP_OPEN_PEOPLE, 'Tom', 'not_paid', unpaidNote('Tom')),
+];
+const gatherBase = {
+  host_name: 'Oleks',
+  show_names: true,
+  members: 22,
+  not_answered: [],
+  people: [],
+  drafts: [],
+  join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: GATHER_FUNNEL, wifi_url: GATHER_WIFI },
+};
+const gatherFixture = (reply: string, name: string, state: 'live' | 'ended', gather: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: 'pocket:runclub' },
+    code: 'runclub',
+    kit: 'gather',
+    name,
+    when: null,
+    state,
+    budget: { calls: 3, usd: 0.01 },
+    gather: { ...gatherBase, ...gather },
+  });
+const rsvpOpen = {
+  face: 'rsvp',
+  phase: 'open',
+  title: 'End-of-season dinner',
+  when: at(12, '19:30'),
+  place: 'The Old Mill',
+  price: '€35 each, paid to Oleks',
+  closes_at: at(10, '20:00'),
+  event_at: at(12, '19:30'),
+  expires_at: at(19, '19:30'),
+  not_answered: ['Rosa', 'Theo'],
+  ...rsvpParts(RSVP_OPEN_PEOPLE),
+  people: RSVP_OPEN_PEOPLE.map(person),
+  drafts: RSVP_DRAFTS,
+};
+type Who = [id: string, name: string, note: string | null];
+const slot = (i: number, name: string, cap: number, who: Who[], waiting: Array<[string, string]> = []) => ({
+  slot: i, name, cap,
+  people: who.map(([id, n, note], j) => ({ id, name: n, avatar: av(i + j), note })),
+  waiting: waiting.length,
+  waiting_people: waiting.map(([id, n], j) => ({ id, name: n, avatar: av(i + j + 3) })),
+});
+const POTLUCK_SLOTS = [
+  slot(0, 'Mains', 3, [['g3', 'Priya', 'lentil stew']]),
+  slot(1, 'Sides', 4, [['g4', 'Ana', null], ['g5', 'Kai', null], ['g7', 'Tom', null]]),
+  slot(2, 'Desserts', 2, [['g2', 'Mia', 'apple cake'], ['g13', 'Ben', 'brownies']], [['g20', 'Hana'], ['g8', 'Leo']]),
+  slot(3, 'Drinks', 2, [['g15', 'Omar', null]]),
+  slot(4, 'Washing-up crew', 3, []),
+];
+const signupOpen = {
+  face: 'signup',
+  phase: 'open',
+  title: 'Christmas potluck',
+  when: at(20, '13:00'),
+  place: 'the clubhouse',
+  closes_at: at(19, '18:00'),
+  event_at: at(20, '13:00'),
+  expires_at: at(27, '13:00'),
+  slots: POTLUCK_SLOTS,
+  moved_up: [],
+};
+const OPTIONS = ['The Old Mill', 'Casa Lupa', 'Golden Lotus', 'Pizza at the clubhouse'].map((name, option) => ({ option, name }));
+const VOTERS = ['Mia', 'Priya', 'Jonas', 'Ana', 'Kai', 'Oleks', 'Elif', 'Marta', 'Ben', 'Lucia', 'Omar', 'Hana', 'Tom', 'Ravi', 'Zoe'].map((name, i) => ({ id: `v${i + 1}`, name, avatar: av(i + 1), at: at(1, '19:00') }));
+const c = (...votes: number[]) => votes.map((v, option) => ({ option, votes: v })).filter((x) => x.votes >= 0);
+const ROUND1 = c(6, 5, 3, 1);
+const voteBase = {
+  face: 'vote',
+  title: "Where's the end-of-season dinner?",
+  closes_at: at(2, '20:00'),
+  expires_at: at(9, '20:00'),
+  not_answered: ['Leo', 'Finn', 'Nina', 'Sam', 'Ida', 'Rosa', 'Theo'],
+  voted: 15,
+  voters: VOTERS,
+};
+const voteOpen = { ...voteBase, phase: 'open', ballot: { kind: 'ranked', options: OPTIONS, in_play: [0, 1, 2, 3] }, live: ROUND1 };
+const ROUNDS_DONE = [
+  { round: 1, counts: ROUND1, exhausted: 0, dropped: [{ option: 3 }] },
+  { round: 2, counts: c(6, 6, 3), exhausted: 0, dropped: [{ option: 2 }] },
+  { round: 3, counts: c(8, 7), exhausted: 0, dropped: [] },
+];
+// Closed RSVP (results-1440 left): 19 coming (15 + 4), 4 no, 3 never answered, paid 14 of 15.
+const RSVP_CLOSED_PEOPLE: P[] = [
+  ['Oleks', 'yes', 1, ['vegetarian'], true], ['Mia', 'yes', 1, [], true], ['Priya', 'yes', 0, ['vegan'], true], ['Jonas', 'yes', 0, [], true], ['Ana', 'yes', 0, ['nut_allergy'], true],
+  ['Kai', 'yes', 0, [], true], ['Ravi', 'yes', 0, ['vegetarian'], true], ['Tom', 'yes', 0, [], true], ['Elif', 'yes', 1, ['vegetarian'], true], ['Marta', 'yes', 0, ['gluten_free'], true],
+  ['Ben', 'yes', 0, [], true], ['Lucia', 'yes', 0, ['vegetarian'], true], ['Omar', 'yes', 0, [], false], ['Hana', 'yes', 0, [], true], ['Leo', 'yes', 1, [], true],
+  ['Finn', 'no', 0, [], false], ['Ida', 'no', 0, [], false], ['Nina', 'no', 0, [], false], ['Sam', 'no', 0, [], false],
+];
+const rsvpClosed = {
+  ...rsvpOpen,
+  phase: 'closed',
+  not_answered: ['Zoe', 'Rosa', 'Theo'],
+  ...rsvpParts(RSVP_CLOSED_PEOPLE),
+  people: RSVP_CLOSED_PEOPLE.map(person),
+  drafts: [draft(RSVP_CLOSED_PEOPLE, 'Omar', 'not_paid', unpaidNote('Omar'))],
+  join: null,
+};
+const signupClosed = {
+  ...signupOpen,
+  phase: 'closed',
+  slots: [
+    slot(0, 'Mains', 3, [['g3', 'Priya', 'lentil stew'], ['g11', 'Elif', 'lasagne'], ['g15', 'Omar', 'curry']]),
+    slot(1, 'Sides', 4, [['g4', 'Ana', null], ['g5', 'Kai', null], ['g7', 'Tom', null], ['g14', 'Lucia', null]]),
+    slot(2, 'Desserts', 2, [['g2', 'Mia', 'apple cake'], ['g20', 'Hana', 'gingerbread']], [['g8', 'Leo']]),
+    slot(3, 'Drinks', 2, [['g15', 'Omar', null], ['g10', 'Jonas', null]]),
+    slot(4, 'Washing-up crew', 3, [['g12', 'Marta', null], ['g6', 'Ravi', null]]),
+  ],
+  join: null,
+};
+const voteClosed = {
+  ...voteBase,
+  phase: 'closed',
+  join: null,
+  ballot: { kind: 'ranked', options: OPTIONS, in_play: [0, 1, 2, 3] },
+  result: { outcome: 'winner', winner: { option: 0 }, tied: [], ballots_counted: 15, rounds: ROUNDS_DONE },
+};
+const HANA_NOTE = "Hi Hana! A spot opened up in Desserts for Sunday's potluck, so you're in now. See you at 1 PM at the clubhouse!";
+export const GATHER_FIXTURES = {
+  rsvpOpen: gatherFixture("Your dinner RSVP is open. Share the link in the club chat; I'll keep count and draft nudges for you to send.", 'Dinner RSVP', 'live', rsvpOpen),
+  rsvpPeople: gatherFixture("Here's who answered. Paid ticks are yours only.", 'Dinner RSVP', 'live', rsvpOpen),
+  rsvpNudges: gatherFixture('8 nudges are drafted. Nothing sends by itself: copy one and send it from your own chat.', 'Dinner RSVP', 'live', rsvpOpen),
+  rsvpNoAddress: gatherFixture('Your dinner RSVP is open on your Wi-Fi. To let members answer from home, set up Tailscale Funnel (the How to has the steps).', 'Dinner RSVP', 'live', {
+    ...rsvpOpen,
+    join: { mode: 'wifi', anywhere_kind: null, anywhere_url: null, wifi_url: GATHER_WIFI },
+  }),
+  signupOpen: gatherFixture('Your potluck sign-up is open. Desserts is full; Hana and Leo are on its waiting list.', 'Potluck sign-up', 'live', signupOpen),
+  signupMoved: gatherFixture('Ben left Desserts, so Hana moved up from the waiting list.', 'Potluck sign-up', 'live', {
+    ...signupOpen,
+    slots: POTLUCK_SLOTS.map((s) => (s.slot === 2 ? slot(2, 'Desserts', 2, [['g2', 'Mia', 'apple cake'], ['g20', 'Hana', 'gingerbread']], [['g8', 'Leo']]) : s)),
+    moved_up: [{ id: 'g20', name: 'Hana', slot: 2, at: at(14, '16:12'), seen: false }],
+    drafts: [{ to: 'Hana', player_id: 'g20', kind: 'moved_up', text: HANA_NOTE, copied_at: null, next_copy_at: null, can_copy: true }],
+  }),
+  voteOpen: gatherFixture("The dinner vote is open. 15 of 22 have voted; it closes Wed at 8 PM.", 'Dinner vote', 'live', voteOpen),
+  voteClosed: gatherFixture('The vote is closed: The Old Mill won, 8 to 7 in the final round.', 'Dinner vote', 'ended', voteClosed),
+  voteTie: gatherFixture("It's a tie between The Old Mill and Casa Lupa. You pick, or open the vote again for 24 hours.", 'Dinner vote', 'live', {
+    ...voteBase,
+    phase: 'tie',
+    join: null,
+    voted: 14,
+    voters: VOTERS.slice(0, 14),
+    ballot: { kind: 'ranked', options: OPTIONS, in_play: [0, 1] },
+    result: { outcome: 'tie', winner: null, tied: c(7, 7), ballots_counted: 14, rounds: [{ ...ROUNDS_DONE[0], counts: c(6, 5, 2, 1), dropped: [{ option: 2 }, { option: 3 }] }, { round: 2, counts: c(7, 7), exhausted: 0, dropped: [] }] },
+  }),
+  rsvpResult: gatherFixture('Your dinner RSVP is closed. 19 are coming; the list for The Old Mill is ready to copy.', 'Dinner RSVP', 'ended', rsvpClosed),
+  signupResult: gatherFixture('Your potluck sign-up is closed. Every slot is full except Washing-up crew.', 'Potluck sign-up', 'ended', signupClosed),
+} satisfies Record<string, Fixture>;
+
+// Front desk (pa13): Marta's sea-view flat in Piran, answered by Bell. Guests, words, times and costs are made up,
+// after Mira's pa13 mockups. Times are today's clock (yesterday's when that is still ahead), as in the mockups.
+const DESK_FUNNEL = 'https://marta-mac.tail5e2c.ts.net/p/seaview';
+const DESK_WIFI = 'http://192.168.1.20:7480/p/seaview';
+const deskAt = (h: number, m: number, daysAgo = 0) => {
+  const d = new Date();
+  d.setDate(d.getDate() - daysAgo);
+  d.setHours(h, m, 0, 0);
+  // Never in the future: an answer must come after the hand-off it answers.
+  if (d.getTime() > Date.now()) d.setDate(d.getDate() - 1);
+  return d.toISOString();
+};
+const deskGuest = (id: string, name: string, creature: string, over: Record<string, unknown> = {}) => ({
+  id,
+  name,
+  creature,
+  waiting: false,
+  handoff_reason: null,
+  last: null,
+  unread: 0,
+  msgs: 0,
+  delete_on: '2026-12-08',
+  ...over,
+});
+const DESK_GUESTS = [
+  deskGuest('g-emma', 'Emma', 'beret', {
+    waiting: true,
+    handoff_reason: 'Emma asks to check out at 1 PM',
+    last: { from: 'guest', text: 'Could we check out at 1 instead of 10 on Sunday? Our ferry is at 3.', at: deskAt(14, 14) },
+    unread: 1,
+    msgs: 6,
+  }),
+  deskGuest('g-tom', 'Tom', 'visor', { last: { from: 'bot', text: 'The Wi-Fi is SeaView-5G, the password is on the fridge door.', at: deskAt(13, 41) }, msgs: 4 }),
+  deskGuest('g-yuki', 'Yuki', 'ears', { last: { from: 'guest', text: 'Thanks, found the beach towels!', at: deskAt(11, 5) }, unread: 1, msgs: 8 }),
+  deskGuest('g-luca', 'Luca', 'bulb', { last: { from: 'bot', text: 'Bins go out on Tuesday night: blue for paper, yellow for plastic.', at: deskAt(19, 30, 2) }, msgs: 3, delete_on: '2026-12-01' }),
+];
+const deskBase = {
+  title: 'Sea-view flat',
+  place: 'Piran',
+  host_name: 'Marta',
+  answer_bot: { id: 'kw-never-shown-01', name: 'Bell', sprite: 'desk', model: 'Claude Haiku 5.5' },
+  counts: { guests: 4, waiting: 1, replies_today: 23, daily_cap: 50, messages_today: 31 },
+  cap_resets_at: deskAt(24, 0),
+  cost_per_reply_usd: 0.004,
+  guide_chars: 2840,
+  guide_facts: 24,
+  guide_preview:
+    'Wi-Fi: SeaView-5G, password on the fridge door.\nCheck-in from 3 PM, check-out by 10 AM. Keys in the lockbox, code sent the day before.\nParking: the blue zone on Tartinijev trg, 2 min walk. Beach towels in the hall cupboard.',
+  guests: DESK_GUESTS,
+  join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: DESK_FUNNEL, wifi_url: DESK_WIFI },
+};
+const deskFixture = (reply: string, state: 'writing' | 'live' | 'ended', desk: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: 'pocket:seaview' },
+    code: 'seaview',
+    kit: 'desk',
+    name: 'Sea-view flat',
+    when: null,
+    state,
+    santa: null,
+    desk: { ...deskBase, ...desk },
+  });
+const deskCapGuests = [
+  deskGuest('g-ana', 'Ana', 'spikes', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'Is there a hair dryer somewhere?', at: deskAt(21, 12) }, unread: 1, msgs: 5 }),
+  deskGuest('g-emma', 'Emma', 'beret', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'What time does the bakery downstairs open?', at: deskAt(20, 48) }, unread: 1, msgs: 9 }),
+  deskGuest('g-ben', 'Ben', 'horns', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'Can we leave the bags here after check-out?', at: deskAt(20, 3) }, unread: 2, msgs: 7 }),
+  deskGuest('g-tom', 'Tom', 'visor', { last: { from: 'bot', text: 'The nearest pharmacy is on Tartinijev trg, open till 8 PM.', at: deskAt(19, 2) }, msgs: 12 }),
+];
+export const DESK_FIXTURES = {
+  setup: deskFixture("Here's the front desk for your flat. Bell answers from this guide only; check it, then start.", 'writing', { guests: [], counts: { guests: 0, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 } }),
+  address: deskFixture('The front desk needs an address that stays the same, because guests come back over days.', 'writing', {
+    guests: [],
+    counts: { guests: 0, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 },
+    start_error: 'needs_stable_address',
+    join: { mode: 'wifi', anywhere_kind: null, anywhere_url: null, wifi_url: DESK_WIFI },
+  }),
+  ready: deskFixture('The front desk is open. Print the QR for the fridge or send the link before guests arrive.', 'live', {
+    guests: [],
+    counts: { guests: 0, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 },
+  }),
+  live: deskFixture('Four guests have written today. Bell answered the rest; Emma needs you.', 'live', {}),
+  conversation: deskFixture("Here's Tom's chat.", 'live', {}),
+  waiting: deskFixture('Emma asks to check out at 1 PM. Bell never says yes to that, so it waits for you.', 'live', {}),
+  answered: deskFixture('Your answer went to Emma.', 'live', {}),
+  cap: deskFixture('Bell wrote 50 replies today, its limit. Three guests are waiting for you.', 'live', {
+    counts: { guests: 4, waiting: 3, replies_today: 50, daily_cap: 50, messages_today: 64 },
+    guests: deskCapGuests,
+  }),
+  ended: deskFixture('The front desk is stopped. Each chat is deleted 7 days after its last message.', 'ended', {
+    counts: { guests: 6, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 },
+    guests: DESK_GUESTS.map((g) => ({ ...g, waiting: false, handoff_reason: null, unread: 0 })),
+    ended: { at: '2026-12-10', deletes_on: '2026-12-17', days: 12, bot_replies: 41, host_replies: 3, messages: 58 },
+  }),
+} satisfies Record<string, Fixture>;
+/** Which guest's chat each fixture opens (DeskCard `openGuest`). */
+export const DESK_OPEN: Partial<Record<keyof typeof DESK_FIXTURES, string>> = { conversation: 'g-tom', waiting: 'g-emma', answered: 'g-emma' };
+/** `read.conversation` for the opened guests, as Lin's `?view=guest:<id>` returns it. */
+export const DESK_CONVERSATIONS: Record<string, unknown> = {
+  'g-tom': {
+    api: 1,
+    version: 3,
+    guest: { id: 'g-tom', name: 'Tom', creature: 'visor', delete_on: '2026-12-08', waiting: false, handoff_reason: null },
+    messages: [
+      { id: 'm1', from: 'guest', text: "Hi! What's the Wi-Fi password?", at: deskAt(13, 40) },
+      { id: 'm2', from: 'bot', text: 'The Wi-Fi is SeaView-5G, the password is on the fridge door.', at: deskAt(13, 40) },
+      { id: 'm3', from: 'guest', text: 'And is there parking nearby?', at: deskAt(13, 41) },
+      { id: 'm4', from: 'bot', text: 'Yes: the blue zone on Tartinijev trg, a 2-minute walk. Pay at the machine or in the app.', at: deskAt(13, 41) },
+    ],
+  },
+  'g-emma': {
+    api: 1,
+    version: 7,
+    guest: { id: 'g-emma', name: 'Emma', creature: 'beret', delete_on: '2026-12-08', waiting: true, handoff_reason: 'Emma asks to check out at 1 PM' },
+    messages: [
+      { id: 'e1', from: 'guest', text: 'Where can we buy fresh fish?', at: deskAt(9, 12) },
+      { id: 'e2', from: 'bot', text: 'The fish market by the harbour opens at 7 AM, closed on Mondays.', at: deskAt(9, 12) },
+      { id: 'e3', from: 'guest', text: 'Could we check out at 1 instead of 10 on Sunday? Our ferry is at 3.', at: deskAt(14, 13) },
+      { id: 'e4', from: 'bot', text: "I can't say yes to a late check-out, so I've asked Marta. She'll reply here.", at: deskAt(14, 14) },
+      { id: 'e5', from: 'note', text: '', note: 'handoff', at: deskAt(14, 14) },
+    ],
+  },
+};
+/** The Needs-you items (`GET /api/waiting`, kind pocket_desk) for the live and cap fixtures. */
+export const DESK_WAITING = {
+  follow_up_hours: 24,
+  items: [
+    {
+      kind: 'pocket_desk',
+      id: 'desk:seaview:g-emma',
+      pocket_code: 'seaview',
+      pocket_title: 'Sea-view flat',
+      guest_id: 'g-emma',
+      guest_name: 'Emma',
+      text: 'Emma asks to check out at 1 PM',
+      quote: 'Could we check out at 1 instead of 10 on Sunday? Our ferry is at 3.',
+      asked_at: deskAt(14, 14),
+      kwant_id: 'kw-never-shown-01',
+      kwant_name: 'Bell',
+      channel_id: null,
+      direct_kwant_id: 'kw-never-shown-01',
+      thread_id: 't-desk',
+    },
+  ],
+};
+
+// Booking Desk (pa13b): Studio Nika's haircuts in Ljubljana, after Mira's pa13b-design.md sample. "Today" is
+// Tue Dec 1 2026, 11:40 AM (the shots and tests set bookingClock to it). Names, notes and times are made up.
+export const BOOKING_TODAY = new Date(2026, 11, 1, 11, 40);
+const BK_FUNNEL = 'https://nika-mac.tail3f9a.ts.net/p/studio';
+const bkAt = (day: number, h: number, m: number) => new Date(2026, 11, day, h, m).toISOString();
+const bkPerson = (guest: string, name: string | null, at: string | null, note: string | null = null, by: 'guest' | 'host' = 'guest') => ({ guest, name, note, at, by });
+type BkPeople = Record<string, { requested?: ReturnType<typeof bkPerson>[]; confirmed?: ReturnType<typeof bkPerson>[] }>;
+/** Tue–Fri 9, 10, 11, 12, 2, 3, 4 (no 1 PM), Sat 9–12: 32 one-hour times. */
+const bkSlots = (people: BkPeople = {}) => {
+  const out: Record<string, unknown>[] = [];
+  for (const day of [1, 2, 3, 4, 5]) {
+    const hours = day === 5 ? [9, 10, 11, 12] : [9, 10, 11, 12, 14, 15, 16];
+    for (const h of hours) {
+      const start = `2026-12-0${day}T${String(h).padStart(2, '0')}:00`;
+      const who = people[start] ?? {};
+      out.push({ id: `s-120${day}-${h}`, start, minutes: 60, label: null, seats: 1, requested: who.requested ?? [], confirmed: who.confirmed ?? [] });
+    }
+  }
+  return out;
+};
+const BK_BOOKED: BkPeople = {
+  '2026-12-01T09:00': { confirmed: [bkPerson('g-mia', 'Mia', bkAt(27, 10, 2))] },
+  '2026-12-01T12:00': { confirmed: [bkPerson('g-yuki', 'Yuki', bkAt(29, 16, 20))] },
+  '2026-12-03T09:00': { confirmed: [bkPerson('g-luca', 'Luca', bkAt(30, 9, 5))] },
+  '2026-12-05T10:00': { confirmed: [bkPerson('g-ana', 'Ana', bkAt(30, 18, 44))] },
+};
+const BK_REQUESTED: BkPeople = {
+  ...BK_BOOKED,
+  '2026-12-02T10:00': { requested: [bkPerson('g-emma', 'Emma', bkAt(1, 10, 32), 'Short trim, same as last time. Thanks!')] },
+  '2026-12-04T15:00': { requested: [bkPerson('g-tom', 'Tom', bkAt(1, 11, 5))] },
+};
+const bkGuest = (id: string, name: string, creature: string, over: Record<string, unknown> = {}) => ({
+  id,
+  name,
+  creature,
+  waiting: false,
+  handoff_reason: null,
+  last: null,
+  unread: 0,
+  msgs: 2,
+  delete_on: '2026-12-09',
+  ...over,
+});
+const BK_GUESTS = [
+  bkGuest('g-tom', 'Tom', 'visor', { last: { from: 'bot', text: 'Fri 3 PM is held for you. Nika will confirm it here.', at: bkAt(1, 11, 5) } }),
+  bkGuest('g-emma', 'Emma', 'beret', { last: { from: 'bot', text: 'Wed 10 AM is held for you. Nika will confirm it here.', at: bkAt(1, 10, 32) } }),
+  bkGuest('g-ana', 'Ana', 'spikes', { last: { from: 'note', text: '', at: bkAt(30, 19, 2) } }),
+  bkGuest('g-luca', 'Luca', 'bulb', { last: { from: 'bot', text: 'See you Thursday at 9!', at: bkAt(30, 9, 30) } }),
+  bkGuest('g-yuki', 'Yuki', 'ears', { last: { from: 'guest', text: 'Thanks!', at: bkAt(29, 17, 1) } }),
+];
+const BK_BEN = bkGuest('g-ben', 'Ben', 'horns', {
+  waiting: true,
+  handoff_reason: 'Ben asks for a time you haven’t listed',
+  ask_slot_start: '2026-12-01T18:00',
+  last: { from: 'guest', text: 'Could you do Tuesday at 6 PM? I finish work at 5:30.', at: bkAt(1, 11, 21) },
+  unread: 1,
+  msgs: 3,
+});
+const bookingBase = {
+  title: 'Studio Nika',
+  place: 'Haircuts',
+  host_name: 'Nika',
+  mode: 'booking',
+  answer_bot: { id: 'kw-never-shown-02', name: 'Bell', sprite: 'desk', model: 'Claude Sonnet 4.6' },
+  counts: { guests: 5, waiting: 0, replies_today: 18, daily_cap: 50, messages_today: 24 },
+  cap_resets_at: bkAt(2, 0, 0),
+  cost_per_reply_usd: 0.02,
+  guide_chars: 412,
+  guide_facts: 6,
+  guide_preview: 'Studio Nika, Trubarjeva 12, 2nd floor (ring "Nika").\nCut 28 €, cut and wash 35 €. Pay at the salon, card or cash.',
+  guests: BK_GUESTS,
+  join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: BK_FUNNEL, wifi_url: null },
+};
+const bookingFixture = (reply: string, state: 'writing' | 'live' | 'ended', desk: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: 'pocket:studio' },
+    code: 'studio',
+    kit: 'desk',
+    name: 'Studio Nika',
+    when: null,
+    state,
+    santa: null,
+    desk: { ...bookingBase, ...desk },
+  });
+const BK_ZERO = { guests: 0, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 };
+export const BOOKING_FIXTURES = {
+  setup: bookingFixture('Here’s your booking desk. I made the week from your hours; take out any time you don’t want, then start.', 'writing', { guests: [], counts: BK_ZERO, slots: bkSlots() }),
+  setupEmpty: bookingFixture('Here’s your booking desk. Pick your days and hours, then “Fill these days”.', 'writing', { guests: [], counts: BK_ZERO, slots: [], guide_preview: null }),
+  open: bookingFixture('Studio Nika is open. 24 times are left this week.', 'live', { slots: bkSlots(BK_BOOKED) }),
+  requests: bookingFixture('Emma and Tom asked for a time. Only your Yes books it.', 'live', { slots: bkSlots(BK_REQUESTED) }),
+  manyRequests: bookingFixture('Five guests asked for a time.', 'live', {
+    slots: bkSlots({
+      ...BK_REQUESTED,
+      '2026-12-02T14:00': { requested: [bkPerson('g-sara', 'Sara', bkAt(1, 11, 10))] },
+      '2026-12-03T11:00': { requested: [bkPerson('g-ivo', 'Ivo', bkAt(1, 11, 15))] },
+      '2026-12-04T09:00': { requested: [bkPerson('g-lea', 'Lea', bkAt(1, 11, 30), 'Fringe only, please.')] },
+    }),
+  }),
+  odd: bookingFixture('Ben asks for Tuesday at 6 PM, a time you haven’t listed. It waits for you.', 'live', {
+    slots: bkSlots(BK_REQUESTED),
+    guests: [BK_BEN, ...BK_GUESTS],
+    counts: { guests: 6, waiting: 1, replies_today: 19, daily_cap: 50, messages_today: 27 },
+  }),
+  cap: bookingFixture('Bell wrote 50 replies today, its limit. Booking still works.', 'live', {
+    slots: bkSlots(BK_REQUESTED),
+    counts: { guests: 5, waiting: 0, replies_today: 50, daily_cap: 50, messages_today: 71 },
+  }),
+  ended: bookingFixture('Studio Nika is stopped. Three bookings are still coming up.', 'ended', {
+    slots: bkSlots(BK_BOOKED),
+    counts: { guests: 5, waiting: 0, replies_today: 0, daily_cap: 50, messages_today: 0 },
+    ended: { at: '2026-12-01', deletes_on: '2026-12-09', days: 6, bot_replies: 37, host_replies: 4, messages: 52 },
+  }),
+} satisfies Record<string, Fixture>;
+export const BOOKING_OPEN: Partial<Record<keyof typeof BOOKING_FIXTURES, string>> = { odd: 'g-ben' };
+export const BOOKING_CONVERSATIONS: Record<string, unknown> = {
+  'g-ben': {
+    api: 1,
+    version: 4,
+    guest: { id: 'g-ben', name: 'Ben', creature: 'horns', delete_on: '2026-12-08', waiting: true, handoff_reason: 'Ben asks for a time you haven’t listed' },
+    messages: [
+      { id: 'b1', from: 'guest', text: 'Hi! Do you have anything after work this week?', at: bkAt(1, 11, 19) },
+      { id: 'b2', from: 'bot', text: 'The latest time this week is 4 PM, Tuesday to Friday. Would one of those work?', at: bkAt(1, 11, 19) },
+      { id: 'b3', from: 'guest', text: 'Could you do Tuesday at 6 PM? I finish work at 5:30.', at: bkAt(1, 11, 21) },
+      { id: 'b4', from: 'bot', text: 'I can’t add a time myself, so I’ve asked Nika. Nika will reply here.', at: bkAt(1, 11, 21) },
+      { id: 'b5', from: 'note', text: '', note: 'handoff', at: bkAt(1, 11, 21) },
+    ],
+  },
+  'g-emma': {
+    api: 1,
+    version: 3,
+    guest: { id: 'g-emma', name: 'Emma', creature: 'beret', delete_on: '2026-12-09', waiting: false, handoff_reason: null },
+    messages: [
+      { id: 'q1', from: 'guest', text: 'Hi, is Wednesday morning free?', at: bkAt(1, 10, 30) },
+      { id: 'q2', from: 'bot', text: 'Wednesday has 9, 10 and 11 AM open. Tap one to ask for it.', at: bkAt(1, 10, 30) },
+      { id: 'q3', from: 'note', text: '', note: 'booking_requested', start: '2026-12-02T10:00', at: bkAt(1, 10, 32) },
+    ],
+  },
+};
+/** The Needs-you items on a booking desk: Emma's request (ask: booking) and Ben's odd request (ask: handoff). */
+export const BOOKING_WAITING = {
+  follow_up_hours: 24,
+  items: [
+    {
+      kind: 'pocket_desk',
+      ask: 'booking',
+      id: 'desk:studio:g-emma',
+      pocket_code: 'studio',
+      pocket_title: 'Studio Nika',
+      guest_id: 'g-emma',
+      guest_name: 'Emma',
+      text: 'Emma asks for a time',
+      quote: 'Short trim, same as last time. Thanks!',
+      slot: 's-1202-10',
+      slot_start: '2026-12-02T10:00',
+      host_name: 'Nika',
+      asked_at: bkAt(1, 10, 32),
+      kwant_id: 'kw-never-shown-02',
+      kwant_name: 'Bell',
+      thread_id: 't-studio',
+    },
+    {
+      kind: 'pocket_desk',
+      ask: 'handoff',
+      id: 'desk:studio:g-ben',
+      pocket_code: 'studio',
+      pocket_title: 'Studio Nika',
+      guest_id: 'g-ben',
+      guest_name: 'Ben',
+      text: 'Ben asks for a time you haven’t listed',
+      quote: 'Could you do Tuesday at 6 PM? I finish work at 5:30.',
+      ask_slot_start: '2026-12-01T18:00',
+      host_name: 'Nika',
+      asked_at: bkAt(1, 11, 21),
+      kwant_id: 'kw-never-shown-02',
+      kwant_name: 'Bell',
+      thread_id: 't-studio',
+    },
+  ],
+};
+
 export const FIXTURES = {
   comparison,
   chartLine,
@@ -637,3 +1156,106 @@ export function draftCardFixture(d: ReturnType<typeof quizDraftFixture>) {
     next: null,
   };
 }
+
+// ---------------------------------------------------------------------------------------------------
+// pa14 Wall: the card in every state of pa14/design.md §1, and the host views the box answers with.
+// Names, counts, sizes and addresses are made up, after Mira's card-states-1440.html.
+const WALL_CODE = 'wl8m3q';
+const WALL_WIFI = `http://192.168.1.20:7480/p/${WALL_CODE}`;
+const WALL_ANYWHERE = `https://photos.example-box.net/p/${WALL_CODE}`;
+const wallBase = {
+  state: 'open',
+  closes_at: 'Sun 12 PM',
+  delete_on: 'Tue, Jan 5',
+  host_name: 'Oleks',
+  captions: true,
+  best_set: false,
+  best_by: null,
+  counts: { total: 0, waiting: 0, approved: 0, hidden: 0, guests: 0, senders: 0 },
+  used_mb: 0,
+  pocket_cap_mb: 1024,
+  best: [],
+  best_max: 30,
+  keep_days: 30,
+  photo_cap_mb: 15,
+  per_guest_max: 40,
+};
+const wallFixture = (reply: string, state: 'live' | 'ended', wall: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: `pocket:${WALL_CODE}` },
+    code: WALL_CODE,
+    kit: 'wall',
+    name: 'Mia & Jonas’s wedding',
+    when: 'Sat, Dec 5 · photos until Sun 12 PM',
+    state,
+    join: state === 'live' ? { mode: 'anywhere', wifi_url: WALL_WIFI, anywhere_url: WALL_ANYWHERE } : null,
+    budget: { calls: 2, usd: 0.01 },
+    wall: { ...wallBase, ...wall },
+  });
+/** Approved photo ids of a closed wall, newest first. */
+export const WALL_IDS = Array.from({ length: 212 }, (_, i) => `ph_w${String(212 - i).padStart(3, '0')}`);
+const best30 = WALL_IDS.filter((_, i) => i % 7 === 0).slice(0, 30);
+const live = (waiting: number, approved: number, hidden: number, used_mb: number) => ({
+  counts: { total: waiting + approved + hidden, waiting, approved, hidden, guests: 34, senders: 22 },
+  used_mb,
+});
+const closed = { state: 'closed', counts: { total: 214, waiting: 0, approved: 212, hidden: 2, guests: 41, senders: 41 }, used_mb: 905 };
+export const WALL_FIXTURES = {
+  ready: wallFixture("Your photo wall is ready. Share the link or put the QR on the tables; photos wait for you before anyone sees them.", 'live', {}),
+  waiting: wallFixture('9 new photos are waiting. Mia sent 4 in a row; you can approve all of hers at once.', 'live', live(9, 119, 1, 452)),
+  caughtUp: wallFixture("You're all caught up. 128 photos are on the wall.", 'live', live(0, 128, 1, 488)),
+  space: wallFixture('The photo space is almost full. About 20 more photos fit.', 'live', { ...live(3, 209, 0, 948) }),
+  picking: wallFixture("The wall closed at noon with 212 photos. I'm picking the best 30 for you to look over.", 'ended', { ...closed, picking: true }),
+  picked: wallFixture('I picked 30 photos. Swap any, then show them to guests.', 'ended', { ...closed, best: best30, best_by: 'snap' }),
+  shown: wallFixture('Good morning! The wall closed at noon with 212 photos. I picked the best 30 and showed them to guests after you said yes.', 'ended', {
+    ...closed,
+    best: best30,
+    best_set: true,
+    best_by: 'snap',
+  }),
+  shownByHost: wallFixture('Your best 30 are on the guests’ page now.', 'ended', { ...closed, best: best30, best_set: true, best_by: null }),
+};
+
+type HostPhotoFixture = { id: string; by: string; by_name: string; creature: number; caption: string | null; caption_removed: boolean; at: string; bytes: number; type: string; w: number; h: number; rotate: number; status: string; best: boolean };
+const GUESTS = [
+  { by: 'pl_mia', by_name: 'Mia Novak', creature: 4 },
+  { by: 'pl_leo', by_name: 'Leo Brandt', creature: 1 },
+  { by: 'pl_priya', by_name: 'Priya Shah', creature: 2 },
+  { by: 'pl_sam', by_name: 'Sam Okafor', creature: 3 },
+  { by: 'pl_ana', by_name: 'Ana Ruiz', creature: 7 },
+  { by: 'pl_jonas', by_name: 'Jonas Weber', creature: 6 },
+];
+const CAPTIONS = ['First dance!', 'Cake time', null, 'Grandma on the dance floor', 'The toast', null, 'Sparklers outside', 'Table 4 says hi'];
+const photo = (id: string, g: (typeof GUESTS)[number], i: number, status: string, best = false): HostPhotoFixture => ({
+  id,
+  ...g,
+  caption: CAPTIONS[i % CAPTIONS.length],
+  caption_removed: false,
+  at: new Date(Date.UTC(2026, 11, 5, 20, 41 - (i % 40))).toISOString(),
+  bytes: 2_400_000 + ((i * 337_000) % 3_100_000),
+  type: 'image/jpeg',
+  w: i % 5 === 3 ? 3024 : 4032,
+  h: i % 5 === 3 ? 4032 : 3024,
+  rotate: i % 9 === 4 ? 90 : 0,
+  status,
+  best,
+});
+/** Mia 4, Leo 1, Priya 2, Sam 1, Ana 1: oldest first, as the box sends the queue. */
+const QUEUE_ORDER = [0, 0, 1, 0, 2, 0, 3, 2, 4];
+const queueOf = (n: number) => QUEUE_ORDER.slice(0, n).map((g, i) => photo(`ph_q${i + 1}`, GUESTS[g], i, 'pending'));
+const wallOf = (n: number, best: string[] = []) => WALL_IDS.slice(0, n).map((id, i) => photo(id, GUESTS[i % GUESTS.length], i + 3, 'approved', best.includes(id)));
+const view = (fx: Fixture, queue: HostPhotoFixture[], wall: HostPhotoFixture[]) => {
+  const w = (fx.results.blocks[0] as unknown as { wall: Record<string, unknown> }).wall;
+  return { ...w, limits: { photo_cap_mb: 15, pocket_cap_mb: 1024, per_guest_max: 40, caption_max: 80 }, queue, wall };
+};
+/** `host_view` per fixture, as `GET /api/pockets/:code` and every action answer with it. */
+export const WALL_HOST_VIEWS: Record<keyof typeof WALL_FIXTURES, Record<string, unknown>> = {
+  ready: view(WALL_FIXTURES.ready, [], []),
+  waiting: view(WALL_FIXTURES.waiting, queueOf(9), wallOf(119)),
+  caughtUp: view(WALL_FIXTURES.caughtUp, [], wallOf(128)),
+  space: view(WALL_FIXTURES.space, queueOf(3), wallOf(209)),
+  picking: view(WALL_FIXTURES.picking, [], wallOf(212)),
+  picked: view(WALL_FIXTURES.picked, [], wallOf(212, best30)),
+  shown: view(WALL_FIXTURES.shown, [], wallOf(212, best30)),
+  shownByHost: view(WALL_FIXTURES.shownByHost, [], wallOf(212, best30)),
+};

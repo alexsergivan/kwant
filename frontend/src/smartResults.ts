@@ -351,6 +351,256 @@ export interface SantaInfo {
   join: { mode: 'anywhere' | 'wifi' | 'none'; anywhere_kind: 'https' | 'funnel' | null; anywhere_url: string | null; wifi_url: string | null } | null;
 }
 
+/** pa10b: the gather kit's three faces on one engine. */
+export type GatherFace = 'signup' | 'rsvp' | 'vote';
+/** open (taking answers), closed (final), tie (a vote's final round tied: the host picks or re-runs for 24 h). */
+export type GatherPhase = 'open' | 'closed' | 'tie';
+export type GatherAnswer = 'yes' | 'maybe' | 'no';
+/** One row in People and paid (host view only), every player, answered or not. Never a ballot. */
+export interface GatherPerson {
+  id: string;
+  name: string;
+  avatar: string | null;
+  answer: GatherAnswer | null;
+  plus_ones: number;
+  /** "vegetarian, no mushrooms" (food keys in words, then food_other); null: none. */
+  food: string | null;
+  /** The host's paid tick (`paid_at` set); null on rows that aren't Yes. */
+  paid: boolean | null;
+}
+export interface GatherSlot {
+  /** The slot's index as text. */
+  id: string;
+  name: string;
+  cap: number;
+  /** Who's in, with their note ("lentil stew"), in join order. */
+  who: Array<{ name: string; avatar: string | null; note: string | null }>;
+  /** First names on this slot's FIFO waiting list, first in line first. */
+  waiting: string[];
+  waiting_count: number;
+}
+/** A count line: an option and its votes (1st choices while open, the final round once closed). */
+export interface GatherCount {
+  name: string;
+  votes: number;
+}
+/** One round of the ranked count ("How it was counted"). `out` is who dropped out after it. */
+export interface GatherRound {
+  counts: GatherCount[];
+  out: string[];
+  /** Ballots with no choice left. */
+  exhausted: number;
+}
+/** Lin's draft kinds. A vote's missing member is not_answered. */
+export type GatherKind = 'maybe' | 'not_paid' | 'moved_up' | 'not_answered';
+/** A Chaser draft for one person (host view only). Nothing sends: the host copies or shares it. */
+export interface GatherNudge {
+  /** The draft's `to`, lowercased: the card's row key. */
+  key: string;
+  /** The draft's `to` as the host typed it; `copied` sends it back. */
+  name: string;
+  /** Null for a listed member who never joined. */
+  player_id: string | null;
+  avatar: string | null;
+  why: GatherKind;
+  /** With `{link}` filled with the join link the card shows. */
+  text: string;
+  /** "9:12 PM" or "Mon 9:12 PM": when the host last copied it; null: never. */
+  copied_at: string | null;
+  /** Inside the 48 h window: "Thu 6:40 PM", the next time a copy is allowed; null: copy now. */
+  until: string | null;
+}
+/**
+ * The gather card's view. On the wire, block.gather is Lin's `host_view` plus the pocket's `title` and
+ * `expires_at` (pa10b/server-shape.md); validGather turns it into this, with times in the person's own zone.
+ * Who voted is a list of names apart from the counts: no person ever carries a ballot.
+ */
+export interface GatherInfo {
+  face: GatherFace;
+  phase: GatherPhase;
+  /** "End-of-season dinner" */
+  title: string;
+  /** "Sat, Dec 12 · 7:30 PM" */
+  when: string | null;
+  /** "The Old Mill" */
+  place: string | null;
+  /** "€35 each, paid to Oleks" */
+  price: string | null;
+  /** "Thu, Dec 10 at 8:00 PM"; null: no closing time. */
+  closes_at: string | null;
+  /** "Sat, Dec 12"; null: no event (a vote). */
+  event_at: string | null;
+  /** "Sat, Dec 19" (pocket.expires_at) */
+  deletes_on: string;
+  /** The host's first name ("Oleks"), for "Tie: Oleks picks". */
+  host_name: string | null;
+  /** Members see names and Yes / Maybe / No (RSVP) or the live count after voting (vote). */
+  show_names: boolean;
+  /** Members on the host's list; null without a list. */
+  members: number | null;
+  /** Listed members who haven't answered or voted. */
+  not_answered: string[];
+  rsvp: {
+    yes: number;
+    maybe: number;
+    no: number;
+    plus_ones: number;
+    /** yes + plus-ones */
+    coming: number;
+    maybe_names: string[];
+    no_names: string[];
+    /** Members on the host's list who never answered; null without a list. */
+    never: number | null;
+    /** "3 vegetarian, 1 vegan, 1 nut allergy, 1 gluten-free"; null: none. */
+    food: string | null;
+    /** Host-only. Null when the RSVP has no price. */
+    paid: { ticked: number; of: number; not_yet: string[] } | null;
+  } | null;
+  /** Sign-up slots in the host's order. */
+  slots: GatherSlot[];
+  /** Sign-up: the newest move up from a waiting list the host hasn't seen (state 6); `more` others. */
+  moved_up: { name: string; slot: string; at: string; note: string | null; more: number } | null;
+  vote: {
+    kind: 'one_pick' | 'ranked';
+    voted: number;
+    members: number | null;
+    /** Who voted, first names and creatures only (never what they picked). */
+    voters: Array<{ name: string; avatar: string | null }>;
+    /** The places in play (after a revote, only the tied ones). */
+    options: Array<{ option: number; name: string }>;
+    /** Open: 1st choices; closed or tie: the final round. Every place in play. */
+    counts: GatherCount[];
+    rounds: GatherRound[];
+    winner: string | null;
+    outcome: 'winner' | 'tie' | 'picked' | 'no_votes' | null;
+    /** The tied places, with the option index `pick` sends. */
+    tied: Array<GatherCount & { option: number }>;
+  } | null;
+  people: GatherPerson[];
+  nudges: GatherNudge[];
+  /** How members join: as santa (own https, else Tailscale Funnel, else Same Wi-Fi). Never a quick tunnel. */
+  join: SantaInfo['join'];
+}
+
+/** pa13 front desk: one guest on the host's list (Lin's `host/state` guests, newest activity first). */
+export interface DeskGuest {
+  id: string;
+  /** First name or nickname the guest typed. */
+  name: string;
+  creature: string | null;
+  waiting: boolean;
+  /** "Late check-out: 2 PM, Sun Dec 8" or a short label ("Bell couldn't answer this message"); null when not waiting. */
+  handoff_reason: string | null;
+  /** The newest message, cut to 90 characters by the server; null before the guest writes. */
+  last: { from: DeskFrom; text: string; at: string } | null;
+  unread: number;
+  msgs: number;
+  /** "2026-12-14": when this guest's chat is deleted; null before they write. */
+  delete_on: string | null;
+  /** pa13b, a booking desk's hand-off that names a time the host hasn't listed ("2026-12-01T18:00"); else null. */
+  ask_slot_start?: string | null;
+}
+export type DeskFrom = 'guest' | 'bot' | 'host' | 'note';
+/** One message in a guest's conversation (`?view=guest:<id>` → `conversation.messages`). */
+export interface DeskMessage {
+  id: string;
+  from: DeskFrom;
+  text: string;
+  at: string;
+  note: 'handoff' | 'host_away' | 'daily_cap' | 'booking_requested' | 'booking_confirmed' | 'booked_by_host' | 'booking_declined' | 'booking_cancelled' | null;
+  /** pa13b booking notes: the slot's wall-clock start ("2026-12-02T10:00"). */
+  start?: string | null;
+}
+
+/** pa13b: one person on a slot (host view). `name` is null once that guest's chat is deleted. */
+export interface DeskSlotPerson {
+  guest: string;
+  name: string | null;
+  note: string | null;
+  at: string | null;
+  by: 'guest' | 'host' | null;
+}
+/** pa13b: one time on a booking desk. `start` is the studio's wall-clock time, never converted. */
+export interface DeskSlot {
+  /** The server's id; null for a time the host just added and hasn't saved. */
+  id: string | null;
+  start: string;
+  minutes: number;
+  label: string | null;
+  seats: number;
+  requested: DeskSlotPerson[];
+  confirmed: DeskSlotPerson[];
+}
+/** pa13b: the booking part of a desk (`spec.mode: "booking"`). */
+export interface DeskBooking {
+  slots: DeskSlot[];
+  open_left: number;
+  requests: number;
+  booked_upcoming: number;
+  booked_total: number;
+}
+
+/**
+ * The front desk card's view (pa13). On the wire, block.desk is Lin's host summary (`GET /api/pockets/:code` →
+ * `summary`) plus the face (`title`, `place`, `host_name`) and the desk's own `join`; validDesk turns it into this.
+ * The answering bot's id is never kept: only its name and model.
+ */
+export interface DeskInfo {
+  title: string;
+  place: string | null;
+  host_name: string | null;
+  bot: { name: string; model: string | null };
+  counts: { guests: number; waiting: number; replies_today: number; daily_cap: number; messages_today: number };
+  /** RFC 3339 or display text; null: "midnight". */
+  cap_resets_at: string | null;
+  cost_per_reply_usd: number | null;
+  guide_chars: number | null;
+  guide_facts: number | null;
+  /** Set-up only: the start of the house guide as the host pasted it. */
+  guide_preview: string | null;
+  guests: DeskGuest[];
+  join: SantaInfo['join'];
+  /** Set-up: the start was refused for want of an address that stays the same (409 no_quick_tunnel / needs_stable_address). */
+  needs_address: boolean;
+  /** Stopped: the day it stopped, and when the last chat goes. Totals fall back to counts. */
+  ended: { at: string | null; deletes_on: string | null; days: number | null; bot_replies: number | null; host_replies: number | null; messages: number | null } | null;
+  /** pa13b: "guide" (pa13a, the default) or "booking". */
+  mode?: 'guide' | 'booking';
+  /** pa13b: the times, when mode is "booking"; else null. */
+  booking?: DeskBooking | null;
+}
+
+/**
+ * The wall kit's host facts on a Pocket card (pa14/card-impl.md "Shape I read"): Juno's host summary (#1139,
+ * server-impl.md "Host view" without `limits`, `queue` and `wall`) plus display text the bot writes. Counts,
+ * sizes in MB and photo ids only: the photo lists come from the box when the card opens, never in the block.
+ */
+export interface WallInfo {
+  state: 'open' | 'closed';
+  /** "Sun 12 PM": when uploads close (display text). */
+  closes_at: string | null;
+  /** "Tue, Jan 5": when the photos leave the box (display text). */
+  delete_on: string | null;
+  /** The host's first name for guest-facing lines ('Oleks can make room'); null when unset. */
+  host_name: string | null;
+  captions: boolean;
+  best_set: boolean;
+  /** pa14b: "snap" when Snap's check picked the best set; anything else (or null) is the host's own pick. */
+  best_by: string | null;
+  counts: { total: number; waiting: number; approved: number; hidden: number; guests: number; senders: number };
+  used_mb: number;
+  pocket_cap_mb: number;
+  /** Photo ids in the best set (≤ best_max), or proposed while `best_set` is false. */
+  best: string[];
+  best_max: number;
+  keep_days: number;
+  /** Spec limits for the meter line; null when the bot didn't send them. */
+  photo_cap_mb: number | null;
+  per_guest_max: number | null;
+  /** pa14b: Snap is picking the best 30 now (closed, nothing proposed yet). */
+  picking: boolean;
+}
+
 /**
  * A pocket app's card in chat (pa4, pa0a/design.md §1 and §6); source is always slot. Every time and
  * date is display text the server wrote for the person's time zone ("Fri, Nov 27 · 8:00 PM").
@@ -383,7 +633,9 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   /** Live: the game so far. */
   live: { players: number; teams: number; leader: { name: string; points: number } | null; now: string | null; palettes: string[] } | null;
   /** Ready and live: how friends join. A URL that isn't known yet is null. */
-  join: { mode: PocketJoinMode; wifi_url: string | null; anywhere_url: string | null } | null;
+  join: { mode: PocketJoinMode; wifi_url: string | null; anywhere_url: string | null; quick_tunnel?: boolean } | null;
+  /** pa11: the class quiz's own line (`pocket.notice`), shown as is. Absent on a normal quiz. */
+  notice?: string;
   /** Ended: "10:12 PM", the winner, the stats line, the deletion date ("Fri, Dec 4"). */
   ended: { at: string; winner: { name: string; points: number } | null; stats: string | null; deletes_on: string | null } | null;
   /** Bot calls and spend so far on the person's account. */
@@ -392,6 +644,12 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   results: PocketResults | null;
   /** kit "santa" only: the Secret Santa card (pa10a). `state` is "live" until the phase is "ended". */
   santa: SantaInfo | null;
+  /** kit "wall" only: the photo wall card (pa14). `state` is "live" while open, "ended" once closed. */
+  wall?: WallInfo | null;
+  /** kit "gather" only (pa10b): Sign-up, RSVP or Vote. `state` is "live" until the phase is "closed". */
+  gather?: GatherInfo | null;
+  /** kit "desk" only (pa13): the front desk (Guest Guide). `state` is "writing" in set-up, "live", then "ended". */
+  desk?: DeskInfo | null;
   /** pa4c: the quiz_drafts id (the bot card's `id`) that Edit questions opens. Null or absent: no editor. */
   draft?: string | null;
   /** pa4c: questions the person wrote or changed themselves (not source-checked). */

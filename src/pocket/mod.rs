@@ -12,15 +12,22 @@
 //! each of whom then draws its own view from the snapshot.
 
 pub mod address;
+pub mod desk;
+pub mod gather;
 pub mod guest;
 pub mod host_api;
 pub mod keys;
 pub mod kits;
 pub mod limits;
 pub mod listener;
+pub mod photo;
+pub mod queue;
+pub mod quiz_kit;
 pub mod santa;
 pub mod schedule;
 pub mod tunnel;
+pub mod wall;
+pub mod wall_pick;
 pub mod words;
 
 use crate::config::Config;
@@ -109,6 +116,11 @@ pub struct Hub {
     pub tunnel: tunnel::Tunnels,
     /// macOS: `caffeinate` held while a tunnel or an open pocket runs.
     pub awake: tunnel::KeepAwake,
+    /// Tests only: the free disk space the Wall's upload check sees (pa14), instead of the disk's.
+    fake_free_disk: Mutex<Option<u64>>,
+    /// pa14b: the walls whose best-30 pick runs in this process now, with the bot running it.
+    /// A pick the state says runs but that isn't here was cut off by a restart.
+    picks: Mutex<HashMap<String, String>>,
 }
 
 impl Hub {
@@ -124,6 +136,15 @@ impl Hub {
         if let Some(tx) = self.channels.lock().unwrap_or_else(|e| e.into_inner()).get(code) {
             let _ = tx.send(s);
         }
+    }
+
+    /// Tests only: make the Wall's free-disk check see `bytes` (`None`: the real disk again).
+    pub fn set_fake_free_disk(&self, bytes: Option<u64>) {
+        *self.fake_free_disk.lock().unwrap_or_else(|e| e.into_inner()) = bytes;
+    }
+
+    fn fake_free_disk(&self) -> Option<u64> {
+        *self.fake_free_disk.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn touch(&self, code: &str) {
@@ -208,7 +229,7 @@ pub type PResult<T> = Result<T, PocketError>;
 
 fn effective_rules(kit: &dyn Kit, spec: &Value) -> KitRules {
     let mut r = kit.rules(spec);
-    r.max_players = r.max_players.clamp(1, kits::DEFAULT_MAX_PLAYERS);
+    r.max_players = r.max_players.clamp(1, kit.player_ceiling(spec).min(kits::MAX_CEILING));
     r
 }
 
@@ -252,7 +273,9 @@ async fn changed(state: &AppState, code: &str) -> PResult<()> {
 /// The public facts about a pocket (no names, no guest text): for the join page and the card.
 pub fn pocket_json(s: &Snapshot) -> Value {
     let rules = s.rules();
-    json!({
+    // pa13a: a front desk guest never learns how many other guests there are
+    let private = s.kit().is_some_and(|k| k.private_guests());
+    let mut out = json!({
         "code": s.row.code,
         "kit": s.row.kit,
         "title": s.row.title,
@@ -265,7 +288,14 @@ pub fn pocket_json(s: &Snapshot) -> Value {
         "max_players": rules.as_ref().map(|r| r.max_players),
         "needs_pin": rules.as_ref().is_some_and(|r| r.needs_pin),
         "retention": rules.as_ref().map(|r| r.retention.describe()),
-    })
+        "first_names_only": s.kit().is_some_and(|k| k.first_names_only(&s.spec)),
+        "notice": s.kit().and_then(|k| k.notice(&s.spec)),
+    });
+    if private {
+        out["players"] = Value::Null;
+        out["max_players"] = Value::Null;
+    }
+    out
 }
 
 /// What one viewer gets, the same over `state` and `ws`: `{api, version, pocket, me, view}`.
@@ -296,6 +326,21 @@ pub fn view_json(s: &Snapshot, viewer: &Viewer, now: DateTime<Utc>) -> Value {
     })
 }
 
+/// pa13a: one part of the host's view by key (`guest:<id>`: a front desk conversation), for the
+/// remote and the person's card: `{api, version, ...the kit's part}`; 404 when there's no such part.
+pub fn host_detail_json(s: &Snapshot, key: &str, now: DateTime<Utc>) -> PResult<Value> {
+    let kit = s.kit().ok_or_else(PocketError::not_found)?;
+    let ctx = KitCtx::new(&s.spec, &s.players, now);
+    let mut part = kit
+        .host_detail(&ctx, &s.kit_state, key)
+        .ok_or_else(|| PocketError::new(StatusCode::NOT_FOUND, "no_such_player", "That player isn't in this pocket."))?;
+    if let Some(o) = part.as_object_mut() {
+        o.insert("api".into(), json!(API_VERSION));
+        o.insert("version".into(), json!(s.row.version));
+    }
+    Ok(part)
+}
+
 // ---- Creating and ending (the person's side) ----
 
 /// What the bot or the person asks for (`POST /api/pockets`, and pa3's tools).
@@ -316,11 +361,18 @@ pub struct CreateRequest {
 }
 
 /// Makes a pocket; returns it and its host key (shown once, kept only as a hash).
-pub async fn create(state: &AppState, req: CreateRequest) -> PResult<(Arc<Snapshot>, String)> {
+pub async fn create(state: &AppState, mut req: CreateRequest) -> PResult<(Arc<Snapshot>, String)> {
     let kit = kits::kit(&req.kit).ok_or_else(|| PocketError::new(StatusCode::BAD_REQUEST, "unknown_kit", format!("There's no kit called {:?}.", req.kit)))?;
+    if kit.answer_bot() {
+        fill_answer_bot(state, &mut req).await?;
+    }
     let spec_text = serde_json::to_string(&req.spec).map_err(|_| PocketError::internal())?;
     if spec_text.len() > MAX_SPEC_BYTES {
         return Err(PocketError::new(StatusCode::PAYLOAD_TOO_LARGE, "spec_too_big", "The spec is bigger than 256 KB."));
+    }
+    // pa13b: a booking desk's slots have their own error, with the first bad slot's index
+    if kit.id() == desk::ID {
+        desk::check_spec_slots(&req.spec).map_err(kit_refusal)?;
     }
     kit.validate_spec(&req.spec).map_err(|m| PocketError::new(StatusCode::BAD_REQUEST, "bad_spec", m))?;
     if let (Some(o), Some(c)) = (req.opens_at, req.closes_at) {
@@ -375,6 +427,35 @@ pub async fn create(state: &AppState, req: CreateRequest) -> PResult<(Arc<Snapsh
     Err(PocketError::internal())
 }
 
+/// pa13a: a kit whose guests a bot answers (the front desk) needs that bot: the spec's
+/// `answer_bot`, else the bot that made the pocket. The spec then holds its id and its face
+/// (`bot: {name, sprite}`) for the views; guests never see the id.
+async fn fill_answer_bot(state: &AppState, req: &mut CreateRequest) -> PResult<()> {
+    let id = req.spec.get("answer_bot").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty()).map(str::to_string).or_else(|| req.owner_kwant_id.clone());
+    let needs_bot = || PocketError::new(StatusCode::BAD_REQUEST, "needs_bot", "Pick the bot that answers guests (answer_bot).");
+    let id = id.ok_or_else(needs_bot)?;
+    let bot = state.db.get_kwant(&id).await?.ok_or_else(needs_bot)?;
+    if let Some(spec) = req.spec.as_object_mut() {
+        spec.insert("answer_bot".into(), json!(bot.id));
+        spec.insert("bot".into(), json!({ "name": bot.name, "sprite": desk::SPRITE }));
+    }
+    Ok(())
+}
+
+/// How long a pocket that keeps nothing after it ends (`Retention::AtEnd`, a class quiz) may stay
+/// open with no closing time before the minute tick ends it for the host (pa11 qa F1): a lesson
+/// is long over by then, and a quiz nobody pressed End on must not keep its players for good.
+pub const AT_END_MAX_OPEN: chrono::Duration = chrono::Duration::hours(12);
+
+/// `true` for an open `AtEnd` pocket with no closing time that opened [`AT_END_MAX_OPEN`] or more
+/// before `now`. A pocket with a closing time is ended at that time instead.
+pub fn abandoned(s: &Snapshot, now: DateTime<Utc>) -> bool {
+    s.row.state == OPEN
+        && s.row.closes_at.is_none()
+        && s.rules().is_some_and(|r| matches!(r.retention, kits::Retention::AtEnd))
+        && s.row.opens_at.unwrap_or(s.row.created_at).max(s.row.created_at) + AT_END_MAX_OPEN <= now
+}
+
 /// Ends an open pocket and sets when its data goes (from the kit's retention).
 pub async fn end(state: &AppState, code: &str) -> PResult<Arc<Snapshot>> {
     let lock = state.pocket.lock_for(code);
@@ -416,12 +497,33 @@ pub async fn delete(state: &AppState, code: &str) -> PResult<bool> {
     let lock = state.pocket.lock_for(code);
     let gone = {
         let _g = lock.lock().await;
-        state.db.pocket_delete(code).await?
+        // pa13a: the bot's conversations with the guests go with the pocket
+        let threads = snapshot(state, code).await?.and_then(|s| s.kit().map(|k| k.owned_threads(&s.kit_state))).unwrap_or_default();
+        let gone = state.db.pocket_delete(code).await?;
+        drop_threads(state, &threads).await;
+        // pa14: the Wall's photo files go with the pocket
+        wall::remove_files(state, code).await;
+        gone
     };
     state.pocket.tunnel.release(code);
     state.pocket.signal(code, Signal::Deleted);
     state.pocket.forget(code);
     Ok(gone)
+}
+
+/// pa13a: deletes kwant threads a kit no longer points at (a guest's conversation with the bot).
+async fn drop_threads(state: &AppState, threads: &[String]) {
+    for t in threads {
+        if let Err(e) = state.db.delete_thread_with_messages(t).await {
+            tracing::warn!("pocket apps: couldn't delete a guest's conversation: {e}");
+        }
+    }
+}
+
+/// Threads in `before` but not in `after`.
+fn threads_gone(kit: &dyn Kit, before: &Value, after: &Value) -> Vec<String> {
+    let kept = kit.owned_threads(after);
+    kit.owned_threads(before).into_iter().filter(|t| !kept.contains(t)).collect()
 }
 
 /// A new host key for the remote; the old one stops working at once, and so do host links
@@ -569,33 +671,48 @@ fn open_check(s: &Snapshot, now: DateTime<Utc>) -> PResult<()> {
 
 /// A new player: returns the player and the guest key for the cookie.
 pub async fn join(state: &AppState, code: &str, req: JoinRequest) -> PResult<(PlayerRow, String)> {
-    let (name, name_key) = words::clean_name(&req.name).map_err(|e| PocketError::new(StatusCode::BAD_REQUEST, e.code(), e.message()))?;
-    let avatar = clean_avatar(req.avatar.as_deref())?;
-    let team = clean_team(req.team.as_deref())?;
+    let cleaned = words::clean_name(&req.name).map_err(|e| PocketError::new(StatusCode::BAD_REQUEST, e.code(), e.message()));
+    let avatar = clean_avatar(req.avatar.as_deref());
+    let team = clean_team(req.team.as_deref());
     let lock = state.pocket.lock_for(code);
     let _g = lock.lock().await;
-    let s = snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
+    let s = snapshot(state, code).await?;
+    let id = keys::new_player_id();
+    // A nameless kit (the queue, pa11b): the guest sends nothing and gets a key; whatever came in
+    // the body is dropped, and the player's name key is its own id so it never collides
+    let nameless = s.as_ref().and_then(|s| s.kit()).is_some_and(|k| k.nameless_join());
+    let (name, name_key, avatar, team) = if nameless {
+        (String::new(), id.clone(), String::new(), None)
+    } else {
+        let (name, name_key) = cleaned?;
+        (name, name_key, avatar?, team?)
+    };
+    let s = s.ok_or_else(PocketError::not_found)?;
     let kit = s.kit().ok_or_else(PocketError::not_found)?;
     let rules = effective_rules(kit, &s.spec);
     let now = Utc::now();
     open_check(&s, now)?;
+    if !nameless && kit.first_names_only(&s.spec) {
+        words::first_name_only(&name).map_err(|e| PocketError::new(StatusCode::BAD_REQUEST, e.code(), e.message()))?;
+    }
     let pin = match (rules.needs_pin, req.pin.as_deref()) {
         (true, Some(p)) if keys::valid_pin(p) => Some(p),
         (true, _) => return Err(PocketError::new(StatusCode::BAD_REQUEST, "pin_required", "Pick a 4-digit PIN.")),
         (false, _) => None,
     };
-    if let Some(existing) = state.db.pocket_player_by_name(code, &name_key).await? {
-        return Err(if existing.removed_at.is_some() {
-            PocketError::new(StatusCode::FORBIDDEN, "removed", "The host removed this name.")
-        } else {
-            PocketError::new(StatusCode::CONFLICT, "name_taken", "Someone already joined with that name. If it's you, open your page again.")
-        });
+    if !nameless {
+        if let Some(existing) = state.db.pocket_player_by_name(code, &name_key).await? {
+            return Err(if existing.removed_at.is_some() {
+                PocketError::new(StatusCode::FORBIDDEN, "removed", "The host removed this name.")
+            } else {
+                PocketError::new(StatusCode::CONFLICT, "name_taken", "Someone already joined with that name. If it's you, open your page again.")
+            });
+        }
     }
     if s.players.len() >= rules.max_players {
         return Err(PocketError::new(StatusCode::CONFLICT, "full", "It's full.").with(json!({ "max_players": rules.max_players })));
     }
     kit.admit(&KitCtx::new(&s.spec, &s.players, now), &s.kit_state, &name_key).map_err(kit_refusal)?;
-    let id = keys::new_player_id();
     let salt = keys::new_salt();
     let pin_hash = pin.map(|p| keys::hash_secret(p, &salt));
     state
@@ -630,7 +747,12 @@ async fn save(state: &AppState, code: &str, kit_state: &Value, ctx: KitCtx<'_>, 
         ctx.events.into_iter().map(|e| (e.player_id, e.kind, serde_json::to_string(&e.payload).unwrap_or_else(|_| "{}".into()))).collect();
     let text = serde_json::to_string(kit_state).map_err(|_| PocketError::internal())?;
     state.db.pocket_save_state(code, &text, &events, now).await?;
-    changed(state, code).await
+    changed(state, code).await?;
+    // pa14: a photo the save hid loses its file now
+    if let Some(s) = snapshot(state, code).await?.filter(|s| s.row.kit == wall::ID) {
+        wall::prune(state, &s).await;
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Default, serde::Deserialize)]
@@ -776,21 +898,74 @@ pub async fn act(state: &AppState, code: &str, actor: &Viewer, name: &str, body:
     if !allowed.contains(&name) {
         return Err(PocketError::new(StatusCode::BAD_REQUEST, "unknown_action", "That action isn't one this pocket knows.").with(json!({ "actions": allowed })));
     }
-    if s.row.state == ENDED {
+    // pa14b: a few host actions still work while an ended pocket's data is kept (the wall's
+    // `set_best`, so the host can show the next morning's best 30)
+    if s.row.state == ENDED && !(*actor == Viewer::Host && kit.host_actions_after_end().contains(&name)) {
         return Err(PocketError::new(StatusCode::GONE, "ended", "This pocket app has ended."));
     }
     let now = Utc::now();
     let mut kit_state = s.kit_state.clone();
     let mut ctx = KitCtx::new(&s.spec, &s.players, now);
     kit.act(&mut ctx, &mut kit_state, actor, name, body).map_err(kit_refusal)?;
-    save(state, code, &kit_state, ctx, now).await
+    let snap_shown = ctx.events.iter().any(|e| e.kind == wall::SNAP_SHOWN_EVENT);
+    save(state, code, &kit_state, ctx, now).await?;
+    if snap_shown {
+        wall_pick::say_shown(state, code).await;
+    }
+    // pa3b: a guest's quiz answer may be a near miss; the live judge looks at it off this request
+    if matches!(actor, Viewer::Guest(_)) && name == "answer" {
+        crate::server::quizmaster_live::after_answer(state, code, kit.id());
+    }
+    // pa13a: a guest's message goes to the bot, a host's reply into the bot's thread
+    if kit.id() == desk::ID {
+        crate::server::desk_turns::after_act(state, code, actor, name, body).await;
+    }
+    Ok(())
 }
 
 fn kit_refusal(e: KitError) -> PocketError {
     match e {
         KitError::BadInput(m) => PocketError::new(StatusCode::BAD_REQUEST, "bad_action", m),
         KitError::NotNow(m) => PocketError::new(StatusCode::CONFLICT, "not_now", m),
+        KitError::Coded { status, code, message, extra } => {
+            PocketError::new(StatusCode::from_u16(status).unwrap_or(StatusCode::CONFLICT), code, message).with(extra)
+        }
     }
+}
+
+/// pa3b: the bot's strict judge settles a near miss (`{q, player, verdict}`) under the pocket's
+/// lock, then saves and pushes views like a host action. Server side only: no route calls this.
+pub async fn judge(state: &AppState, code: &str, body: &Value) -> PResult<()> {
+    let lock = state.pocket.lock_for(code);
+    let _g = lock.lock().await;
+    let s = snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
+    let kit = s.kit().ok_or_else(PocketError::not_found)?;
+    if s.row.state == ENDED {
+        return Err(PocketError::new(StatusCode::GONE, "ended", "This pocket app has ended."));
+    }
+    let now = Utc::now();
+    let mut kit_state = s.kit_state.clone();
+    let mut ctx = KitCtx::new(&s.spec, &s.players, now);
+    kit.judge(&mut ctx, &mut kit_state, body).map_err(kit_refusal)?;
+    save(state, code, &kit_state, ctx, now).await
+}
+
+/// pa13a: one step of the server's own work on a pocket (the front desk's bot turns), under the
+/// pocket's lock, saved and pushed like an action. Server side only: no route calls this.
+pub async fn server_event(state: &AppState, code: &str, name: &str, body: &Value) -> PResult<Value> {
+    let lock = state.pocket.lock_for(code);
+    let _g = lock.lock().await;
+    let s = snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
+    let kit = s.kit().ok_or_else(PocketError::not_found)?;
+    if s.row.state == ENDED {
+        return Err(PocketError::new(StatusCode::GONE, "ended", "This pocket app has ended."));
+    }
+    let now = Utc::now();
+    let mut kit_state = s.kit_state.clone();
+    let mut ctx = KitCtx::new(&s.spec, &s.players, now);
+    let out = kit.server_event(&mut ctx, &mut kit_state, name, body).map_err(kit_refusal)?;
+    save(state, code, &kit_state, ctx, now).await?;
+    Ok(out)
 }
 
 /// The host removes a player: their keys stop working and the kit forgets them.
@@ -811,7 +986,36 @@ pub async fn remove_player(state: &AppState, code: &str, player_id: &str) -> PRe
     let mut kit_state = s.kit_state.clone();
     let mut ctx = KitCtx::new(&s.spec, &players, now);
     kit.on_remove(&mut ctx, &mut kit_state, player_id);
-    save(state, code, &kit_state, ctx, now).await
+    let gone = threads_gone(kit, &s.kit_state, &kit_state);
+    save(state, code, &kit_state, ctx, now).await?;
+    drop_threads(state, &gone).await;
+    Ok(())
+}
+
+/// pa13a: forgets the players whose data has expired (a front desk guest 7 days after their last
+/// message): their row, keys, events, the bot's conversation with them and their kit state.
+/// Returns how many went.
+pub async fn forget_idle(state: &AppState, code: &str, now: DateTime<Utc>) -> PResult<usize> {
+    let lock = state.pocket.lock_for(code);
+    let _g = lock.lock().await;
+    let Some(s) = snapshot(state, code).await? else { return Ok(0) };
+    let Some(kit) = s.kit() else { return Ok(0) };
+    let idle = kit.idle_players(&KitCtx::new(&s.spec, &s.players, now), &s.kit_state);
+    if idle.is_empty() {
+        return Ok(0);
+    }
+    let players: Vec<Player> = s.players.iter().filter(|p| !idle.contains(&p.id)).cloned().collect();
+    let mut kit_state = s.kit_state.clone();
+    let mut ctx = KitCtx::new(&s.spec, &players, now);
+    for id in &idle {
+        state.db.pocket_player_forget(code, id).await?;
+        state.pocket.signal(code, Signal::Revoked(id.clone()));
+        kit.on_remove(&mut ctx, &mut kit_state, id);
+    }
+    let gone = threads_gone(kit, &s.kit_state, &kit_state);
+    save(state, code, &kit_state, ctx, now).await?;
+    drop_threads(state, &gone).await;
+    Ok(idle.len())
 }
 
 /// The host's PIN reset: a one-time 4-character code, valid 24 h. The old PIN and every guest key
@@ -890,6 +1094,18 @@ pub async fn sweep(state: &AppState, now: DateTime<Utc>) -> Swept {
         return out;
     }
     tick_unwatched(state, now).await;
+    // pa13a: front desk guests whose data has expired (pa11b: and queue guests whose ticket is
+    // done), then turns a restart left queued
+    let mut codes = state.db.pocket_codes_of_kit(desk::ID).await.unwrap_or_default();
+    codes.extend(state.db.pocket_codes_of_kit(queue::ID).await.unwrap_or_default());
+    for code in codes {
+        match forget_idle(state, &code, now).await {
+            Ok(n) if n > 0 => tracing::info!(count = n, "pocket apps: deleted expired guests' data"),
+            Ok(_) => {}
+            Err(e) => tracing::warn!(code = %code, "pocket apps: couldn't delete expired guests: {}", e.code),
+        }
+    }
+    crate::server::desk_turns::resume(state).await;
     for code in state.db.pocket_past_closing(now).await.unwrap_or_default() {
         if end(state, &code).await.is_ok() {
             out.ended += 1;

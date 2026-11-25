@@ -71,7 +71,9 @@ test('validator: names each broken limit', () => {
   const ok = { version: '0.7.6', date: '2026-11-14', highlights: [hl('a'), hl('b')], fixes: [] };
   assert.deepEqual(s.validateEntry(ok), []);
   const bad = (over) => s.validateEntry({ ...ok, ...over });
-  assert.match(bad({ highlights: [hl('a')] })[0], /highlights: 1, needs 2–6/);
+  assert.match(bad({ highlights: [] })[0], /highlights: 0, needs 1–6/);
+  assert.deepEqual(bad({ highlights: [hl('a')] }), [], 'one real highlight is enough');
+  assert.deepEqual(bad({ highlights: [hl('a', { open: 'settings/teams' })], fixes: [] }), [], 'one highlight and no fixes');
   assert.match(bad({ highlights: 'abcdefg'.split('').map((x) => hl(x)) })[0], /highlights: 7/);
   assert.match(bad({ highlights: [hl('a', { title: 'x'.repeat(61) }), hl('b')] })[0], /title is 61 characters, max 60/);
   assert.deepEqual(bad({ highlights: [hl('a', { title: 'é'.repeat(60) }), hl('b')] }), [], 'characters, not bytes');

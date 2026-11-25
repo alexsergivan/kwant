@@ -46,6 +46,10 @@ export interface PocketRead {
   summary: unknown;
   removed: number;
   join?: PocketJoin | null;
+  /** The kit's host view, validated before use: pa10b gather (names, drafts with `next_copy_at`); pa14 wall (counts plus `queue` and `wall` photo lists). */
+  host_view?: unknown;
+  /** pa13 desk, `?view=guest:<id>` only: one guest's conversation (host only). */
+  conversation?: unknown;
 }
 
 export type PocketLinkRole = 'host' | 'screen';
@@ -64,6 +68,8 @@ export class PocketApiError extends Error {
     readonly code: string | null,
     /** 422 `invalid`: the server's numbered problems ("1. round 1, question 1: …"). */
     readonly problems: string[] = [],
+    /** The error body as sent (pa13b: 409 slot_in_use carries {slot, start, name}). */
+    readonly data: Record<string, unknown> | null = null,
   ) {
     super(message);
     this.name = 'PocketApiError';
@@ -170,7 +176,7 @@ async function call<T>(method: 'GET' | 'POST' | 'PATCH' | 'DELETE', path: string
       (code && FALLBACK[code]) ||
       (res.status === 404 ? FALLBACK.not_found : `That didn’t work (HTTP ${res.status}).`);
     const problems = Array.isArray(data?.problems) ? data.problems.filter((p): p is string => typeof p === 'string') : [];
-    throw new PocketApiError(message, res.status, code, problems);
+    throw new PocketApiError(message, res.status, code, problems, data);
   }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -203,6 +209,17 @@ export const pocketApi = {
   // segment: /host/* lives only on the guest port (/api/pocket/, singular), which refuses another origin.
   /** A named kit action (santa: draw_now, reveal_now, skip_reveal, add_pair, ...). Returns the host view. */
   hostAction: async (code: string, name: string, body?: Record<string, unknown>) => call<unknown>('POST', `${one(code)}/action`, body === undefined ? { name } : { name, body }),
+  // pa10b gather: host actions through the same route, named as Lin's src/pocket/gather.rs (pa10b/server-shape.md).
+  /** The host's own paid tick on a Yes row. Never shown to members. */
+  setPaid: async (code: string, playerId: string, paid: boolean) => pocketApi.hostAction(code, 'set_paid', { player_id: playerId, paid }),
+  /** The host copied or shared the draft to `to` (a name). Inside the 48 h window it's a 409 `not_now`: re-read `next_copy_at`. */
+  copied: async (code: string, to: string) => pocketApi.hostAction(code, 'copied', { to }),
+  /** Break a tie: the host picks a ballot option by its index. */
+  pick: async (code: string, option: number) => pocketApi.hostAction(code, 'pick', { option }),
+  /** Close a vote now and count it (`/end` is Stop). */
+  closeNow: async (code: string) => pocketApi.hostAction(code, 'close_now'),
+  /** Break a tie: voting opens again for 24 hours. */
+  revote24h: async (code: string) => pocketApi.hostAction(code, 'revote_24h'),
   /** The player's keys stop working; before the draw only for santa. Returns the host view. */
   removePlayer: async (code: string, playerId: string) => call<unknown>('POST', `${one(code)}/remove`, { player_id: playerId }),
   /** A one-time code, exactly once. Nothing else comes back: never a match. */
@@ -223,12 +240,40 @@ export const pocketApi = {
   /** pa4c: only the fields sent change; `accepted: []` clears the also-accept list. */
   editQuestion: async (id: string, n: number, body: QuestionFields & { base: number }) => call<DraftReply>('PATCH', qPath(id, n), body),
   deleteQuestion: async (id: string, n: number, base: number) => call<DraftReply>('DELETE', `${qPath(id, n)}?base=${encodeURIComponent(String(base))}`),
+  // pa13 front desk (Lin's src/pocket/desk.rs, #1150): the host's two actions; both answer with the same read as GET.
+  /** The host's own answer to one guest, marked "host". Clears `waiting`. */
+  deskReply: async (code: string, guest: string, text: string) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'reply', body: { guest, text } }),
+  /** The host's daily reply limit (10..200, whole numbers; #1150 round 4). Answers with the read; the new cap is summary.counts.daily_cap. */
+  deskSetCap: async (code: string, cap: number) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'set_cap', body: { cap } }),
+  /** "No reply needed": clears `waiting`, sends nothing to the guest. */
+  deskResolve: async (code: string, guest: string) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'resolve', body: { guest } }),
+  /** One guest's conversation, host only: the read plus `conversation`. */
+  // pa13b booking desk (design "For Vega"; Vega's pa13b-impl.md wins once it exists).
+  deskConfirm: async (code: string, guest: string, slot: string) => call<PocketRead>('POST', `${one(code)}/action`, { name: 'confirm', body: { guest, slot } }),
+  deskDecline: async (code: string, guest: string, slot: string, text: string | null) =>
+    call<PocketRead>('POST', `${one(code)}/action`, { name: 'decline', body: text ? { guest, slot, text } : { guest, slot } }),
+  deskBook: async (code: string, guest: string, to: { slot: string } | { new_slot: { start: string; minutes: number } }) =>
+    call<PocketRead>('POST', `${one(code)}/action`, { name: 'book', body: { guest, ...to } }),
+  deskSetSlots: async (code: string, slots: { id?: string; start: string; minutes: number; seats: number; label?: string }[]) =>
+    call<PocketRead>('POST', `${one(code)}/action`, { name: 'set_slots', body: { slots } }),
+  deskGuest: async (code: string, guest: string) => call<PocketRead>('GET', `${one(code)}?view=${encodeURIComponent(`guest:${guest}`)}`),
+  /** The Needs-you list (`GET /api/waiting`); the desk keeps only its own `pocket_desk` items (validDeskItems). */
+  waiting: async () => call<unknown>('GET', '/api/waiting'),
 };
 
 /**
  * The page a minted link opens: the join address (`…/p/<code>`) with the token in the fragment, which browsers never
  * send to a server or put in a Referer. `#remote=` opens the host remote, `#screen=` the big screen.
  */
+/**
+ * pa14: one Wall photo for the person, on the main port like `wall.zip`. Juno's #1139 serves photos on the guest
+ * port only (host cookie or bearer); card-impl.md asks for this main-port twin.
+ */
+export const wallPhotoUrl = (code: string, id: string) => `${one(code)}/photo/${encodeURIComponent(id)}`;
+/** pa14: the Wall's zip, `wall-<code>.zip`: approved photos, `all` adds the waiting ones, `best` the best set only. */
+export const wallZipUrl = (code: string, pick: 'approved' | 'all' | 'best' = 'approved') =>
+  `${one(code)}/wall.zip${pick === 'all' ? '?all=1' : pick === 'best' ? '?best=1' : ''}`;
+
 export function linkUrl(joinUrl: string, role: PocketLinkRole, token: string): string {
   const base = joinUrl.split('#')[0].split('?')[0];
   return `${base}#${role === 'host' ? 'remote' : 'screen'}=${encodeURIComponent(token)}`;

@@ -1110,6 +1110,27 @@ pub(super) async fn run_routine_turn(
     run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, true, Vec::new()).await
 }
 
+/// pa14b: a wall's one best-30 pick (see [`crate::pocket::wall_pick`]). Nobody asked for the
+/// turn, so every call that could change something asks the person; the pick's own two tools
+/// don't (one reads small previews, the other only stores a proposal the host still has to show).
+pub(crate) async fn run_pocket_pick_turn(
+    state: &AppState,
+    kwant: &Kwant,
+    channel_id: Option<String>,
+    thread_id: Option<String>,
+    prompt: String,
+    label: &str,
+) -> Result<Option<String>, String> {
+    let opts = || TurnOpts {
+        always_ask: true,
+        started_by: Some(label.to_string()),
+        source: Some(super::bot_status::TurnSource::routine(label)),
+        purpose: Some(label.to_string()),
+        ..TurnOpts::default()
+    };
+    run_turn_with(state, kwant, channel_id, thread_id, prompt, opts, true, Vec::new()).await
+}
+
 /// [`run_routine_turn`] with the routing card for the reply (`meta.routing`) and extra stop keys
 /// (the person's message): a channel message the person routed by choosing a bot, or one a bot
 /// handed back (see [`super::rerouting`]).
@@ -4776,6 +4797,8 @@ async fn send_chat_routed(
     )
     .await;
     payload.prompt.push_str(&note);
+    // Every early return below (continue, typed answer, held, routing) comes after this
+    show_sent(&state, &saved_user_msg).await;
 
     // The person answered the lead's list: the cards close, specialists waiting in threads go
     // on, and the lead is told whom to pass the rest to
@@ -5205,6 +5228,8 @@ async fn send_to_thread(
     let _ = state.db.touch_thread(&thread.id).await;
     super::waiting::person_wrote(&state, None, None, Some(&thread.id)).await;
     let note = super::attachments::attach_to_message(&state, &uploads, &saved.id, None, None, Some(&thread.id)).await;
+    // Before the J8 return below, so an answer typed in a brief's chat shows everywhere too
+    show_sent(&state, &saved).await;
     // In a Dev mode brief's chat with open questions, the message answers them (J8): no turn
     if super::dev::tickets::hooks::answer_in_chat(&state, &thread.id, &payload.prompt).await {
         return Ok(Json(json!({
@@ -5247,6 +5272,17 @@ async fn send_to_thread(
     });
     with_held(&mut reply, held);
     Ok(Json(reply))
+}
+
+/// The person's message, just saved (its reply and files linked), goes to its chat's live stream,
+/// so their other open screens show it at once instead of when the bot's turn ends
+/// (sent-message-shows-everywhere, 0.9.50). Read back as a chat load shows it (reply quote, file
+/// cards); the sender's app swaps its `temp-` copy for it. Only chat views read `MessageAdded`:
+/// it raises no notification, unread badge or Inbox row.
+async fn show_sent(state: &AppState, saved: &Message) {
+    let mut m = state.db.get_message(&saved.id).await.ok().flatten().unwrap_or_else(|| saved.clone());
+    state.db.attach_chat_fields(std::slice::from_mut(&mut m)).await;
+    let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&m).unwrap_or_default() });
 }
 
 /// The chat a channel or 1:1 send's turn runs in, as its turn's origin names it
