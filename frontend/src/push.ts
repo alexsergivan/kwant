@@ -168,13 +168,13 @@ export function deviceNotifyHint(s: {
     case 'insecure':
       return { text: 'Notifications need https://. Open this site through its https address to turn this on.', warn: true };
     case 'ios-install':
-      return { text: 'On iPhone and iPad, add kwant bots to your Home Screen first: tap Share, then Add to Home Screen. Then turn this on in that app.', warn: true };
+      return { text: 'On iPhone and iPad, add kwant to your Home Screen first: tap Share, then Add to Home Screen. Then turn this on in that app.', warn: true };
     case 'unsupported':
       return { text: "This browser can't show notifications.", warn: true };
   }
   if (s.permission === 'denied') {
     const how = s.android && s.standalone
-      ? 'Long-press the kwant bots icon, tap App info, then Notifications, and allow them.'
+      ? 'Long-press the kwant icon, tap App info, then Notifications, and allow them.'
       : "Allow notifications for this site in the browser's site settings (the icon left of the address), then come back.";
     return { text: `Notifications are blocked for this site. ${how}`, warn: true };
   }

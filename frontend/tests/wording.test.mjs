@@ -21,7 +21,10 @@ const BAD = /\b(kwants?|kwnt|agents?)\b/i;
 // Agent Maestro, the VS Code extension's own name (a Custom API preset), and "coding agent", what
 // Claude Code, Codex and Cursor are called in Settings → Coding agents (0.7.4).
 // 0.9.8 first screen (Mira, first-screen F): the product's own name in the welcome and the claude.ai step.
-const ALLOWED = /\bWelcome to kwant\b|\ballow kwant\.|\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/gi;
+// Plain words (0.9.52 36h-a): Mira's plain-words/word-list.md rows 8, 14, 39-45 make "kwant" the product's name
+// (it was "kwant bots") on the sign-in, update, install, phone and team screens, and kwant picks who answers.
+const PRODUCT_PW_A = /^\s*kwant\s*$|\b(?:[Oo]pen|[Oo]pens|Install|[Uu]se|[Aa]dd|Run|Put|Star|Download|Downloading|Updated to|What’s new in|find|signed in to|control of|this|its own|the user that runs|machine running|server) kwant\b|\bkwant (?:again|at|then opens|opens|server|runs|picks|printed|address|folder|icon|browser|on|from|behind|that way|to)\b|\bkwant’s shared folder\b/;
+const ALLOWED = new RegExp(/\bWelcome to kwant\b|\ballow kwant\.|\bkwant bots?\b|\bcoding agents?\b|\b(?:exec kwnt )?kwnt (?:token|signin-link)\b|~\/\.kwnt\/api-token/.source + '|' + PRODUCT_PW_A.source, 'gi');
 const MAESTRO = /\bAgent Maestro\b|\bHermes Agent\b/g;
 // T/D preview sheet (0.7.7): Mira's review-396-397 must-fix 7 and Ada's deviation-4 ruling keep "kwant"
 // as the subject in these three sentences only.
@@ -92,10 +95,13 @@ test('no visible text says a bare "kwant", "kwnt" or "agent"', () => {
   assert.deepEqual(findBareWording(), []);
 });
 
-test('the page title says "kwant bots"', () => {
-  const title = readFileSync(join(root, 'index.html'), 'utf8').match(/<title>([^<]*)<\/title>/)?.[1] ?? '';
-  assert.match(title, /kwant bots/);
-  assert.doesNotMatch(title.replace(/\bkwant bots?\b/gi, ''), BAD);
+test('the page title and Home Screen name say "kwant" (plain words, row 45)', () => {
+  const html = readFileSync(join(root, 'index.html'), 'utf8');
+  const title = html.match(/<title>([^<]*)<\/title>/)?.[1] ?? '';
+  assert.equal(title, 'kwant: your team of AI bots');
+  assert.doesNotMatch(title.replace(/^kwant:/, ''), BAD);
+  assert.match(html, /<meta name="apple-mobile-web-app-title" content="kwant" \/>/);
+  assert.doesNotMatch(html, /kwant bots/);
 });
 
 // Plain words (0.9.52 36h-b-2): Mira's plain-words/word-list.md row "engine" says "AI" outside Dev mode and Details.
