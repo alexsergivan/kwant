@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { Hash, Plus, CheckCircle2, ShieldCheck, KeyRound, Loader2, Users, ChevronDown, Settings, Settings2, X, Crown, UserPlus, Pencil, Inbox, Search, Split, Hand, MoreHorizontal, UserMinus, MessageSquare, KanbanSquare, CalendarClock } from 'lucide-react';
 import { ModernAvatar, modelBadgeSnapshot, useModelBadge } from './ModernAvatar';
 import { playSfx } from '../audio/chiptune';
@@ -522,10 +522,13 @@ export const Sidebar: React.FC<SidebarProps> = ({
   // space (remembered per device) or live (jar takes ready, page open now). Opening a page counts as use.
   const [usedRows, setUsedRows] = useState<MoreRowKey[]>(() => readUsedRows(space.id));
   const [moreOpen, setMoreOpen] = useState(false);
-  useEffect(() => {
+  // A space switch reseeds during render, so the new space never shows the old one's rows for a frame.
+  const [usedFor, setUsedFor] = useState(space.id);
+  if (usedFor !== space.id) {
+    setUsedFor(space.id);
     setUsedRows(readUsedRows(space.id));
     setMoreOpen(false);
-  }, [space.id]);
+  }
   const openedRow: MoreRowKey | null = missionsActive ? 'missions' : ideaJarActive ? 'jar' : parallelActive ? 'parallel' : null;
   useEffect(() => {
     if (openedRow) setUsedRows(markRowUsed(space.id, openedRow));
@@ -536,16 +539,33 @@ export const Sidebar: React.FC<SidebarProps> = ({
     active: { missions: missionsActive, jar: ideaJarActive, parallel: parallelActive },
     jarCount: ideaJarCount,
   });
+  // A row opened from inside More moves to the top list, a new parent, so React remounts it: put keyboard
+  // focus back on it once it is there (WCAG 2.4.3).
+  const utilityRows = useRef<HTMLDivElement>(null);
+  const focusAfterMove = useRef<MoreRowKey | null>(null);
+  const ROW_SELECTOR: Record<MoreRowKey, string> = { missions: '[data-missions-row]', jar: '[data-nav="jar"]', parallel: '[data-parallel-row]' };
+  const topKeys = rowPlace.top.join(',');
+  useLayoutEffect(() => {
+    const k = focusAfterMove.current;
+    if (!k || !rowPlace.top.includes(k)) return;
+    focusAfterMove.current = null;
+    utilityRows.current?.querySelector<HTMLElement>(ROW_SELECTOR[k])?.focus();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [topKeys]);
+  const fromMore = (k: MoreRowKey, open?: () => void) => () => {
+    if (rowPlace.more.includes(k)) focusAfterMove.current = k;
+    open?.();
+  };
   const moreRow = (k: MoreRowKey) =>
     k === 'missions' ? (
-      <button key={k} type="button" onClick={onOpenMissions} aria-current={missionsActive ? 'page' : undefined} className={navRow(missionsActive)} data-missions-row>
+      <button key={k} type="button" onClick={fromMore('missions', onOpenMissions)} aria-current={missionsActive ? 'page' : undefined} className={navRow(missionsActive)} data-missions-row>
         <KanbanSquare size={15} className={missionsActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
         <span className="truncate flex-1">Mission board</span>
       </button>
     ) : k === 'jar' ? (
-      <IdeaJarRow key={k} active={ideaJarActive} count={ideaJarCount} onOpen={onOpenIdeaJar!} onDrop={onDropIdea!} className={navRow(ideaJarActive)} />
+      <IdeaJarRow key={k} active={ideaJarActive} count={ideaJarCount} onOpen={fromMore('jar', onOpenIdeaJar)} onDrop={onDropIdea!} className={navRow(ideaJarActive)} />
     ) : (
-      <button key={k} type="button" onClick={onOpenParallel} aria-current={parallelActive ? 'page' : undefined} className={navRow(parallelActive)} data-parallel-row>
+      <button key={k} type="button" onClick={fromMore('parallel', onOpenParallel)} aria-current={parallelActive ? 'page' : undefined} className={navRow(parallelActive)} data-parallel-row>
         <Split size={15} className={parallelActive ? 'text-sky-400' : 'text-zinc-500'} aria-hidden="true" />
         <span className="truncate flex-1">Parallel Universe</span>
       </button>
@@ -1092,7 +1112,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               <span className="block text-body font-semibold text-zinc-50 truncate">{space.name}</span>
               <SpaceSubline counts={space.counts} devOn={devOn} approvals={space.approvals} />
             </span>
-            <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+            <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform motion-reduce:transition-none ${switcherOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
           </button>
           </div>
         ) : (
@@ -1133,7 +1153,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       <div className="flex-1 overflow-y-auto p-2 space-y-4">
         {showChats && (
-        <div className="space-y-0.5" data-utility-rows>
+        <div ref={utilityRows} className="space-y-0.5" data-utility-rows>
           <button type="button" onClick={onOpenSearch} className={navRow(false)}>
             <Search size={15} className="text-zinc-500" aria-hidden="true" />
             <span className="truncate flex-1">Search {space.name}</span>
@@ -1179,7 +1199,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               >
                 <MoreHorizontal size={15} className="text-zinc-500" aria-hidden="true" />
                 <span className="truncate flex-1">More</span>
-                <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform ${moreOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
+                <ChevronDown size={14} className={`shrink-0 text-zinc-500 transition-transform motion-reduce:transition-none ${moreOpen ? 'rotate-180' : ''}`} aria-hidden="true" />
               </button>
               <div id="kw-sidebar-more" hidden={!moreOpen} className="mt-0.5 space-y-0.5">
                 {moreOpen && rowPlace.more.map(moreRow)}
