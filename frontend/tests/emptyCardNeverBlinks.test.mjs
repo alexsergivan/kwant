@@ -60,7 +60,8 @@ const liveBubble = (text) => {
   const at = html.indexOf('data-live-bubble-body=""');
   assert.ok(at > 0, 'the live bubble renders');
   const open = html.lastIndexOf('<div', at);
-  return { tag: html.slice(open, html.indexOf('>', at) + 1), inside: html.slice(at, at + 600) };
+  // 36d: rest = the whole bubble on: the scene is long, and the words come after it.
+  return { tag: html.slice(open, html.indexOf('>', at) + 1), inside: html.slice(at, at + 600), rest: html.slice(at) };
 };
 
 test('a marker-only reply keeps the working scene in the bubble (no empty bubble)', () => {
@@ -69,9 +70,10 @@ test('a marker-only reply keeps the working scene in the bubble (no empty bubble
     assert.match(b.inside, /data-working-avatar=""/, `${text}: the scene stays`);
     assert.doesNotMatch(b.inside, /data-stream-blocks/, `${text}: no empty words block`);
   }
+  // 36d: with words the scene stays on top (it is the one working status) and the words stream under it.
   const words = liveBubble('[PASS] Nothing to add from me.');
-  assert.doesNotMatch(words.inside, /data-working-avatar/);
-  assert.match(words.inside, /Nothing to add from me\./);
+  assert.match(words.inside, /data-working-avatar=""[^>]*data-writing=""/);
+  assert.match(words.rest, /data-scene-words="">[\s\S]*Nothing to add from me\./);
 });
 
 test('the bubble itself fades in, so its frame and what is inside it appear together', () => {
@@ -80,8 +82,10 @@ test('the bubble itself fades in, so its frame and what is inside it appear toge
   const fromOpacity = (name) => Number(css.match(new RegExp(`@keyframes ${name} \\{ from \\{ opacity: ([\\d.]+); \\}`))?.[1]);
   assert.equal(anim('.kw-live-in'), 'kw-wa-in');
   assert.equal(fromOpacity('kw-wa-in'), 0, 'the bubble comes up from nothing');
-  // Inside it, the scene and the first words never start from 0 (a frame of an empty bubble at the swap).
-  for (const sel of ['.kw-wa', '.kw-wa-in']) {
+  // Inside it, nothing starts from 0 (a frame of an empty bubble). 36d: the scene row no longer fades on its own
+  // (no swap: it stays above the words), so only the half-fade class is left.
+  assert.ok(!anim('.kw-wa'), 'the scene row does not fade by itself');
+  for (const sel of ['.kw-wa-in']) {
     const name = anim(sel);
     assert.ok(name, `${sel} has an animation`);
     assert.ok(fromOpacity(name) >= 0.5, `${sel} starts at ${fromOpacity(name)}`);

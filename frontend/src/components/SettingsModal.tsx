@@ -62,6 +62,7 @@ import {
 import { FlightSchoolSettings, TIERS, TIER_HINTS, TIER_LABELS, Tier, parseFlightSchoolSettings } from '../flightSchool';
 import { DISCOVERY_CAPS, DISCOVERY_SETTING_EVENT, parseDiscoverySettings } from '../automationDiscovery';
 import { editorProps, isTextField } from '../escape';
+import type { AppSettingsPage } from '../nav';
 
 const RECOVERY_PCTS = [0, 10, 25, 50, 100];
 
@@ -264,6 +265,9 @@ interface SettingsModalProps {
   focusRow?: string | null;
   /** 0.9.5: opens a bot's settings at its monthly budget (the overview's Set / Change). */
   onOpenBotBudget?: (kwantId: string) => void;
+  /** 36e: Settings › All spaces shows one page (the others stay mounted, hidden, so unsaved edits keep);
+   *  null shows every page ("Find a setting" has words); not given, everything shows as one column. */
+  page?: AppSettingsPage | null;
 }
 
 /** App settings: shared by every space (keys, Laya, limits, notifications, sounds). Accounts,
@@ -310,7 +314,14 @@ const DiscoverySetting: React.FC<{ value: DiscoverySettings; onChange: (v: Disco
   );
 };
 
-export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0, embedded = false, onOpenApiKeys, focusRow = null, onOpenBotBudget }) => {
+export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, tokensUsed = 0, embedded = false, onOpenApiKeys, focusRow = null, onOpenBotBudget, page }) => {
+  // 36e pages: every page stays rendered (one form, one Save); the ones not open are hidden.
+  const paged = page !== undefined;
+  const finding = page === null;
+  const show = (x: AppSettingsPage) => !paged || finding || page === x;
+  // A section named like its page: the page's own heading says it, so its legend is for screen readers only.
+  const pageLegend = (x: AppSettingsPage) => (paged && !finding && page === x ? 'sr-only' : 'flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3');
+  const pageTop = paged && !finding ? '' : 'pt-2 border-t border-zinc-800';
   const { authRequired, deviceLogin, signOut } = useAuth();
   const computer = useComputerMode(isOpen);
   const [sfxMuted, setSfxMuted] = useState(isSfxMuted);
@@ -593,10 +604,9 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
         </div>
         )}
 
-        <LayaStatusRow />
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+        <div hidden={!show('general')} data-settings-page="general" className="space-y-6">
+        <div className={`grid grid-cols-1 ${hapticsAvailable() ? 'sm:grid-cols-2' : ''} gap-3`} data-settings-section>
+          <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800" data-setting-row>
             <span className="flex-1 text-xs font-medium text-zinc-200 flex items-center gap-2">
               {sfxMuted ? <VolumeX size={15} className="text-zinc-500" aria-hidden="true" /> : <Volume2 size={15} className="text-sky-400" aria-hidden="true" />}
               <span id="sfx-label">UI sounds</span>
@@ -615,7 +625,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </button>
           </div>
           {hapticsAvailable() && (
-            <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
+            <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800" data-setting-row>
               <span className="flex-1 text-xs font-medium text-zinc-200 flex items-center gap-2">
                 {vibration ? <Vibrate size={15} className="text-sky-400" aria-hidden="true" /> : <VibrateOff size={15} className="text-zinc-500" aria-hidden="true" />}
                 <span id="vibration-label">Vibration</span>
@@ -642,44 +652,20 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               </span>
             </div>
           )}
-          <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
-            <span className="flex-1 text-xs font-medium text-zinc-200 flex items-center gap-2">
-              <BellRing size={15} className={nudges ? 'text-amber-400' : 'text-zinc-500'} aria-hidden="true" />
-              <span id="nudges-label">Show nudges</span>
-            </span>
-            <button
-              type="button"
-              role="switch"
-              aria-checked={nudges}
-              aria-labelledby="nudges-label"
-              aria-describedby="nudges-hint"
-              onClick={() => {
-                setNudgesEnabled(!nudges);
-                setNudges(!nudges);
-              }}
-              className={`relative shrink-0 w-9 h-5 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-                nudges ? 'bg-sky-600' : 'bg-zinc-700'
-              }`}
-            >
-              <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${nudges ? 'translate-x-4' : ''}`} />
-            </button>
-            <span id="nudges-hint" className="sr-only">
-              A short note at the top of the app when a bot needs you in another chat, and a mark on the tab. The app icon count stays.
-            </span>
-          </div>
-          <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
-            <Gauge size={15} className="text-zinc-500" aria-hidden="true" />
-            <span className="flex-1 text-xs font-medium text-zinc-200">AI use in this chat</span>
-            <span className="font-mono text-xs text-zinc-300">{tokensUsed} tokens</span>
-          </div>
         </div>
 
-        <VersionCard />
-        <StarAskSettingsLink />
-        <PerchSettingsCard />
+        <div data-setting-row>
+          <VersionCard />
+        </div>
+        <div data-setting-row>
+          <StarAskSettingsLink />
+        </div>
+        <div data-setting-row>
+          <PerchSettingsCard />
+        </div>
 
         {computer.state.settings && (
-          <div data-computer-card tabIndex={-1} className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3 focus:outline-none">
+          <div data-computer-card data-setting-row tabIndex={-1} className="bg-zinc-950/60 p-4 rounded-xl border border-zinc-800 space-y-3 focus:outline-none">
             <div>
               <p id="computer-mode-label" className="flex items-center gap-2 text-xs font-medium text-zinc-300">
                 <Monitor size={15} className="text-sky-400" aria-hidden="true" />
@@ -692,512 +678,580 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
           </div>
         )}
 
-        {/* Saves at once, so it sits outside the Settings form (its own Create form can't nest). */}
-        <CodingAgents currentSpace={getCurrentSpace()} />
+        </div>
 
         {/* App settings form; API keys moved to Settings › This space › Apps & accounts */}
-        <form onSubmit={handleSave} onChange={(e) => isTextField(e.target) && setTyped(true)} {...editorProps(typed)} className="space-y-4">
-          {onOpenApiKeys && (
-            <button
-              type="button"
-              onClick={() => {
-                playSfx('click');
-                onOpenApiKeys();
-              }}
-              data-api-keys-link
-              className="w-full flex items-center gap-2 p-3 text-left rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
-            >
-              <Key size={14} className="text-sky-400" aria-hidden="true" />
-              <span className="flex-1">
-                <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
-                <span className="block text-[11px] text-zinc-500">Now in Settings › This space › Apps & accounts, next to the accounts that use them.</span>
-              </span>
-              <ChevronRight size={15} className="text-zinc-500" aria-hidden="true" />
-            </button>
-          )}
-
-          {place && (
-            <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
-              <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
-                <MapPin size={14} className="text-sky-300" aria-hidden="true" />
-                <span>Where you are</span>
-              </legend>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <label htmlFor="settings-timezone" className="block text-[11px] font-medium text-zinc-300">
-                    Time zone
-                  </label>
-                  <input
-                    id="settings-timezone"
-                    list="settings-timezones"
-                    value={place.timezone}
-                    onChange={(e) => setPlace((p) => (p ? { ...p, timezone: e.target.value } : p))}
-                    spellCheck={false}
-                    autoCapitalize="off"
-                    autoComplete="off"
-                    aria-describedby="settings-timezone-hint"
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors"
-                  />
-                  <datalist id="settings-timezones">
-                    {timeZoneOptions(place.timezone).map((z) => (
-                      <option key={z} value={z} />
-                    ))}
-                  </datalist>
-                  <p id="settings-timezone-hint" className="text-[11px] text-zinc-500">
-                    Bots tell the time and schedule routines in this zone. This device says {defaultTimeZone()}.
-                  </p>
-                </div>
-                <div className="space-y-1">
-                  <label htmlFor="settings-location" className="block text-[11px] font-medium text-zinc-300">
-                    City <span className="font-normal text-zinc-500">(optional)</span>
-                  </label>
-                  <input
-                    id="settings-location"
-                    value={place.location}
-                    maxLength={MAX_LOCATION_CHARS}
-                    onChange={(e) => setPlace((p) => (p ? { ...p, location: e.target.value } : p))}
-                    placeholder="e.g. Ljubljana"
-                    autoComplete="address-level2"
-                    aria-describedby="settings-location-hint"
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
-                  />
-                  <p id="settings-location-hint" className="text-[11px] text-zinc-500">
-                    For weather and local tips. Bots only get what you type here, never your GPS location.
-                  </p>
-                </div>
-              </div>
-            </fieldset>
-          )}
-
-          {limits && (
-            <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
-              <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
-                <Layers size={14} className="text-sky-300" aria-hidden="true" />
-                <span>Parallel work</span>
-              </legend>
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                {LIMIT_FIELDS.map(({ key, label, hint }) => {
-                  const err = limitErrors[key];
-                  const { min, max } = TURN_LIMITS[key];
-                  return (
-                    <div key={key} className="space-y-1">
-                      <label htmlFor={`limit-${key}`} className="block text-[11px] font-medium text-zinc-300">
-                        {label}
-                      </label>
-                      <input
-                        id={`limit-${key}`}
-                        type="number"
-                        inputMode="numeric"
-                        min={min}
-                        max={max}
-                        step={1}
-                        value={limits[key]}
-                        onChange={(e) => setLimits((prev) => (prev ? { ...prev, [key]: e.target.value } : prev))}
-                        aria-invalid={!!err}
-                        aria-describedby={`limit-${key}-hint`}
-                        className={`w-full bg-zinc-950 border rounded-lg px-3 py-2 text-xs text-zinc-100 focus:outline-none transition-colors ${
-                          err ? 'border-rose-500/60 focus:border-rose-400' : 'border-zinc-800 focus:border-sky-500'
-                        }`}
-                      />
-                      <p id={`limit-${key}-hint`} className={`text-[11px] ${err ? 'text-rose-300' : 'text-zinc-500'}`}>
-                        {err ?? `${hint} (${min}–${max})`}
-                      </p>
-                    </div>
-                  );
-                })}
-              </div>
-              {perAgentOverGlobal && (
-                <p className="text-[11px] text-amber-300" role="status">
-                  The total is lower than the per-bot limit, so a bot never gets more than {limits.max_turns_global} at once.
-                </p>
-              )}
-            </fieldset>
-          )}
-
-          <fieldset className="min-w-0 space-y-3 pt-2 border-t border-zinc-800">
-            <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
-              <Gauge size={14} className="text-sky-300" aria-hidden="true" />
-              <span>Usage</span>
-            </legend>
-            {tokenLimits !== null && (
-              <div className="space-y-2" role="group" aria-labelledby="token-limits-h" data-token-limits>
-                <div>
-                  <p id="token-limits-h" className="text-[11px] font-semibold text-zinc-200">
-                    Token limits
-                  </p>
-                  <p className="text-[11px] text-zinc-500">Bots can use as much AI as they need. Set a limit to cap spending per task.</p>
-                </div>
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <DefaultLimitField
-                    id="default-task-limit"
-                    label="New tasks"
-                    scope="task"
-                    value={tokenLimits.task}
-                    onChange={(v) => setTokenLimits((p) => (p ? { ...p, task: v } : p))}
-                  />
-                  <DefaultLimitField
-                    id="default-mission-limit"
-                    label="New missions"
-                    scope="mission"
-                    value={tokenLimits.mission}
-                    onChange={(v) => setTokenLimits((p) => (p ? { ...p, mission: v } : p))}
-                  />
-                </div>
-                <p className="text-[11px] text-zinc-500">You can still set or remove a limit on any task or mission from the board.</p>
-              </div>
-            )}
-            {chainBudget !== null && (
-              <div className="space-y-1" data-chain-token-budget>
-                <DefaultLimitField id="chain-token-budget" label="Hand-offs per request" scope="request" value={chainBudget} onChange={setChainBudget} />
-                <p className="text-[11px] text-zinc-500">
-                  With no limit, bots hand work to each other until they're done. Set one and they pause and ask you before going over it for one of
-                  your messages.
-                </p>
-              </div>
-            )}
-            {spendStop !== null && <SpendStopFields value={spendStop} onChange={setSpendStop} open={isOpen} savedKey={spendSaved} />}
-            <DailyUsagePanel open={isOpen} />
-            <BudgetOverview open={isOpen} onOpenBot={onOpenBotBudget} />
-          </fieldset>
-
-          {agentTools !== null && (
-            <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
-              <div className="flex-1">
-                <p id="agent-tools-label" className="text-xs font-medium text-zinc-200">Bots can use their own tools</p>
-                <p id="agent-tools-hint" className="text-[11px] text-zinc-500">
-                  Delegating to each other, asking you questions, sharing files, skills, searching earlier chats and keeping notes. Off, bots just reply.
-                </p>
-              </div>
+        <form id="kw-app-settings-form" onSubmit={handleSave} onChange={(e) => isTextField(e.target) && setTyped(true)} {...editorProps(typed)} className="space-y-4">
+          <div hidden={!show('general')} data-settings-page="general" className="space-y-4">
+            {onOpenApiKeys && (
               <button
                 type="button"
-                role="switch"
-                aria-checked={agentTools}
-                aria-labelledby="agent-tools-label"
-                aria-describedby="agent-tools-hint"
                 onClick={() => {
                   playSfx('click');
-                  setAgentTools((v) => !v);
+                  onOpenApiKeys();
                 }}
-                className={`relative shrink-0 w-9 h-5 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
-                  agentTools ? 'bg-sky-600' : 'bg-zinc-700'
-                }`}
+                data-api-keys-link
+                data-setting-row
+                className="w-full flex items-center gap-2 p-3 text-left rounded-xl border border-zinc-800 bg-zinc-950/60 hover:border-zinc-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400"
               >
-                <span
-                  className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${agentTools ? 'translate-x-4' : ''}`}
-                />
+                <Key size={14} className="text-sky-400" aria-hidden="true" />
+                <span className="flex-1">
+                  <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
+                  <span className="block text-[11px] text-zinc-500">Now in Settings › This space › Apps & accounts, next to the accounts that use them.</span>
+                </span>
+                <ChevronRight size={15} className="text-zinc-500" aria-hidden="true" />
               </button>
-            </div>
-          )}
-
-          {(proactive || ideaCap !== null) && (
-            <fieldset className="space-y-3 pt-2 border-t border-zinc-800" data-testid="proactive-settings">
-              <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
-                <Sparkles size={14} className="text-info" aria-hidden="true" />
-                <span>Bots on their own</span>
-              </legend>
-              {/* The jar's row stands on its own: a server without decide_first still shows it (#323 S3). */}
-              {proactive && (
-                <>
-              <SwitchRow
-                id="decide-first"
-                label="Bots decide reversible choices themselves"
-                hint="Instead of asking you to pick, they run their own checks, ask a teammate, choose, and show it with a Change button. They still ask you before sending, paying, deleting or signing in."
-                checked={proactive.decide_first}
-                onToggle={() => setProactive((p) => (p ? { ...p, decide_first: !p.decide_first } : p))}
-              />
-              <SwitchRow
-                id="work-ahead"
-                label="Bots work ahead while I’m away"
-                hint="When a chat has been quiet for 2 hours, its lead finishes open checks and gets the next step ready. You get one “While you were away” message per chat a day at most. They never send, pay or contact anyone."
-                checked={proactive.work_ahead}
-                onToggle={() => setProactive((p) => (p ? { ...p, work_ahead: !p.work_ahead } : p))}
-              >
-                <div className="mt-2 flex items-center gap-2">
-                  <label htmlFor="work-ahead-cap" className={`text-[11px] ${proactive.work_ahead ? 'text-zinc-300' : 'text-zinc-500'}`}>
-                    At most
-                  </label>
-                  <select
-                    id="work-ahead-cap"
-                    value={proactive.work_ahead_daily_cap}
-                    disabled={!proactive.work_ahead}
-                    onChange={(e) => setProactive((p) => (p ? { ...p, work_ahead_daily_cap: Number(e.target.value) } : p))}
-                    className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none disabled:opacity-50"
-                  >
-                    {Array.from({ length: WORK_AHEAD_CAP_MAX - WORK_AHEAD_CAP_MIN + 1 }, (_, i) => i + WORK_AHEAD_CAP_MIN).map((n) => (
-                      <option key={n} value={n}>
-                        {n}
-                      </option>
-                    ))}
-                  </select>
-                  <span className={`text-[11px] ${proactive.work_ahead ? 'text-zinc-300' : 'text-zinc-500'}`}>
-                    {proactive.work_ahead_daily_cap === 1 ? 'time' : 'times'} a day in each space
-                  </span>
+            )}
+            {place && (
+              <fieldset className="space-y-3 pt-2 border-t border-zinc-800" data-setting-row>
+                <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
+                  <MapPin size={14} className="text-sky-300" aria-hidden="true" />
+                  <span>Where you are</span>
+                </legend>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <label htmlFor="settings-timezone" className="block text-[11px] font-medium text-zinc-300">
+                      Time zone
+                    </label>
+                    <input
+                      id="settings-timezone"
+                      list="settings-timezones"
+                      value={place.timezone}
+                      onChange={(e) => setPlace((p) => (p ? { ...p, timezone: e.target.value } : p))}
+                      spellCheck={false}
+                      autoCapitalize="off"
+                      autoComplete="off"
+                      aria-describedby="settings-timezone-hint"
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none transition-colors"
+                    />
+                    <datalist id="settings-timezones">
+                      {timeZoneOptions(place.timezone).map((z) => (
+                        <option key={z} value={z} />
+                      ))}
+                    </datalist>
+                    <p id="settings-timezone-hint" className="text-[11px] text-zinc-500">
+                      Bots tell the time and schedule routines in this zone. This device says {defaultTimeZone()}.
+                    </p>
+                  </div>
+                  <div className="space-y-1">
+                    <label htmlFor="settings-location" className="block text-[11px] font-medium text-zinc-300">
+                      City <span className="font-normal text-zinc-500">(optional)</span>
+                    </label>
+                    <input
+                      id="settings-location"
+                      value={place.location}
+                      maxLength={MAX_LOCATION_CHARS}
+                      onChange={(e) => setPlace((p) => (p ? { ...p, location: e.target.value } : p))}
+                      placeholder="e.g. Ljubljana"
+                      autoComplete="address-level2"
+                      aria-describedby="settings-location-hint"
+                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors"
+                    />
+                    <p id="settings-location-hint" className="text-[11px] text-zinc-500">
+                      For weather and local tips. Bots only get what you type here, never your GPS location.
+                    </p>
+                  </div>
                 </div>
-              </SwitchRow>
-                </>
-              )}
-              {ideaCap !== null && (
+              </fieldset>
+            )}
+            {signedInDevicesVisible(authRequired, deviceLogin) && (
+              <div data-setting-row>
+                <SignedInDevices />
+              </div>
+            )}
+          </div>
+
+          <div hidden={!show('bots')} data-settings-page="bots" className="space-y-4">
+            {agentTools !== null && (
+              <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800" data-setting-row>
+                <div className="flex-1">
+                  <p id="agent-tools-label" className="text-xs font-medium text-zinc-200">Bots can use their own tools</p>
+                  <p id="agent-tools-hint" className="text-[11px] text-zinc-500">
+                    Delegating to each other, asking you questions, sharing files, skills, searching earlier chats and keeping notes. Off, bots just reply.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={agentTools}
+                  aria-labelledby="agent-tools-label"
+                  aria-describedby="agent-tools-hint"
+                  onClick={() => {
+                    playSfx('click');
+                    setAgentTools((v) => !v);
+                  }}
+                  className={`relative shrink-0 w-9 h-5 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                    agentTools ? 'bg-sky-600' : 'bg-zinc-700'
+                  }`}
+                >
+                  <span
+                    className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${agentTools ? 'translate-x-4' : ''}`}
+                  />
+                </button>
+              </div>
+            )}
+
+            {(proactive || ideaCap !== null) && (
+              <fieldset className="space-y-3 pt-2 border-t border-zinc-800" data-testid="proactive-settings" data-settings-section>
+                <legend className={pageLegend('bots')}>
+                  <Sparkles size={14} className="text-info" aria-hidden="true" />
+                  <span>Bots on their own</span>
+                </legend>
+                {/* The jar's row stands on its own: a server without decide_first still shows it (#323 S3). */}
+                {proactive && (
+                  <>
                 <SwitchRow
-                  id="idea-jar"
-                  label="Free bots peek in the idea jar"
-                  hint="A bot with nothing on takes the oldest idea and writes a take: worth it or not, how big, and a plan. It reads only. Nothing starts until you press Do it."
-                  checked={ideaCap > 0}
-                  onToggle={() =>
-                    setIdeaCap((c) => {
-                      const next = ideaCapForSwitch(!(c && c > 0), lastIdeaCap());
-                      if (next > 0) rememberIdeaCap(next);
-                      return next;
-                    })
-                  }
+                  id="decide-first"
+                  label="Bots decide reversible choices themselves"
+                  hint="Instead of asking you to pick, they run their own checks, ask a teammate, choose, and show it with a Change button. They still ask you before sending, paying, deleting or signing in."
+                  checked={proactive.decide_first}
+                  onToggle={() => setProactive((p) => (p ? { ...p, decide_first: !p.decide_first } : p))}
+                />
+                <SwitchRow
+                  id="work-ahead"
+                  label="Bots work ahead while I’m away"
+                  hint="When a chat has been quiet for 2 hours, its lead finishes open checks and gets the next step ready. You get one “While you were away” message per chat a day at most. They never send, pay or contact anyone."
+                  checked={proactive.work_ahead}
+                  onToggle={() => setProactive((p) => (p ? { ...p, work_ahead: !p.work_ahead } : p))}
                 >
                   <div className="mt-2 flex items-center gap-2">
-                    <label htmlFor="idea-jar-cap" className={`text-[11px] ${ideaCap > 0 ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                    <label htmlFor="work-ahead-cap" className={`text-[11px] ${proactive.work_ahead ? 'text-zinc-300' : 'text-zinc-500'}`}>
                       At most
                     </label>
                     <select
-                      id="idea-jar-cap"
-                      value={ideaCap > 0 ? ideaCap : lastIdeaCap() ?? IDEA_CAP_DEFAULT}
-                      disabled={ideaCap <= 0}
-                      onChange={(e) => {
-                        const n = Number(e.target.value);
-                        rememberIdeaCap(n);
-                        setIdeaCap(n);
-                      }}
+                      id="work-ahead-cap"
+                      value={proactive.work_ahead_daily_cap}
+                      disabled={!proactive.work_ahead}
+                      onChange={(e) => setProactive((p) => (p ? { ...p, work_ahead_daily_cap: Number(e.target.value) } : p))}
                       className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none disabled:opacity-50"
                     >
-                      {Array.from({ length: IDEA_CAP_MAX - IDEA_CAP_MIN + 1 }, (_, i) => i + IDEA_CAP_MIN).map((n) => (
+                      {Array.from({ length: WORK_AHEAD_CAP_MAX - WORK_AHEAD_CAP_MIN + 1 }, (_, i) => i + WORK_AHEAD_CAP_MIN).map((n) => (
                         <option key={n} value={n}>
                           {n}
                         </option>
                       ))}
                     </select>
-                    <span className={`text-[11px] ${ideaCap > 0 ? 'text-zinc-300' : 'text-zinc-500'}`}>
-                      {(ideaCap > 0 ? ideaCap : lastIdeaCap() ?? IDEA_CAP_DEFAULT) === 1 ? 'take' : 'takes'} a day in each space
+                    <span className={`text-[11px] ${proactive.work_ahead ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                      {proactive.work_ahead_daily_cap === 1 ? 'time' : 'times'} a day in each space
                     </span>
                   </div>
                 </SwitchRow>
-              )}
-            </fieldset>
-          )}
-
-          {missionBoard !== null && (
-            <fieldset className="space-y-3 pt-2 border-t border-zinc-800" data-testid="mission-board-settings">
-              <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
-                <KanbanSquare size={14} className="text-sky-400" aria-hidden="true" />
-                <span>Mission board</span>
-              </legend>
-              <SwitchRow
-                id="mission-board"
-                label="Show the Mission board"
-                hint="One board for all your team’s work: Ready, Working, Needs you, Review and Verified. A task reaches Verified only when a check passes, not on a bot’s word."
-                checked={missionBoard}
-                onToggle={() => setMissionBoard((v) => !v)}
-              />
-              {autofix !== null && (
-                <SwitchRow
-                  id="autofix"
-                  label="Retry failed tasks with AutoFix"
-                  hint="When a task fails, AutoFix works out why and plans a retry that fits: wait a bit, start from a checkpoint, or pass along what the check said. It never retries a missing login, a denied action or a spent budget."
-                  checked={autofix.autofix !== 'off'}
-                  onToggle={() => setAutofix((a) => (a ? { ...a, autofix: a.autofix === 'off' ? 'suggest' : 'off' } : a))}
-                >
-                  {autofix.autofix !== 'off' && (
-                    <div className="mt-2 space-y-2" data-testid="autofix-options">
-                      <div role="radiogroup" aria-label="How AutoFix retries" className="space-y-1">
-                        {AUTOFIX_MODES.filter((m) => m.value !== 'off').map((m) => (
-                          <label key={m.value} className="flex items-start gap-2 min-h-[32px] cursor-pointer text-[11px]">
-                            <input
-                              type="radio"
-                              name="autofix-mode"
-                              value={m.value}
-                              checked={autofix.autofix === m.value}
-                              onChange={() => setAutofix((a) => (a ? { ...a, autofix: m.value } : a))}
-                              className="mt-0.5 accent-sky-500"
-                            />
-                            <span>
-                              <span className="block font-medium text-zinc-200">{m.value === 'suggest' ? 'Ask me first' : 'Retry on its own'}</span>
-                              <span className="block text-zinc-500">{m.hint}</span>
-                            </span>
-                          </label>
-                        ))}
-                      </div>
-                      <div className="flex flex-wrap items-center gap-2">
-                        <label htmlFor="recovery-pct" className="text-[11px] text-zinc-300">
-                          Retries may spend up to
-                        </label>
-                        <select
-                          id="recovery-pct"
-                          value={autofix.recovery_budget_pct}
-                          onChange={(e) => setAutofix((a) => (a ? { ...a, recovery_budget_pct: Number(e.target.value) } : a))}
-                          className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
-                        >
-                          {[...new Set([...RECOVERY_PCTS, autofix.recovery_budget_pct])]
-                            .sort((x, y) => x - y)
-                            .map((n) => (
-                              <option key={n} value={n}>
-                                {n}%
-                              </option>
-                            ))}
-                        </select>
-                        <span className="text-[11px] text-zinc-300">of each task’s budget</span>
-                      </div>
-                    </div>
-                  )}
-                </SwitchRow>
-              )}
-              {lessons !== null && (
-                <SwitchRow
-                  id="lessons"
-                  label="Learn from earlier work"
-                  hint="Before similar work, each bot sees what went wrong in its last 30 days: failed checks, stalled turns, your send-backs and goals that stopped holding."
-                  checked={lessons === 'on'}
-                  onToggle={() => setLessons((v) => (v === 'on' ? 'off' : 'on'))}
-                />
-              )}
-              {flightSchool !== null && <FlightSchoolSetting value={flightSchool} onChange={setFlightSchool} />}
-              {auditor !== null && (
-                <SwitchRow
-                  id="auditor"
-                  label="Challenge important work with an audit"
-                  hint={AUDITOR_HINT}
-                  checked={auditor.auditor === 'on'}
-                  onToggle={() => setAuditor((a) => (a ? { ...a, auditor: a.auditor === 'on' ? 'off' : 'on' } : a))}
-                >
-                  {auditor.auditor === 'on' && (
-                    <div className="mt-2 flex flex-wrap items-center gap-2" data-testid="auditor-options">
-                      <label htmlFor="auditor-cap" className="text-[11px] text-zinc-300">
+                  </>
+                )}
+                {ideaCap !== null && (
+                  <SwitchRow
+                    id="idea-jar"
+                    label="Free bots peek in the idea jar"
+                    hint="A bot with nothing on takes the oldest idea and writes a take: worth it or not, how big, and a plan. It reads only. Nothing starts until you press Do it."
+                    checked={ideaCap > 0}
+                    onToggle={() =>
+                      setIdeaCap((c) => {
+                        const next = ideaCapForSwitch(!(c && c > 0), lastIdeaCap());
+                        if (next > 0) rememberIdeaCap(next);
+                        return next;
+                      })
+                    }
+                  >
+                    <div className="mt-2 flex items-center gap-2">
+                      <label htmlFor="idea-jar-cap" className={`text-[11px] ${ideaCap > 0 ? 'text-zinc-300' : 'text-zinc-500'}`}>
                         At most
                       </label>
                       <select
-                        id="auditor-cap"
-                        value={auditor.auditor_daily_cap}
-                        onChange={(e) => setAuditor((a) => (a ? { ...a, auditor_daily_cap: Number(e.target.value) } : a))}
-                        className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                        id="idea-jar-cap"
+                        value={ideaCap > 0 ? ideaCap : lastIdeaCap() ?? IDEA_CAP_DEFAULT}
+                        disabled={ideaCap <= 0}
+                        onChange={(e) => {
+                          const n = Number(e.target.value);
+                          rememberIdeaCap(n);
+                          setIdeaCap(n);
+                        }}
+                        className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none disabled:opacity-50"
                       >
-                        {[...new Set([...DAILY_CAPS, auditor.auditor_daily_cap])]
-                          .sort((x, y) => x - y)
-                          .map((n) => (
-                            <option key={n} value={n}>
-                              {n}
-                            </option>
-                          ))}
+                        {Array.from({ length: IDEA_CAP_MAX - IDEA_CAP_MIN + 1 }, (_, i) => i + IDEA_CAP_MIN).map((n) => (
+                          <option key={n} value={n}>
+                            {n}
+                          </option>
+                        ))}
                       </select>
-                      <span className="text-[11px] text-zinc-300">{auditor.auditor_daily_cap === 1 ? 'audit' : 'audits'} a day</span>
+                      <span className={`text-[11px] ${ideaCap > 0 ? 'text-zinc-300' : 'text-zinc-500'}`}>
+                        {(ideaCap > 0 ? ideaCap : lastIdeaCap() ?? IDEA_CAP_DEFAULT) === 1 ? 'take' : 'takes'} a day in each space
+                      </span>
                     </div>
-                  )}
-                  {(auditor.auditor === 'on' || modelError) && auditor.auditor_model !== undefined && (
-                    <AuditorModelSetting
-                      value={auditor.auditor_model}
-                      error={modelError ? AUDITOR_MODEL_ERROR : null}
-                      onChange={(m) => {
-                        setSaveError(null);
-                        setAuditor((x) => (x ? { ...x, auditor_model: m } : x));
-                      }}
-                    />
-                  )}
-                </SwitchRow>
-              )}
-              {discovery !== null && <DiscoverySetting value={discovery} onChange={setDiscovery} />}
-            </fieldset>
-          )}
+                  </SwitchRow>
+                )}
+              </fieldset>
+            )}
 
-          <fieldset className="space-y-3 pt-2 border-t border-zinc-800">
-            <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
-              <Bell size={14} className="text-amber-300" />
-              <span>Notifications</span>
-            </legend>
-
-            <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800" data-testid="device-notify">
-              <div className="flex-1 min-w-0">
-                <p id="browser-notify-label" className="text-xs font-medium text-zinc-200">Notify me on this device</p>
-                <p id="browser-notify-hint" className={`text-[11px] ${notifyHint.warn ? 'text-amber-300' : 'text-zinc-500'}`}>
-                  {notifyHint.text}
-                </p>
-                {notifyError && (
-                  <p className="mt-1 text-[11px] text-rose-400" role="alert">
-                    {notifyError}
+            {missionBoard !== null && (
+              <fieldset className="space-y-3 pt-2 border-t border-zinc-800" data-testid="mission-board-settings" data-settings-section>
+                <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
+                  <KanbanSquare size={14} className="text-sky-400" aria-hidden="true" />
+                  <span>Mission board</span>
+                </legend>
+                <SwitchRow
+                  id="mission-board"
+                  label="Show the Mission board"
+                  hint="One board for all your team’s work: Ready, Working, Needs you, Review and Verified. A task reaches Verified only when a check passes, not on a bot’s word."
+                  checked={missionBoard}
+                  onToggle={() => setMissionBoard((v) => !v)}
+                />
+                {autofix !== null && (
+                  <SwitchRow
+                    id="autofix"
+                    label="Retry failed tasks with AutoFix"
+                    hint="When a task fails, AutoFix works out why and plans a retry that fits: wait a bit, start from a checkpoint, or pass along what the check said. It never retries a missing login, a denied action or a spent budget."
+                    checked={autofix.autofix !== 'off'}
+                    onToggle={() => setAutofix((a) => (a ? { ...a, autofix: a.autofix === 'off' ? 'suggest' : 'off' } : a))}
+                  >
+                    {autofix.autofix !== 'off' && (
+                      <div className="mt-2 space-y-2" data-testid="autofix-options">
+                        <div role="radiogroup" aria-label="How AutoFix retries" className="space-y-1">
+                          {AUTOFIX_MODES.filter((m) => m.value !== 'off').map((m) => (
+                            <label key={m.value} className="flex items-start gap-2 min-h-[32px] cursor-pointer text-[11px]">
+                              <input
+                                type="radio"
+                                name="autofix-mode"
+                                value={m.value}
+                                checked={autofix.autofix === m.value}
+                                onChange={() => setAutofix((a) => (a ? { ...a, autofix: m.value } : a))}
+                                className="mt-0.5 accent-sky-500"
+                              />
+                              <span>
+                                <span className="block font-medium text-zinc-200">{m.value === 'suggest' ? 'Ask me first' : 'Retry on its own'}</span>
+                                <span className="block text-zinc-500">{m.hint}</span>
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <label htmlFor="recovery-pct" className="text-[11px] text-zinc-300">
+                            Retries may spend up to
+                          </label>
+                          <select
+                            id="recovery-pct"
+                            value={autofix.recovery_budget_pct}
+                            onChange={(e) => setAutofix((a) => (a ? { ...a, recovery_budget_pct: Number(e.target.value) } : a))}
+                            className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                          >
+                            {[...new Set([...RECOVERY_PCTS, autofix.recovery_budget_pct])]
+                              .sort((x, y) => x - y)
+                              .map((n) => (
+                                <option key={n} value={n}>
+                                  {n}%
+                                </option>
+                              ))}
+                          </select>
+                          <span className="text-[11px] text-zinc-300">of each task’s budget</span>
+                        </div>
+                      </div>
+                    )}
+                  </SwitchRow>
+                )}
+                {lessons !== null && (
+                  <SwitchRow
+                    id="lessons"
+                    label="Learn from earlier work"
+                    hint="Before similar work, each bot sees what went wrong in its last 30 days: failed checks, stalled turns, your send-backs and goals that stopped holding."
+                    checked={lessons === 'on'}
+                    onToggle={() => setLessons((v) => (v === 'on' ? 'off' : 'on'))}
+                  />
+                )}
+                {flightSchool !== null && <FlightSchoolSetting value={flightSchool} onChange={setFlightSchool} />}
+                {auditor !== null && (
+                  <SwitchRow
+                    id="auditor"
+                    label="Challenge important work with an audit"
+                    hint={AUDITOR_HINT}
+                    checked={auditor.auditor === 'on'}
+                    onToggle={() => setAuditor((a) => (a ? { ...a, auditor: a.auditor === 'on' ? 'off' : 'on' } : a))}
+                  >
+                    {auditor.auditor === 'on' && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2" data-testid="auditor-options">
+                        <label htmlFor="auditor-cap" className="text-[11px] text-zinc-300">
+                          At most
+                        </label>
+                        <select
+                          id="auditor-cap"
+                          value={auditor.auditor_daily_cap}
+                          onChange={(e) => setAuditor((a) => (a ? { ...a, auditor_daily_cap: Number(e.target.value) } : a))}
+                          className="bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1.5 text-xs text-zinc-100 focus:border-sky-500 focus:outline-none"
+                        >
+                          {[...new Set([...DAILY_CAPS, auditor.auditor_daily_cap])]
+                            .sort((x, y) => x - y)
+                            .map((n) => (
+                              <option key={n} value={n}>
+                                {n}
+                              </option>
+                            ))}
+                        </select>
+                        <span className="text-[11px] text-zinc-300">{auditor.auditor_daily_cap === 1 ? 'audit' : 'audits'} a day</span>
+                      </div>
+                    )}
+                    {(auditor.auditor === 'on' || modelError) && auditor.auditor_model !== undefined && (
+                      <AuditorModelSetting
+                        value={auditor.auditor_model}
+                        error={modelError ? AUDITOR_MODEL_ERROR : null}
+                        onChange={(m) => {
+                          setSaveError(null);
+                          setAuditor((x) => (x ? { ...x, auditor_model: m } : x));
+                        }}
+                      />
+                    )}
+                  </SwitchRow>
+                )}
+                {discovery !== null && <DiscoverySetting value={discovery} onChange={setDiscovery} />}
+              </fieldset>
+            )}
+            {limits && (
+              <fieldset className="space-y-3 pt-2 border-t border-zinc-800" data-setting-row>
+                <legend className="flex items-center gap-2 text-xs font-medium text-zinc-300 pt-3">
+                  <Layers size={14} className="text-sky-300" aria-hidden="true" />
+                  <span>Parallel work</span>
+                </legend>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  {LIMIT_FIELDS.map(({ key, label, hint }) => {
+                    const err = limitErrors[key];
+                    const { min, max } = TURN_LIMITS[key];
+                    return (
+                      <div key={key} className="space-y-1">
+                        <label htmlFor={`limit-${key}`} className="block text-[11px] font-medium text-zinc-300">
+                          {label}
+                        </label>
+                        <input
+                          id={`limit-${key}`}
+                          type="number"
+                          inputMode="numeric"
+                          min={min}
+                          max={max}
+                          step={1}
+                          value={limits[key]}
+                          onChange={(e) => setLimits((prev) => (prev ? { ...prev, [key]: e.target.value } : prev))}
+                          aria-invalid={!!err}
+                          aria-describedby={`limit-${key}-hint`}
+                          className={`w-full bg-zinc-950 border rounded-lg px-3 py-2 text-xs text-zinc-100 focus:outline-none transition-colors ${
+                            err ? 'border-rose-500/60 focus:border-rose-400' : 'border-zinc-800 focus:border-sky-500'
+                          }`}
+                        />
+                        <p id={`limit-${key}-hint`} className={`text-[11px] ${err ? 'text-rose-300' : 'text-zinc-500'}`}>
+                          {err ?? `${hint} (${min}–${max})`}
+                        </p>
+                      </div>
+                    );
+                  })}
+                </div>
+                {perAgentOverGlobal && (
+                  <p className="text-[11px] text-amber-300" role="status">
+                    The total is lower than the per-bot limit, so a bot never gets more than {limits.max_turns_global} at once.
                   </p>
                 )}
+              </fieldset>
+            )}
+          </div>
+
+          <div hidden={!show('usage')} data-settings-page="usage">
+            <fieldset className={`min-w-0 space-y-3 ${pageTop}`} data-settings-section data-usage-section>
+              <legend className={pageLegend('usage')}>
+                <Gauge size={14} className="text-sky-300" aria-hidden="true" />
+                <span>Usage</span>
+              </legend>
+              <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800" data-setting-row>
+                <Gauge size={15} className="text-zinc-500" aria-hidden="true" />
+                <span className="flex-1 text-xs font-medium text-zinc-200">AI use in this chat</span>
+                <span className="font-mono text-xs text-zinc-300">{tokensUsed} tokens</span>
               </div>
-              {/* The track stays 36×20; the button around it is a 44×44 tap target. */}
-              <button
-                type="button"
-                role="switch"
-                aria-checked={browserNotify}
-                aria-labelledby="browser-notify-label"
-                aria-describedby="browser-notify-hint"
-                aria-busy={notifyBusy}
-                disabled={notifyBusy || (!browserNotify && (notifyBlocked || permission === 'denied'))}
-                onClick={toggleBrowserNotify}
-                className="group shrink-0 -m-3 p-3 rounded-full disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
-              >
-                <span className={`relative block w-9 h-5 rounded-full transition-colors ${browserNotify ? 'bg-sky-600' : 'bg-zinc-700'}`}>
-                  <span
-                    className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${browserNotify ? 'translate-x-4' : ''}`}
-                  />
+              {tokenLimits !== null && (
+                <div className="space-y-2" role="group" aria-labelledby="token-limits-h" data-token-limits data-setting-row>
+                  <div>
+                    <p id="token-limits-h" className="text-[11px] font-semibold text-zinc-200">
+                      Token limits
+                    </p>
+                    <p className="text-[11px] text-zinc-500">Bots can use as much AI as they need. Set a limit to cap spending per task.</p>
+                  </div>
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <DefaultLimitField
+                      id="default-task-limit"
+                      label="New tasks"
+                      scope="task"
+                      value={tokenLimits.task}
+                      onChange={(v) => setTokenLimits((p) => (p ? { ...p, task: v } : p))}
+                    />
+                    <DefaultLimitField
+                      id="default-mission-limit"
+                      label="New missions"
+                      scope="mission"
+                      value={tokenLimits.mission}
+                      onChange={(v) => setTokenLimits((p) => (p ? { ...p, mission: v } : p))}
+                    />
+                  </div>
+                  <p className="text-[11px] text-zinc-500">You can still set or remove a limit on any task or mission from the board.</p>
+                </div>
+              )}
+              {chainBudget !== null && (
+                <div className="space-y-1" data-chain-token-budget data-setting-row>
+                  <DefaultLimitField id="chain-token-budget" label="Hand-offs per request" scope="request" value={chainBudget} onChange={setChainBudget} />
+                  <p className="text-[11px] text-zinc-500">
+                    With no limit, bots hand work to each other until they're done. Set one and they pause and ask you before going over it for one of
+                    your messages.
+                  </p>
+                </div>
+              )}
+              {spendStop !== null && (
+                <div data-setting-row>
+                  <SpendStopFields value={spendStop} onChange={setSpendStop} open={isOpen} savedKey={spendSaved} />
+                </div>
+              )}
+              <div data-setting-row>
+                <DailyUsagePanel open={isOpen} />
+              </div>
+              <div data-setting-row>
+                <BudgetOverview open={isOpen} onOpenBot={onOpenBotBudget} />
+              </div>
+            </fieldset>
+          </div>
+
+          <div hidden={!show('notifications')} data-settings-page="notifications">
+            <fieldset className={`space-y-3 ${pageTop}`} data-settings-section>
+              <legend className={pageLegend('notifications')}>
+                <Bell size={14} className="text-amber-300" aria-hidden="true" />
+                <span>Notifications</span>
+              </legend>
+              <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800" data-setting-row>
+                <span className="flex-1 text-xs font-medium text-zinc-200 flex items-center gap-2">
+                  <BellRing size={15} className={nudges ? 'text-amber-400' : 'text-zinc-500'} aria-hidden="true" />
+                  <span id="nudges-label">Show nudges</span>
                 </span>
-              </button>
-            </div>
-
-            <div>
-              <label htmlFor="notify-webhook" className="block text-xs font-medium text-zinc-400 mb-1">
-                Phone webhook (optional)
-              </label>
-              <div className="flex gap-1.5">
-                <input
-                  id="notify-webhook"
-                  type={webhookUrl === MASK ? 'password' : 'url'}
-                  value={webhookUrl}
-                  onChange={(e) => setWebhookUrl(e.target.value)}
-                  onFocus={() => webhookUrl === MASK && setWebhookUrl('')}
-                  onBlur={() => !webhookUrl.trim() && settings?.notify_webhook_url === MASK && setWebhookUrl(MASK)}
-                  placeholder="https://ntfy.sh/your-secret-topic"
-                  aria-invalid={!!webhookError}
-                  aria-describedby="notify-webhook-hint"
-                  autoComplete="off"
-                  spellCheck={false}
-                  className={`flex-1 min-w-0 bg-zinc-950 border rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none transition-colors ${
-                    webhookError ? 'border-rose-500/70' : 'border-zinc-800 focus:border-sky-500'
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={nudges}
+                  aria-labelledby="nudges-label"
+                  aria-describedby="nudges-hint"
+                  onClick={() => {
+                    setNudgesEnabled(!nudges);
+                    setNudges(!nudges);
+                  }}
+                  className={`relative shrink-0 w-9 h-5 rounded-full transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                    nudges ? 'bg-sky-600' : 'bg-zinc-700'
                   }`}
-                />
-                {settings?.notify_webhook_url === MASK && (
-                  <button
-                    type="button"
-                    onClick={() => setWebhookUrl('')}
-                    className="px-2.5 rounded-lg text-[11px] font-medium text-zinc-300 border border-zinc-800 hover:text-rose-200 hover:bg-zinc-800 transition-colors"
-                  >
-                    Remove
-                  </button>
-                )}
+                >
+                  <span className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${nudges ? 'translate-x-4' : ''}`} />
+                </button>
+                <span id="nudges-hint" className="sr-only">
+                  A short note at the top of the app when a bot needs you in another chat, and a mark on the tab. The app icon count stays.
+                </span>
               </div>
-              <p id="notify-webhook-hint" className={`mt-1 text-[11px] ${webhookError ? 'text-rose-400' : 'text-zinc-500'}`}>
-                {webhookError ??
-                  (webhookUrl === MASK
-                    ? 'A webhook is saved. Type a new URL to replace it.'
-                    : settings?.notify_webhook_url === MASK && !webhookUrl.trim()
-                      ? 'Saving will remove the webhook.'
-                      : 'https only. Each post has a short title and line, never message text.')}
-              </p>
-            </div>
 
-            <div className="space-y-1.5" role="group" aria-labelledby="notify-kinds-label">
-              <p id="notify-kinds-label" className="text-xs font-medium text-zinc-400">Tell me when</p>
-              {notifyKindsFor(appUpdates, !!proactive, !!discovery, !!flightSchool?.flight_school, spendStop !== null).map((k) => (
-                <label key={k.id} className="flex items-center gap-2 text-[11px] text-zinc-300">
-                  <input
-                    type="checkbox"
-                    className="accent-sky-500"
-                    checked={notifyOn.includes(k.id)}
-                    onChange={(e) => setNotifyOn((prev) => (e.target.checked ? [...prev, k.id] : prev.filter((x) => x !== k.id)))}
-                  />
-                  {k.label}
+
+              <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800" data-testid="device-notify" data-setting-row>
+                <div className="flex-1 min-w-0">
+                  <p id="browser-notify-label" className="text-xs font-medium text-zinc-200">Notify me on this device</p>
+                  <p id="browser-notify-hint" className={`text-[11px] ${notifyHint.warn ? 'text-amber-300' : 'text-zinc-500'}`}>
+                    {notifyHint.text}
+                  </p>
+                  {notifyError && (
+                    <p className="mt-1 text-[11px] text-rose-400" role="alert">
+                      {notifyError}
+                    </p>
+                  )}
+                </div>
+                {/* The track stays 36×20; the button around it is a 44×44 tap target. */}
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={browserNotify}
+                  aria-labelledby="browser-notify-label"
+                  aria-describedby="browser-notify-hint"
+                  aria-busy={notifyBusy}
+                  disabled={notifyBusy || (!browserNotify && (notifyBlocked || permission === 'denied'))}
+                  onClick={toggleBrowserNotify}
+                  className="group shrink-0 -m-3 p-3 rounded-full disabled:opacity-40 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+                >
+                  <span className={`relative block w-9 h-5 rounded-full transition-colors ${browserNotify ? 'bg-sky-600' : 'bg-zinc-700'}`}>
+                    <span
+                      className={`absolute top-0.5 left-0.5 w-4 h-4 rounded-full bg-white transition-transform motion-reduce:transition-none ${browserNotify ? 'translate-x-4' : ''}`}
+                    />
+                  </span>
+                </button>
+              </div>
+
+              <div data-setting-row>
+                <label htmlFor="notify-webhook" className="block text-xs font-medium text-zinc-400 mb-1">
+                  Phone webhook (optional)
                 </label>
-              ))}
+                <div className="flex gap-1.5">
+                  <input
+                    id="notify-webhook"
+                    type={webhookUrl === MASK ? 'password' : 'url'}
+                    value={webhookUrl}
+                    onChange={(e) => setWebhookUrl(e.target.value)}
+                    onFocus={() => webhookUrl === MASK && setWebhookUrl('')}
+                    onBlur={() => !webhookUrl.trim() && settings?.notify_webhook_url === MASK && setWebhookUrl(MASK)}
+                    placeholder="https://ntfy.sh/your-secret-topic"
+                    aria-invalid={!!webhookError}
+                    aria-describedby="notify-webhook-hint"
+                    autoComplete="off"
+                    spellCheck={false}
+                    className={`flex-1 min-w-0 bg-zinc-950 border rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:outline-none transition-colors ${
+                      webhookError ? 'border-rose-500/70' : 'border-zinc-800 focus:border-sky-500'
+                    }`}
+                  />
+                  {settings?.notify_webhook_url === MASK && (
+                    <button
+                      type="button"
+                      onClick={() => setWebhookUrl('')}
+                      className="px-2.5 rounded-lg text-[11px] font-medium text-zinc-300 border border-zinc-800 hover:text-rose-200 hover:bg-zinc-800 transition-colors"
+                    >
+                      Remove
+                    </button>
+                  )}
+                </div>
+                <p id="notify-webhook-hint" className={`mt-1 text-[11px] ${webhookError ? 'text-rose-400' : 'text-zinc-500'}`}>
+                  {webhookError ??
+                    (webhookUrl === MASK
+                      ? 'A webhook is saved. Type a new URL to replace it.'
+                      : settings?.notify_webhook_url === MASK && !webhookUrl.trim()
+                        ? 'Saving will remove the webhook.'
+                        : 'https only. Each post has a short title and line, never message text.')}
+                </p>
+              </div>
+
+              <div className="space-y-1.5" role="group" aria-labelledby="notify-kinds-label" data-setting-row>
+                <p id="notify-kinds-label" className="text-xs font-medium text-zinc-400">Tell me when</p>
+                {notifyKindsFor(appUpdates, !!proactive, !!discovery, !!flightSchool?.flight_school, spendStop !== null).map((k) => (
+                  <label key={k.id} className="flex items-center gap-2 text-[11px] text-zinc-300">
+                    <input
+                      type="checkbox"
+                      className="accent-sky-500"
+                      checked={notifyOn.includes(k.id)}
+                      onChange={(e) => setNotifyOn((prev) => (e.target.checked ? [...prev, k.id] : prev.filter((x) => x !== k.id)))}
+                    />
+                    {k.label}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          </div>
+        </form>
+
+        {/* Shell-level details most people never need: closed until opened. CodingAgents saves at once and has
+            its own Create form, so it sits outside the Settings form. */}
+        <details hidden={!show('general')} data-settings-page="general" data-settings-section data-for-developers className="group rounded-xl border border-zinc-800 bg-zinc-950/40">
+          <summary className="flex items-center gap-2 px-3 py-2.5 min-h-[44px] cursor-pointer list-none rounded-xl text-xs font-medium text-zinc-300 hover:text-zinc-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 [&::-webkit-details-marker]:hidden">
+            <ChevronRight size={14} className="text-zinc-500 transition-transform motion-reduce:transition-none group-open:rotate-90" aria-hidden="true" />
+            For developers
+          </summary>
+          <div className="space-y-3 px-3 pb-3">
+            <div data-setting-row>
+              <LayaStatusRow />
             </div>
-          </fieldset>
+            <div data-setting-row>
+              <CodingAgents currentSpace={getCurrentSpace()} />
+            </div>
+          </div>
+        </details>
 
-          {signedInDevicesVisible(authRequired, deviceLogin) && <SignedInDevices />}
-
+        {/* One Save for every page: it submits the form above, wherever it sits. */}
+        <div className="space-y-3" data-settings-save>
           {saveError && (
             <div className="bg-rose-500/10 border border-rose-500/20 text-rose-300 px-3 py-2 rounded-lg text-xs flex items-center gap-2" role="alert">
               <AlertTriangle size={14} />
@@ -1238,13 +1292,14 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
             </button>
             <button
               type="submit"
+              form="kw-app-settings-form"
               disabled={saving || !!webhookError || limitsInvalid || tokenLimitsInvalid || spendStopInvalid}
               className="px-4 py-2 rounded-lg text-xs font-medium text-white bg-sky-600 hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-50"
             >
               {saving ? 'Saving…' : 'Save'}
             </button>
           </div>
-        </form>
+        </div>
     </>,
   );
 };

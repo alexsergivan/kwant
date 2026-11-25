@@ -1153,3 +1153,8 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
   body:has(> .kw-print-sign) { background: white !important; }
   body > .kw-print-sign { display: flex !important; page: sign; break-inside: avoid; }
 }
+
+/* 36e: Settings › All spaces › "Find a setting" hides rows and blocks without the typed words. */
+[data-find-hidden] {
+  display: none !important;
+}

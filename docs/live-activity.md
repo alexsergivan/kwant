@@ -57,8 +57,8 @@ scoped to the turn). The `activity` step of kind `thinking` only marks start (`r
 (`ok`, with `text`). While it's running, show the `ThinkingDelta` text under it.
 
 A `note` step (status `ok`) explains a limit. It is the first step of a turn on an API engine:
-"This engine shares its thinking only when its model returns it; otherwise you'll see what it says
-between steps and each tool it runs." Show it as a muted line, not an error.
+"This AI shares its thinking only when it returns it; otherwise you'll see what it says between
+steps and each tool it runs." Show it as a muted line, not an error.
 
 ### After a reload: `meta.activity` on the reply
 

@@ -326,7 +326,7 @@ const StepDetail: React.FC<{ text: string; path: boolean }> = ({ text, path }) =
   return <>{parts.map((p, i) => <React.Fragment key={i}>{i > 0 && <wbr />}{p}</React.Fragment>)}</>;
 };
 
-const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string; openStep?: string | null; who?: string }> = ({
+export const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string; openStep?: string | null; who?: string }> = ({
   steps,
   live,
   dropped = 0,
