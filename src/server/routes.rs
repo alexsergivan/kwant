@@ -760,6 +760,8 @@ pub(super) async fn get_configured_key(db: &crate::db::Database, target_model: &
         db.get_setting("anthropic_api_key").await.ok().flatten()
     } else if target_model.contains("grok") {
         db.get_setting("xai_api_key").await.ok().flatten()
+    } else if crate::profiles::Engine::from_model(target_model) == Some(crate::profiles::Engine::Mistral) {
+        db.get_setting("mistral_api_key").await.ok().flatten()
     } else if target_model.contains("openai") || target_model.contains("codex") || target_model.contains("gpt") {
         db.get_setting("openai_api_key").await.ok().flatten()
     } else {
@@ -5531,6 +5533,7 @@ pub struct SettingsResponse {
     pub anthropic_api_key: String,
     pub xai_api_key: String,
     pub openai_api_key: String,
+    pub mistral_api_key: String,
     pub ollama_url: String,
     pub claude_cli_found: bool,
     pub claude_cli_path: Option<String>,
@@ -5635,6 +5638,7 @@ pub struct SaveSettingsPayload {
     pub anthropic_api_key: Option<String>,
     pub xai_api_key: Option<String>,
     pub openai_api_key: Option<String>,
+    pub mistral_api_key: Option<String>,
     pub ollama_url: Option<String>,
     /// https only; "" removes it, the mask keeps it.
     pub notify_webhook_url: Option<String>,
@@ -5692,6 +5696,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
     let anthropic = state.db.get_setting("anthropic_api_key").await.unwrap_or(None).unwrap_or_default();
     let xai = state.db.get_setting("xai_api_key").await.unwrap_or(None).unwrap_or_default();
     let openai = state.db.get_setting("openai_api_key").await.unwrap_or(None).unwrap_or_default();
+    let mistral = state.db.get_setting("mistral_api_key").await.unwrap_or(None).unwrap_or_default();
     let ollama = state.db.get_setting("ollama_url").await.unwrap_or(None).unwrap_or_else(|| "http://localhost:11434/v1".to_string());
 
     let claude_bin = find_cli_binary("claude");
@@ -5703,6 +5708,7 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         anthropic_api_key: if anthropic.is_empty() { String::new() } else { "••••••••".into() },
         xai_api_key: if xai.is_empty() { String::new() } else { "••••••••".into() },
         openai_api_key: if openai.is_empty() { String::new() } else { "••••••••".into() },
+        mistral_api_key: if mistral.is_empty() { String::new() } else { "••••••••".into() },
         ollama_url: ollama,
         claude_cli_found: claude_bin.is_some(),
         claude_cli_path: claude_bin,
@@ -5869,6 +5875,14 @@ pub async fn save_settings(
         Some(raw) => Some(crate::drivers::clean_location(raw)),
         None => None,
     };
+    // 35a: checked like an account's key (no spaces, 8 to 512 characters) before anything is kept
+    let mistral_key = match payload.mistral_api_key.as_deref() {
+        Some(key) if !key.starts_with('•') && !key.trim().is_empty() => match crate::profiles::clean_key(key) {
+            Ok(k) => Some(k),
+            Err(e) => return bad(e.replace("api_key", "mistral_api_key")),
+        },
+        _ => None,
+    };
     if let Err(e) =
         super::continuity::save_notify_settings(&state, payload.notify_webhook_url, payload.notify_on).await
     {
@@ -5893,6 +5907,10 @@ pub async fn save_settings(
             let _ = state.db.set_setting("openai_api_key", &key).await;
             engines_changed = true;
         }
+    }
+    if let Some(key) = mistral_key {
+        let _ = state.db.set_setting("mistral_api_key", &key.0).await;
+        engines_changed = true;
     }
     if let Some(url) = payload.ollama_url {
         if !url.is_empty() {
