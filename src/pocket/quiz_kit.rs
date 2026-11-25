@@ -311,4 +311,64 @@ mod tests {
         let names: Vec<&str> = r["teams"].as_array().unwrap().iter().map(|t| t["members"][0].as_str().unwrap()).collect();
         assert!(names.contains(&"Ann") && names.contains(&"Bob"), "{r}");
     }
+
+    /// What the big screen draws each guest as: (name, creature) from its `lobby` rows.
+    fn screen_creatures(ctx: &KitCtx, state: &Value) -> Vec<(String, Value)> {
+        let v = QuizPocket.view(ctx, state, &Viewer::BigScreen);
+        v["lobby"].as_array().expect("the big screen gets the roster").iter().map(|r| (r["name"].as_str().unwrap().to_string(), r["avatar"].clone())).collect()
+    }
+
+    #[test]
+    fn the_big_screen_shows_each_guest_as_the_creature_they_picked() {
+        // Mira's pub quiz (ux-pass-0952 #4): the TV drew guests in join order, not as their pick.
+        // Creatures 7, 0, 4 and 2 of frontend/guest/src/dom.ts AVATARS, joined in that order.
+        let spec = spec();
+        let mut state = QuizPocket.init(&spec);
+        let picks = [("1", "Ana", "horns"), ("2", "Ben", "antenna"), ("3", "Cleo", "beret"), ("4", "Dan", "visor")];
+        let players: Vec<Player> =
+            picks.iter().map(|(id, name, a)| Player { avatar: (*a).to_string(), ..player(id, name) }).collect();
+        let mut ctx = KitCtx::new(&spec, &players, Utc::now());
+        for p in &players {
+            QuizPocket.on_join(&mut ctx, &mut state, p);
+        }
+        let want: Vec<(String, Value)> = picks.iter().map(|(_, n, a)| (n.to_string(), json!(a))).collect();
+        assert_eq!(screen_creatures(&ctx, &state), want, "the TV lobby");
+        // Kept in the saved game at the join, not only looked up when drawn
+        let saved: Vec<&Value> = state["players"].as_array().unwrap().iter().map(|p| &p["avatar"]).collect();
+        assert_eq!(saved, [&json!("horns"), &json!("antenna"), &json!("beret"), &json!("visor")]);
+        // After the start the big screen still gets the roster (answered row, podium crews), so a TV
+        // that opens late or reloads draws the same creatures; guests get no roster outside the lobby
+        QuizPocket.act(&mut ctx, &mut state, &Viewer::Host, "start", &json!({})).unwrap();
+        assert_eq!(QuizPocket.view(&ctx, &state, &Viewer::BigScreen)["phase"], json!("question"));
+        assert_eq!(screen_creatures(&ctx, &state), want, "the TV after the start");
+        assert!(QuizPocket.view(&ctx, &state, &Viewer::Guest("1".into()))["lobby"].is_null());
+        QuizPocket.act(&mut ctx, &mut state, &Viewer::Host, "end", &json!({})).unwrap();
+        assert_eq!(screen_creatures(&ctx, &state), want, "the TV podium");
+        // A guest with no creature (pocket's blank) has none, so the TV picks one as before
+        let mut state = QuizPocket.init(&spec);
+        let blank = [player("9", "Eve")];
+        let mut ctx = KitCtx::new(&spec, &blank, Utc::now());
+        QuizPocket.on_join(&mut ctx, &mut state, &blank[0]);
+        assert!(state["players"][0].get("avatar").is_none(), "{state}");
+        assert_eq!(screen_creatures(&ctx, &state), [("Eve".to_string(), Value::Null)]);
+    }
+
+    #[test]
+    fn a_quiz_saved_before_creatures_were_kept_draws_them_from_the_players() {
+        let spec = spec();
+        let mut state = QuizPocket.init(&spec);
+        let players = [Player { avatar: "beret".into(), ..player("1", "Cleo") }, Player { avatar: "visor".into(), ..player("2", "Dan") }];
+        let mut ctx = KitCtx::new(&spec, &players, Utc::now());
+        for p in &players {
+            QuizPocket.on_join(&mut ctx, &mut state, p);
+        }
+        // As main cf87adfc saved it: players without the key
+        for p in state["players"].as_array_mut().unwrap() {
+            p.as_object_mut().unwrap().remove("avatar");
+        }
+        assert!(!state.to_string().contains("avatar"));
+        assert_eq!(screen_creatures(&ctx, &state), [("Cleo".to_string(), json!("beret")), ("Dan".to_string(), json!("visor"))]);
+        QuizPocket.act(&mut ctx, &mut state, &Viewer::Host, "start", &json!({})).unwrap();
+        assert_eq!(QuizPocket.view(&ctx, &state, &Viewer::Host)["phase"], json!("question"), "it still plays");
+    }
 }
