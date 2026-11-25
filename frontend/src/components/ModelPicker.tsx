@@ -90,7 +90,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engin
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         <div>
           <label htmlFor={`${id}-engine`} className="block text-xs font-medium text-zinc-400 mb-1">
-            Engine
+            AI
           </label>
           <select
             id={`${id}-engine`}
@@ -100,7 +100,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engin
             aria-invalid={health.kind === 'engine_unavailable' || undefined}
             className={`${SELECT} ${health.kind === 'engine_unavailable' ? 'border-amber-500/60' : ''}`}
           >
-            <option value="auto">Auto (Laya picks)</option>
+            <option value="auto">Auto (kwant picks)</option>
             {options.map((o) => (
               <option key={o.id} value={o.id}>
                 {o.via.length ? `${o.label} · ${o.via.join(', ')}` : o.label}
@@ -144,7 +144,7 @@ export const ModelPicker: React.FC<ModelPickerProps> = ({ value, onChange, engin
             aria-describedby={describedBy}
             className={`${SELECT} ${health.kind === 'model_missing' ? 'border-amber-500/60' : ''}`}
           >
-            <option value="">{family === 'auto' ? 'Laya picks per task' : 'Auto (Laya picks)'}</option>
+            <option value="">{family === 'auto' ? 'kwant picks per task' : 'Auto (kwant picks)'}</option>
             {groupByTier(models).map((g) => (
               <optgroup key={g.label} label={g.label}>
                 {g.models.map((m) => (
@@ -193,14 +193,14 @@ const PickHint: React.FC<{ id: string; health: ReturnType<typeof pickHealth>; on
     case 'loading':
       return (
         <p id={id} className="flex items-center gap-1.5 text-[11px] text-zinc-500" aria-live="polite">
-          <Loader2 size={11} className="animate-spin motion-reduce:animate-none" /> Checking which engines can run…
+          <Loader2 size={11} className="animate-spin motion-reduce:animate-none" /> Checking which AIs can run…
         </p>
       );
     case 'none_ready':
       return (
         <div id={id} role="status" className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[11px] text-amber-200 space-y-1">
           <p className="flex items-center gap-1.5 font-medium">
-            <AlertTriangle size={12} /> No engine can run right now
+            <AlertTriangle size={12} /> No AI can run right now
           </p>
           <p className="text-amber-200/80">
             {onSignInClaude ? (
@@ -223,7 +223,7 @@ const PickHint: React.FC<{ id: string; health: ReturnType<typeof pickHealth>; on
           </p>
           <p className="text-amber-200/80">
             {health.reason ? `${health.reason.replace(/`/g, '').replace(/\.$/, '')}. ` : ''}
-            This bot won't switch engine by itself: fix it, or pick another engine.{' '}
+            This bot won’t switch to another AI by itself: fix it, or pick another AI.{' '}
             {health.family === 'claude' && onSignInClaude ? <SignInClaudeLink onSignInClaude={onSignInClaude} /> : <SettingsLink onOpenSettings={onOpenSettings} />}
           </p>
         </div>

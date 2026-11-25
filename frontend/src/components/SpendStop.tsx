@@ -292,7 +292,7 @@ export const SpendStopFields: React.FC<{
             className={field(!!uErr)}
           />
           <p id="spend-stop-usd-hint" className={`text-[11px] ${uErr ? 'text-rose-300' : 'text-zinc-500'}`}>
-            {uErr ?? 'Like 5 or 2.50. Counts only engines that report a cost.'}
+            {uErr ?? 'Like 5 or 2.50. Counts only AIs that report a cost.'}
           </p>
         </div>
       </div>

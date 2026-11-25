@@ -68,7 +68,7 @@ test('Alex: one Claude card says bots use Personal, with This machine first and 
   const html = panel([alexOn]);
   assert.match(html, /Engines &amp; accounts/);
   // The summary replaces the headline: Claude runs on Claude Code CLI through Personal.
-  assert.match(html, /What runs your kwant bots/);
+  assert.match(html, /What runs your bots/);
   assert.match(html, /data-route="claude"[\s\S]*?Claude Code CLI[\s\S]*?>Personal</);
   assert.match(html, /No backup account is ready\./);
   assert.match(html, /data-engine="claude" data-status="ready"/);
@@ -92,10 +92,10 @@ test('switched off with Personal signed in: "Off · Turn on to use Personal"', (
   const html = panel([engine('claude', { enabled: false, status: 'disabled', ready: false, uses: null })]);
   assert.match(html, /data-status="off"/);
   assert.equal(summary(html, 'claude'), 'Off · Turn on to use Personal');
-  assert.match(html, /No engine can run right now\. Claude Code CLI is off: turn it on to use Personal\./);
+  assert.match(html, /No AI can run right now\. Claude Code CLI is off: turn it on to use Personal\./);
   assert.match(html, /role="switch" aria-checked="false"/);
   assert.match(html, /Not checked while Claude Code CLI is off/);
-  assert.doesNotMatch(html, /What runs your kwant bots/);
+  assert.doesNotMatch(html, /What runs your bots/);
   // Nothing to sign in to while it's off.
   assert.doesNotMatch(html, /Sign in with Claude/);
 });

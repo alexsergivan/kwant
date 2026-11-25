@@ -342,7 +342,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               {isEdit ? <Pencil size={14} /> : <Sparkles size={15} />}
             </div>
             <h3 id="agent-modal-title" className="text-sm font-semibold text-zinc-100">
-              {isEdit ? `Edit ${initial?.name}` : joinTeamName ? `New bot for @${joinTeamName}` : 'New kwant bot'}
+              {isEdit ? `Edit ${initial?.name}` : joinTeamName ? `New bot for @${joinTeamName}` : 'New bot'}
             </h3>
           </div>
           <button

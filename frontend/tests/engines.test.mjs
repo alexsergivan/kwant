@@ -112,11 +112,11 @@ test('ready engines come first; not-installed CLIs and Ollama fold under "Not av
 
 test('the headline gives way to the route summary once something is ready', () => {
   // With something ready, the route summary answers "what runs" instead of a count.
-  assert.match(panel(live), /What runs your kwant bots/);
+  assert.match(panel(live), /What runs your bots/);
   assert.doesNotMatch(panel(live), /no API keys are needed/);
   assert.match(panel(live.map((e) => ({ ...e, status: 'signed_out' }))), /Nothing can answer yet/);
-  assert.match(panel(live.map((e) => ({ ...e, status: 'signed_out', enabled: e.id !== 'codex' }))), /No engine can run right now/);
-  assert.match(panel(null), /Checking which engines can run/);
+  assert.match(panel(live.map((e) => ({ ...e, status: 'signed_out', enabled: e.id !== 'codex' }))), /No AI can run right now/);
+  assert.match(panel(null), /Checking which AIs can run/);
 });
 
 test('the on/off switch appears only when the server reports it', () => {
@@ -132,7 +132,7 @@ test('the picker offers only engines that can run, plus Auto', () => {
   assert.deepEqual(engines, ['auto', 'claude']);
   const both = live.map((e) => (e.id === 'xai_api' ? { ...e, status: 'ready', models: [{ id: 'grok-4.6', label: 'grok-4.6', default: true }] } : e));
   assert.deepEqual(options(picker('auto', both), 0), [
-    ['auto', 'Auto (Laya picks)'],
+    ['auto', 'Auto (kwant picks)'],
     ['claude', 'Claude · Claude Code CLI'],
     ['grok', 'Grok (xAI) · xAI API key'],
   ]);
@@ -144,7 +144,7 @@ test('the picker offers only engines that can run, plus Auto', () => {
 test('models are grouped Fast, Balanced, Deep with Auto first and the default marked', () => {
   const html = picker('claude', live);
   assert.deepEqual(options(html, 1), [
-    ['', 'Auto (Laya picks)'],
+    ['', 'Auto (kwant picks)'],
     ['haiku', 'Haiku'],
     ['sonnet', 'Sonnet'],
     ['opus', 'Opus (default)'],
@@ -179,7 +179,7 @@ test('a saved engine that can no longer run stays selected with a warning', () =
   assert.ok(options(html, 0).some(([v, l]) => v === 'codex' && l === 'Codex (OpenAI) (can&#x27;t run now)'));
   assert.match(html, /<option value="codex" selected="">/);
   assert.match(html, /Codex \(OpenAI\) can(&#x27;|')t run right now/);
-  assert.match(html, /Not signed in: run codex login\. This bot won(&#x27;|')t switch engine by itself/);
+  assert.match(html, /Not signed in: run codex login\. This bot won’t switch to another AI by itself/);
   assert.match(html, /aria-invalid="true"/);
   assert.deepEqual(m.pickHealth('codex', live), { kind: 'engine_unavailable', family: 'codex', reason: 'Not signed in: run `codex login`' });
   // A model the engine stopped offering.
@@ -194,9 +194,9 @@ test('with nothing ready the picker points to Settings', () => {
   const none = live.map((e) => ({ ...e, status: 'signed_out' }));
   const html = picker('auto', none);
   assert.deepEqual(options(html, 0).map(([v]) => v), ['auto']);
-  assert.match(html, /No engine can run right now/);
+  assert.match(html, /No AI can run right now/);
   assert.match(html, /Open Settings/);
-  assert.match(picker('auto', null), /Checking which engines can run/);
+  assert.match(picker('auto', null), /Checking which AIs can run/);
   // An older server without /api/engines keeps every engine on offer.
   assert.deepEqual(options(picker('auto', []), 0).map(([v]) => v), ['auto', 'claude', 'codex', 'grok', 'ollama']);
 });
