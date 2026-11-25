@@ -620,7 +620,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
                       </option>
                     ))}
                     {profileId && !engineProfiles.some((p) => p.id === profileId) && (
-                      <option value={profileId}>Another AI’s account (cleared on save)</option>
+                      <option value={profileId}>From another AI (cleared on save)</option>
                     )}
                   </select>
                   <label className="mt-1.5 flex items-start gap-2 text-[11px] text-zinc-400">

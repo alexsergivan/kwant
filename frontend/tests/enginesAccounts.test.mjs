@@ -66,7 +66,7 @@ test('ready comes from `ready`, not the host login or the model list', () => {
 
 test('Alex: one Claude card says bots use Personal, with This machine first and signed out', () => {
   const html = panel([alexOn]);
-  assert.match(html, /Engines &amp; accounts/);
+  assert.match(html, /AIs &amp; accounts/);
   // The summary replaces the headline: Claude runs on Claude Code CLI through Personal.
   assert.match(html, /What runs your kwant bots/);
   assert.match(html, /data-route="claude"[\s\S]*?Claude Code CLI[\s\S]*?>Personal</);

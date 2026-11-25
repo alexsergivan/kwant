@@ -112,14 +112,16 @@ const enginesIn = (rel) => {
   return out;
 };
 
-test('the New bot form and the steps list say "AI", not "engine" (plain words, 36h-b-2)', () => {
+test('the New bot form, the steps list and Apps & accounts say "AI", not "engine" (plain words, 36h-b-2)', () => {
   const modal = readFileSync(join(src, 'components/NewAgentModal.tsx'), 'utf8');
-  for (const s of ['title, avatar, AI and more', 'persona, avatar, AI and more', 'Another AI’s account (cleared on save)', 'Switch to this AI’s next account when this one runs out of usage or is signed out']) {
+  for (const s of ['title, avatar, AI and more', 'persona, avatar, AI and more', 'From another AI (cleared on save)', 'Switch to this AI’s next account when this one runs out of usage or is signed out']) {
     assert.ok(modal.includes(s), s);
   }
   assert.match(readFileSync(join(src, 'components/ActivityList.tsx'), 'utf8'), /aria-label="About this AI’s steps"/);
   assert.deepEqual(enginesIn('components/NewAgentModal.tsx'), []);
   assert.deepEqual(enginesIn('components/ActivityList.tsx'), []);
+  // Apps & accounts heading. Only the heading here: the rest of EnginesPanel's "engine" words are #1196's.
+  assert.match(readFileSync(join(src, 'components/EnginesPanel.tsx'), 'utf8'), /id="engines-title"[^>]*>AIs &amp; accounts</);
 });
 
 if (process.argv.includes('--list')) console.log(findBareWording().join('\n'));
