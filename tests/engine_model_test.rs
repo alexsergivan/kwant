@@ -155,7 +155,7 @@ async fn laya_picks_model_tier_pins_and_engine_switches() {
     std::env::set_var("PATH", format!("{}:/usr/bin:/bin", bin.display()));
     std::env::set_var("HOME", tmp.path());
     std::env::set_var("FAKE_DIR", tmp.path());
-    for var in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "OLLAMA_MODEL", "CLAUDE_CONFIG_DIR"] {
+    for var in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY", "OLLAMA_MODEL", "CLAUDE_CONFIG_DIR"] {
         std::env::remove_var(var);
     }
     std::env::set_var("OLLAMA_URL", "http://127.0.0.1:9");
@@ -199,7 +199,7 @@ async fn laya_picks_model_tier_pins_and_engine_switches() {
     assert_eq!(s, StatusCode::NOT_FOUND);
     let (s, v) = call(&app, "POST", "/api/engines/codex", Some(json!({"enabled": false}))).await;
     assert_eq!(s, StatusCode::OK, "{v}");
-    assert_eq!(v["engines"].as_array().unwrap().len(), 8, "the full GET /api/engines shape");
+    assert_eq!(v["engines"].as_array().unwrap().len(), 9, "the full GET /api/engines shape");
     let codex = by_id(&v, "codex");
     assert_eq!((codex["status"].clone(), codex["enabled"].clone(), codex["models"].clone()), (json!("disabled"), json!(false), json!([])));
     assert_eq!((codex["ready"].clone(), codex["uses"].clone()), (json!(false), Value::Null));

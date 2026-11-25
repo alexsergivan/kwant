@@ -2194,21 +2194,105 @@ pub async fn post_webhook(url: String, title: String, body: String) {
     }
 }
 
-/// Turns turn and approval events into notifications, until the bus closes.
+/// How many approval ids the notifier remembers having handled, so a catch-up and the card's
+/// own event never notify twice.
+const NOTIFIED_CARDS: usize = 512;
+/// A catch-up also reads cards this much older than the moment the notifier last had nothing
+/// left to read: a card is stored, then its event sent after an await, and `created_at` keeps
+/// whole seconds.
+const CATCH_UP_SLACK_SECS: i64 = 5;
+/// At most this many cards per catch-up.
+const CATCH_UP_MAX: i64 = 100;
+
+/// The approval ids the notifier already handled (oldest dropped first past [`NOTIFIED_CARDS`]).
+#[derive(Default)]
+struct NotifiedCards {
+    order: std::collections::VecDeque<String>,
+    ids: std::collections::HashSet<String>,
+}
+
+impl NotifiedCards {
+    /// True the first time `id` comes, false after.
+    fn first(&mut self, id: &str) -> bool {
+        if self.ids.contains(id) {
+            return false;
+        }
+        if self.order.len() >= NOTIFIED_CARDS {
+            if let Some(old) = self.order.pop_front() {
+                self.ids.remove(&old);
+            }
+        }
+        self.order.push_back(id.to_string());
+        self.ids.insert(id.to_string());
+        true
+    }
+}
+
+/// Turns turn and approval events into notifications, until the bus closes. When the bus
+/// outruns it (`Lagged`), the approval events it missed are read back from the approvals still
+/// pending, so a person who is away still hears a bot waits for them. A missed `TurnEnded` stays
+/// missed: no record of an ended turn keeps its reply and `quiet` flag.
 pub fn spawn_notifier(state: AppState) -> tokio::task::JoinHandle<()> {
     let mut rx = state.event_sender.subscribe();
     tokio::spawn(async move {
+        let mut notified = NotifiedCards::default();
+        // Every event sent before this moment was read
+        let mut caught_up = chrono::Utc::now();
         loop {
+            if rx.is_empty() {
+                caught_up = chrono::Utc::now();
+            }
             let event = match rx.recv().await {
                 Ok(e) => e,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                    tracing::warn!(missed, "the notifier fell behind the event bus; catching up on pending approvals");
+                    catch_up_approvals(&state, caught_up, &mut notified).await;
+                    continue;
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             };
+            if let RuntimeEvent::ApprovalRequired { id, .. } = event.unscoped() {
+                if !notified.first(id) {
+                    continue;
+                }
+            }
             if let Some(n) = notification_for(&state, &event).await {
                 notify(&state, n).await;
             }
         }
     })
+}
+
+/// Notifies each approval still pending, created since `caught_up` (less the slack), that the
+/// notifier hasn't handled: the ones whose `ApprovalRequired` a lag dropped. A card answered in
+/// the meantime is no longer pending and stays quiet.
+async fn catch_up_approvals(state: &AppState, caught_up: chrono::DateTime<chrono::Utc>, notified: &mut NotifiedCards) {
+    let since = caught_up - chrono::Duration::seconds(CATCH_UP_SLACK_SECS);
+    let cards = match state.db.pending_approvals_since(since, CATCH_UP_MAX).await {
+        Ok(cards) => cards,
+        Err(e) => return tracing::warn!(error = %e, "the notifier could not read pending approvals to catch up"),
+    };
+    for card in cards {
+        if !notified.first(&card.id) {
+            continue;
+        }
+        // The card's details are what its event carried (`parameters` is stored from them)
+        let mut details: Value = serde_json::from_str(&card.parameters).unwrap_or_else(|_| json!({}));
+        if !details.is_object() {
+            details = json!({});
+        }
+        if details["kwant_id"].as_str().is_none_or(str::is_empty) {
+            details["kwant_id"] = json!(card.kwant_id);
+        }
+        let event = RuntimeEvent::ApprovalRequired {
+            id: card.id,
+            tool_name: card.tool_name,
+            details,
+        };
+        if let Some(n) = notification_for(state, &event).await {
+            notify(state, n).await;
+        }
+    }
 }
 
 async fn kwant_name(state: &AppState, id: &str) -> String {
@@ -2450,6 +2534,20 @@ fn place_of_chat(chat: Option<&serde_json::Value>) -> (Option<String>, Option<St
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_notifier_remembers_a_bounded_set_of_cards() {
+        let mut seen = NotifiedCards::default();
+        assert!(seen.first("a"));
+        assert!(!seen.first("a"), "a card is handled once");
+        for i in 0..NOTIFIED_CARDS {
+            seen.first(&format!("c{i}"));
+        }
+        assert_eq!(seen.order.len(), NOTIFIED_CARDS);
+        assert_eq!(seen.ids.len(), NOTIFIED_CARDS);
+        assert!(seen.first("a"), "the oldest id is dropped first");
+        assert!(!seen.first(&format!("c{}", NOTIFIED_CARDS - 1)), "the newest ids are kept");
+    }
 
     #[test]
     fn a_refused_call_names_its_turns_chat_thread_first() {

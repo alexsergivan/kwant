@@ -676,3 +676,216 @@ async fn specs_the_kit_cant_run_are_refused_and_a_pin_is_required() {
     let text = r.body.to_string();
     assert!(text.contains("\"after_date\"") && text.contains("\"days\":7"), "{text}");
 }
+
+// ---- Delete answers now (pa10c) ----
+// Brief: /home/maus/shared/ship-software-safely/autonomy/pocket-apps/pa10b/delete-now-brief.md
+
+/// Every place a guest's name or answer could still be after "Delete answers now": the person's
+/// list and card, the host remote (the same view the socket pushes), the stored kit state, every
+/// player row (removed ones too) and the event log.
+async fn everything_kept(t: &T, code: &str, host_key: &str) -> String {
+    let mut out = String::new();
+    for (app, path, req) in [
+        (&t.main, "/api/pockets".to_string(), person()),
+        (&t.main, format!("/api/pockets/{code}"), person()),
+        (&t.guest, format!("/api/pocket/{code}/host/state"), host_req(host_key)),
+        (&t.guest, format!("/api/pocket/{code}/info"), Req { ip: Some(fresh_ip()), ..Default::default() }),
+    ] {
+        let r = send(app, "GET", &path, None, &req).await;
+        assert_eq!(r.status, StatusCode::OK, "{path}: {}", r.body);
+        out.push_str(&r.body.to_string());
+    }
+    out.push_str(&t.state.db.pocket_get(code).await.unwrap().unwrap().kit_state);
+    for (p, kind, payload) in t.state.db.pocket_events(code).await.unwrap() {
+        out.push_str(&format!("{p:?} {kind} {payload}\n"));
+    }
+    out
+}
+
+/// After the wipe: no word of `gone` anywhere, no player rows, and each old guest key is refused.
+async fn nothing_of(t: &T, code: &str, host_key: &str, gone: &[&str], keys: &[&str]) {
+    let all = everything_kept(t, code, host_key).await;
+    for w in gone {
+        assert!(!all.contains(w), "{w:?} is still kept: {all}");
+    }
+    assert_eq!(t.state.db.pocket_row_counts(code).await.unwrap()[1], 0, "every player row goes, removed ones too");
+    for k in keys {
+        let r = send(&t.guest, "GET", &format!("/api/pocket/{code}/state"), None, &guest_req(code, k)).await;
+        assert_eq!(r.status, StatusCode::UNAUTHORIZED, "an old guest key: {}", r.body);
+    }
+}
+
+#[tokio::test]
+async fn delete_answers_now_keeps_only_the_rsvp_counts() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, host_key) = make(&t, spec(now, "rsvp", json!({ "fields": ["plus_ones", "food_needs"], "price": "€35", "members": ["Anneliese", "Zebulon"] }))).await;
+    let mut people = Vec::new();
+    for n in ["Anneliese", "Bartholomew", "Cordelia", "Dagobert"] {
+        people.push(joined(&t, &code, n).await);
+    }
+    ok(&t, &code, &people[0].1, "answer", json!({ "answer": "yes", "plus_ones": 2, "food": ["nut_allergy"], "food_other": "Sesame-free please" })).await;
+    ok(&t, &code, &people[1].1, "answer", json!({ "answer": "yes" })).await;
+    ok(&t, &code, &people[2].1, "answer", json!({ "answer": "maybe" })).await;
+    ok(&t, &code, &people[3].1, "answer", json!({ "answer": "no" })).await;
+    assert_eq!(host_act(&t, &code, "set_paid", json!({ "player_id": people[0].0 })).await.status, StatusCode::OK);
+    // A removed player's row keeps their name until now
+    let (gone_id, gone_key) = joined(&t, &code, "Evangeline").await;
+    assert_eq!(send(&t.main, "POST", &format!("/api/pockets/{code}/remove"), Some(json!({ "player_id": gone_id })), &person()).await.status, StatusCode::OK);
+    assert_eq!(host_act(&t, &code, "copied", json!({ "to": "Zebulon" })).await.status, StatusCode::OK);
+
+    // While answers are open: refused, nothing changes
+    let before = kit_state(&t, &code).await;
+    let r = host_act(&t, &code, "delete_answers", json!({})).await;
+    assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::CONFLICT, Some("not_now")), "{}", r.body);
+    assert_eq!(r.body["message"], "Close answers first.");
+    assert_eq!(kit_state(&t, &code).await, before);
+    assert_eq!(host_view(&t, &code).await["answers_deleted_at"], Value::Null);
+
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    let line = "4 coming · 1 maybe · 1 no";
+    let h = host_view(&t, &code).await;
+    assert_eq!(h["summary"], line);
+    assert_eq!((h["not_answered"].clone(), h["not_answered_count"].clone()), (json!(["Zebulon"]), json!(1)), "{h}");
+    let expiry = before_expiry(&t, &code).await;
+    assert!(expiry.is_string(), "{expiry}");
+    let r = host_act(&t, &code, "delete_answers", json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let h = &r.body["host_view"];
+    let at = h["answers_deleted_at"].as_str().unwrap_or_else(|| panic!("{h}")).to_string();
+    assert!(DateTime::parse_from_rfc3339(&at).is_ok(), "{at}");
+    assert_eq!(h["summary"], line, "the card's closed face");
+    assert_eq!(h["counts"], json!({ "yes": 2, "maybe": 1, "no": 1, "plus_ones": 2, "coming": 4 }));
+    assert_eq!((h["people"].clone(), h["not_answered"].clone(), h["drafts"].clone()), (json!([]), json!([]), json!([])));
+    assert!(h["food"]["counts"].as_object().unwrap().values().all(|n| n == 0) && h["food"]["other"] == json!([]), "{}", h["food"]);
+    assert_eq!(h["paid"]["not_yet"], json!([]));
+    assert_eq!((r.body["summary"]["summary"].as_str(), r.body["summary"]["answers_deleted_at"].as_str()), (Some(line), Some(at.as_str())), "the Done row");
+    assert_eq!(r.body["summary"]["counts"]["coming"], 4);
+    // The card's "1 never answered" stays (pa10c QA F1): the count, not the name
+    assert_eq!((r.body["summary"]["not_answered"].clone(), h["not_answered_count"].clone()), (json!(1), json!(1)));
+    assert_eq!((r.body["summary"]["joined"].clone(), r.body["pocket"]["players"].clone()), (json!(4), json!(4)), "joined is kept");
+    assert_eq!(r.body["pocket"]["expires_at"], expiry, "the deletion date doesn't move");
+    let ids: Vec<String> = people.iter().map(|p| p.0.clone()).collect();
+    let mut gone: Vec<&str> = vec!["Anneliese", "Bartholomew", "Cordelia", "Dagobert", "Evangeline", "Zebulon", "zebulon", "Sesame", "nut_allergy\":1", &gone_id];
+    gone.extend(ids.iter().map(String::as_str));
+    let keys: Vec<&str> = people.iter().map(|p| p.1.as_str()).chain([gone_key.as_str()]).collect();
+    nothing_of(&t, &code, &host_key, &gone, &keys).await;
+    // Nobody opens their page again; nobody joins
+    let r = send(&t.guest, "POST", &format!("/api/pocket/{code}/rejoin"), Some(json!({ "name": "Anneliese", "pin": PIN })), &Req { ip: Some(fresh_ip()), ..Default::default() }).await;
+    assert_ne!(r.status, StatusCode::OK, "{}", r.body);
+    assert_ne!(join(&t, &code, "Anneliese").await.status, StatusCode::CREATED);
+
+    // A second call: 200, nothing left to wipe, the time stays
+    let st = kit_state(&t, &code).await;
+    let r = host_act(&t, &code, "delete_answers", json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert_eq!(r.body["host_view"]["answers_deleted_at"], json!(at));
+    assert_eq!(kit_state(&t, &code).await, st);
+}
+
+/// The pocket's deletion date as the card shows it.
+async fn before_expiry(t: &T, code: &str) -> Value {
+    send(&t.main, "GET", &format!("/api/pockets/{code}"), None, &person()).await.body["pocket"]["expires_at"].clone()
+}
+
+#[tokio::test]
+async fn delete_ballots_now_keeps_the_winner_and_the_rounds_even_after_the_end() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, host_key) = make(&t, spec(now, "vote", json!({}))).await;
+    // The design's sample: 6/5/3/1 → 6/6/3 → The Old Mill 8 to 7
+    let groups: [(&[usize], usize); 5] = [(&[0, 1], 6), (&[1, 0], 5), (&[2, 0], 2), (&[2, 1], 1), (&[3, 1], 1)];
+    let mut people = Vec::new();
+    for (ranking, n) in groups {
+        for _ in 0..n {
+            let p = joined(&t, &code, &format!("Voterina {}", people.len() + 1)).await;
+            ok(&t, &code, &p.1, "vote", json!({ "ranking": ranking })).await;
+            people.push(p);
+        }
+    }
+    assert_eq!(host_act(&t, &code, "delete_answers", json!({})).await.status, StatusCode::CONFLICT, "open");
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    let before = host_view(&t, &code).await;
+    let line = "The Old Mill wins, 8 to 7 in the last round";
+    assert_eq!(before["summary"], line);
+    // A decided vote is final: the core ends it (and would post the result); its data stays
+    // until the deletion date, and "Delete ballots now" still works
+    pocket::schedule::run_once(&t.state, Utc::now()).await;
+    assert_eq!(before_state(&t, &code).await, "ended");
+    let r = host_act(&t, &code, "delete_answers", json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let h = &r.body["host_view"];
+    assert!(h["answers_deleted_at"].is_string(), "{h}");
+    assert_eq!(h["summary"], line);
+    assert_eq!(h["result"], before["result"], "winner, final counts and every round's counts are kept");
+    assert_eq!(h["result"]["ballots_counted"], 15);
+    assert_eq!((h["voted"].as_u64(), h["voters"].clone()), (Some(15), json!([])));
+    assert_eq!(r.body["summary"]["summary"], line);
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["ballots"].clone(), st["voted"].clone()), (json!({}), json!({})), "{st}");
+    let ids: Vec<String> = people.iter().map(|p| p.0.clone()).collect();
+    let mut gone: Vec<&str> = vec!["Voterina"];
+    gone.extend(ids.iter().map(String::as_str));
+    let keys: Vec<&str> = people.iter().map(|p| p.1.as_str()).collect();
+    nothing_of(&t, &code, &host_key, &gone, &keys).await;
+    // Other host actions don't come back after the end
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::GONE);
+    assert_eq!(host_act(&t, &code, "delete_answers", json!({})).await.status, StatusCode::OK, "idempotent");
+}
+
+async fn before_state(t: &T, code: &str) -> String {
+    t.state.db.pocket_get(code).await.unwrap().unwrap().state
+}
+
+#[tokio::test]
+async fn delete_answers_now_keeps_slot_counts_and_drops_names_and_waiting_lists() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, host_key) = make(&t, spec(now, "signup", json!({ "fields": ["slot_note"] }))).await;
+    let ana = joined(&t, &code, "Anneliese").await;
+    let ben = joined(&t, &code, "Bartholomew").await;
+    let cleo = joined(&t, &code, "Cordelia").await;
+    let dev = joined(&t, &code, "Dagobert").await;
+    ok(&t, &code, &ana.1, "take", json!({ "slot": 0, "note": "Tiramisu" })).await;
+    ok(&t, &code, &ben.1, "take", json!({ "slot": 0 })).await;
+    ok(&t, &code, &cleo.1, "take", json!({ "slot": 1 })).await;
+    ok(&t, &code, &dev.1, "take", json!({ "slot": 0 })).await;
+    // Ana lets go: Ben moves up (a moved-up note), Dev stays waiting
+    ok(&t, &code, &ana.1, "let_go", json!({})).await;
+    ok(&t, &code, &ana.1, "take", json!({ "slot": 1, "note": "Lemonade" })).await;
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    let line = "3 of 3 spots taken · 1 waiting";
+    assert_eq!(host_view(&t, &code).await["summary"], line);
+    let r = host_act(&t, &code, "delete_answers", json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let h = &r.body["host_view"];
+    assert!(h["answers_deleted_at"].is_string(), "{h}");
+    assert_eq!(h["summary"], line);
+    let slots: Vec<(u64, u64, Value, Value)> = h["slots"].as_array().unwrap().iter().map(|s| (s["filled"].as_u64().unwrap(), s["waiting"].as_u64().unwrap(), s["people"].clone(), s["waiting_people"].clone())).collect();
+    assert_eq!(slots, vec![(1, 1, json!([]), json!([])), (2, 0, json!([]), json!([]))]);
+    assert_eq!(h["moved_up"], json!([]));
+    let st = kit_state(&t, &code).await;
+    assert!(st["slots"].as_array().unwrap().iter().all(|s| s["taken"] == json!([]) && s["waiting"] == json!([])), "{st}");
+    assert_eq!(st["moved"], json!({}));
+    let ids = [ana.0.as_str(), ben.0.as_str(), cleo.0.as_str(), dev.0.as_str()];
+    let mut gone = vec!["Anneliese", "Bartholomew", "Cordelia", "Dagobert", "Tiramisu", "Lemonade"];
+    gone.extend(ids);
+    nothing_of(&t, &code, &host_key, &gone, &[&ana.1, &ben.1, &cleo.1, &dev.1]).await;
+
+    // Then the event passes and the pocket ends (pa10c QA F2): the end line counts who took
+    // part from what was kept, not the forgotten players ("Nobody joined.")
+    let mut rx = t.state.event_sender.subscribe();
+    let later = now + Duration::days(7) + Duration::minutes(5);
+    pocket::sweep(&t.state, later).await;
+    pocket::schedule::run_once(&t.state, later).await;
+    assert_eq!(before_state(&t, &code).await, "ended");
+    let mut ends = Vec::new();
+    while let Ok(ev) = rx.try_recv() {
+        match ev {
+            kwnt::drivers::events::RuntimeEvent::Notify { title, body, .. } if title.ends_with("has ended") => ends.push((title, body)),
+            _ => {}
+        }
+    }
+    assert_eq!(ends, vec![("Club dinner has ended".to_string(), "4 players took part.".to_string())]);
+    assert_eq!(send(&t.main, "GET", &format!("/api/pockets/{code}"), None, &person()).await.body["pocket"]["players"], 4);
+}
