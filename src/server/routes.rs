@@ -2959,6 +2959,28 @@ pub(super) async fn stall_limit(db: &crate::db::Database) -> Option<std::time::D
     (secs > 0).then(|| std::time::Duration::from_secs(secs))
 }
 
+/// 36h: the server log line for what a turn runs on (it used to be a "Running on …" thinking line).
+/// Kept out of `run_kwant_turn_inner` so the event's fields don't grow that future's stack frame.
+#[inline(never)]
+fn log_turn_runs_on(
+    kwant: &str,
+    turn: &dyn std::fmt::Display,
+    engine: crate::drivers::engines::EngineId,
+    profile: Option<&crate::db::models::LlmProfile>,
+    model: Option<&str>,
+    tier: Option<&str>,
+) {
+    tracing::info!(
+        kwant = %kwant,
+        turn = %turn,
+        engine = %engine.name(),
+        account = %super::profile_turn::account_name(profile, engine).unwrap_or_default(),
+        model = %model.unwrap_or("default model"),
+        tier = %tier.unwrap_or(""),
+        "turn runs on"
+    );
+}
+
 async fn run_kwant_turn_inner(
     scope: &TurnScope,
     target_kwant: &Kwant,
@@ -3715,15 +3737,16 @@ async fn run_kwant_turn_inner(
             // 36h: what the turn runs on is for the server log only. As a thinking line ("Running on
             // Claude Code CLI · This machine · sonnet (balanced tier)") it was the live reply's status
             // line; the model badge and Details' "Ran on …" already say it, from `turn_runs_on`
+            // Logged from its own frame: inline here, the event's fields sat in this future's poll
+            // frame, which keep_going_test's debug stack can't spare (TurnOpts, #787)
             if let Some(e) = runs_on {
-                tracing::info!(
-                    kwant = %target_kwant.id,
-                    turn = %tag.turn_id,
-                    engine = %e.name(),
-                    account = %super::profile_turn::account_name(profile.as_ref(), e).unwrap_or_default(),
-                    model = %input.model.as_deref().unwrap_or("default model"),
-                    tier = %choice.as_ref().and_then(|c| c.tier).map(|t| t.as_str()).unwrap_or(""),
-                    "turn runs on"
+                log_turn_runs_on(
+                    &target_kwant.id,
+                    &tag.turn_id,
+                    e,
+                    profile.as_ref(),
+                    input.model.as_deref(),
+                    choice.as_ref().and_then(|c| c.tier).map(|t| t.as_str()),
                 );
             }
             if ran_on.is_none() {
