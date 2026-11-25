@@ -456,7 +456,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
               value={prompt}
               onChange={(e) => setPrompt(e.target.value)}
               placeholder="e.g. Answer our support emails kindly, and pass anything about refunds to me."
-              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none"
+              className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none leading-normal"
             />
           </div>
 
@@ -474,7 +474,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
             >
               <span className="text-xs font-medium text-zinc-300">More options</span>
               <span className="min-w-0 flex-1 truncate text-[11px] text-zinc-500">
-                · {isEdit ? 'title, avatar, engine, personality and more' : 'persona, avatar, engine, personality and more'}
+                · {isEdit ? 'title, avatar, engine and more' : 'persona, avatar, engine and more'}
               </span>
               <ChevronRight
                 size={13}
@@ -487,7 +487,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
                 <div>
                   <div className="flex items-center justify-between mb-1.5">
                     <span id="agent-persona-label" className="text-xs font-medium text-zinc-400">
-                      Start from a persona <span className="text-zinc-600 font-normal">· optional</span>
+                      Start from a persona <span className="hidden sm:inline text-zinc-600 font-normal">· optional</span>
                     </span>
                     <div className="flex p-0.5 rounded-lg bg-zinc-950 border border-zinc-800" role="tablist">
                       {PRESET_GROUPS.map((g) => (
@@ -500,7 +500,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
                             playSfx('click');
                             setPresetGroup(g.id);
                           }}
-                          className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium transition-colors ${
+                          className={`px-2.5 py-0.5 rounded-md text-[11px] font-medium whitespace-nowrap transition-colors ${
                             presetGroup === g.id ? 'bg-sky-500/15 text-sky-200' : 'text-zinc-500 hover:text-zinc-300'
                           }`}
                         >
@@ -711,7 +711,7 @@ export const NewAgentModal: React.FC<NewAgentModalProps> = ({
                   value={soul}
                   onChange={(e) => setSoul(e.target.value)}
                   placeholder="e.g. Warm and witty, a little impatient with jargon, celebrates small wins..."
-                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none"
+                  className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-xs text-zinc-100 placeholder-zinc-600 focus:border-sky-500 focus:outline-none transition-colors resize-none leading-normal"
                 />
               </div>
 
