@@ -235,7 +235,8 @@ async fn laya_picks_model_tier_pins_and_engine_switches() {
     let (text, notes) = turn(&app, &state, &kid, "hi").await;
     assert!(text.contains("hello from fake claude"), "{text}");
     assert!(last_argv(tmp.path(), "claude").contains("--model haiku"), "{}", last_argv(tmp.path(), "claude"));
-    assert!(notes.iter().any(|n| n.contains("Running on Claude Code CLI · This machine · haiku (fast tier)")), "{notes:?}");
+    // 36h: no "Running on … (fast tier)" status line; ran_on below names the model and tier
+    assert!(!notes.iter().any(|n| n.starts_with("Running on") || n.contains(" tier)")), "{notes:?}");
     let r = ran_on(&state, &kid).await;
     assert_eq!(
         (r["engine"].clone(), r["family"].clone(), r["model"].clone(), r["tier"].clone(), r["picked_by"].clone(), r["effort"].clone()),

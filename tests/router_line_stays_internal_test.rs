@@ -3,7 +3,9 @@
 //! The live reply card showed the first as its status line until "Running on …" replaced it (Mira
 //! caught it in the 0.9.35 kwant.si clips). Both are debug lines for the server log: no event, no
 //! wire frame and no saved message of a direct-chat turn or a team-routed channel turn carries
-//! them. A fake claude CLI answers turns. Its own test binary: it changes PATH.
+//! them. 36h plain-words: "Running on Claude Code CLI · This machine · sonnet (balanced tier)" went
+//! the same way, so a normal turn's stream has no "Running on" line either. A fake claude CLI
+//! answers turns. Its own test binary: it changes PATH.
 
 #[path = "common/exe.rs"]
 mod exe;
@@ -138,8 +140,8 @@ async fn no_turn_shows_the_router_line_to_a_person() {
         "the turn ran"
     );
     assert!(
-        events.iter().any(|e| matches!(e.unscoped(), RuntimeEvent::ThinkingDelta(t) if t.starts_with("Running on"))),
-        "the live status line still says what it runs on"
+        !events.iter().any(|e| matches!(e.unscoped(), RuntimeEvent::ThinkingDelta(t) if t.starts_with("Running on") || t.contains(" tier)"))),
+        "36h: what the turn runs on stays in the server log, not the live status line"
     );
     assert_eq!(leaks(&events), Vec::<String>::new(), "direct chat: the router line reached the live stream");
     assert_eq!(saved_leaks(&app, &state, &ann).await, Vec::<String>::new(), "direct chat: the router line was saved");

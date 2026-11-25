@@ -1649,7 +1649,7 @@ impl Driver for CliDriver {
 
         let effort = input.effort_level.as_deref().unwrap_or("medium");
 
-        // Kept out of the chat: the turn's "Running on" notice already names the engine and
+        // Kept out of the chat: the turn's `turn_runs_on` event already names the engine and
         // account, and the same binary runs every account
         tracing::info!(
             cli = %self.tool_kind,

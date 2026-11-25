@@ -332,8 +332,9 @@ async fn openai_compatible_account_lists_models_and_streams_a_turn_in_its_space(
     let (text, pieces) = streamed(&events);
     assert_eq!(text, "Hello from gpt-4.1 over OpenAI");
     assert!(pieces >= 3, "streamed piece by piece, not as one block: {pieces}");
+    // 36h: no "Running on …" status line; the account and model are in ran_on below
     let notice = thinking(&events);
-    assert!(notice.contains("Running on Custom API · Copilot via Maestro · gpt-4.1"), "{notice}");
+    assert!(!notice.contains("Running on"), "{notice}");
 
     let (saved, ran_on) = env.reply(&kid).await;
     assert_eq!(saved, "Hello from gpt-4.1 over OpenAI");
