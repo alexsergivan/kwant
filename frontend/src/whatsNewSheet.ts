@@ -26,7 +26,7 @@ export interface WhatsNewEntry {
 }
 
 /** The limits a whatsnew file must keep. scripts/site_release_gate.py checks the same ones at release. */
-export const LIMITS = { highlightsMin: 2, highlightsMax: 6, title: 60, text: 200, fixesMax: 15, fix: 140 } as const;
+export const LIMITS = { highlightsMin: 1, highlightsMax: 6, title: 60, text: 200, fixesMax: 15, fix: 140 } as const;
 
 export const SEEN_KEY = 'kwant:whatsnew:seen';
 /** More fixes than this fold behind "Show N more"; folded, the first FIXES_SHOWN stay visible. */

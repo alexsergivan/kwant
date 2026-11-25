@@ -20,7 +20,7 @@ const m = await loadBundled(`
   import React from 'react';
   import { renderToStaticMarkup } from 'react-dom/server.browser';
   import { Sidebar } from './src/components/Sidebar';
-  import { SpaceSubline, MovedPointer } from './src/components/FirstScreenBits';
+  import { SpaceSubline } from './src/components/FirstScreenBits';
   import { BotHome, AccountCard } from './src/components/BotHome';
   export { React };
   export { createRoot } from 'react-dom/client';
@@ -28,7 +28,7 @@ const m = await loadBundled(`
   export * from './src/firstScreen';
   export { suggestedPrompts } from './src/suggestedPrompts';
   export { GetStarted } from './src/components/GetStarted';
-  export { MovedPointer, AccountCard };
+  export { AccountCard };
   const r = (C, p) => renderToStaticMarkup(React.createElement(C, p));
   const engines = { engines: [], loading: false, error: null, refresh: () => {} };
   export const sidebar = (p) =>
@@ -38,7 +38,6 @@ const m = await loadBundled(`
       engines, kwants: [], ...p,
     });
   export const subline = (p) => r(SpaceSubline, p);
-  export const pointer = (p) => r(MovedPointer, { phone: false, onOpen() {}, onHide() {}, ...p });
   export const botHome = (p) => r(BotHome, p);
 `);
 const { React, createRoot, flushSync } = m;
@@ -91,102 +90,18 @@ test('A: the sidebar has no Space controls block, Dev mode toast or flip note; t
   assert.doesNotMatch(app, /<SpaceControls|<DevOnToast|<DevFlipNote/);
 });
 
-// ------------------------------------------------------------------ A: the "moved" pointer
+// ------------------------------------------------------------------ A: the "moved" pointer is gone (composer-diet e)
 
-test('A: the pointer shows only to someone who used kwant before, until Open or Hide sets the key', () => {
-  assert.equal(m.movedPointerShows({ established: true, seen: false }), true);
-  assert.equal(m.movedPointerShows({ established: false, seen: false }), false, 'a brand-new person');
-  assert.equal(m.movedPointerShows({ established: null, seen: false }), false, 'still working it out');
-  assert.equal(m.movedPointerShows({ established: true, seen: true }), false);
-  localStorage.clear();
-  assert.equal(m.movedSeen(), false);
-  m.markMovedSeen();
-  assert.equal(localStorage.getItem('kwnt:moved-space-controls'), '1');
-  assert.equal(m.movedSeen(), true);
-  localStorage.clear();
-});
-
-test('A: the pointer sits under the header with its copy, Open and Hide; nothing without the prop', () => {
-  const on = m.sidebar({ space: space('ask'), movedPointer: true, onOpenMoved() {}, onHideMoved() {} });
-  const header = on.indexOf('data-space-header');
-  const ptr = on.indexOf('data-moved-pointer');
-  assert.ok(header > -1 && ptr > header, 'right under the header');
-  assert.match(text(on), /Dev mode and Approvals moved to this space's settings\. Open/);
-  assert.match(on, /aria-label="Hide"/);
-  assert.doesNotMatch(m.sidebar({ space: space('ask') }), /data-moved-pointer/);
-});
-
-test('A: Open and Hide call back; on a phone both have a 44 px hit area, 24 px Hide on desktop', () => {
-  let opened = 0;
-  let hidden = 0;
-  const r = mount(h(m.MovedPointer, { phone: true, onOpen: () => opened++, onHide: () => hidden++ }));
-  const open = r.host.querySelector('[data-moved-open]');
-  const hide = r.host.querySelector('[data-moved-hide]');
-  assert.match(open.className, /min-h-11 min-w-11/);
-  assert.match(hide.className, /min-h-11 min-w-11/);
-  open.click();
-  hide.click();
-  assert.deepEqual([opened, hidden], [1, 1]);
-  r.done();
-  assert.match(m.pointer({ phone: false }), /data-moved-hide="true" class="[^"]*h-6 w-6/);
-});
-
-test('A: Open goes to Space settings › General and rings the Dev mode card once; App gives the pointer What\'s new\'s "established"', async () => {
-  const card = document.createElement('form');
-  card.setAttribute('data-dev-settings', '');
-  let scrolled = 0;
-  card.scrollIntoView = () => scrolled++;
-  document.body.appendChild(card);
-  m.ringDevSettings(document);
-  assert.equal(scrolled, 1);
-  assert.ok(card.classList.contains('ring-2') && card.classList.contains('ring-sky-400/55'));
-  await new Promise((r) => setTimeout(r, 1400));
-  assert.ok(!card.classList.contains('ring-2') && !card.hasAttribute('data-moved-ring'), 'gone after 1.2 s and the fade');
-  card.remove();
-  const app = src('App.tsx');
-  assert.match(app, /movedPointer=\{movedPointerShows\(\{ established: whatsNewEstablished, seen: movedHidden \}\)\}/);
-  assert.match(app, /const openMoved = \(\) => \{\s*openSpaceSettings\('general'\);\s*ringDevSettings\(\);\s*hideMoved\(\);/);
-  assert.match(app, /<GetStarted[\s\S]*?onDismissed=\{hideMoved\}/, 'finishing Get started (someone new) hides the pointer for good');
-});
-
-// 29v (Mira's UX pass 0.9.26, fix #3): a brand-new person gets the pointer recorded as seen, the way What's new
-// records its version for them, so it never pins to their sidebar after their first message.
-test('29v: a brand-new person (established false) records the pointer; true still shows it; null waits', () => {
-  assert.equal(typeof m.recordMovedForNewPerson, 'function', 'firstScreen exports recordMovedForNewPerson');
-  assert.equal(m.recordMovedForNewPerson({ established: false, seen: false }), true, 'brand new, decided: record it');
-  assert.equal(m.recordMovedForNewPerson({ established: null, seen: false }), false, 'still loading: do nothing');
-  assert.equal(m.recordMovedForNewPerson({ established: true, seen: false }), false, 'used kwant before: leave it to show');
-  assert.equal(m.recordMovedForNewPerson({ established: false, seen: true }), false, 'already recorded: nothing to do');
-});
-
-test('29v: brand new on load, then the first message: the pointer never shows', () => {
-  localStorage.clear();
-  // The same steps SpaceApp runs: load (null), decided brand new (false), first message written (true).
-  let seen = m.movedSeen();
-  for (const established of [null, false, true]) {
-    if (m.recordMovedForNewPerson({ established, seen })) {
-      m.markMovedSeen();
-      seen = true;
-    }
-    assert.equal(m.movedPointerShows({ established, seen }), false, `no pointer at established=${established}`);
+// It said "Dev mode and Approvals moved to this space's settings." and its own comment said to remove it with its
+// key in 0.9.10. composer-diet (0.9.50) deletes it: no component, no key, no props, no wiring.
+test('composer-diet e: the "moved" notice, its key and its wiring are gone', () => {
+  assert.doesNotMatch(m.sidebar({ space: space('ask') }), /data-moved-pointer|moved to this space/);
+  for (const name of ['MOVED_KEY', 'movedSeen', 'markMovedSeen', 'movedPointerShows', 'recordMovedForNewPerson', 'ringDevSettings']) {
+    assert.equal(m[name], undefined, `firstScreen no longer exports ${name}`);
   }
-  assert.equal(localStorage.getItem('kwnt:moved-space-controls'), '1', 'the key is recorded');
-  // Reload after that first message: established is true straight away, the key keeps it hidden.
-  assert.equal(m.movedPointerShows({ established: true, seen: m.movedSeen() }), false);
-  localStorage.clear();
-  // Someone with history and no key: true on load, nothing recorded, the pointer shows.
-  seen = m.movedSeen();
-  assert.equal(m.recordMovedForNewPerson({ established: true, seen }), false);
-  assert.equal(m.movedPointerShows({ established: true, seen }), true, 'someone who used kwant before still sees it');
-  assert.equal(localStorage.getItem('kwnt:moved-space-controls'), null);
-});
-
-test('29v: SpaceApp records it in an effect placed after whatsNewEstablished is declared', () => {
-  const app = src('App.tsx');
-  const decl = app.indexOf('const whatsNewEstablished = decideWhatsNewEstablished(');
-  const eff = app.search(/useEffect\(\(\) => \{\s*if \(recordMovedForNewPerson\(\{ established: whatsNewEstablished, seen: movedHidden \}\)\) hideMoved\(\);\s*\}/);
-  assert.ok(decl > 0, 'whatsNewEstablished is declared');
-  assert.ok(eff > decl, 'the effect sits after the declaration, so it never reads it before it exists');
+  for (const f of ['App.tsx', 'components/Sidebar.tsx', 'components/FirstScreenBits.tsx', 'firstScreen.ts']) {
+    assert.doesNotMatch(src(f), /MovedPointer|movedPointer|onOpenMoved|onHideMoved|kwnt:moved-space-controls|moved to this space/, f);
+  }
 });
 
 // ------------------------------------------------------------------ C: #general's three asks

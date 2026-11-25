@@ -287,7 +287,7 @@ const NUM = new Intl.NumberFormat('en');
 const num = (n: number) => NUM.format(n);
 const usd = (n: number) => `$${n < 0.01 && n > 0 ? '0.01' : n.toFixed(2)}`;
 const KIT_LABEL: Record<string, string> = { quiz: 'Quiz', santa: 'Secret Santa', wall: 'Photo wall', gather: 'Sign-up', desk: 'Guest Guide' };
-export const kitLabel = (kit: string) => KIT_LABEL[kit] ?? kit.charAt(0).toUpperCase() + kit.slice(1).replace(/_/g, ' ');
+export const kitLabel = (kit: string, mode?: string) => (kit === 'desk' && mode === 'booking' ? 'Booking Desk' : null) ?? KIT_LABEL[kit] ?? kit.charAt(0).toUpperCase() + kit.slice(1).replace(/_/g, ' ');
 
 export function budgetLine(b: PocketBlock): string {
   const tail = b.kit === 'quiz' ? ' Live play uses none unless a near miss needs judging.' : '';
@@ -980,7 +980,7 @@ const ResultsCard: React.FC<{ block: PocketBlock; results: PocketResults; ask: (
       <header className="relative flex items-start gap-3">
         <Tile kind="trophy" />
         <div className="min-w-0 flex-1">
-          <div className="text-2xs font-semibold text-sky-300">Pocket app · {kitLabel(block.kit)} results</div>
+          <div className="text-2xs font-semibold text-sky-300">Pocket app · {kitLabel(block.kit, block.desk?.mode)} results</div>
           <h3 className="text-[20px] font-bold leading-[26px] text-zinc-50 sm:text-[19px]">{block.name}</h3>
           {block.when && <p className="text-[13px] text-zinc-300">{block.when}</p>}
         </div>
@@ -1242,7 +1242,7 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, as
       <header className="relative flex items-start gap-3">
         <Tile kind="quiz" />
         <div className="min-w-0 flex-1">
-          <div className="text-2xs font-semibold text-sky-300">Pocket app · {kitLabel(block.kit)}</div>
+          <div className="text-2xs font-semibold text-sky-300">Pocket app · {kitLabel(block.kit, block.desk?.mode)}</div>
           <h3 className="text-[20px] font-bold leading-[26px] text-zinc-50 sm:text-[19px]">{block.name}</h3>
           {/* Phone: the state chip sits under the name, so a long name keeps the width. */}
           <span className="mt-1.5 block sm:hidden">
