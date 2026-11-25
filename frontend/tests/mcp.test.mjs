@@ -266,7 +266,7 @@ test('says honestly which engines can use MCP tools', () => {
   assert.deepEqual(mcpSupportFor('local_ollama', none), { supported: true, note: null });
   const auto = mcpSupportFor('auto', none);
   assert.equal(auto.supported, true);
-  assert.match(auto.note, /Laya/);
+  assert.match(auto.note, /^kwant picks the AI/);
 });
 
 const memoryStorage = (initial = {}) => {

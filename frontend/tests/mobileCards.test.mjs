@@ -257,7 +257,7 @@ test('on a phone the steps panel is one 44 px row, the engine note behind an inf
   assert.match(b[0].label, /^Steps · 1/);
   assert.match(b[0].attrs, /min-h-\[44px\]|h-11/);
   assert.match(b[0].attrs, /aria-expanded="false"/);
-  const info = b.find((x) => /aria-label="About this engine/.test(x.attrs));
+  const info = b.find((x) => /aria-label="About this AI/.test(x.attrs));
   assert.ok(info, 'info button');
   assert.match(info.attrs, /w-11 h-11|h-11 w-11/);
 });
