@@ -35,7 +35,8 @@ try {
     const errors = [];
     page.on('pageerror', (e) => errors.push(String(e)));
     await page.goto(base + '/');
-    await page.getByText(ready.bot_name, { exact: true }).first().tap();
+    // The row's own text sits behind its focus/click button (a11y-basics #1186's overlay button fix).
+    await page.getByRole('button', { name: new RegExp(`^${ready.bot_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).first().tap();
     const solve = page.getByRole('button', { name: 'Solve it' }).last();
     await solve.waitFor({ timeout: 15000 });
     await solve.scrollIntoViewIfNeeded();

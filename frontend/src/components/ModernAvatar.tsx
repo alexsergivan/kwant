@@ -68,6 +68,15 @@ export const useModelBadge = (kwantId: string | undefined): ModelBadge | null =>
   );
 };
 
+/** A one-off, non-reactive read of the same badge useModelBadge computes, for a `title` the browser
+ * only reads on hover: no subscription needed, and the call site doesn't have to be a component. */
+export const modelBadgeSnapshot = (kwantId: string | undefined): ModelBadge | null => {
+  const bot = badgeBotOf(kwantId);
+  if (!bot) return null;
+  const last = lastRunOf(kwantId);
+  return modelBadgeFor(last ? { ...bot, last_ran_on: last } : bot, isKwantWorking(kwantId) ? liveRunOf(kwantId) : null, badgeEngines());
+};
+
 /** The hover's usage line for the account the bot's next turn would use, re-read when accounts or engines change. */
 const useBadgeUsage = (badge: ModelBadge | null) => {
   const engines = useSyncExternalStore(subscribeBadgeData, badgeEngines, () => null);

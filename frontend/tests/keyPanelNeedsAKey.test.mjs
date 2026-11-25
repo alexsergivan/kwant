@@ -139,6 +139,20 @@ test('32y: switching to OpenAI starts the name as "OpenAI" (xAI likewise)', asyn
   r.done();
 });
 
+test('35a: the Mistral card names the account "Mistral", says how it is paid, and adds a Mistral key account', async () => {
+  const { r, panel, q } = await keyPanel('k5');
+  const radio = (label) => [...panel.querySelectorAll('[role="radio"]')].find((b) => b.textContent === label);
+  assert.ok(radio('Mistral'), 'a Mistral card next to Anthropic, OpenAI and xAI');
+  flushSync(() => radio('Mistral').click());
+  assert.equal(q.name().value, 'Mistral');
+  assert.match(panel.textContent, /Paid per use on your Mistral account\. Mistral's free plan is too limited for bots\. The key stays on this computer\./);
+  flushSync(() => typeInto(q.key(), 'mistral-test-key'));
+  flushSync(() => q.add().click());
+  await settle();
+  assert.deepEqual(creates()[0].body, { engine: 'mistral', name: 'Mistral', kind: 'api_key', is_default: true, api_key: 'mistral-test-key' });
+  r.done();
+});
+
 // ------------------------------------------------------------------ the Settings form, unchanged
 
 test('32y (guard): the form without the Get started mode keeps today: empty name, default unticked, Cancel, keyless add', async () => {

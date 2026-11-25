@@ -78,7 +78,7 @@ pub async fn items(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen
     for p in posted(state, space, since).await? {
         let s = &p.snap;
         let code = s.row.code.clone();
-        let players = s.players.len();
+        let players = s.player_count();
         let win = winner(s);
         let kwant = match &p.kwant_id {
             Some(k) => state.db.get_kwant(k).await?,

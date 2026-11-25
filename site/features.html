@@ -41,7 +41,7 @@
     <a class="nl" href="/features" aria-current="page">Features</a>
     <a class="nl" href="/docs/quickstart">Docs</a>
     <a class="nl" href="/blog/">Blog</a>
-    <a class="nl stars" href="https://github.com/alexsergivan/kwant" rel="noopener" aria-label="kwant on GitHub, 702 stars"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><b>★ 702</b></a>
+    <a class="nl stars" href="https://github.com/alexsergivan/kwant" rel="noopener" aria-label="kwant on GitHub, 707 stars"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><b>★ 707</b></a>
     <a class="btn btn-solid btn-get px" href="/docs/quickstart">Get started</a>
   </nav>
 </header>
@@ -58,7 +58,7 @@
   <div class="wrap">
     <div class="jump-scroll">
       <p class="jump-label" aria-hidden="true">Jump</p>
-      <ul class="jump"><li><a class="ver" href="#new-0949">0.9.49</a></li><li><a class="ver" href="#new-0948">0.9.48</a></li><li><a class="ver" href="#new-0947">0.9.47</a></li><li><a class="ver" href="#new-0946">0.9.46</a></li><li><a class="ver" href="#new-0945">0.9.45</a></li><li><a class="ver" href="#new-0944">0.9.44</a></li></ul><span class="sep" aria-hidden="true"></span>
+      <ul class="jump"><li><a class="ver" href="#new-0951">0.9.51</a></li><li><a class="ver" href="#new-0950">0.9.50</a></li><li><a class="ver" href="#new-0949">0.9.49</a></li><li><a class="ver" href="#new-0948">0.9.48</a></li><li><a class="ver" href="#new-0947">0.9.47</a></li><li><a class="ver" href="#new-0946">0.9.46</a></li></ul><span class="sep" aria-hidden="true"></span>
       <ul class="jump">
         <li><a href="#discovery">Suggested routines</a></li>
         <li><a href="#new-teams">Hand-offs &amp; review</a></li>
@@ -79,6 +79,38 @@
     </div>
   </div>
 </nav>
+
+<section id="new-0951" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.51</span><time datetime="2026-11-25">Nov 25, 2026</time></p>
+      <h2>A step the bot recovered from says Retried, not Failed, and Stop leaves a short Stopped line with the bot's steps</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0951">Smaller changes in 0.9.51</h3>
+        <p>A step the bot recovered from now says Retried in grey, and a command step reads "Running a command on <host>" with the exact command under Show command. Pressing Stop leaves "Stopped. You stopped this reply." from the bot, with the steps it had taken; it raises no badge or notification. The router card is one line, "Sent to Quant, the team lead", with Why and Who else one tap away; "Laya is offline" left the chat and stays in Details. When kwant gets busy, Telegram still gets each bot question and approval once, and cards handled in kwant meanwhile lose their buttons. When kwant gets busy, the push or webhook notice that a bot waits for your approval still goes out, once; cards already answered send nothing. New bot opens with Name and "What should it do?"; Soul is now Personality, and editing a bot with its own settings opens More options. Space icons in the sidebar, switcher and pickers now use kwant's pixel glyphs; icons without a glyph keep their emoji. If the app missed the end of a reply, it re-reads what is running when it reconnects, comes back to the front or you press Stop, so the working strip goes away. The Connect sheet starts with every bot ticked and folds the list behind Choose bots; a bot's own Connect card still ticks only that bot. Press Tab for a "Skip to conversation" link; sidebar rows are one button each, and small sidebar buttons are easier to tap. Get started, the start picker and API keys have a Mistral key; it's paid per use, since Mistral's free plan is too limited for bots.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v0951-step-retried-2880.webp?v=ec60093702" data-caption="A kwant direct chat with Quant, the Trailhead Outfitters store-ops bot. You asked &#x27;Please restart the shop server, checkout is hanging.&#x27; Quant&#x27;s steps are open: &#x27;A command on 203.0.113.66 didn&#x27;t connect, so Quant tried again&#x27; carries a grey Retried chip with its ssh command shown, then two finished commands. Quant replies that the shop is back up and no orders were lost."><img class="app" src="assets/media/v0951-step-retried-1440.webp?v=d72f2f44b3" srcset="assets/media/v0951-step-retried-1440.webp?v=d72f2f44b3 1440w, assets/media/v0951-step-retried-2880.webp?v=ec60093702 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="A kwant direct chat with Quant, the Trailhead Outfitters store-ops bot. You asked &#x27;Please restart the shop server, checkout is hanging.&#x27; Quant&#x27;s steps are open: &#x27;A command on 203.0.113.66 didn&#x27;t connect, so Quant tried again&#x27; carries a grey Retried chip with its ssh command shown, then two finished commands. Quant replies that the shop is back up and no orders were lost."></a></div>
+    </div>
+  </div>
+</section>
+
+<section id="new-0950" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="rel-kick"><span class="sr-only">New in </span><span class="ver">v0.9.50</span><time datetime="2026-11-25">Nov 25, 2026</time></p>
+      <h2>A message you send shows at once on your other open screens, and the message box takes less room in every chat</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0950">Smaller changes in 0.9.50</h3>
+        <p>A message you send shows at once on your other open screens, not when the bot's turn ends. The message box takes less room: one Answers chip replaces the row of Ask chips, and the tip line goes after your first message.</p>
+      </div>
+      <div class="frame"><a class="zoom" href="assets/media/v0950-sent-everywhere-2880.webp?v=25d56e703c" data-caption="Two screens on the same kwant chat with Fay, the Trailhead Outfitters buyer bot. On the left, the Mac has just sent &#x27;Which of our tents can reach Denver by Friday?&#x27; and Fay is working, reading exports/stock-by-warehouse.csv. On the right, the phone already shows the same question, with Fay&#x27;s &#x27;Steps · 1&#x27; under it and the same &#x27;Fay is reading exports/stock-by-warehouse.csv&#x27; line above the message box."><img class="app" src="assets/media/v0950-sent-everywhere-1440.webp?v=24b44f8a85" srcset="assets/media/v0950-sent-everywhere-1440.webp?v=24b44f8a85 1440w, assets/media/v0950-sent-everywhere-2880.webp?v=25d56e703c 2880w" sizes="(max-width: 1024px) 100vw, 680px" width="1440" height="900" loading="lazy" decoding="async" alt="Two screens on the same kwant chat with Fay, the Trailhead Outfitters buyer bot. On the left, the Mac has just sent &#x27;Which of our tents can reach Denver by Friday?&#x27; and Fay is working, reading exports/stock-by-warehouse.csv. On the right, the phone already shows the same question, with Fay&#x27;s &#x27;Steps · 1&#x27; under it and the same &#x27;Fay is reading exports/stock-by-warehouse.csv&#x27; line above the message box."></a></div>
+    </div>
+  </div>
+</section>
 
 <section id="new-0949" class="fgroup">
   <div class="wrap">
@@ -2060,7 +2092,7 @@
       <p><a class="more-link" href="/docs/phone">How to install it →</a></p>
     </div>
     <div class="phones">
-      <div class="phone"><a class="zoom" href="assets/media/phone-team-chat-780.webp?v=73a1073948" data-caption="The Product team summary on a phone screen."><img src="assets/media/phone-team-chat-390.webp?v=8005c8189c" srcset="assets/media/phone-team-chat-390.webp?v=8005c8189c 390w, assets/media/phone-team-chat-780.webp?v=73a1073948 780w" sizes="240px" width="390" height="844" loading="lazy" decoding="async" alt="The Product team summary on a phone screen."></a></div>
+      <div class="phone"><a class="zoom" href="assets/media/phone-team-chat-780.webp?v=30093d346e" data-caption="The Product team summary on a phone screen."><img src="assets/media/phone-team-chat-390.webp?v=4943218a03" srcset="assets/media/phone-team-chat-390.webp?v=4943218a03 390w, assets/media/phone-team-chat-780.webp?v=30093d346e 780w" sizes="240px" width="390" height="844" loading="lazy" decoding="async" alt="The Product team summary on a phone screen."></a></div>
       <div class="phone"><a class="zoom" href="assets/media/phone-approval-780.webp?v=5cd2767a9d" data-caption="The approval card for a GitHub pull request on a phone screen."><img src="assets/media/phone-approval-390.webp?v=bc6f8cc391" srcset="assets/media/phone-approval-390.webp?v=bc6f8cc391 390w, assets/media/phone-approval-780.webp?v=5cd2767a9d 780w" sizes="240px" width="390" height="844" loading="lazy" decoding="async" alt="The approval card for a GitHub pull request on a phone screen."></a></div>
     </div>
   </div>
@@ -2190,7 +2222,7 @@
 </footer>
 <script src="assets/js/site.js?v=02a491b838" defer></script>
 <script src="assets/js/pixel.js?v=0a1a3bf1e2" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-24","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/features","name":"Features: self-hosted AI agent orchestration","description":"Teams and @mention handoffs, Dev mode code review, the Idea jar, Smart Results, Goals, model failover across accounts, spaces, routines, approvals, memory, skills, MCP tools and a bot browser.","url":"https://kwant.si/features","image":"https://kwant.si/assets/og/features.png?v=6c9323bb00","inLanguage":"en","dateModified":"2026-11-25","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Features","item":"https://kwant.si/features"}]}]}</script>
 <script type="application/json" id="cf-beacon">{"token": "7f6ed395033a43eea3885ad0943890c2"}</script>
 </body>
 </html>

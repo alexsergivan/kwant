@@ -31,7 +31,8 @@ import { RoutinesPanel, type RoutineFocus } from './RoutinesPanel';
 import type { MessageTarget } from './DoneDetail';
 import { HirePolicyPanel } from './HirePolicyPanel';
 import { ModernAvatar } from './ModernAvatar';
-import { SpaceTile } from './Spaces';
+import { PickerGlyph, SpaceTile } from './Spaces';
+import { pixelIconFor } from '../spaceIcons';
 import { ImportDialog, RecentImports } from './ImportDialog';
 import { ImportError, ImportRecord, downloadExport, importApi, importErrorText } from '../imports';
 import { memberIdsOf, type Channel, type Kwant, type Team } from './Sidebar';
@@ -460,11 +461,11 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
                 key={i}
                 type="button"
                 aria-pressed={icon === i}
-                aria-label={`Icon ${i}`}
+                aria-label={`Icon: ${pixelIconFor(i)?.name ?? i}`}
                 onClick={() => setIcon(i)}
                 className={`w-9 h-9 max-md:w-11 max-md:h-11 rounded-lg text-lg flex items-center justify-center border ${icon === i ? 'border-sky-400 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-600'}`}
               >
-                {i}
+                <PickerGlyph icon={i} colour={spaceColor({ id: space.id, color })} />
               </button>
             ))}
           </div>

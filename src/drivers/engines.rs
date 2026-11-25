@@ -70,6 +70,8 @@ pub enum EngineId {
     Ollama,
     /// The space's Custom API accounts (OpenAI-compatible or Anthropic-compatible servers).
     CustomApi,
+    /// 35a: Mistral's API (api.mistral.ai), the only engine of the `mistral` family until 35b.
+    MistralApi,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -157,7 +159,7 @@ pub fn codex_tier(slug: &str, description: Option<&str>) -> Option<Tier> {
 
 impl EngineId {
     /// Every engine, in the order the API lists them.
-    pub const ALL: [EngineId; 8] = [
+    pub const ALL: [EngineId; 9] = [
         EngineId::Claude,
         EngineId::Codex,
         EngineId::Grok,
@@ -166,6 +168,7 @@ impl EngineId {
         EngineId::XaiApi,
         EngineId::Ollama,
         EngineId::CustomApi,
+        EngineId::MistralApi,
     ];
 
     pub fn name(self) -> &'static str {
@@ -178,15 +181,18 @@ impl EngineId {
             EngineId::XaiApi => "xAI API",
             EngineId::Ollama => "Ollama",
             EngineId::CustomApi => "Custom API",
+            EngineId::MistralApi => "Mistral API",
         }
     }
 
     pub fn kind(self) -> EngineKind {
         match self {
             EngineId::Claude | EngineId::Codex | EngineId::Grok => EngineKind::Cli,
-            EngineId::AnthropicApi | EngineId::OpenaiApi | EngineId::XaiApi | EngineId::CustomApi => {
-                EngineKind::Api
-            }
+            EngineId::AnthropicApi
+            | EngineId::OpenaiApi
+            | EngineId::XaiApi
+            | EngineId::CustomApi
+            | EngineId::MistralApi => EngineKind::Api,
             EngineId::Ollama => EngineKind::Local,
         }
     }
@@ -202,6 +208,7 @@ impl EngineId {
             EngineId::XaiApi => "xai_api",
             EngineId::Ollama => "ollama",
             EngineId::CustomApi => "custom_api",
+            EngineId::MistralApi => "mistral_api",
         }
     }
 
@@ -216,17 +223,20 @@ impl EngineId {
             EngineId::Codex | EngineId::OpenaiApi => Some(Engine::Codex),
             EngineId::Grok | EngineId::XaiApi => Some(Engine::Grok),
             EngineId::CustomApi => Some(Engine::Custom),
+            EngineId::MistralApi => Some(Engine::Mistral),
             EngineId::Ollama => None,
         }
     }
 
-    /// For Custom API both are [`EngineId::CustomApi`]: it has no CLI.
+    /// For Custom API both are [`EngineId::CustomApi`] and for Mistral both are
+    /// [`EngineId::MistralApi`]: neither has a CLI (35b adds Mistral's).
     pub fn of_family(engine: Engine) -> (EngineId, EngineId) {
         match engine {
             Engine::Claude => (EngineId::Claude, EngineId::AnthropicApi),
             Engine::Codex => (EngineId::Codex, EngineId::OpenaiApi),
             Engine::Grok => (EngineId::Grok, EngineId::XaiApi),
             Engine::Custom => (EngineId::CustomApi, EngineId::CustomApi),
+            Engine::Mistral => (EngineId::MistralApi, EngineId::MistralApi),
         }
     }
 }
@@ -342,6 +352,7 @@ pub struct ProbeEnv {
     pub anthropic_key: Option<String>,
     pub openai_key: Option<String>,
     pub xai_key: Option<String>,
+    pub mistral_key: Option<String>,
     /// Ollama server root (no `/v1`).
     pub ollama_root: String,
     pub ollama_installed: bool,
@@ -351,6 +362,7 @@ pub struct ProbeEnv {
     pub anthropic_base: String,
     pub openai_base: String,
     pub xai_base: String,
+    pub mistral_base: String,
 }
 
 impl ProbeEnv {
@@ -376,12 +388,14 @@ impl ProbeEnv {
             anthropic_key: key(db, "anthropic_api_key", "ANTHROPIC_API_KEY").await,
             openai_key: key(db, "openai_api_key", "OPENAI_API_KEY").await,
             xai_key: key(db, "xai_api_key", "XAI_API_KEY").await,
+            mistral_key: key(db, "mistral_api_key", "MISTRAL_API_KEY").await,
             ollama_root: super::ollama_root(ollama_url.as_deref()),
             ollama_installed,
             ollama_configured,
             anthropic_base: "https://api.anthropic.com".into(),
             openai_base: "https://api.openai.com".into(),
             xai_base: "https://api.x.ai".into(),
+            mistral_base: MISTRAL_API_BASE.into(),
         }
     }
 }
@@ -397,7 +411,9 @@ pub async fn probe_within(id: EngineId, env: &ProbeEnv, limit: Duration) -> Prob
             EngineId::Claude => probe_claude(env.claude_bin.as_deref(), env.claude_config_dir.as_deref()).await,
             EngineId::Codex => probe_codex(env.codex_bin.as_deref()).await,
             EngineId::Grok => probe_grok(env.grok_bin.as_deref()).await,
-            EngineId::AnthropicApi | EngineId::OpenaiApi | EngineId::XaiApi => probe_api(id, env).await,
+            EngineId::AnthropicApi | EngineId::OpenaiApi | EngineId::XaiApi | EngineId::MistralApi => {
+                probe_api(id, env).await
+            }
             EngineId::Ollama => probe_ollama(env).await,
             // Nothing on the host to check: each account is checked on its own (see
             // `drivers::custom`), and a space's report is ready through its accounts
@@ -615,6 +631,9 @@ async fn probe_grok(bin: Option<&str>) -> Probe {
 
 /// Chat models in a provider's `GET /v1/models` reply, newest first, default marked.
 pub fn parse_api_models(id: EngineId, body: &Value) -> Vec<EngineModel> {
+    if id == EngineId::MistralApi {
+        return parse_mistral_models(body);
+    }
     let chat = |m: &str| match id {
         EngineId::AnthropicApi => m.starts_with("claude"),
         EngineId::XaiApi => m.contains("grok") && !m.contains("image") && !m.contains("imagine"),
@@ -658,10 +677,100 @@ pub fn parse_api_models(id: EngineId, body: &Value) -> Vec<EngineModel> {
         .collect()
 }
 
+/// Mistral's API root; chat is `{MISTRAL_API_BASE}/v1/chat/completions`.
+pub const MISTRAL_API_BASE: &str = "https://api.mistral.ai";
+
+/// The Mistral model of each tier a turn runs when it pins none: small, medium, large. Also what
+/// a turn runs when the model list doesn't load (see `api::api_model_name`).
+pub const MISTRAL_TIER_MODELS: [(Tier, &str, &str); 3] = [
+    (Tier::Fast, "mistral-small-latest", "Mistral Small (latest)"),
+    (Tier::Balanced, "mistral-medium-latest", "Mistral Medium (latest)"),
+    (Tier::Deep, "mistral-large-latest", "Mistral Large (latest)"),
+];
+
+/// A Mistral model's tier: kwant's usual words first, else Mistral's sizes (small, tiny and
+/// ministral are fast, medium balanced, large deep).
+fn mistral_tier(id: &str) -> Option<Tier> {
+    if let Some(t) = MISTRAL_TIER_MODELS.iter().find(|(_, m, _)| *m == id).map(|(t, _, _)| *t) {
+        return Some(t);
+    }
+    let lower = id.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_ascii_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let has = |names: &[&str]| words.iter().any(|w| names.contains(w));
+    if has(&["small", "tiny", "ministral"]) {
+        Some(Tier::Fast)
+    } else if has(&["medium"]) {
+        Some(Tier::Balanced)
+    } else if has(&["large"]) {
+        Some(Tier::Deep)
+    } else {
+        tier_from_name(id)
+    }
+}
+
+/// Mistral's `GET /v1/models`: only models that chat and call tools (a turn's tools are
+/// function calls), never embedding, OCR, moderation or transcription models. The three tier
+/// models come first, in tier order, with medium the default; then the rest in Mistral's order
+/// (its `created` is the same for every model, so it can't sort them). Each id once.
+pub fn parse_mistral_models(body: &Value) -> Vec<EngineModel> {
+    const NOT_CHAT: [&str; 6] = ["embed", "ocr", "moderation", "transcribe", "realtime", "tts"];
+    let mut seen = std::collections::HashSet::new();
+    let listed: Vec<(String, String)> = body["data"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|m| {
+            let id = m["id"].as_str()?.trim();
+            let caps = &m["capabilities"];
+            // Missing capabilities read as yes: only a model Mistral says can't is dropped
+            let can = |c: &str| caps[c].as_bool() != Some(false);
+            let lower = id.to_lowercase();
+            let keep = !id.is_empty()
+                && can("completion_chat")
+                && can("function_calling")
+                && !NOT_CHAT.iter().any(|w| lower.contains(w))
+                && seen.insert(id.to_string());
+            keep.then(|| {
+                let label = MISTRAL_TIER_MODELS
+                    .iter()
+                    .find(|(_, t, _)| *t == id)
+                    .map(|(_, _, l)| l.to_string())
+                    .unwrap_or_else(|| id.to_string());
+                (id.to_string(), label)
+            })
+        })
+        .collect();
+    let rank = |id: &str| MISTRAL_TIER_MODELS.iter().position(|(_, m, _)| *m == id).unwrap_or(usize::MAX);
+    let mut ordered = listed;
+    // Stable: models other than the three keep Mistral's order
+    ordered.sort_by_key(|(id, _)| rank(id));
+    let default_id = MISTRAL_TIER_MODELS[1].1;
+    let has_default = ordered.iter().any(|(id, _)| id == default_id);
+    ordered
+        .into_iter()
+        .enumerate()
+        .map(|(i, (id, label))| {
+            let default = if has_default { id == default_id } else { i == 0 };
+            let tier = mistral_tier(&id);
+            EngineModel::new(id, label, default, tier)
+        })
+        .collect()
+}
+
+/// [`MISTRAL_TIER_MODELS`] as a model list: what a Mistral turn picks from when the list
+/// doesn't load.
+pub fn mistral_fallback_models() -> Vec<EngineModel> {
+    MISTRAL_TIER_MODELS
+        .iter()
+        .map(|(tier, id, label)| EngineModel::new(*id, *label, *tier == Tier::Balanced, Some(*tier)))
+        .collect()
+}
+
 async fn probe_api(id: EngineId, env: &ProbeEnv) -> Probe {
     let (key, base) = match id {
         EngineId::AnthropicApi => (&env.anthropic_key, &env.anthropic_base),
         EngineId::OpenaiApi => (&env.openai_key, &env.openai_base),
+        EngineId::MistralApi => (&env.mistral_key, &env.mistral_base),
         _ => (&env.xai_key, &env.xai_base),
     };
     let Some(key) = key else {
@@ -1112,6 +1221,7 @@ pub fn key_for(api: EngineId, configured_key: Option<String>) -> Option<String> 
     let var = match api {
         EngineId::AnthropicApi => "ANTHROPIC_API_KEY",
         EngineId::XaiApi => "XAI_API_KEY",
+        EngineId::MistralApi => "MISTRAL_API_KEY",
         _ => "OPENAI_API_KEY",
     };
     configured_key.or_else(|| std::env::var(var).ok()).filter(|k| !k.trim().is_empty())
@@ -1145,10 +1255,14 @@ pub fn system_route(
             return Ok(SystemRoute::Api { engine: api, key });
         }
     }
-    if let Some(bin) = find_bin(family.as_str()) {
+    // An API-only family (Mistral until 35b) has no CLI to fall back on
+    if let Some(bin) = (cli != api).then(|| find_bin(family.as_str())).flatten() {
         if engines.usable(cli, true) {
             return Ok(SystemRoute::Cli { engine: cli, bin });
         }
+    }
+    if cli == api {
+        return Err(unavailable(target_model, &[engines.report(api)]));
     }
     Err(unavailable(target_model, &[engines.report(cli), engines.report(api)]))
 }
@@ -1527,5 +1641,55 @@ mod tests {
         assert!(reports.iter().all(|r| r.status == EngineStatus::Disabled && r.checked_at.is_none()));
         reg.recheck_one(EngineId::Claude, &ProbeEnv::default()).await;
         assert!(reg.report(EngineId::Claude).checked_at.is_none(), "recheck_one leaves an engine that is off alone");
+    }
+
+    /// 35a: Mistral's model list keeps chat models that call tools, puts small/medium/large
+    /// first as Fast/Balanced/Deep with medium the default, and sizes the rest by name.
+    #[test]
+    fn mistral_models_pick_tiers_and_drop_non_chat() {
+        let body = serde_json::json!({"data": [
+            {"id": "codestral-latest", "capabilities": {"completion_chat": true, "function_calling": true}},
+            {"id": "mistral-large-latest", "capabilities": {"completion_chat": true, "function_calling": true}},
+            {"id": "mistral-embed", "capabilities": {"completion_chat": false, "function_calling": false}},
+            {"id": "mistral-ocr-latest", "capabilities": {"completion_chat": true, "function_calling": true}},
+            {"id": "mistral-moderation-latest", "capabilities": {"completion_chat": false}},
+            {"id": "open-mistral-nemo", "capabilities": {"completion_chat": true, "function_calling": false}},
+            {"id": "ministral-8b-latest", "capabilities": {"completion_chat": true, "function_calling": true}},
+            {"id": "mistral-small-latest"},
+            {"id": "mistral-medium-latest", "capabilities": {"completion_chat": true, "function_calling": true}},
+            {"id": "mistral-medium-latest", "capabilities": {"completion_chat": true, "function_calling": true}},
+            {"id": "voxtral-mini-transcribe-2507", "capabilities": {"completion_chat": false}}
+        ]});
+        let models = parse_mistral_models(&body);
+        let ids: Vec<&str> = models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(ids, ["mistral-small-latest", "mistral-medium-latest", "mistral-large-latest", "codestral-latest", "ministral-8b-latest"]);
+        let tiers: Vec<Option<Tier>> = models.iter().map(|m| m.tier).collect();
+        assert_eq!(tiers[..3], [Some(Tier::Fast), Some(Tier::Balanced), Some(Tier::Deep)]);
+        assert_eq!(models[4].tier, Some(Tier::Fast), "ministral is the small one");
+        assert_eq!(models.iter().filter(|m| m.default).map(|m| m.id.as_str()).collect::<Vec<_>>(), ["mistral-medium-latest"]);
+        assert_eq!(models[1].label, "Mistral Medium (latest)");
+
+        // Without medium the first one is the default; an empty or odd body lists nothing
+        let only = parse_mistral_models(&serde_json::json!({"data": [{"id": "devstral-medium-2507"}, {"id": "magistral-small-2509"}]}));
+        assert!(only[0].default && !only[1].default);
+        assert_eq!((only[0].tier, only[1].tier), (Some(Tier::Balanced), Some(Tier::Fast)));
+        assert!(parse_mistral_models(&serde_json::json!({"error": "x"})).is_empty());
+        assert!(parse_mistral_models(&serde_json::json!({"data": [{"id": "  "}, {"id": 5}]})).is_empty());
+
+        // The fallback names the three tiers, medium the default
+        let fallback = mistral_fallback_models();
+        assert_eq!(fallback.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(), ["mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"]);
+        assert!(fallback[1].default);
+    }
+
+    /// 35a: Mistral is its own family, API only.
+    #[test]
+    fn mistral_is_an_api_only_family() {
+        assert_eq!(EngineId::MistralApi.as_str(), "mistral_api");
+        assert_eq!(EngineId::MistralApi.name(), "Mistral API");
+        assert_eq!(EngineId::MistralApi.kind(), EngineKind::Api);
+        assert_eq!(EngineId::MistralApi.family(), Some(Engine::Mistral));
+        assert_eq!(EngineId::of_family(Engine::Mistral), (EngineId::MistralApi, EngineId::MistralApi));
+        assert!(EngineId::ALL.contains(&EngineId::MistralApi));
     }
 }

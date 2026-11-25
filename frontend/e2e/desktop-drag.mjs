@@ -12,7 +12,8 @@ const step = await waitFor(async () => (await steps()).find((s) => s.status === 
 const b = await chromium.launch({ executablePath: process.env.CHROMIUM || '/usr/bin/chromium', args: ['--no-sandbox'] });
 const page = await (await b.newContext({ viewport: { width: 1280, height: 800 } })).newPage();
 await page.goto(base + '/');
-await page.getByText(ready.bot_name, { exact: true }).first().click();
+// The row's own text sits behind its focus/click button (a11y-basics #1186's overlay button fix).
+await page.getByRole('button', { name: new RegExp(`^${ready.bot_name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`) }).first().click();
 await page.getByRole('button', { name: 'Solve it' }).first().click();
 await page.getByText('Controlling').first().waitFor({ timeout: 15000 });
 if (await page.locator('[data-browser-fullscreen]').count()) throw new Error('full screen opened on desktop');

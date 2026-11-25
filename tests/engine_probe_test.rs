@@ -198,3 +198,39 @@ async fn api_keys_are_checked_against_the_free_model_list() {
     assert_eq!(p.status, EngineStatus::Error);
     assert!(p.detail.unwrap().contains("ollama serve"));
 }
+
+/// 35a: a Mistral key is checked against Mistral's own model list (Bearer), which keeps only
+/// chat models that call tools, with medium the default.
+#[tokio::test]
+async fn a_mistral_key_reads_mistrals_model_list() {
+    async fn mistral_models(headers: HeaderMap) -> (StatusCode, Json<Value>) {
+        match headers.get("authorization").and_then(|v| v.to_str().ok()) {
+            Some("Bearer good-mistral-key") => (
+                StatusCode::OK,
+                Json(json!({"object": "list", "data": [
+                    {"id": "mistral-large-latest", "capabilities": {"completion_chat": true, "function_calling": true}},
+                    {"id": "mistral-embed", "capabilities": {"completion_chat": false, "function_calling": false}},
+                    {"id": "mistral-small-latest", "capabilities": {"completion_chat": true, "function_calling": true}},
+                    {"id": "mistral-medium-latest", "capabilities": {"completion_chat": true, "function_calling": true}}
+                ]})),
+            ),
+            _ => (StatusCode::UNAUTHORIZED, Json(json!({"message": "Unauthorized", "request_id": "x"}))),
+        }
+    }
+    let base = serve(Router::new().route("/v1/models", get(mistral_models))).await;
+    let env = |key: &str| ProbeEnv { mistral_key: Some(key.into()), mistral_base: base.clone(), ..ProbeEnv::default() };
+
+    let p = probe(EngineId::MistralApi, &env("good-mistral-key")).await;
+    assert_eq!(p.status, EngineStatus::Ready);
+    assert_eq!(
+        p.models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["mistral-small-latest", "mistral-medium-latest", "mistral-large-latest"]
+    );
+    assert_eq!(p.models.iter().find(|m| m.default).unwrap().id, "mistral-medium-latest");
+
+    let p = probe(EngineId::MistralApi, &env("wrong-mistral-key")).await;
+    assert_eq!(p.status, EngineStatus::SignedOut);
+    assert_eq!(p.detail.as_deref(), Some("API key rejected (401)"));
+    let p = probe(EngineId::MistralApi, &ProbeEnv::default()).await;
+    assert_eq!(p.status, EngineStatus::NotInstalled);
+}

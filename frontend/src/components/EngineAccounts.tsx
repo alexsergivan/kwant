@@ -338,7 +338,7 @@ type KeyOrLoginSpec = { engine: Profile['engine']; kind: 'cli_home' | 'api_key' 
 /** Get started's key panel (32y): the key is required, the name starts as the provider, it becomes the default, no Cancel. */
 export type GetStartedKeyMode = { label: string };
 
-/** "Paste an API key" for an API card (anthropic_api, openai_api, xai_api): the same form as on its card. */
+/** "Paste an API key" for an API card (anthropic_api, openai_api, xai_api, mistral_api): the same form as on its card. */
 export const NewKeyAccountForm: React.FC<{ card: string; onCancel: () => void; onCreated: () => void; getStarted?: GetStartedKeyMode }> = ({ card, onCancel, onCreated, getStarted }) => {
   const spec = newAccountFor(card);
   return spec && spec.kind === 'api_key' ? <KeyOrLoginForm key={card} spec={spec as KeyOrLoginSpec} onCancel={onCancel} onCreated={onCreated} getStarted={getStarted} /> : null;
