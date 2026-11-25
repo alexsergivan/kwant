@@ -17,12 +17,12 @@ import { ModernAvatar } from './ModernAvatar';
 import { WorkingAvatar } from './WorkingAvatar';
 import { BotHome } from './BotHome';
 import { accountCardShows } from '../firstScreen';
-import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine, teamChipLabel, teamChipTitle } from '../botHome';
+import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine } from '../botHome';
 import { moodNoticed } from '../kwantMood';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, SM_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
-import { composerStacked, fitPlaceholder, keyboardMode, measureText16, phonePlaceholder } from '../composer';
+import { answersChip, composerStacked, fitPlaceholder, hintLearned, hintLineShows, keyboardMode, markHintLearned, measureText16, phonePlaceholder, suggestedShows } from '../composer';
 import { isNewThing, markNewSeen, subscribeNew } from '../whatsNew';
 import { ModernApprovalCard, PendingApproval, approvalAction } from './ModernApprovalCard';
 import { placeSettled } from '../settledPlace';
@@ -292,6 +292,8 @@ export interface ChatViewProps {
   routingState?: RoutingState | null;
   onCancelDiscussion?: () => void;
   teamMembers?: Array<{ id: string; name: string; title: string; avatar_sprite: string }>;
+  /** The team's lead, for the Answers chip's "<lead> leads" (composer-diet a). */
+  teamLeadId?: string | null;
   teamId?: string;
   teamName?: string;
   workspacePath?: string;
@@ -564,20 +566,6 @@ const LayaRoutingCard: React.FC<{ routing: RoutingState; spaceName?: string }> =
   );
 };
 
-/** True below Tailwind's sm breakpoint, kept in sync with resizes. */
-const useNarrow = () => {
-  const query = '(max-width: 639px)';
-  const [narrow, setNarrow] = useState(() => typeof window !== 'undefined' && !!window.matchMedia?.(query).matches);
-  useEffect(() => {
-    const mq = window.matchMedia?.(query);
-    if (!mq) return;
-    const on = () => setNarrow(mq.matches);
-    mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
-  }, []);
-  return narrow;
-};
-
 /**
  * The live reply's words or thinking line (14b): the one place that re-renders with the stream, at most
  * once a frame. The finished messages around it never do. `onGrow` keeps the bottom pinned. Its markdown
@@ -642,6 +630,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   routingState,
   onCancelDiscussion,
   teamMembers,
+  teamLeadId,
   teamId,
   teamName,
   workspacePath,
@@ -738,7 +727,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
   deciding,
   onChangeDecision,
 }) => {
-  const narrow = useNarrow();
   const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
   const vmOpen = isVmPaneOpen !== undefined ? isVmPaneOpen : internalIsVmPaneOpen;
   const toggleVm = onToggleVmPane || (() => setInternalIsVmPaneOpen((prev) => !prev));
@@ -793,6 +781,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
   const kbd = keyboardMode({ phone, touch, focused: composerFocused });
   const [fieldWidth, setFieldWidth] = useState(0);
+  // composer-diet b: the hint line under the field is learned once; the first sent message puts it away for good.
+  const [hintDone, setHintDone] = useState(hintLearned);
   const [uploads, setUploads] = useState<PendingUpload[]>([]);
   const stacked = composerStacked({ phone, focused: composerFocused, hasContent: inputVal.length > 0 || uploads.length > 0 });
   const [uploadNote, setUploadNote] = useState<string | null>(null);
@@ -880,17 +870,6 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setValue: setInputVal,
     onToast: onToast ? (t) => onToast(t) : undefined,
   });
-
-  const handleInsertTag = (tag: string) => {
-    playSfx('click');
-    setInputVal((prev) => {
-      const trimmed = prev.trim();
-      return trimmed ? `${trimmed} ${tag} ` : `${tag} `;
-    });
-    if (textareaRef.current) {
-      textareaRef.current.focus();
-    }
-  };
 
   // Fallback to fetch kwants and teams if not provided as props
   const [internalKwants, setInternalKwants] = useState<Array<{ id: string; name: string; title: string; avatar_sprite: string; preferred_model?: string }>>([]);
@@ -994,6 +973,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionStartIndex, setMentionStartIndex] = useState<number>(-1);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  // composer-diet a: the "@" the Answers chip typed, and how its list closed (see answersChipTap).
+  const chipUndo = useRef<{ before: string; after: string } | null>(null);
+  const chipClose = useRef<'pick' | 'dismiss' | null>(null);
 
   const checkMention = (text: string, cursorPos: number | null) => {
     if (cursorPos === null || cursorPos === undefined) {
@@ -1046,6 +1028,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const textBefore = inputVal.slice(0, mentionStartIndex);
     const textAfter = inputVal.slice(cursorPos);
     markNewSeen('mention');
+    chipClose.current = 'pick';
     const mentionText = `@${item.name} `;
     const newVal = `${textBefore}${mentionText}${textAfter}`;
     setInputVal(newVal);
@@ -1284,11 +1267,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
     focusStartRef.current = false;
     if (scrollRef.current) scrollRef.current.style.overflowAnchor = '';
   }, [contextKey]);
-  // Phone: the field's width picks the placeholder (A1), and its height follows when it moves between
-  // one row and two. Keyboard mode keeps the last message in view while the chat follows the bottom.
+  // The field's width picks the placeholder (A1 on phones; composer-diet d on desktop too), and its height
+  // follows when it moves between one row and two. Keyboard mode keeps the last message in view.
   useEffect(() => {
     const el = textareaRef.current;
-    if (!el || !phone) return;
+    if (!el) return;
     const measure = () => setFieldWidth(el.clientWidth);
     measure();
     if (typeof ResizeObserver === 'undefined') return;
@@ -1768,6 +1751,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const replying = replyTo;
     const refs = readyAttachments(uploads);
     const sent = onSendMessage(inputVal.trim(), refs, replying ? { replyTo: replying } : undefined);
+    if (!hintDone) {
+      markHintLearned();
+      setHintDone(true);
+    }
     if (refs.some((r) => r.point)) setSentPicks((n) => n + 1);
     setReplyTo(null);
     // A send that fails keeps the reply, unless the person has moved on to another one.
@@ -1823,6 +1810,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       }
       if (e.key === 'Escape') {
         e.preventDefault();
+        chipClose.current = 'dismiss';
         setMentionQuery(null);
         return;
       }
@@ -2693,7 +2681,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Phone hint row (spec A2): no "@ mention · attach files" on touch, and "Answers:" only where it isn't
   // obvious (channels and team chats, or a direct chat with an @mention typed).
   const showAnswers = !ideaMode && (!phone || home?.kind !== 'bot' || target.kind === 'mention');
-  const showHintText = !(phone && touch);
+  const showHintText = hintLineShows({ phone, touch, learned: hintDone });
+  // composer-diet a: the lead's face and name ride in the Answers chip while the team answers (not after an @mention).
+  const lead = target.kind === 'team' && teamLeadId ? teamMembers?.find((m) => m.id === teamLeadId) ?? null : null;
+  const chip = answersChip({ who: target.kind === 'laya' ? target.label : target.label.replace(/^@/, ''), lead: lead?.name });
   const measure16 = (t: string) => measureText16(t, textareaRef.current ? getComputedStyle(textareaRef.current).fontFamily : '');
   const placeholder = dict.phase === 'recording' && !inputVal
     ? 'Speak now…'
@@ -2703,11 +2694,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     ? phone
       ? fitPlaceholder(answerPlaceholder(awaitingBot?.name || streamingSpeakerName || title), 'Your answer…', fieldWidth, measure16)
       : answerPlaceholder(awaitingBot?.name || streamingSpeakerName || title)
-    : phone
-    ? phonePlaceholder(title, fieldWidth, (t) => measureText16(t, textareaRef.current ? getComputedStyle(textareaRef.current).fontFamily : ''))
-    : spaceName && !narrow
-      ? `Message ${title} in ${spaceName}`
-      : `Message ${title}`;
+    : // composer-diet d: "Message {title}" when it fits the field, else "Message", on desktop as on the phone. No
+      // " in {space}": the sidebar and the header already say where you are.
+      phonePlaceholder(title, fieldWidth, measure16);
   const insertAt = () => {
     playSfx('click');
     const el = textareaRef.current;
@@ -2715,7 +2704,65 @@ export const ChatView: React.FC<ChatViewProps> = ({
     setInputVal(next);
     el?.focus();
     requestAnimationFrame(() => checkMention(next, next.length));
+    return next;
   };
+  // composer-diet a (Mira F1, F1b): the Answers chip opens the list by typing "@"; that "@" is the chip's, not the
+  // person's. How the list closes decides what happens to it:
+  //   a pick keeps "@Name "; Escape, a second tap or a tap outside take the "@" back when nothing was typed after it
+  //   (a typed "@Qu" stays: the person wrote a name); closing by typing words that aren't a name drops only the "@".
+  // The @ button and a hand-typed "@" never set chipUndo, so they keep today's behaviour (Rigel F2: second tap closes).
+  const answersChipTap = () => {
+    markNewSeen('mention');
+    if (isMentionOpen && chipUndo.current) {
+      chipClose.current = 'dismiss';
+      setMentionQuery(null);
+      setMentionStartIndex(-1);
+      return;
+    }
+    const before = inputVal;
+    chipClose.current = null;
+    chipUndo.current = { before, after: insertAt() };
+  };
+  // F1b: a tap outside the list (and the chip and the field) closes a list the chip opened. Layout effect: listening
+  // from the same frame the list appears, so a quick tap away is never missed.
+  useLayoutEffect(() => {
+    if (!isMentionOpen || !chipUndo.current) return;
+    const away = (e: PointerEvent) => {
+      const t = e.target as Element | null;
+      if (t?.closest?.('#kw-mention-list, [data-answers-chip], textarea[data-composer]')) return;
+      chipClose.current = 'dismiss';
+      setMentionQuery(null);
+      setMentionStartIndex(-1);
+    };
+    document.addEventListener('pointerdown', away, true);
+    return () => document.removeEventListener('pointerdown', away, true);
+  }, [isMentionOpen]);
+  const mentionWasOpen = useRef(false);
+  useEffect(() => {
+    if (isMentionOpen) {
+      mentionWasOpen.current = true;
+      return;
+    }
+    if (!mentionWasOpen.current) return;
+    mentionWasOpen.current = false;
+    const undo = chipUndo.current;
+    const how = chipClose.current;
+    chipUndo.current = null;
+    chipClose.current = null;
+    if (!undo || how === 'pick') return;
+    if (inputVal === undo.after) {
+      setInputVal(undo.before);
+      return;
+    }
+    if (how === 'dismiss' || !inputVal.startsWith(undo.after)) return;
+    // Closed by typing: keep a typed name ("@Quant "), else drop only the chip's "@" and keep every word.
+    const rest = inputVal.slice(undo.after.length);
+    const word = rest.match(/^[a-zA-Z0-9_-]*/)?.[0].toLowerCase() ?? '';
+    if (word && mentionItems.some((i) => i.name.toLowerCase() === word)) return;
+    const next = undo.after.slice(0, -1) + rest;
+    setInputVal(next);
+    afterRender(() => textareaRef.current?.setSelectionRange(next.length, next.length));
+  }, [isMentionOpen]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // 18f: once the reply has words the steps fold (desktop: the saved reply's row; phone: the compact row as is) and
   // move below the bubble, into the landed action row's place, so landing moves nothing above the words.
@@ -3120,8 +3167,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
       </div>
 
       {/* Suggested prompts for who is in this chat: one swipeable row on phones */}
-      {/* O2 §6: hidden while nothing can run, instead of shown disabled */}
-      {messages.length <= 1 && suggestions.length > 0 && !showHome && canRun !== false && (
+      {/* O2 §6: hidden while nothing can run, instead of shown disabled. composer-diet c: and while a reply streams */}
+      {suggestedShows({ messages: messages.length, suggestions: suggestions.length, showHome, canRun, streaming: isStreaming }) && (
         <ScrollRow
           className="kw-scroll-row px-3 sm:px-6 py-2 flex flex-nowrap sm:flex-wrap items-center gap-2 overflow-x-auto sm:overflow-visible select-none"
           role="group"
@@ -3147,57 +3194,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         className={`px-3 ${phone ? 'pt-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]' : 'pt-3 pb-[max(0.75rem,env(safe-area-inset-bottom))]'} sm:p-4 border-t border-hairline bg-surface-side/60`}
       >
         {newTagRoom > 0 && <div aria-hidden="true" data-new-tag-room={newTagRoom} style={{ height: newTagRoom }} />}
-        {teamMembers && teamMembers.length > 0 && (
-          <ScrollRow
-            className={
-              phone
-                ? // Phone: 28 px chips that tap like 44 px. The row scrolls sideways, which clips
-                  // anything sticking out of it, so it carries 8 px above and below for the chips'
-                  // kws-hit areas and gives the same space back in its margins (row stays 28 px).
-                  'kw-scroll-row max-w-4xl mx-auto -mt-1.5 mb-0.5 py-2 flex items-center gap-1.5 overflow-x-auto text-xs select-none'
-                : 'kw-scroll-row max-w-4xl mx-auto mb-2.5 flex items-center gap-1.5 overflow-x-auto text-xs select-none'
-            }
-            role="group"
-            aria-label="Ask a member"
-          >
-            <span className="shrink-0 text-[11px] font-medium text-zinc-500 whitespace-nowrap">Ask:</span>
-            {teamMembers.map((m) => (
-              <button
-                key={m.id}
-                type="button"
-                onClick={() => handleInsertTag(`@${m.name}`)}
-                data-compact={phone ? '' : undefined}
-                className={
-                  phone
-                    ? 'kws-hit h-7 shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
-                    : 'shrink-0 whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-zinc-800/90 hover:bg-zinc-700 text-zinc-300 hover:text-zinc-100 border border-zinc-700/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
-                }
-                title={`Ask ${m.name}`}
-              >
-                <ModernAvatar role={m.avatar_sprite} name={m.name} size={14} kwantId={m.id} />
-                <span>@{m.name}</span>
-              </button>
-            ))}
-            {teamName && (
-              <button
-                type="button"
-                onClick={() => handleInsertTag(`@${teamName}`)}
-                data-compact={phone ? '' : undefined}
-                className={
-                  phone
-                    ? 'kws-hit h-7 shrink-0 max-w-[14rem] whitespace-nowrap flex items-center gap-1.5 px-2.5 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
-                    : 'shrink-0 max-w-[14rem] whitespace-nowrap flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-sky-950/60 hover:bg-sky-900/60 text-sky-300 hover:text-sky-200 border border-sky-800/60 transition-all text-xs cursor-pointer shadow-sm active:scale-95'
-                }
-                title={teamChipTitle(teamName)}
-                aria-label={teamChipTitle(teamName)}
-                data-team-chip=""
-              >
-                <Users size={12} className="shrink-0 text-sky-400" aria-hidden="true" />
-                <span className="min-w-0 truncate">{teamChipLabel(teamName)}</span>
-              </button>
-            )}
-          </ScrollRow>
-        )}
+        {/* composer-diet a: the Ask row is gone; the Answers chip under the field opens the member list. */}
 
         {/* On a phone the strip's "Answer ↑" stands in for this pill while the bot waits on the card. */}
         {/* 30a: one pointer per card: it also steps aside while the Needs-you strip offers "Go to the approval". */}
@@ -3508,15 +3505,37 @@ export const ChatView: React.FC<ChatViewProps> = ({
           data-composer-hints
         >
           {showAnswers && (
-            <span
-              className={`kw-chip min-w-0 ${showHintText ? 'max-w-[min(22rem,60%)]' : 'max-w-full'} ${target.kind === 'laya' ? 'kw-chip-accent' : target.kind === 'mention' ? 'kw-chip-info' : ''}`}
+            // composer-diet a: one "who answers" control. It reads "Answers: <who> · <lead> leads ▾" and opens the
+            // member list the @ button opens; picking someone puts their @name in the field, as the Ask row did.
+            // Phone: drawn 32 px tall, 44 px to the touch (kws-hit).
+            <button
+              type="button"
+              onClick={answersChipTap}
+              aria-haspopup="listbox"
+              aria-expanded={isMentionOpen}
+              aria-label={chip.name}
+              className={`kw-chip min-w-0 ${showHintText ? 'max-w-[min(26rem,62%)]' : 'max-w-full'} ${phone ? 'kws-hit h-8' : ''} ${target.kind === 'laya' ? 'kw-chip-accent' : target.kind === 'mention' ? 'kw-chip-info' : ''} cursor-pointer hover:border-sky-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-400`}
               title={target.detail}
               data-answer-target={target.kind}
+              data-answers-chip=""
+              data-compact={phone ? '' : undefined}
             >
-              {target.kind === 'laya' ? <Sparkles size={12} className="shrink-0" aria-hidden="true" /> : <AtSign size={12} className="shrink-0" aria-hidden="true" />}
+              {target.kind === 'laya' ? <Sparkles size={12} className="shrink-0" aria-hidden="true" /> : !lead ? <AtSign size={12} className="shrink-0" aria-hidden="true" /> : null}
               <span className="shrink-0 whitespace-nowrap text-zinc-400 font-normal">Answers:</span>
               <span className="min-w-0 truncate" data-answer-name="">{target.kind === 'laya' ? target.label : target.label.replace(/^@/, '')}</span>
-            </span>
+              {lead && (
+                <span className="flex items-center gap-1 min-w-0 pl-2 ml-0.5 border-l border-hairline text-zinc-300 font-normal" data-answer-lead="">
+                  {/* Resting face: at 14 px the working ring ran into "leads" (Mira F2); the reply header shows the mood. */}
+                  <ModernAvatar role={lead.avatar_sprite} name={lead.name} size={14} kwantId={lead.id} mood="idle" />
+                  <span className="truncate">{chip.lead} leads</span>
+                </span>
+              )}
+              <ChevronDown
+                size={12}
+                className={`shrink-0 text-zinc-400 transition-transform duration-150 motion-reduce:transition-none ${isMentionOpen ? 'rotate-180' : ''}`}
+                aria-hidden="true"
+              />
+            </button>
           )}
           {showHintText && (
             <span className="min-w-0 truncate text-right">

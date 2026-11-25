@@ -6,38 +6,23 @@ import { readFileSync } from 'node:fs';
 import { loadBundled } from './bundle.mjs';
 
 const m = await loadBundled(`
-  export { teamChipLabel, teamChipTitle, answerTarget } from './src/botHome';
+  export { answerTarget } from './src/botHome';
   export { refocusAfterApprove } from './src/approvalAsk';
 `);
 const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
 
-test('the team chip names the team once, without "(Team)"', () => {
-  assert.equal(m.teamChipLabel('Booktun.ing Team'), '@Booktun.ing Team');
-  assert.equal(m.teamChipLabel('helpers'), '@helpers');
-  assert.equal(m.teamChipLabel('  Booktun.ing Marketing Operations Team '), '@Booktun.ing Marketing Operations Team');
+test('the team is named once, without "(Team)"; the Ask row\'s team chip went with composer-diet a', () => {
   assert.doesNotMatch(chat, /\(Team\)/);
-  assert.doesNotMatch(chat, /Ask whole team/);
+  assert.doesNotMatch(chat, /Ask whole team|data-team-chip/);
 });
 
-test('the team chip title says "the whole … team" without doubling "team"', () => {
-  assert.equal(m.teamChipTitle('Booktun.ing Team'), 'Ask the whole Booktun.ing Team');
-  assert.equal(m.teamChipTitle('helpers'), 'Ask the whole helpers team');
-  assert.equal(m.teamChipTitle('Ops TEAM'), 'Ask the whole Ops TEAM');
-  assert.doesNotMatch(m.teamChipTitle('Booktun.ing Team'), /team team/i);
-});
-
-test('a long team name truncates inside the chip and the Answers pill; the full name stays in the title', () => {
-  const chip = chat.slice(chat.indexOf('data-team-chip'), chat.indexOf('data-team-chip') + 400);
-  assert.match(chat, /bg-sky-950\/60[^']*'/);
-  assert.equal((chat.match(/max-w-\[14rem\] whitespace-nowrap flex items-center gap-1\.5 px-2\.5[^']*bg-sky-950\/60/g) ?? []).length, 2);
-  assert.match(chip, /className="min-w-0 truncate">\{teamChipLabel\(teamName\)\}/);
-  assert.match(chat, /title=\{teamChipTitle\(teamName\)\}/);
+test('a long team name truncates inside the Answers chip; the full name stays in the title', () => {
   const pill = chat.slice(chat.indexOf('data-answer-target'), chat.indexOf('data-answer-name') + 200);
-  // Beside the hint text it takes at most 22rem or 60% of the row; alone (phone) it may use the whole row.
-  assert.match(chat, /kw-chip min-w-0 \$\{showHintText \? 'max-w-\[min\(22rem,60%\)\]' : 'max-w-full'\}/);
+  // Beside the hint text it takes at most 26rem or 62% of the row (it now also names the lead); alone, the whole row.
+  assert.match(chat, /kw-chip min-w-0 \$\{showHintText \? 'max-w-\[min\(26rem,62%\)\]' : 'max-w-full'\}/);
   assert.match(pill, /shrink-0 whitespace-nowrap text-zinc-400 font-normal">Answers:/);
   assert.match(pill, /className="min-w-0 truncate" data-answer-name/);
-  // answerTarget's words are unchanged (18e doesn't touch them): the title keeps the full name.
+  assert.match(chat, /title=\{target\.detail\}\s*data-answer-target/);
   const t = m.answerTarget({ kind: 'team', text: '', teamName: 'Booktun.ing Marketing Operations Team', names: [] });
   assert.equal(t.label, '@Booktun.ing Marketing Operations Team');
   assert.match(t.detail, /^@Booktun\.ing Marketing Operations Team answers\./);

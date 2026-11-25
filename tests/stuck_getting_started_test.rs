@@ -87,7 +87,7 @@ async fn a_stream_that_lost_turn_ended_closes_so_the_app_reads_the_running_turns
 // ---- The server's safety net (src/server/lost_turns.rs) and Stop ----
 
 use kwnt::db::continuity::RunningTurn;
-use kwnt::db::models::NewChannel;
+use kwnt::db::models::{NewChannel, NewKwant};
 use kwnt::db::spaces::SpaceId;
 use kwnt::server::lost_turns::{self, Lost};
 use kwnt::server::turns::ActiveTurn;
@@ -106,9 +106,28 @@ fn listed(turn_id: &str, context_id: &str, minutes_ago: i64) -> ActiveTurn {
     }
 }
 
+/// A team chat led by a real bot in the default space: `create_channel` refuses a lead that isn't one
+/// (the API fills an empty lead from the first member before it gets there).
 async fn team_chat(state: &AppState) -> String {
-    let input: NewChannel = serde_json::from_value(serde_json::json!({ "name": "Binance Trading Lab" })).unwrap();
-    state.db.create_channel(&SpaceId::default_space(), &input).await.unwrap().id
+    let space = SpaceId::default_space();
+    let quant = NewKwant {
+        name: "Quant".into(),
+        title: "Quant researcher".into(),
+        persona_prompt: "Backtests trading ideas.".into(),
+        soul: String::new(),
+        avatar_sprite: "ben".into(),
+        driver_type: "api".into(),
+        preferred_model: "auto".into(),
+    };
+    let lead = state.db.create_kwant(&space, &quant).await.unwrap().id;
+    let input = NewChannel {
+        name: "Binance Trading Lab".into(),
+        description: None,
+        lead_kwant_id: lead.clone(),
+        member_kwants: vec![lead],
+        routing_mode: "lead".into(),
+    };
+    state.db.create_channel(&space, &input).await.unwrap().id
 }
 
 /// The `turn_ended` events of `turn_id` waiting in `rx`.
