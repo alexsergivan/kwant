@@ -1971,8 +1971,10 @@ pub async fn cancel_thread(State(state): State<AppState>, Path(id): Path<String>
         Err(_) => return internal(),
     }
     let cancelled = state.turns.cancel(Some(&id));
+    // stuck-getting-started (0.9.51): a listed turn nothing runs ends too, so Stop clears the thread
+    let ended = super::lost_turns::end_orphans(&state, |t| t.thread_id.as_deref() == Some(id.as_str())).await;
     cancel_thread_delegation(&state, &id).await;
-    Json(json!({ "status": "cancelled", "cancelled": cancelled })).into_response()
+    Json(json!({ "status": "cancelled", "cancelled": cancelled + ended })).into_response()
 }
 
 #[derive(Deserialize)]

@@ -1,5 +1,6 @@
 //! Schema version 2 (Custom API accounts): the `llm_profiles` rebuild keeps every row, index and
-//! rule, and a failed change leaves version 1 running without Custom API accounts.
+//! rule, and a failed change leaves version 1 running without Custom API accounts. 35a rebuilds
+//! it once more so the engine CHECK takes 'mistral', keeping every row, key and state.
 
 use kwnt::db::custom_api::{ProfileEndpoint, CUSTOM_API_SCHEMA_VERSION};
 use kwnt::db::spaces::SPACES_SCHEMA_VERSION;
@@ -54,6 +55,8 @@ async fn the_rebuild_keeps_every_account_and_rule_and_adds_custom() {
     let db = Database::init(tmp.path()).await.unwrap();
     assert_eq!(db.schema_version().await.unwrap(), CUSTOM_API_SCHEMA_VERSION);
     assert!(db.custom_api_ready().await);
+    // 35a: the second rebuild (Mistral accounts) ran too, on the same rows
+    assert!(db.mistral_ready().await);
     let pool = raw(&tmp.path().join("kwnt.db")).await;
     assert_eq!(profiles(&pool).await, before, "every account kept as it was");
     let secret: (String,) = sqlx::query_as("SELECT api_key FROM llm_profile_secrets WHERE profile_id = 'prf_grok_key'")
@@ -76,6 +79,10 @@ async fn the_rebuild_keeps_every_account_and_rule_and_adds_custom() {
     exec(&pool, "INSERT INTO llm_profiles (id, engine, name, kind) VALUES ('p_custom', 'custom', 'Maestro', 'custom_api')").await.unwrap();
     // Same name on another engine is fine, as before
     exec(&pool, "INSERT INTO llm_profiles (id, engine, name, kind) VALUES ('p_custom2', 'custom', 'Personal', 'custom_api')").await.unwrap();
+    // 35a: a Mistral key account fits, one default per space like the others
+    exec(&pool, "INSERT INTO llm_profiles (id, engine, name, kind, is_default) VALUES ('p_mistral', 'mistral', 'Mistral', 'api_key', 1)").await.unwrap();
+    assert!(exec(&pool, "INSERT INTO llm_profiles (id, engine, name, kind, is_default) VALUES ('p_mistral2', 'mistral', 'Other', 'api_key', 1)").await.is_err());
+    exec(&pool, "DELETE FROM llm_profiles WHERE id = 'p_mistral'").await.unwrap();
     pool.close().await;
 
     let endpoint = ProfileEndpoint {

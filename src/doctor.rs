@@ -77,6 +77,7 @@ pub fn cli_install_fix(engine: Engine, p: Platform) -> &'static str {
         (Engine::Codex, _) => "kwnt setup --clis codex   (or: npm install -g @openai/codex; needs Node.js 18+)",
         (Engine::Grok, _) => "kwnt setup --clis grok   (or: curl -fsSL https://x.ai/cli/install.sh | bash)",
         (Engine::Custom, _) => "Add a Custom API account in the app: Settings › This space › Accounts",
+        (Engine::Mistral, _) => "Add a Mistral API key in the app: Settings › This space › Accounts (or set MISTRAL_API_KEY)",
     }
 }
 
@@ -86,7 +87,7 @@ pub fn cli_sign_in_fix(engine: Engine, p: Platform) -> String {
         Engine::Claude => ("claude auth login", "ANTHROPIC_API_KEY"),
         Engine::Codex => ("codex login --device-auth", "OPENAI_API_KEY"),
         Engine::Grok => ("grok login --device-auth", "XAI_API_KEY"),
-        Engine::Custom => return cli_install_fix(engine, p).to_string(),
+        Engine::Custom | Engine::Mistral => return cli_install_fix(engine, p).to_string(),
     };
     let run = match p {
         Platform::Docker => format!("docker compose exec kwnt {cmd}"),
