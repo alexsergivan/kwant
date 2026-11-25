@@ -8,6 +8,22 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.52] - 2026-11-25
+
+kwant 0.9.52: one working scene instead of a strip and a steps card, plain words for AIs and AI use, plain words on the sign-in, team and update screens, a shorter New routine form, plain words in the folder picker and the thinking note, silent stops show up in Needs you, four short Settings pages and "AI" instead of "engine" on the New bot form.
+
+### Changed
+- While a bot works, the chat shows one thing: the bot at its laptop saying what it's doing, with the time, a step count and its steps one tap away, instead of a separate working strip and steps card (#1192)
+- Settings, the AI picker, the New bot form and the usage panel now say "AI", "kwant picks" and "AI use" instead of Laya, engine and fresh tokens (#1196)
+- The sign-in, team, update and phone-app screens now say "kwant", "Team folder" and "your team of AI bots" instead of "kwant bots", "Team Workspace" and Laya (#1197)
+- A new routine asks for a name, what to do and when; the bot and where it posts sit on one line under it, with Change to pick others (#1200)
+- The folder picker on Mac and Linux asks for "a folder on this computer for your team" instead of "Select Team Workspace Folder", and the thinking note says "This AI" instead of "This engine" (#1201)
+- Settings › All spaces is split into four short pages, General, Bots on their own, Usage and Notifications, with one Save, and Find a setting looks across all four (#1204)
+- The New bot form, the steps list and Apps & accounts now say "AI" instead of "engine" (#1205)
+
+### Fixed
+- When kwant stops a reply because the bot went silent too long, it now also shows up once in Needs you, so you see it was stopped (#1202)
+
 ## [Mac 0.9.51] - 2026-11-25
 
 kwant 0.9.51: a grey Retried on steps the bot recovered from, a Stopped line in the chat when you press Stop, one line that says which bot answers, Telegram that still gets every question and approval when kwant is busy, push and webhook notices that still say a bot waits for you when kwant is busy, a New bot form that asks for a name and a job, space icons drawn in kwant's pixel style, a chat that stops saying "getting started" once the reply has ended, a Connect sheet that ticks every bot in the space for you, a Skip to conversation link and cleaner keyboard paths and Mistral as an AI you connect with your own key.
