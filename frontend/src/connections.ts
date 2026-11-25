@@ -270,7 +270,7 @@ export const connectionsApi = {
 /** The groups the page shows, in order. */
 export const GROUPS: Array<{ key: string; kinds: string[]; label: string; empty: string }> = [
   { key: 'mcp', kinds: ['mcp'], label: 'Tool servers (MCP)', empty: 'No tool servers yet.' },
-  { key: 'account', kinds: ['account'], label: 'Engine accounts', empty: 'No engine accounts yet.' },
+  { key: 'account', kinds: ['account'], label: 'AI accounts', empty: 'No AI accounts yet.' },
   { key: 'browser_login', kinds: ['browser_login'], label: 'Saved website logins', empty: 'No saved website logins.' },
   { key: 'sources', kinds: ['email', 'github'], label: 'Mail and GitHub (Loose ends)', empty: 'No mail or GitHub sources.' },
 ];

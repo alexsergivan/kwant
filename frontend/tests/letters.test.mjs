@@ -248,7 +248,7 @@ test('the draft: a paper letter is copy only; an email has a mailto; nothing is 
   const paper = ui.draft({ c: letterCase() });
   assert.match(paper, /data-draft-channel="letter"/);
   assert.match(paper, /Reply by post to Thames Water/);
-  assert.match(paper, /Nothing is sent from kwant bots/);
+  assert.match(paper, /Nothing is sent from kwant\./);
   assert.match(paper, /print or write it out/);
   assert.match(paper, /Copy reply/);
   assert.doesNotMatch(paper, /mailto:|Open in my mail app/);
@@ -259,7 +259,7 @@ test('the draft: a paper letter is copy only; an email has a mailto; nothing is 
   assert.match(email, /Reply by email to billing@water.example/);
   assert.match(email, /href="mailto:billing@water.example\?subject=Re"/);
   assert.match(email, /Open in my mail app/);
-  assert.match(email, /Nothing is sent from kwant bots/);
+  assert.match(email, /Nothing is sent from kwant\./);
 
   // A letter channel never gets a link, even if the server sent one.
   const odd = ui.draft({ c: letterCase({ draft: { ...letterCase().draft, mailto: 'mailto:x@y.example' } }) });

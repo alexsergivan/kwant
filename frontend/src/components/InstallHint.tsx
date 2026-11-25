@@ -58,7 +58,7 @@ export const InstallHint: React.FC = () => {
     >
       <img src="/icons/icon-192.png" alt="" width={36} height={36} className="shrink-0 rounded-lg [image-rendering:pixelated]" />
       <div className="flex-1 min-w-0">
-        <p className="font-medium text-zinc-100">Install kwant bots on your phone</p>
+        <p className="font-medium text-zinc-100">Install kwant on your phone</p>
         {kind === 'prompt' ? (
           <>
             <p className="mt-0.5 text-zinc-400">It opens full screen from your home screen, like an app.</p>

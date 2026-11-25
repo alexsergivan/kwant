@@ -510,7 +510,7 @@ test('D7 can’t read: "Pick a local folder instead" shows when the picker is pa
   v.unmount();
 });
 
-test('A8 "Pick a repo": Manage team opens on Team Workspace; Git Repo + repo URL focused with no workspace, its own tab otherwise', async () => {
+test('A8 "Pick a repo": Manage team opens on Team folder; Git Repo + repo URL focused with no workspace, its own tab otherwise', async () => {
   const scrolled = [];
   const orig = window.HTMLElement.prototype.scrollIntoView;
   window.HTMLElement.prototype.scrollIntoView = function (o) {

@@ -245,7 +245,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
       const r = await api.addComposio({ api_key: key.trim(), enabled: false });
       const sid = serverIdOf(r.connection_id);
       if (!sid) {
-        setError({ step: 1, text: 'Composio was added, but kwant bots didn’t say which server it is. Open Advanced to finish there.' });
+        setError({ step: 1, text: 'Composio was added, but kwant didn’t say which server it is. Open Advanced to finish there.' });
         return null;
       }
       setServerId(sid);
@@ -353,7 +353,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                 </li>
               </ul>
               <p className="text-[11px] text-zinc-400">
-                Through Composio, a service with a free plan. {app ? `Your ${app.name} sign-in stays on Composio’s servers, not in kwant bots.` : 'Your app sign-ins stay on Composio’s servers, not in kwant bots.'}
+                Through Composio, a service with a free plan. {app ? `Your ${app.name} sign-in stays on Composio’s servers, not in kwant.` : 'Your app sign-ins stay on Composio’s servers, not in kwant.'}
               </p>
             </div>
 
@@ -774,7 +774,7 @@ export const AppsAccounts: React.FC<AppsAccountsProps> = (p) => {
             );
           })}
         </ul>
-        {data && !composio && <p className="text-[11px] text-zinc-400">This server can’t connect apps yet. Update kwant bots to connect them here.</p>}
+        {data && !composio && <p className="text-[11px] text-zinc-400">This server can’t connect apps yet. Update kwant to connect them here.</p>}
       </section>
 
       {/* Another app: built in, through Composio and the public list, one row per app */}
