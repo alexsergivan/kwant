@@ -1776,7 +1776,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
               contextId: ctx || targetId || undefined,
               candidates: event.data?.candidates || [],
             });
-            markLive(ctx || targetId, 'Laya');
+            markLive(ctx || targetId);
             break;
           }
           case 'routing_decided':
@@ -3093,7 +3093,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     }
     const name = kwants.find((k) => k.id === kwantId)?.name;
     if (!name) return 'That bot is gone.';
-    if (!(await handleSendMessage(`@${name} ${question.text}`))) return `Routing learned, but ${name} wasn’t asked. Send it again with @${name}.`;
+    if (!(await handleSendMessage(`@${name} ${question.text}`))) return `Saved: ${name} answers these from now on. It wasn’t asked this time, so send it again with @${name}.`;
   };
 
   const renderDelegation = (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => {
@@ -3223,7 +3223,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         body: JSON.stringify(kwantData),
       });
       if (res.status === 409) return (await serverError(res)) ?? `Another bot in ${space.name} is already named "${agentData.name}".`;
-      if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen engine.';
+      if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen AI.';
       if (!res.ok) return (await serverError(res)) ?? `Couldn't save the bot (HTTP ${res.status}).`;
 
       const updated: Kwant = await res.json();
@@ -3300,7 +3300,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         return;
       }
       if (res.status === 409) return (await serverError(res)) ?? `Another bot in ${space.name} is already named "${agentData.name}".`;
-      if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen engine.';
+      if (res.status === 400) return (await serverError(res)) ?? 'Check the name (no spaces or @) and that the account belongs to the chosen AI.';
       return (await serverError(res)) ?? `Couldn't create the bot (HTTP ${res.status}).`;
     } catch (err) {
       console.error('Failed creating bot:', err);
