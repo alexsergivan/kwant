@@ -96,7 +96,7 @@ export interface ConnectSheetProps {
   api?: ConnectApi;
   phone?: boolean;
   /** Tests and screenshots: start with these filled in. */
-  initial?: { key?: string; picked?: string[]; opened?: boolean; error?: string };
+  initial?: { key?: string; picked?: string[]; opened?: boolean; error?: string; choosing?: boolean };
 }
 
 /** One numbered step of the sheet. Outside the sheet, so typing in a step keeps its focus.
@@ -153,7 +153,19 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
   const [key, setKey] = useState(initial.key ?? '');
   const [addingKey, setAddingKey] = useState(false);
   const [showKey, setShowKey] = useState(false);
-  const [picked, setPicked] = useState<string[]>(initial.picked ?? []);
+  // 36f: a first connect starts with every bot in the space ticked, unless a chat card passed its own bot.
+  // Once Composio is set up the sheet starts from the bots that have it now (the effect below).
+  const passedPicks = !!initial.picked?.length;
+  const allIds = kwants.map((k) => k.id);
+  const [picked, setPicked] = useState<string[]>(passedPicks ? initial.picked! : ready ? initial.picked ?? [] : allIds);
+  const [touched, setTouched] = useState(false);
+  // The bot list can arrive after the sheet opens: keep "every bot" until the person changes a tick.
+  useEffect(() => {
+    if (!ready && !passedPicks && !touched) setPicked(allIds);
+  }, [allIds.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
+  // With 2 or more bots, a first connect folds the chips behind "Choose bots".
+  const fold = !ready && kwants.length > 1;
+  const [choosing, setChoosing] = useState(!!initial.choosing);
   const [pickedLoaded, setPickedLoaded] = useState(!ready || !!initial.picked);
   const [error, setError] = useState<{ step: 1 | 2 | 3; text: string } | null>(initial.error ? { step: 1, text: initial.error } : null);
   const keyUrl = keyUrlOf(composio);
@@ -178,8 +190,18 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
   // The sign-in step: before setup it waits for the key (step 2); once Composio is added it's step 1.
   const signInStep: 1 | 2 = ready ? 1 : 2;
   const chosenBots = kwants.filter((k) => picked.includes(k.id));
+  const whoLine =
+    picked.length === 0
+      ? ready
+        ? 'No bot has it. Tick the ones that should.'
+        : 'None until you tick one.'
+      : fold && chosenBots.length === kwants.length
+        ? `All ${kwants.length} bots in ${spaceName} get it, turned on.`
+        : `${listNames(chosenBots.map((k) => k.name))} ${chosenBots.length === 1 ? 'gets' : 'get'} it, turned on.`;
   const approval = approvalLine(app?.acts ?? 'Send, post or change things', chosenBots, spaceMode);
-  const toggle = (kid: string) => (setPicked((p) => (p.includes(kid) ? p.filter((x) => x !== kid) : [...p, kid])), setError((x) => (x?.step === 3 ? null : x)));
+  const toggle = (kid: string) => (
+    setTouched(true), setPicked((p) => (p.includes(kid) ? p.filter((x) => x !== kid) : [...p, kid])), setError((x) => (x?.step === 3 ? null : x))
+  );
 
   const signIn = async () => {
     if (!app) return;
@@ -239,7 +261,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
     setError(null);
     let sid = serverId;
     if (!sid && !key.trim()) return setError({ step: 1, text: 'Paste your Composio API key first.' });
-    if (picked.length === 0 && !ready) return setError({ step: 3, text: 'Tick at least one bot. Only the bots you tick can use it.' });
+    if (picked.length === 0 && !ready) return setChoosing(true), setError({ step: 3, text: 'Tick at least one bot. Only the bots you tick can use it.' });
     setSaving(true);
     try {
       if (!sid) {
@@ -266,6 +288,33 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
   const panel = isPhone
     ? 'absolute inset-x-0 bottom-0 max-h-[92vh] rounded-t-2xl border-t'
     : 'absolute right-0 top-0 h-full w-full max-w-[460px] border-l';
+
+  // The bot chips: shown as they are, or behind "Choose bots" on a first connect.
+  const chips = (
+    <fieldset>
+      <legend className="sr-only">Bots in {spaceName}</legend>
+      <div className="flex flex-wrap gap-2">
+        {kwants.map((k) => {
+          const on = picked.includes(k.id);
+          return (
+            <label
+              key={k.id}
+              data-sheet-bot={k.id}
+              className={`inline-flex items-center gap-2 min-h-[44px] sm:min-h-[32px] px-3 rounded-full border text-xs cursor-pointer focus-within:outline focus-within:outline-2 focus-within:outline-sky-500 ${
+                on ? 'border-sky-500/60 bg-sky-500/15 text-zinc-100' : 'border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:border-zinc-600'
+              }`}
+            >
+              <input type="checkbox" className="accent-sky-500" checked={on} onChange={() => toggle(k.id)} />
+              <span aria-hidden="true" className="inline-flex">
+                <ModernAvatar role={k.avatar_sprite} name={k.name} size={20} kwantId={k.id} />
+              </span>
+              {k.name}
+            </label>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
 
   const sheet = (
     <div className="fixed inset-0 z-[60]" data-connect-sheet={app?.slug ?? 'composio'}>
@@ -309,7 +358,7 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
             <ol className="space-y-4" aria-label="Steps">
               {!ready && (
                 <Step {...stepProps(1)} errorInChildren title="Add your free Composio key">
-                  <p className="text-[11px] text-zinc-400">Composio is a service with a free plan that signs your bots in to apps. Add your key once and your bots can use any app you connect.</p>
+                  <p className="text-[11px] text-zinc-400">kwant bots use Composio to sign in to apps; the key is free. Add it once for every app you connect.</p>
                   <div className="flex items-center justify-between gap-2">
                     <label htmlFor={`${id}-key`} className="text-[11px] font-medium text-zinc-300">
                       Composio API key
@@ -399,34 +448,41 @@ export const ConnectSheet: React.FC<ConnectSheetProps> = ({ app, composio, kwant
                   </p>
                 ) : kwants.length === 0 ? (
                   <p className="text-[11px] text-zinc-400">{spaceName} has no bots yet. Make one first, then come back.</p>
-                ) : (
-                  <fieldset>
-                    <legend className="sr-only">Bots in {spaceName}</legend>
-                    <div className="flex flex-wrap gap-2">
-                      {kwants.map((k) => {
-                        const on = picked.includes(k.id);
-                        return (
-                          <label
-                            key={k.id}
-                            data-sheet-bot={k.id}
-                            className={`inline-flex items-center gap-2 min-h-[44px] sm:min-h-[32px] px-3 rounded-full border text-xs cursor-pointer focus-within:outline focus-within:outline-2 focus-within:outline-sky-500 ${
-                              on ? 'border-sky-500/60 bg-sky-500/15 text-zinc-100' : 'border-zinc-700 bg-zinc-800/60 text-zinc-300 hover:border-zinc-600'
-                            }`}
-                          >
-                            <input type="checkbox" className="accent-sky-500" checked={on} onChange={() => toggle(k.id)} />
-                            <span aria-hidden="true" className="inline-flex">
+                ) : fold ? (
+                  <>
+                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1" data-sheet-who>
+                      {chosenBots.length > 0 && (
+                        <span aria-hidden="true" className="inline-flex shrink-0 -space-x-1.5" data-sheet-who-faces>
+                          {chosenBots.slice(0, 5).map((k) => (
+                            <span key={k.id} className="inline-flex rounded-full ring-2 ring-zinc-900 bg-zinc-800">
                               <ModernAvatar role={k.avatar_sprite} name={k.name} size={20} kwantId={k.id} />
                             </span>
-                            {k.name}
-                          </label>
-                        );
-                      })}
+                          ))}
+                        </span>
+                      )}
+                      <p className="min-w-0 text-xs text-zinc-200" aria-live="polite" data-sheet-who-line>
+                        {whoLine}
+                      </p>
+                      <button
+                        type="button"
+                        className={linkBtn}
+                        aria-expanded={choosing}
+                        aria-controls={`${id}-bots`}
+                        onClick={() => setChoosing((v) => !v)}
+                        data-sheet-choose
+                      >
+                        Choose bots
+                        <ChevronRight size={13} aria-hidden="true" className={`transition-transform motion-reduce:transition-none ${choosing ? 'rotate-90' : ''}`} />
+                      </button>
                     </div>
-                  </fieldset>
+                    <div id={`${id}-bots`} hidden={!choosing} data-sheet-bots>
+                      {chips}
+                    </div>
+                  </>
+                ) : (
+                  chips
                 )}
-                <p className="text-[11px] text-zinc-400">
-                  {picked.length === 0 ? (ready ? 'No bot has it. Tick the ones that should.' : 'None until you tick one.') : `${listNames(chosenBots.map((k) => k.name))} ${chosenBots.length === 1 ? 'gets' : 'get'} it, turned on.`}
-                </p>
+                {!fold && <p className="text-[11px] text-zinc-400">{whoLine}</p>}
                 <p className="text-[11px] text-zinc-300" data-sheet-one-connection>
                   Composio is one connection: the bots you tick can use every app on it{app ? `, not only ${app.name}` : ''}.
                 </p>

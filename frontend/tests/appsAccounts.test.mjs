@@ -105,13 +105,14 @@ const sheetProps = (over = {}) => ({
 
 // ── The sheet's three steps ──────────────────────────────────────────────────────────────────
 
-test('the sheet says what bots can do and that it goes through Composio, then shows three steps with no bot ticked', () => {
+test('the sheet says what bots can do and that it goes through Composio, then shows three steps with every bot ticked (36f)', () => {
   const html = m.renderToStaticMarkup(h(m.ConnectSheet, sheetProps()));
-  for (const t of ['Connect Gmail', 'Your bots will be able to', 'Read and search your mail', 'Through Composio, a service with a free plan', 'Add your free Composio key', 'Composio API key', 'Get a free key', 'Sign in to Gmail', 'Which bots get it?', 'None until you tick one.', 'Free plan: 10,000 tool calls a month.']) {
+  for (const t of ['Connect Gmail', 'Your bots will be able to', 'Read and search your mail', 'Through Composio, a service with a free plan', 'Add your free Composio key', 'kwant bots use Composio to sign in to apps; the key is free.', 'Composio API key', 'Get a free key', 'Sign in to Gmail', 'Which bots get it?', 'All 3 bots in Home get it, turned on.', 'Choose bots', 'Free plan: 10,000 tool calls a month.']) {
     assert.ok(html.includes(t), `sheet shows "${t}"`);
   }
+  assert.ok(!html.includes('Composio is a service with a free plan that signs'), 'step 1 says why once, in one line');
   assert.equal((html.match(/data-sheet-step="/g) ?? []).length, 3);
-  assert.ok(!/type="checkbox"[^>]*checked/.test(html), 'no bot is preselected');
+  assert.equal((html.match(/type="checkbox"[^>]*checked/g) ?? []).length, 3, 'every bot is preselected');
   assert.match(html, /role="dialog"/);
   assert.match(html, /aria-modal="true"/);
   for (const t of ['MCP', 'Composio link', 'user_id', 'toolkit', 'server URL', 'connector']) assert.ok(!html.includes(t), `no "${t}" on the main path`);
@@ -126,7 +127,13 @@ test('no key stops at step 1 with words, and no bot stops at step 3', async () =
   assert.match(text(host.querySelector('[data-sheet-error="1"]')), /^Paste your Composio API key first\./);
   await type(host.querySelector('[data-sheet-step="1"] input'), 'ck_abc');
   assert.equal(host.querySelector('[data-sheet-error="1"]'), null, 'typing clears the key error');
+  await click(host.querySelector('[data-sheet-choose]'));
+  for (const b of host.querySelectorAll('[data-sheet-bot] input')) await click(b);
+  assert.match(text(host.querySelector('[data-sheet-who-line]')), /^None until you tick one\.$/);
+  await click(host.querySelector('[data-sheet-choose]'));
+  assert.ok(host.querySelector('[data-sheet-bots]').hidden, 'fold closed again with nobody ticked');
   await submit(host);
+  assert.equal(host.querySelector('[data-sheet-bots]').hidden, false, 'the error opens the fold so the chips are there to tick');
   assert.match(text(host.querySelector('[data-sheet-error="3"]')), /Tick at least one bot/);
   await click(host.querySelector('[data-sheet-bot] input'));
   assert.equal(host.querySelector('[data-sheet-error="3"]'), null, 'ticking a bot clears the bot error');
@@ -158,7 +165,9 @@ test('picking one bot adds Composio and gives it to just that bot, then says so'
   let done = null;
   const host = await mount(m.ConnectSheet, sheetProps({ api, onDone: (r) => (done = r) }));
   await type(host.querySelector('[data-sheet-step="1"] input'), 'ck_abc');
-  await click(host.querySelector('[data-sheet-bot="k1"] input'));
+  await click(host.querySelector('[data-sheet-choose]'));
+  await click(host.querySelector('[data-sheet-bot="k2"] input'));
+  await click(host.querySelector('[data-sheet-bot="k3"] input'));
   assert.match(text(host), /Ann gets it, turned on/);
   await submit(host);
   assert.deepEqual(api.calls[0], ['add', { api_key: 'ck_abc', enabled: false }], 'added off: only the picks turn it on');
@@ -510,4 +519,116 @@ test('round 5 (qa item 3): the page names bots on auto only on "Used first"; bac
   const backup = part('backup');
   assert.match(backup, /Cody uses it first/);
   assert.doesNotMatch(backup, /Ann|Ben/, 'was "Ann, Ben and Cody use it first" and "Ann and Ben use it first"');
+});
+
+// ── 36f connect-preselects-bots: a first connect ticks the space's bots behind "Choose bots" ──────
+
+const ticks = (host) => [...host.querySelectorAll('[data-sheet-bot] input')].filter((i) => i.checked).map((i) => i.closest('[data-sheet-bot]').getAttribute('data-sheet-bot'));
+
+test('36f: a first connect from Settings starts with every bot ticked and the fold closed, and gives it to all of them', async () => {
+  const api = fakeApi();
+  const host = await mount(m.AppsAccounts, pageProps({ connectApi: api }));
+  await click(host.querySelector('[data-app-tile="gmail"]'));
+  const sheet = document.querySelector('[data-connect-sheet="gmail"]');
+  assert.deepEqual(ticks(sheet), ['k1', 'k2', 'k3']);
+  assert.equal(text(sheet.querySelector('[data-sheet-who-line]')), 'All 3 bots in Home get it, turned on.');
+  const choose = sheet.querySelector('[data-sheet-choose]');
+  assert.equal(text(choose), 'Choose bots');
+  assert.equal(choose.getAttribute('type'), 'button');
+  assert.equal(choose.getAttribute('aria-expanded'), 'false');
+  const region = sheet.querySelector('[data-sheet-bots]');
+  assert.equal(choose.getAttribute('aria-controls'), region.id);
+  assert.equal(region.hidden, true, 'the chips wait behind Choose bots');
+  assert.match(choose.className, /min-h-\[44px\]/, '44 px on a phone');
+  assert.equal(sheet.querySelectorAll('[data-sheet-who-faces] > *').length, 3, 'the bots’ faces next to the line');
+  assert.equal(sheet.querySelector('[data-sheet-step="3"]').getAttribute('data-done'), 'true');
+  await type(sheet.querySelector('[data-sheet-step="1"] input'), 'ck_abc');
+  await submit(sheet);
+  assert.deepEqual(api.calls.at(-1), ['give', 'cmp1', ['k1', 'k2', 'k3'], ['k1', 'k2', 'k3']]);
+});
+
+test('36f: opening the fold shows every chip ticked; unticking one updates the line, and the guard is unchanged', async () => {
+  const api = fakeApi();
+  const host = await mount(m.ConnectSheet, sheetProps({ api, initial: { key: 'ck_abc' } }));
+  const choose = host.querySelector('[data-sheet-choose]');
+  await click(choose);
+  assert.equal(choose.getAttribute('aria-expanded'), 'true');
+  assert.equal(host.querySelector('[data-sheet-bots]').hidden, false);
+  assert.equal(host.querySelectorAll('[data-sheet-bot]').length, 3);
+  for (const l of host.querySelectorAll('[data-sheet-bot]')) assert.match(l.className, /min-h-\[44px\]/);
+  assert.deepEqual(ticks(host), ['k1', 'k2', 'k3']);
+  await click(host.querySelector('[data-sheet-bot="k2"] input'));
+  assert.deepEqual(ticks(host), ['k1', 'k3']);
+  assert.equal(text(host.querySelector('[data-sheet-who-line]')), 'Ann and Cody get it, turned on.');
+  assert.equal(host.querySelector('[data-sheet-who-line]').getAttribute('aria-live'), 'polite');
+  assert.equal(host.querySelectorAll('[data-sheet-who-faces] > *').length, 2);
+  await submit(host);
+  assert.deepEqual(api.calls.at(-1), ['give', 'cmp1', ['k1', 'k2', 'k3'], ['k1', 'k3']]);
+  // Unticking the last one shows the same words as before 36f and the submit guard stops it.
+  const api2 = fakeApi();
+  for (const u of [...mounted]) u();
+  const host2 = await mount(m.ConnectSheet, sheetProps({ api: api2, initial: { key: 'ck_abc', choosing: true } }));
+  for (const b of host2.querySelectorAll('[data-sheet-bot] input')) await click(b);
+  await submit(host2);
+  assert.match(text(host2.querySelector('[data-sheet-error="3"]')), /^Tick at least one bot\. Only the bots you tick can use it\./);
+  assert.deepEqual(api2.calls, []);
+});
+
+test('36f: a chat-card entry keeps exactly its own bot, folded, with that bot named', async () => {
+  const api = fakeApi();
+  const host = await mount(m.ConnectSheet, sheetProps({ api, initial: { key: 'ck_abc', picked: ['k1'] } }));
+  assert.deepEqual(ticks(host), ['k1']);
+  assert.equal(text(host.querySelector('[data-sheet-who-line]')), 'Ann gets it, turned on.');
+  assert.ok(host.querySelector('[data-sheet-choose]'));
+  assert.equal(host.querySelector('[data-sheet-bots]').hidden, true);
+  await submit(host);
+  assert.deepEqual(api.calls.at(-1), ['give', 'cmp1', ['k1', 'k2', 'k3'], ['k1']]);
+});
+
+test('36f: a card with no bot of its own (picked: []) starts like Settings, with every bot', () => {
+  const html = m.renderToStaticMarkup(h(m.ConnectSheet, sheetProps({ initial: { picked: [] } })));
+  assert.equal((html.match(/type="checkbox"[^>]*checked/g) ?? []).length, 3);
+  assert.ok(html.includes('All 3 bots in Home get it, turned on.'));
+});
+
+test('36f: with Composio already set up the sheet still starts from the bots that have it, chips shown, no fold', async () => {
+  const api = fakeApi();
+  const host = await mount(m.ConnectSheet, sheetProps({ api, composio: readyComposio() }));
+  assert.deepEqual(ticks(host), ['k2'], 'from botsWith, never more');
+  assert.equal(host.querySelector('[data-sheet-choose]'), null);
+  assert.equal(host.querySelector('[data-sheet-bots]'), null);
+  assert.match(text(host), /Ben gets it, turned on\./);
+  const none = await mount(m.ConnectSheet, sheetProps({ api: fakeApi({ botsWith: async () => [] }), composio: readyComposio(), app: null }));
+  assert.match(text(none.querySelectorAll('[data-connect-sheet]')[1]), /No bot has it\. Tick the ones that should\./);
+});
+
+test('36f: a 0-bot space is unchanged; a 1-bot space ticks that bot with no fold', () => {
+  const zero = m.renderToStaticMarkup(h(m.ConnectSheet, sheetProps({ kwants: [] })));
+  assert.ok(zero.includes('Home has no bots yet. Make one first, then come back.'));
+  assert.ok(zero.includes('None until you tick one.'));
+  assert.ok(!zero.includes('data-sheet-choose'));
+  assert.ok(!zero.includes('type="checkbox"'));
+  const one = m.renderToStaticMarkup(h(m.ConnectSheet, sheetProps({ kwants: [bots[0]] })));
+  assert.ok(!one.includes('data-sheet-choose'));
+  assert.equal((one.match(/type="checkbox"[^>]*checked/g) ?? []).length, 1);
+  assert.ok(one.includes('Ann gets it, turned on.'));
+});
+
+test('36f: bots that arrive after the sheet opens are ticked too, until the person changes a tick', async () => {
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = m.createRoot(host);
+  const props = sheetProps({ kwants: [] });
+  root.render(h(m.ConnectSheet, props));
+  await settle();
+  root.render(h(m.ConnectSheet, { ...props, kwants: bots }));
+  await settle();
+  assert.deepEqual(ticks(document.body), ['k1', 'k2', 'k3']);
+  await click(document.querySelector('[data-sheet-choose]'));
+  await click(document.querySelector('[data-sheet-bot="k1"] input'));
+  root.render(h(m.ConnectSheet, { ...props, kwants: [...bots, { id: 'k4', name: 'Dot', approvals_effective: 'ask' }] }));
+  await settle();
+  assert.deepEqual(ticks(document.body), ['k2', 'k3'], 'a changed pick is kept');
+  root.unmount();
+  host.remove();
 });
