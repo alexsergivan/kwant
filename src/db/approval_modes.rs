@@ -361,6 +361,23 @@ impl Database {
         .await?)
     }
 
+    /// Cards still `pending` created at or after `since`, oldest first, at most `limit`: what the
+    /// push/webhook notifier catches up on after it fell behind the event bus.
+    pub async fn pending_approvals_since(
+        &self,
+        since: chrono::DateTime<Utc>,
+        limit: i64,
+    ) -> Result<Vec<super::models::Approval>, DbError> {
+        Ok(sqlx::query_as::<_, super::models::Approval>(
+            "SELECT * FROM approvals WHERE status = 'pending' AND datetime(created_at) >= datetime(?1)
+             ORDER BY created_at, rowid LIMIT ?2",
+        )
+        .bind(since.format("%Y-%m-%d %H:%M:%S").to_string())
+        .bind(limit)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// Moves a card's `created_at` back `hours` (tests of the waiting window).
     #[doc(hidden)]
     pub async fn backdate_approval_for_test(&self, id: &str, hours: i64) -> Result<(), DbError> {

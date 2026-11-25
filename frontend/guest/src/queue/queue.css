@@ -1,0 +1,102 @@
+/* ===================== pa11b Queue ticket: the guest page (guest/src/queue). From pa11/queue-shots/queue.css, Mira Nov 24.
+   Kit variables only (the token block is guest.css). Ships beside the queue chunk, so other kits never load it. */
+
+.qg .bar .qtile { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; background: var(--sky-900); border: 1px solid var(--sky-700); color: var(--sky-200); flex-shrink: 0; }
+.qg .bar .qtile svg.pi { width: 14px; height: 14px; }
+.qg .qline { margin: 4px 0 0; font-size: 15px; line-height: 21px; }
+.qg .qbigicon { margin: 0 auto; width: 56px; height: 56px; border-radius: 16px; display: grid; place-items: center; background: var(--kw-surface-raised); border: 1px solid var(--kw-hairline-strong); color: var(--sky-300); }
+.qg .qbigicon svg.pi { width: 24px; height: 24px; }
+.qg .gbtn svg.pi { width: 18px; height: 18px; margin-right: 8px; }
+.qg .tkc { width: 44px; height: 55px; display: block; }
+.qg .ginfo { font-size: 14px; line-height: 20px; color: var(--zinc-300); display: flex; gap: 8px; align-items: flex-start; margin: 0; }
+.qg .ginfo svg.pi { margin-top: 3px; color: var(--zinc-400); width: 13px; height: 13px; flex-shrink: 0; }
+.qg .ginfo b { color: var(--zinc-50); }
+.qg .err { text-align: left; margin: 6px 0 0; }
+.qg .input[aria-invalid="true"] { border-color: var(--kw-bad); }
+.qg .facts dt, .qg .facts dd { margin: 0; }
+.qg .facts { margin: 0; }
+.qg .tk .eta svg.pi { width: 14px; height: 14px; }
+.qg .tk .stub .t { min-width: 0; }
+/* The countdown bar shrinks with transform only: --p is set from the script (CSSOM, never a style attribute). */
+.cd .cdbar i { transform: scaleX(var(--p, 1)); }
+.glink { margin: 0 auto; padding: 0 12px; background: none; border: 0; cursor: pointer; font: inherit; font-size: 16px; }
+.gb44, .gconfirm .two button { cursor: pointer; font-family: inherit; }
+.gconfirm .two button { background: transparent; }
+.gconfirm .two button:disabled { opacity: .6; cursor: default; }
+.gconfirm p { margin: 0; }
+.buzz .br .gb44 { flex-shrink: 0; }
+/* At 390 the stub must never clip: the side fact wraps under smaller numbers. */
+@media (max-width: 380px) { .tk .stub { gap: 10px; padding: 0 14px; } .tk .stub .t b { font-size: 52px; } .tk .word:not(.sm) { font-size: 38px; line-height: 44px; } }
+
+/* ---------- guest page: the ticket ---------- */
+.tk { --cut: 132px; position: relative; border-radius: 20px; background: linear-gradient(180deg, color-mix(in srgb, var(--sky-500) 20%, var(--kw-surface-raised)) 0, var(--kw-surface-raised) 100%);
+  -webkit-mask: radial-gradient(circle 13px at 0 var(--cut), transparent 12.5px, black 13px) left / 51% 100% no-repeat, radial-gradient(circle 13px at 100% var(--cut), transparent 12.5px, black 13px) right / 51% 100% no-repeat;
+          mask: radial-gradient(circle 13px at 0 var(--cut), transparent 12.5px, black 13px) left / 51% 100% no-repeat, radial-gradient(circle 13px at 100% var(--cut), transparent 12.5px, black 13px) right / 51% 100% no-repeat; }
+.tk .stub { height: var(--cut); display: flex; align-items: center; gap: 14px; padding: 0 20px; }
+.tk .stub .c { flex-shrink: 0; }
+.tk .stub .t small { display: block; font-size: 13px; font-weight: 700; color: var(--sky-200); letter-spacing: .06em; text-transform: uppercase; }
+.tk .stub .t b { display: block; font-size: 60px; line-height: 64px; font-weight: 800; letter-spacing: -.03em; font-variant-numeric: tabular-nums; color: var(--zinc-50); }
+.tk .stub .t em { font-style: normal; font-size: 15px; color: var(--zinc-200); }
+.tk .stub .tside { margin-left: auto; text-align: right; font-size: 13px; color: var(--zinc-300); line-height: 18px; }
+.tk .stub .tside b { display: block; font-size: 22px; line-height: 28px; color: var(--zinc-50); font-variant-numeric: tabular-nums; }
+.tk .perf { margin: 0 22px; border-top: 2px dashed color-mix(in srgb, var(--sky-300) 35%, transparent); }
+.tk .tmain { padding: 18px 20px 22px; text-align: center; }
+.tk .tmain .pre { font-size: 17px; color: var(--zinc-200); }
+.tk .tmain .place { font-size: 76px; line-height: 80px; font-weight: 800; letter-spacing: -.03em; color: var(--zinc-50); font-variant-numeric: tabular-nums; }
+.tk .tmain .post { font-size: 16px; line-height: 23px; color: var(--zinc-200); }
+.tk .tmain .post b { color: var(--zinc-50); }
+.tk .tmain .eta { display: inline-flex; gap: 8px; align-items: center; margin-top: 12px; padding: 8px 14px; border-radius: 999px; background: var(--kw-surface-main); border: 1px solid var(--kw-hairline-strong); font-size: 15px; font-weight: 600; color: var(--zinc-100); }
+.tk .tmain .eta.none { font-weight: 500; color: var(--zinc-300); }
+.tk.next { background: linear-gradient(180deg, color-mix(in srgb, var(--sky-500) 38%, var(--kw-surface-raised)) 0, color-mix(in srgb, var(--sky-500) 16%, var(--kw-surface-raised)) 100%); }
+.tk.turn { background: linear-gradient(180deg, var(--sky-500) 0, var(--sky-700) 100%); }
+.tk.turn .stub .t small, .tk.turn .tmain .pre, .tk.turn .tmain .post, .tk.turn .stub .tside { color: white; }
+.tk.turn .perf { border-color: rgb(255 255 255 / .45); }
+.tk.dim { background: var(--kw-surface-raised); }
+.tk.dim .stub .t b { color: var(--zinc-300); }
+.tk.dim .perf { border-color: var(--kw-hairline-strong); }
+.tk .word { font-size: 44px; line-height: 50px; font-weight: 800; letter-spacing: -.02em; color: var(--zinc-50); }
+/* Skipped, served and left: the smaller headline (Mira's check, fix 3), with the mockup's gaps under each headline. */
+.tk .word.sm, .tk .word.sm.served { font-size: 34px; line-height: 40px; }
+.tk .word.served { margin-top: 12px; }
+.tk .tmain .post.p4 { margin-top: 4px; }
+.tk .tmain .post.p6 { margin-top: 6px; }
+.tk .tmain .post.p8 { margin-top: 8px; }
+.cd { margin-top: 14px; display: grid; gap: 8px; }
+.cd .row { display: flex; justify-content: space-between; align-items: baseline; font-size: 15px; font-weight: 600; color: white; }
+.cd .row b { font-size: 34px; line-height: 38px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.cd .cdbar { height: 12px; border-radius: 6px; background: rgb(0 0 0 / .28); overflow: hidden; }
+.cd .cdbar i { display: block; height: 100%; background: white; transform-origin: left; transition: transform 1s linear; }
+.buzz { border-radius: 16px; background: var(--kw-surface-raised); border: 1px solid var(--kw-hairline-strong); overflow: hidden; }
+.buzz .bh { padding: 12px 14px 4px; font-size: 15px; font-weight: 700; color: var(--zinc-50); display: flex; gap: 8px; align-items: center; }
+.buzz .br { display: flex; gap: 12px; align-items: center; min-height: 52px; padding: 6px 14px; border-top: 1px solid var(--kw-hairline); font-size: 15px; line-height: 21px; color: var(--zinc-100); }
+.buzz .bh + .br { border-top: 0; }
+.buzz .br .pi { width: 18px; height: 18px; color: var(--sky-300); flex-shrink: 0; }
+.buzz .br .st { margin-left: auto; font-size: 14px; color: var(--zinc-300); font-weight: 600; white-space: nowrap; }
+.buzz .br .st.ok { color: var(--kw-ok); }
+.buzz .br .st.no { color: var(--zinc-400); font-weight: 500; white-space: normal; text-align: right; max-width: 170px; font-size: 13px; line-height: 18px; }
+.gb44 { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 44px; padding: 0 16px; border-radius: 12px; border: 2px solid var(--sky-300); background: var(--sky-600); color: white; font-size: 15px; font-weight: 700; margin-left: auto; white-space: nowrap; }
+.gb44.ghost { background: transparent; border-color: var(--kw-hairline-strong); color: var(--zinc-100); }
+.honest { display: flex; gap: 10px; align-items: flex-start; padding: 12px 14px; border-top: 1px solid var(--kw-hairline); background: color-mix(in srgb, var(--sky-500) 8%, transparent); font-size: 14px; line-height: 20px; color: var(--zinc-100); }
+.honest .pi { width: 16px; height: 16px; margin-top: 2px; color: var(--sky-300); flex-shrink: 0; }
+.honest.solo { border: 1px dashed var(--zinc-700); border-radius: 12px; background: transparent; }
+.glink { text-align: center; font-size: 16px; font-weight: 600; color: var(--sky-300); text-decoration: underline; text-underline-offset: 4px; min-height: 44px; display: flex; align-items: center; justify-content: center; }
+.gnote { display: flex; gap: 10px; align-items: flex-start; border-radius: 14px; padding: 12px 14px; font-size: 15px; line-height: 21px; color: var(--zinc-100); background: var(--kw-surface-raised); border: 1px solid var(--kw-hairline-strong); }
+.gnote .pi { width: 16px; height: 16px; margin-top: 3px; flex-shrink: 0; color: var(--sky-300); }
+.gnote.warn { border-color: color-mix(in srgb, var(--kw-warn) 40%, transparent); background: color-mix(in srgb, var(--kw-warn) 8%, var(--kw-surface-raised)); }
+.gnote.warn .pi { color: var(--kw-warn); }
+.gnote.ok { border-color: color-mix(in srgb, var(--kw-ok) 40%, transparent); }
+.gnote.ok .pi { color: var(--kw-ok); }
+.gconfirm { border-radius: 16px; border: 2px solid var(--sky-300); background: var(--kw-surface-raised); padding: 14px; display: grid; gap: 12px; font-size: 16px; line-height: 23px; }
+.gconfirm .two { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.gconfirm .two button { min-height: 52px; border-radius: 14px; display: flex; align-items: center; justify-content: center; font-weight: 700; font-size: 16px; border: 2px solid var(--kw-hairline-strong); color: var(--zinc-50); text-align: center; padding: 0 8px; }
+.gconfirm .two button.stop { border-color: color-mix(in srgb, var(--kw-bad) 50%, transparent); color: var(--kw-bad); }
+.gstat { display: flex; justify-content: center; gap: 8px; flex-wrap: wrap; }
+.gchip { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 12px; border-radius: 999px; font-size: 14px; font-weight: 700; border: 1px solid var(--kw-hairline-strong); color: var(--zinc-100); }
+.gchip.ok { color: var(--kw-ok); border-color: color-mix(in srgb, var(--kw-ok) 40%, transparent); background: color-mix(in srgb, var(--kw-ok) 10%, transparent); }
+.gchip.warn { color: var(--kw-warn); border-color: color-mix(in srgb, var(--kw-warn) 40%, transparent); background: color-mix(in srgb, var(--kw-warn) 10%, transparent); }
+.gchip.info { color: var(--sky-100); border-color: var(--sky-600); background: color-mix(in srgb, var(--sky-500) 22%, transparent); }
+/* ---------- motion ---------- */
+.tk, .buzz, .gnote { transition: opacity 160ms var(--kw-ease), transform 160ms var(--kw-ease); }
+@keyframes tk-in { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: none; } }
+.tk.turn { animation: tk-in 180ms var(--kw-ease); }
+@media (prefers-reduced-motion: reduce) { .tk, .buzz, .gnote, .cd .cdbar i { transition: none; } .tk.turn { animation: none; } }

@@ -48,6 +48,7 @@ jobs:
           export CHROMIUM="$(command -v google-chrome || command -v chromium)"
           node guest/e2e/csp.mjs "$RUNNER_TEMP/guest-shots"
           node guest/e2e/remote.mjs "$RUNNER_TEMP/guest-shots"
+          node guest/e2e/queue.mjs "$RUNNER_TEMP/guest-shots"
       - name: Guest page shots
         if: always()
         uses: actions/upload-artifact@v4
@@ -140,6 +141,29 @@ jobs:
         with:
           name: native-drop
           path: ${{ runner.temp }}/native-drop
+          retention-days: 7
+      # 36b (ux-a11y-1124/a11y-audit.md): axe-core against the real rendered app, on the same debug kwnt,
+      # across the screens the audit flagged (first run, a sent message, Settings, New bot modal). Fails only
+      # on serious/critical violations (the audit's threshold: it alone would have caught every regression
+      # found). Not a required check yet, same continue-on-error precedent as Performance budget below;
+      # remove it once the ranked findings above this threshold are clear.
+      - name: Accessibility guard (axe-core, serious+critical)
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          PW_CORE: ${{ runner.temp }}/pw/node_modules/playwright-core/index.mjs
+        run: |
+          npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/axe" axe-core@4.14.1
+          export CHROMIUM="$(command -v google-chrome || command -v chromium)"
+          export AXE_CORE="$RUNNER_TEMP/axe/node_modules/axe-core/axe.min.js"
+          node frontend/e2e/a11y-check.mjs target/debug/kwnt 9684 "$RUNNER_TEMP/a11y-check"
+      - name: Accessibility guard results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a11y-check
+          path: ${{ runner.temp }}/a11y-check
+          if-no-files-found: ignore
           retention-days: 7
       # P3: a performance budget on the same debug kwnt (no new build). Cold start, first reply (fake claude), idle memory
       # and the bot browser launch, each the median of 5 runs against scripts/perf_budget.json. Over a limit fails the step.

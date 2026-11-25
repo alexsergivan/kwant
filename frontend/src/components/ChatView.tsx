@@ -3,6 +3,7 @@ import { parseWatchMeta, type WatchMeta } from '../missionWatch';
 import { flushSync } from 'react-dom';
 import { createStreamText, useStreamPart, useStreamThinking, useStreamWriting, type StreamText, type StreamView } from '../streamText';
 import { queuedText } from '../claudeVm';
+import { stepsWho } from '../toolLabel';
 import { QueuedBeside } from './QueuedBeside';
 import { WaitingBanner } from './WaitingBanner';
 import { answerPlaceholder, isTeamTurn, onlyAskOpen, turnRail, waitingStopLabel } from '../waitingState';
@@ -912,6 +913,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const liveSpeaker = streamingSpeakerName || title;
   // Who the live row shows: the current speaker in a discussion, else the replying bot.
   const liveName = discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : liveSpeaker;
+  // 36a: who the live steps' words name; never the team or room chat's title (stepsWho).
+  const stepsName = stepsWho({
+    discussing: discussionState?.inProgress,
+    currentSpeaker: discussionState?.currentSpeaker,
+    streamingSpeakerName,
+    title,
+    direct: home?.kind === 'bot',
+  });
   const livePages = useMemo(() => pagesOfReply(liveActivity?.steps), [liveActivity?.steps]);
   const savedTrail = useMemo((): { id: string; bot: string; pages: ReplyPage[] } | null => {
     const from = (m: ChatMessage) => {
@@ -2245,7 +2254,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
             >
               {/* What the reply did: "12 steps · 41s", opening to the steps (tool calls go inside) */}
               {savedActivity && (
-                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`} openRequest={detailsAsk[msg.id]} focusStep={outcome?.stepId ?? null}>
+                <SavedActivityList activity={savedActivity} idBase={`act-${msg.id}`} openRequest={detailsAsk[msg.id]} focusStep={outcome?.stepId ?? null} who={displayName}>
                   {msg.tool_calls && (
                     <div className="border-t border-zinc-800/60 p-2">
                       <ToolCallsList raw={msg.tool_calls} />
@@ -2261,7 +2270,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <button
                     type="button"
                     onClick={() => toggleThought(msg.id)}
-                    className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer shadow-sm group"
+                    className="max-w-full min-w-0 flex items-center gap-2 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/80 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all motion-reduce:transition-none cursor-pointer shadow-sm group"
                   >
                     <Sparkles size={13} className="text-sky-400 group-hover:rotate-12 transition-transform flex-shrink-0" />
                     <span className="truncate min-w-0 sm:max-w-md">
@@ -2459,7 +2468,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <button
             type="button"
             onClick={() => toggleThought(threadKey)}
-            className="sm:ml-[48px] max-w-full flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all cursor-pointer"
+            className="sm:ml-[48px] max-w-full flex items-center gap-2.5 px-3 py-1.5 rounded-xl text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-900/60 hover:bg-zinc-900 border border-zinc-800 hover:border-zinc-700/80 transition-all motion-reduce:transition-none cursor-pointer"
           >
             {isThreadOpen ? <ChevronDown size={13} className="text-zinc-500" /> : <ChevronRight size={13} className="text-zinc-500" />}
             <span className="flex -space-x-1.5">
@@ -2773,6 +2782,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       idBase={`live-${liveActivity.turnId}`}
       compact={phone}
       folded={stepsBelow}
+      who={stepsName}
       lead={
         livePages.length > 0 ? (
           <BrowsedChip botName={liveSpeaker} steps={liveActivity.steps} live phone={phone} onOpen={() => openBrowserFor(null)} />

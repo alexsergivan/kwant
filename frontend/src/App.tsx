@@ -505,9 +505,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     else setPhoneView('chat');
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isPhone, loaded, canRun, channels]);
-  // The sidebar and chat under Settings: inert while it's open (the space rail stays usable).
+  // The sidebar and chat under Settings or the New bot modal: inert while either is open (the space rail stays usable).
   const contentRef = useRef<HTMLDivElement>(null);
-  useSettingsCover(!!spaceSettingsTab, contentRef);
   // Moving between Settings tabs drops the card's sheet too: Apps & accounts remounts on the way back and
   // would open it again by itself (Rigel's 32x QA defect 1).
   const changeSpaceSettingsTab = (tab: SpaceSettingsTab) => {
@@ -1160,6 +1159,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   }, []);
 
   const [isNewAgentOpen, setIsNewAgentOpen] = useState(false);
+  useSettingsCover(!!spaceSettingsTab || isNewAgentOpen, contentRef);
   // Team that a newly created bot should join (set by a team's "Add member")
   const [newAgentTeam, setNewAgentTeam] = useState<Team | null>(null);
   const [isNewTeamOpen, setIsNewTeamOpen] = useState(false);
@@ -5024,16 +5024,16 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                     )}
                   </>
                 ) : phoneTab === 'jar' ? (
-                  <div className="flex-1 min-h-0 flex" data-main-pane>{jarPage}</div>
+                  <main id="main-pane" tabIndex={-1} className="flex-1 min-h-0 flex focus:outline-none" data-main-pane>{jarPage}</main>
                 ) : (
                   sidebar(phoneTab === 'bots' ? 'bots' : 'chats')
                 )}
               </div>
             ) : (
-              <div className={`relative flex-1 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
+              <main id="main-pane" tabIndex={-1} className={`relative flex-1 min-h-0 flex focus:outline-none ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
                 {mainPane}
                 <DropPillHost />
-              </div>
+              </main>
             )}
             {(showPhoneList || needsSetup) && (
               <PhoneTabBar
@@ -5064,10 +5064,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         ) : (
           <>
             {sidebar('all')}
-            <div className={`relative flex-1 min-w-0 min-h-0 flex ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
+            <main id="main-pane" tabIndex={-1} className={`relative flex-1 min-w-0 min-h-0 flex focus:outline-none ${devOn ? 'kw-blueprint' : ''}`} data-main-pane>
               {mainPane}
               <DropPillHost />
-            </div>
+            </main>
           </>
         )}
       </div>

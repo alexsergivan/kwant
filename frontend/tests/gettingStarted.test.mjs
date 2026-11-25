@@ -350,8 +350,8 @@ test('card: already signed in → hero D2, steps 1–2 done with Change, step 3 
   assert.equal(card.getAttribute('data-open-step'), '3');
   assert.match(r.host.querySelector('h2').textContent, /^Claude is ready on this (Mac|computer)$/);
   const heads = [...r.host.querySelectorAll('h3')].map((x) => x.textContent);
-  assert.match(heads[0], /^Step 1 of 3, Choose your AI, doneClaude, already signed in on this (Mac|computer)$/);
-  assert.equal(heads[1], 'Step 2 of 3, Sign in, doneNothing to do');
+  assert.match(heads[0], /^Step 1 of 3, Choose your AI, done,Claude, already signed in on this (Mac|computer)$/);
+  assert.equal(heads[1], 'Step 2 of 3, Sign in, done,Nothing to do');
   assert.equal(heads[2], 'Step 3 of 3, Pick a team, open');
   assert.ok([...r.host.querySelectorAll('button')].some((b) => b.getAttribute('aria-label') === 'Change your AI'));
   let dismissed = 0;
@@ -569,7 +569,7 @@ test('step 3: imported before step 2 is done → step 3 reads done with "Your im
   assert.equal(m.isImported('imp-early'), true, 'a later visit does not reset it');
   const r = mount(h(m.GetStarted, { space: 'imp-early', bots: [{ id: 'a', name: 'Architect' }], engines: [signedOut('claude')], reloadEngines() {}, onDismissed() {}, hostOverride: null }));
   const heads = [...r.host.querySelectorAll('h3')].map((x) => x.textContent);
-  assert.equal(heads[2], 'Step 3 of 3, Pick a team, doneYour imported bots');
+  assert.equal(heads[2], 'Step 3 of 3, Pick a team, done,Your imported bots');
   r.done();
 });
 

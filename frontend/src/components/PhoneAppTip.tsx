@@ -51,7 +51,7 @@ export const PhoneAppTip: React.FC<{ className: string; onOpen: () => void }> = 
           onClick={hide}
           aria-label="Dismiss the phone tip"
           title="Dismiss. Find it any time in Settings › All spaces."
-          className="shrink-0 mr-1 p-1 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
+          className="shrink-0 mr-1 p-1.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500"
         >
           <X size={12} aria-hidden="true" />
         </button>
