@@ -205,6 +205,28 @@ struct St {
     picked: bool,
     // Chaser: name key → when the host last copied a note for that person.
     copied: BTreeMap<String, DateTime<Utc>>,
+    /// pa10c: the host's "Delete answers now" (or "Delete ballots now"): when, and the counts
+    /// kept in place of everyone's answers. The vote's `tally` stays as it is (option counts).
+    deleted: Option<Kept>,
+}
+
+/// What stays after "Delete answers now": counts and the summary line, never a name, a note,
+/// a food need, a paid tick or a ballot (design rule 8).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+struct Kept {
+    at: Option<DateTime<Utc>>,
+    summary: String,
+    joined: usize,
+    answered: usize,
+    /// Listed members who never answered (or voted): the card's "N never answered".
+    never: usize,
+    /// RSVP: yes / maybe / no / plus_ones / coming.
+    rsvp: Value,
+    /// Sign-up: (filled, waiting) per slot.
+    slots: Vec<(usize, usize)>,
+    /// Vote: ballots counted (one per voter).
+    ballots: usize,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -336,6 +358,58 @@ impl St {
         self.closes_at.or_else(|| spec.get("closes_at").and_then(spec_date))
     }
 
+    /// pa10c: keeps the counts and the summary, then forgets every answer, name key, note,
+    /// food need, paid tick, waiting list, moved-up note, nudge time and ballot. Again: nothing
+    /// left to forget, and the first time stays.
+    fn delete_answers(&mut self, ctx: &KitCtx) {
+        if self.deleted.is_none() {
+            self.deleted = Some(Kept {
+                at: Some(ctx.now),
+                summary: Gather::summary_line(ctx, self),
+                joined: ctx.players.len(),
+                answered: self.answered_count(ctx),
+                never: self.not_answered(ctx).len(),
+                rsvp: Gather::rsvp_counts(self),
+                slots: self.slots.iter().map(|x| (x.taken.len(), x.waiting.len())).collect(),
+                ballots: self.ballots.len(),
+            });
+        }
+        self.answers.clear();
+        self.paid.clear();
+        for slot in self.slots.iter_mut() {
+            slot.taken.clear();
+            slot.waiting.clear();
+        }
+        self.moved.clear();
+        self.voted.clear();
+        self.ballots.clear();
+        self.ballot_salt.clear();
+        self.copied.clear();
+    }
+
+    /// People who joined (kept after a delete: the players are gone then).
+    fn joined(&self, ctx: &KitCtx) -> usize {
+        self.deleted.as_ref().map_or(ctx.players.len(), |k| k.joined)
+    }
+
+    /// How many listed members never answered (or voted), kept after a delete (the names go).
+    fn not_answered_count(&self, ctx: &KitCtx) -> usize {
+        self.deleted.as_ref().map_or_else(|| self.not_answered(ctx).len(), |k| k.never)
+    }
+
+    /// A slot's (filled, waiting), kept after a delete.
+    fn slot_counts(&self, i: usize) -> (usize, usize) {
+        match &self.deleted {
+            Some(k) => k.slots.get(i).copied().unwrap_or_default(),
+            None => self.slots.get(i).map_or((0, 0), |x| (x.taken.len(), x.waiting.len())),
+        }
+    }
+
+    /// How many voted (= ballots counted), kept after a delete.
+    fn ballots_counted(&self) -> usize {
+        self.deleted.as_ref().map_or(self.ballots.len(), |k| k.ballots)
+    }
+
     /// Open and not past the closing time (the tick may not have run yet).
     fn taking_answers(&self, spec: &Value, now: DateTime<Utc>) -> bool {
         self.phase == OPEN && self.closes(spec).is_none_or(|c| now < c)
@@ -426,6 +500,9 @@ impl St {
     }
 
     fn answered_count(&self, ctx: &KitCtx) -> usize {
+        if let Some(k) = &self.deleted {
+            return k.answered;
+        }
         match face(ctx.spec) {
             RSVP => self.answers.len(),
             SIGNUP => self.slots.iter().map(|s| s.taken.len() + s.waiting.len()).sum(),
@@ -444,6 +521,9 @@ impl St {
 
     /// Listed members who haven't answered (or voted) yet, as the host typed them.
     fn not_answered(&self, ctx: &KitCtx) -> Vec<String> {
+        if self.deleted.is_some() {
+            return vec![];
+        }
         members(ctx.spec)
             .into_iter()
             .filter(|m| {
@@ -555,7 +635,7 @@ fn tally_json(spec: &Value, s: &St) -> Value {
         "outcome": if s.picked { "picked" } else { kind },
         "winner": winner.map(|o| json!({ "option": o, "name": name(o), "votes": votes_of(o) })),
         "tied": tied.iter().map(|o| json!({ "option": o, "name": name(*o), "votes": votes_of(*o) })).collect::<Vec<_>>(),
-        "ballots_counted": s.ballots.len(),
+        "ballots_counted": s.ballots_counted(),
         "final_round_active": last.map(|r| r.counts.iter().map(|(_, c)| c).sum::<u32>()),
         "rounds": rounds,
     })
@@ -595,7 +675,7 @@ impl Gather {
             "event_at": spec.get("event_at").and_then(spec_date),
             "fields": fields,
             "show_names": flag(spec, "show_names"),
-            "joined": ctx.players.len(),
+            "joined": s.joined(ctx),
             "members": members(spec).len(),
         });
         match f {
@@ -611,8 +691,8 @@ impl Gather {
                     .iter()
                     .enumerate()
                     .map(|(i, (name, cap))| {
-                        let slot = s.slots.get(i).cloned().unwrap_or_default();
-                        json!({ "slot": i, "name": name, "cap": cap, "filled": slot.taken.len(), "full": slot.taken.len() >= *cap, "waiting": slot.waiting.len() })
+                        let (filled, waiting) = s.slot_counts(i);
+                        json!({ "slot": i, "name": name, "cap": cap, "filled": filled, "full": filled >= *cap, "waiting": waiting })
                     })
                     .collect::<Vec<_>>());
             }
@@ -623,13 +703,16 @@ impl Gather {
                     "options": options(spec).iter().enumerate().map(|(i, n)| json!({ "option": i, "name": n })).collect::<Vec<_>>(),
                     "in_play": s.in_play(spec),
                 });
-                v["voted"] = json!(s.voted.len());
+                v["voted"] = json!(s.ballots_counted());
             }
         }
         v
     }
 
     fn rsvp_counts(s: &St) -> Value {
+        if let Some(k) = &s.deleted {
+            return k.rsvp.clone();
+        }
         let n = |a: &str| s.answers.values().filter(|x| x.answer == a).count();
         let plus: u64 = s.answers.values().filter(|x| x.answer == "yes").map(|x| x.plus_ones).sum();
         json!({ "yes": n("yes"), "maybe": n("maybe"), "no": n("no"), "plus_ones": plus, "coming": n("yes") as u64 + plus })
@@ -686,10 +769,11 @@ impl Gather {
                             })
                             .collect();
                         let waiting: Vec<Value> = slot.waiting.iter().filter_map(|w| ctx.player(w).map(Self::person)).collect();
+                        let (filled, queued) = s.slot_counts(i);
                         json!({
-                            "slot": i, "name": name, "cap": cap, "filled": slot.taken.len(), "full": slot.taken.len() >= *cap,
+                            "slot": i, "name": name, "cap": cap, "filled": filled, "full": filled >= *cap,
                             "people": if names { json!(people) } else { Value::Null },
-                            "waiting": slot.waiting.len(),
+                            "waiting": queued,
                             "waiting_people": if names { json!(waiting) } else { Value::Null },
                         })
                     })
@@ -780,7 +864,8 @@ impl Gather {
                             })
                             .collect();
                         let waiting: Vec<Value> = slot.waiting.iter().filter_map(|w| ctx.player(w).map(Self::person)).collect();
-                        json!({ "slot": i, "name": name, "cap": cap, "filled": slot.taken.len(), "full": slot.taken.len() >= *cap, "people": people, "waiting": slot.waiting.len(), "waiting_people": waiting })
+                        let (filled, queued) = s.slot_counts(i);
+                        json!({ "slot": i, "name": name, "cap": cap, "filled": filled, "full": filled >= *cap, "people": people, "waiting": queued, "waiting_people": waiting })
                     })
                     .collect::<Vec<_>>());
                 v["moved_up"] = json!(ctx
@@ -805,14 +890,20 @@ impl Gather {
             }
         }
         v["not_answered"] = json!(s.not_answered(ctx));
+        // pa10c: the count stays after "Delete answers now", when the list above is empty
+        v["not_answered_count"] = json!(s.not_answered_count(ctx));
         v["drafts"] = json!(s.drafts(ctx));
         v["needs_you"] = json!(s.phase == TIE);
         v["summary"] = json!(Self::summary_line(ctx, s));
+        v["answers_deleted_at"] = json!(s.deleted.as_ref().and_then(|k| k.at));
         v
     }
 
     /// One line for the card foot and Done: counts and the winner, never a name of a guest.
     fn summary_line(ctx: &KitCtx, s: &St) -> String {
+        if let Some(k) = &s.deleted {
+            return k.summary.clone();
+        }
         let spec = ctx.spec;
         match face(spec) {
             RSVP => {
@@ -1025,7 +1116,7 @@ impl Kit for Gather {
             needs_pin: true,
             max_players: DEFAULT_MAX_PLAYERS,
             guest_actions: &["answer", "take", "leave", "let_go", "seen", "vote"],
-            host_actions: &["set_paid", "copied", "pick", "revote_24h", "close_now"],
+            host_actions: &["set_paid", "copied", "pick", "revote_24h", "close_now", "delete_answers"],
         }
     }
 
@@ -1086,6 +1177,11 @@ impl Kit for Gather {
                     _ => "Answers are closed.",
                 }));
             }
+        }
+        // pa10c: after "Delete answers now" nothing may bring a name back (a Chaser copy, a
+        // paid tick); only the delete itself repeats.
+        if s.deleted.is_some() && name != "delete_answers" {
+            return Err(not_now("Answers were deleted."));
         }
         match (actor, name) {
             (Viewer::Guest(me), "answer") => {
@@ -1274,6 +1370,18 @@ impl Kit for Gather {
                 }
                 s.close(ctx);
             }
+            (Viewer::Host, "delete_answers") => {
+                match s.phase.as_str() {
+                    CLOSED => {}
+                    TIE => return Err(not_now("Pick the winner or vote again first.")),
+                    _ => return Err(not_now("Close answers first.")),
+                }
+                if s.deleted.is_none() {
+                    // A count, never who
+                    ctx.event(None, "answers_deleted", json!({ "answers": s.answered_count(ctx) }));
+                }
+                s.delete_answers(ctx);
+            }
             _ => return Err(bad(format!("unknown action {name}"))),
         }
         store(state, &s);
@@ -1306,6 +1414,20 @@ impl Kit for Gather {
         true
     }
 
+    /// pa10c: a decided vote or a past event ends the pocket, and its data stays until the
+    /// deletion date; "Delete answers now" still works then.
+    fn host_actions_after_end(&self) -> &'static [&'static str] {
+        &["delete_answers"]
+    }
+
+    fn forgets_everyone(&self, state: &Value) -> bool {
+        load(state).deleted.is_some()
+    }
+
+    fn kept_players(&self, state: &Value) -> Option<usize> {
+        load(state).deleted.map(|k| k.joined)
+    }
+
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value {
         let s = load(state);
         match viewer {
@@ -1325,12 +1447,13 @@ impl Kit for Gather {
         let mut v = json!({
             "face": face(ctx.spec),
             "phase": s.phase,
-            "joined": ctx.players.len(),
+            "joined": s.joined(ctx),
             "answered": s.answered_count(ctx),
-            "not_answered": s.not_answered(ctx).len(),
+            "not_answered": s.not_answered_count(ctx),
             "drafts": s.drafts(ctx).len(),
             "needs_you": s.phase == TIE,
             "summary": Self::summary_line(ctx, &s),
+            "answers_deleted_at": s.deleted.as_ref().and_then(|k| k.at),
         });
         if face(ctx.spec) == RSVP {
             v["counts"] = Self::rsvp_counts(&s);

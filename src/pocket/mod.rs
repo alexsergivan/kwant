@@ -98,6 +98,11 @@ impl Snapshot {
     pub fn rules(&self) -> Option<KitRules> {
         self.kit().map(|k| effective_rules(k, &self.spec))
     }
+
+    /// How many took part: the players, or the count a kit kept after forgetting them (pa10c).
+    pub fn player_count(&self) -> usize {
+        self.kit().and_then(|k| k.kept_players(&self.kit_state)).unwrap_or(self.players.len())
+    }
 }
 
 /// The in-memory side of pockets: per-pocket locks, viewers' channels, snapshots, limiters and
@@ -284,7 +289,7 @@ pub fn pocket_json(s: &Snapshot) -> Value {
         "closes_at": s.row.closes_at,
         "ended_at": s.row.ended_at,
         "expires_at": s.row.expires_at,
-        "players": s.players.len(),
+        "players": s.player_count(),
         "max_players": rules.as_ref().map(|r| r.max_players),
         "needs_pin": rules.as_ref().is_some_and(|r| r.needs_pin),
         "retention": rules.as_ref().map(|r| r.retention.describe()),
@@ -898,8 +903,9 @@ pub async fn act(state: &AppState, code: &str, actor: &Viewer, name: &str, body:
     if !allowed.contains(&name) {
         return Err(PocketError::new(StatusCode::BAD_REQUEST, "unknown_action", "That action isn't one this pocket knows.").with(json!({ "actions": allowed })));
     }
-    // pa14b: a few host actions still work while an ended pocket's data is kept (the wall's
-    // `set_best`, so the host can show the next morning's best 30)
+    // pa14b, pa10c: a few host actions still work while an ended pocket's data is kept (the
+    // wall's `set_best`, so the host can show the next morning's best 30; Gather's
+    // `delete_answers`, so the host may delete the answers before the deletion date)
     if s.row.state == ENDED && !(*actor == Viewer::Host && kit.host_actions_after_end().contains(&name)) {
         return Err(PocketError::new(StatusCode::GONE, "ended", "This pocket app has ended."));
     }
@@ -909,6 +915,18 @@ pub async fn act(state: &AppState, code: &str, actor: &Viewer, name: &str, body:
     kit.act(&mut ctx, &mut kit_state, actor, name, body).map_err(kit_refusal)?;
     let snap_shown = ctx.events.iter().any(|e| e.kind == wall::SNAP_SHOWN_EVENT);
     save(state, code, &kit_state, ctx, now).await?;
+    // pa10c: answers deleted: every player goes (removed ones too, names and all), with their
+    // guest keys and events. After the save, so a failure here is repaired by the host's retry.
+    if matches!(actor, Viewer::Host) && kit.forgets_everyone(&kit_state) {
+        let ids = state.db.pocket_forget_all_players(code).await?;
+        if !ids.is_empty() {
+            for id in ids {
+                state.pocket.signal(code, Signal::Revoked(id));
+            }
+            state.db.pocket_bump(code).await?;
+            changed(state, code).await?;
+        }
+    }
     if snap_shown {
         wall_pick::say_shown(state, code).await;
     }

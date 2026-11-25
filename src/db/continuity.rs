@@ -1236,6 +1236,11 @@ impl Database {
         Ok(())
     }
 
+    /// The record of one running turn (where its reply would go), if it has one.
+    pub async fn running_turn(&self, turn_id: &str) -> Result<Option<RunningTurn>, DbError> {
+        Ok(sqlx::query_as::<_, RunningTurn>("SELECT * FROM running_turns WHERE turn_id = ?").bind(turn_id).fetch_optional(&self.pool).await?)
+    }
+
     pub async fn remove_running_turn(&self, turn_id: &str) -> Result<(), DbError> {
         sqlx::query("DELETE FROM running_turns WHERE turn_id = ?").bind(turn_id).execute(&self.pool).await?;
         Ok(())

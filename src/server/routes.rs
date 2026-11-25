@@ -698,6 +698,22 @@ pub async fn cancel_chat(
         Some(k) => state.turns.cancel(Some(k)),
         None => super::spaces::stop_turns(&state, &space).await,
     };
+    // A listed turn no job holds has nothing to cancel, and kept its chat "getting started" after
+    // Stop (stuck-getting-started, 0.9.51): it ends here, so every app clears it
+    let ended = match &key {
+        Some(k) => {
+            super::lost_turns::end_orphans(&state, |t| {
+                t.turn_id == *k || t.kwant_id == *k || t.context_id == *k || t.thread_id.as_deref() == Some(k.as_str())
+            })
+            .await
+        }
+        None => {
+            let bots: std::collections::HashSet<String> =
+                state.db.list_kwants(&space).await.unwrap_or_default().into_iter().map(|b| b.id).collect();
+            super::lost_turns::end_orphans(&state, |t| bots.contains(&t.kwant_id)).await
+        }
+    };
+    let cancelled = cancelled + ended;
     if let Some(thread_id) = &key {
         super::delegation::cancel_thread_delegation(&state, thread_id).await;
     }
@@ -2923,7 +2939,7 @@ pub const STALL_SETTING: &str = "turn_stall_secs";
 pub const DEFAULT_STALL_SECS: u64 = 120;
 
 /// The stall limit from settings: missing or unreadable means the default, 0 turns it off.
-async fn stall_limit(db: &crate::db::Database) -> Option<std::time::Duration> {
+pub(super) async fn stall_limit(db: &crate::db::Database) -> Option<std::time::Duration> {
     let secs = db
         .get_setting(STALL_SETTING)
         .await

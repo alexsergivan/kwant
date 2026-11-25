@@ -399,18 +399,100 @@ async fn allow_once(state: &AppState, runner: &Runner, link: &TelegramLink, ask:
 
 /// Listens for questions, approvals, human steps and notifications, until the bus closes. One
 /// per server (tests run several servers in a process, each with its own bus).
+///
+/// When it falls behind the bus, the events it missed are gone: it catches up from the database
+/// instead ([`catch_up`]), so a question or an approval still reaches Telegram and a card closed
+/// meanwhile still loses its buttons there.
 pub fn spawn_listener(state: AppState) {
     let mut rx = state.event_sender.subscribe();
+    let listening_since = Utc::now();
     tokio::spawn(async move {
         loop {
             let event = match rx.recv().await {
                 Ok(e) => e,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                    tracing::warn!(missed, "telegram: the bridge fell behind the event bus; catching up from the database");
+                    catch_up(&state, listening_since).await;
+                    continue;
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => return,
             };
             on_event(&state, event.unscoped()).await;
         }
     });
+}
+
+/// A catch-up sends only what was asked within this many minutes (and since the bridge started
+/// listening and the chat was paired): never an old item nobody announced to Telegram.
+const CATCH_UP_MINUTES: i64 = 60;
+/// Room for a row stored with whole seconds (an approval's `created_at`).
+const CATCH_UP_SLACK_SECS: i64 = 5;
+
+/// What the events a lag dropped would have done, read from the database as it is now, through
+/// the same paths the live events take:
+/// 1. every open Telegram ask whose question, approval or human step no longer waits is closed
+///    and edited with the line its source says ([`closed_line`], as the live close does);
+/// 2. in each paired space, every open question and pending approval of a kind that is on, asked
+///    since `listening_since` (and the pairing, within [`CATCH_UP_MINUTES`]), is sent unless it
+///    already has a Telegram ask ([`on_question`] and [`on_approval`] skip those, so a catch-up
+///    and a late live event never send one twice).
+///
+/// Bounded: open items only, at most 100 questions and 200 approvals per space (the lists' own
+/// limits). A human step or a notification a lag dropped isn't sent (best effort, as before).
+async fn catch_up(state: &AppState, listening_since: DateTime<Utc>) {
+    let Ok(links) = state.db.telegram_links().await else { return };
+    let now = Utc::now();
+    for link in links {
+        let space = link.space_id.as_str();
+        for kind in ["question", "approval", "alert"] {
+            for ask in state.db.telegram_open_asks(space, kind, false).await.unwrap_or_default() {
+                if source_waits(state, &ask).await {
+                    continue;
+                }
+                if let Some(line) = closed_line(state, &ask).await {
+                    close_and_edit(state, &ask, &line).await;
+                }
+            }
+        }
+        if !link.is_paired() {
+            continue;
+        }
+        let since = [Some(listening_since), link.paired_at, Some(now - chrono::Duration::minutes(CATCH_UP_MINUTES))]
+            .into_iter()
+            .flatten()
+            .max()
+            .unwrap_or(now)
+            - chrono::Duration::seconds(CATCH_UP_SLACK_SECS);
+        let sid = SpaceId::new(space);
+        if link.kind_on("question") {
+            // Oldest first, as they were asked
+            for q in state.db.list_questions(Some("open"), None, Some(&sid)).await.unwrap_or_default().into_iter().rev() {
+                if q.created_at >= since {
+                    if let Ok(v) = serde_json::to_value(&q) {
+                        on_question(state, &v).await;
+                    }
+                }
+            }
+        }
+        if link.kind_on("approval") {
+            for a in state.db.list_approvals(&sid, Some("pending"), None).await.unwrap_or_default().into_iter().rev() {
+                if a.created_at.is_some_and(|t| t >= since) {
+                    // Stored as announced: a card's parameters are its event's details
+                    let details: Value = serde_json::from_str(&a.parameters).unwrap_or(Value::Null);
+                    on_approval(state, &a.id, &a.tool_name, &details).await;
+                }
+            }
+        }
+    }
+}
+
+/// Whether an ask's source still waits for the person: an approval pending or parked for a late
+/// answer (`waiting`, its card stays up), a question or human step open.
+async fn source_waits(state: &AppState, ask: &TelegramAsk) -> bool {
+    match ask.kind.as_str() {
+        "approval" => state.db.get_approval(&ask.ref_id).await.ok().flatten().is_some_and(|a| a.status == "pending" || a.status == "waiting"),
+        _ => still_waiting(state, ask).await,
+    }
 }
 
 async fn on_event(state: &AppState, event: &RuntimeEvent) {
