@@ -174,7 +174,7 @@ test('Usage is one section with one Usage heading: open-chat tokens, limits, spe
   const { host } = await mount(app('usage'));
   const sec = q('[data-usage-section]', host);
   assert.ok(shown(sec));
-  const order = ['Token usage, open chat', 'Token limits', 'Hand-offs per request', 'Daily spending stop'].map((t) => sec.textContent.indexOf(t));
+  const order = ['AI use in this chat', 'Token limits', 'Hand-offs per request', 'Daily spending stop'].map((t) => sec.textContent.indexOf(t));
   assert.ok(order.every((n, i) => n >= 0 && (i === 0 || n > order[i - 1])), `order ${order}`);
   // The page title says Usage; the section's legend is for screen readers only, and nothing else says it.
   assert.equal(q('legend', sec).className, 'sr-only');
@@ -189,11 +189,11 @@ test('For developers starts closed and holds Laya and Coding agents', async () =
   const dev = q('details[data-for-developers]', host);
   assert.equal(dev.open, false);
   assert.equal(q('summary', dev).textContent.trim(), 'For developers');
-  assert.match(dev.textContent, /Laya, the router/);
+  assert.match(dev.textContent, /Picking who answers/);
   assert.ok(q('[data-coding-agents]', dev), 'Coding agents');
   // Laya is nowhere else on the page.
   const outside = qa('[data-setting-row]', host).filter((r) => !dev.contains(r));
-  assert.ok(outside.every((r) => !/Laya, the router/.test(r.textContent)));
+  assert.ok(outside.every((r) => !/Picking who answers/.test(r.textContent)));
 });
 
 test('an edit on one page survives a switch to another, and Save there sends it', async () => {

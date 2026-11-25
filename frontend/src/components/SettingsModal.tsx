@@ -1056,8 +1056,8 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
               </legend>
               <div className="flex items-center gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800" data-setting-row>
                 <Gauge size={15} className="text-zinc-500" aria-hidden="true" />
-                <span className="flex-1 text-xs font-medium text-zinc-200">Token usage, open chat</span>
-                <span className="font-mono text-xs text-zinc-300">{tokensUsed} tk</span>
+                <span className="flex-1 text-xs font-medium text-zinc-200">AI use in this chat</span>
+                <span className="font-mono text-xs text-zinc-300">{tokensUsed} tokens</span>
               </div>
               {tokenLimits !== null && (
                 <div className="space-y-2" role="group" aria-labelledby="token-limits-h" data-token-limits data-setting-row>
@@ -1065,7 +1065,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, t
                     <p id="token-limits-h" className="text-[11px] font-semibold text-zinc-200">
                       Token limits
                     </p>
-                    <p className="text-[11px] text-zinc-500">Bots can use as many tokens as they need. Set a limit to cap spending per task.</p>
+                    <p className="text-[11px] text-zinc-500">Bots can use as much AI as they need. Set a limit to cap spending per task.</p>
                   </div>
                   <div className="grid gap-3 sm:grid-cols-2">
                     <DefaultLimitField

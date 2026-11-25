@@ -123,7 +123,7 @@ const Trend: React.FC<{ days: TrendDay[]; metric: Metric; now?: Date }> = ({ day
   return (
     <div>
       <ul
-        aria-label={`${metric === 'cost' ? 'Cost' : 'Fresh tokens'} per day`}
+        aria-label={`${metric === 'cost' ? 'Cost' : 'AI use'} per day`}
         className={`flex items-end h-20 ${days.length > 14 ? 'gap-[2px]' : 'gap-1'}`}
         onMouseLeave={() => setShown(null)}
         data-usage-trend
@@ -213,7 +213,7 @@ const ByModel: React.FC<{ models: ModelTotals[]; metric: Metric; engines?: Engin
 
 const Numbers: React.FC<{ fresh: number; cached: number; cost: number | null; strong?: boolean }> = ({ fresh, cached, cost, strong }) => (
   <span className={`shrink-0 font-mono text-[11px] tabular-nums ${strong ? 'text-zinc-200' : 'text-zinc-400'}`}>
-    <span title={`${fresh.toLocaleString('en-US')} fresh tokens`}>{compactTokens(fresh)}</span>
+    <span title={`${fresh.toLocaleString('en-US')} tokens`}>{compactTokens(fresh)}</span>
     <span className="text-zinc-600"> · </span>
     <span className="text-zinc-500" title={`${cached.toLocaleString('en-US')} read from cache`}>
       {compactTokens(cached)}
@@ -291,7 +291,7 @@ export const DailyUsageView: React.FC<{
       <div className="space-y-2">
         <h4 className="text-[11px] font-medium text-zinc-400">By day</h4>
         <p className="text-[11px] text-zinc-500">
-          Fresh tokens · read from cache · cost where the engine reports it. Fresh is new input, cache writes and output: what makes a
+          Fresh tokens · read from cache · cost where the AI reports it. Fresh is new input, cache writes and output: what makes a
           reply heavy.
         </p>
         <ul className="space-y-2" aria-label="Usage per day">
