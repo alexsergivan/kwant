@@ -20,7 +20,7 @@ import { InstallAppButton, useDesktopInstallKind } from './InstallAppButton';
 import { desktopAppOs, inDesktopApp } from '../externalLinks';
 import { PHONE_APP_ANCHOR, PHONE_APP_TITLE } from './PhoneAppTip';
 
-// "Use kwant bots on your phone": Settings › All spaces, first card. On a computer it shows a QR code
+// "Use kwant on your phone": Settings › All spaces, first card. On a computer it shows a QR code
 // (a one-time sign-in link when the server asks for sign-in) and three steps; on a phone it shows how
 // to install this phone. On 127.0.0.1 or plain http it says why a phone can't use this address.
 
@@ -116,10 +116,10 @@ const homeScreenStep = {
 const notifyStep = {
   title: 'Turn on notifications',
   detail:
-    'Open kwant bots from the Home Screen, then go to Settings › All spaces › Notifications › Notify me on this device. On an iPhone this only works in the Home Screen app.',
+    'Open kwant from the Home Screen, then go to Settings › All spaces › Notifications › Notify me on this device. On an iPhone this only works in the Home Screen app.',
 };
 
-const notifyHere = 'Open kwant bots from the Home Screen and turn on Notify me on this device, under Notifications below.';
+const notifyHere = 'Open kwant from the Home Screen and turn on Notify me on this device, under Notifications below.';
 
 /** The card, from plain values. Exported for tests. */
 export const PhoneAppCardView: React.FC<PhoneAppCardViewProps> = (p) => {
@@ -195,7 +195,7 @@ export const PhoneAppCardView: React.FC<PhoneAppCardViewProps> = (p) => {
       <Note
         lead={
           <>
-            Your phone can’t reach this one. kwant bots runs at <Mono>{p.host}</Mono>, an address only this {p.machine} can open.
+            Your phone can’t reach this one. kwant runs at <Mono>{p.host}</Mono>, an address only this {p.machine} can open.
           </>
         }
       >
@@ -205,7 +205,7 @@ export const PhoneAppCardView: React.FC<PhoneAppCardViewProps> = (p) => {
             <span className="h-1 w-1 shrink-0 rounded-full bg-zinc-500 mt-1.5" aria-hidden="true" />
             <div className="space-y-0.5">
               <p className="text-[11px] text-zinc-400 leading-relaxed">
-                Run kwant bots on a server with an https address. Open that address on this computer, and this card shows a QR code for your phone.
+                Run kwant on a server with an https address. Open that address on this computer, and this card shows a QR code for your phone.
               </p>
               <Ext href={PHONE_GUIDE_URL}>How to set it up</Ext>
             </div>
@@ -232,7 +232,7 @@ export const PhoneAppCardView: React.FC<PhoneAppCardViewProps> = (p) => {
         }
       >
         <p className="text-[11px] text-zinc-400 leading-relaxed">
-          Put kwant bots behind an https proxy, then open the https address on this computer. This card then shows a QR code for your phone.
+          Put kwant behind an https proxy, then open the https address on this computer. This card then shows a QR code for your phone.
         </p>
         <Ext href={HTTPS_GUIDE_URL}>Set up https</Ext>
       </Note>
@@ -240,22 +240,22 @@ export const PhoneAppCardView: React.FC<PhoneAppCardViewProps> = (p) => {
   } else {
     const step1 =
       p.kind === 'signin'
-        ? { title: 'Scan with your phone’s camera', detail: 'It opens kwant bots on the phone and signs it in once.', body: p.signIn }
+        ? { title: 'Scan with your phone’s camera', detail: 'It opens kwant on the phone and signs it in once.', body: p.signIn }
         : {
             title: 'Scan with your phone’s camera',
             detail: (
               <>
-                It opens kwant bots at <Mono>{p.host}</Mono> on the phone.{p.tokenSignIn && ' Sign in there with your access token.'}
+                It opens kwant at <Mono>{p.host}</Mono> on the phone.{p.tokenSignIn && ' Sign in there with your access token.'}
               </>
             ),
             body: (
               <div className="rounded-xl border border-sky-500/30 bg-sky-500/5 p-4 space-y-3" data-phone-qr>
                 <div className="mx-auto w-full max-w-[176px]">
-                  <QrImage text={address} label="QR code for this kwant bots address" />
+                  <QrImage text={address} label="QR code for this kwant address" />
                 </div>
                 <div className="flex gap-2">
                   <label className="sr-only" htmlFor="phone-app-address">
-                    kwant bots address
+                    kwant address
                   </label>
                   <input
                     id="phone-app-address"
@@ -295,7 +295,7 @@ export const PhoneAppCardView: React.FC<PhoneAppCardViewProps> = (p) => {
         </div>
         <div className="min-w-0">
           <h4 id={PHONE_APP_TITLE} tabIndex={-1} className="text-sm font-semibold text-zinc-100 focus:outline-none">
-            {phone ? 'Add kwant bots to your Home Screen' : 'Use kwant bots on your phone'}
+            {phone ? 'Add kwant to your Home Screen' : 'Use kwant on your phone'}
           </h4>
           <p className="text-[11px] text-zinc-400 leading-relaxed mt-0.5">
             {phone

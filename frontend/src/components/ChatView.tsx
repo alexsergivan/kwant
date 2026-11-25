@@ -2860,7 +2860,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {(workspacePath || repoUrl) && (
             <div
               className="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-mono text-zinc-300 bg-zinc-900 border border-zinc-700/60 max-w-[200px] truncate"
-              title={workspacePath ? `Workspace directory: ${workspacePath}` : `Git Repository: ${repoUrl}`}
+              title={workspacePath ? `Team folder: ${workspacePath}` : `Team repo: ${repoUrl}`}
             >
               {workspacePath ? (
                 <Folder size={12} className="text-amber-400 flex-shrink-0" />

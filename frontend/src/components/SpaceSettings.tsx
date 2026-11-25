@@ -683,7 +683,7 @@ const BotsTab: React.FC<TabProps> = ({ space, kwants, onNewBot, onEditBot, onOpe
   <div className="space-y-3">
     <div className="flex flex-wrap items-center justify-between gap-3">
       <p className="text-xs text-zinc-400">
-        {kwants.length} {kwants.length === 1 ? 'bot' : 'bots'} in {space.name}. Laya only picks from these.
+        {kwants.length} {kwants.length === 1 ? 'bot' : 'bots'} in {space.name}. Only these can be picked to answer.
       </p>
       <div className="flex gap-2">
         <button type="button" onClick={onOpenImport} className={rowBtn}>
