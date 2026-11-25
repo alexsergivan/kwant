@@ -51,23 +51,23 @@ export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDis
           <span className="min-w-0">
             {view.kind === 'available' && (
               <>
-                <span className="font-medium">kwant bots {view.version} is ready.</span>
+                <span className="font-medium">kwant {view.version} is ready.</span>
                 <span className="text-zinc-400"> Your chats and bots stay as they are.</span>
               </>
             )}
             {view.kind === 'downloading' && (
               <span className="font-medium">
-                Downloading kwant bots {view.version}…{view.progress != null && ` ${Math.round(view.progress * 100)}%`}
+                Downloading kwant {view.version}…{view.progress != null && ` ${Math.round(view.progress * 100)}%`}
               </span>
             )}
             {view.kind === 'restarting' && <span className="font-medium">Restarting the app to finish the update…</span>}
             {view.kind === 'error' && (
               <>
-                <span className="font-medium">kwant bots {view.version} didn’t install.</span>
+                <span className="font-medium">kwant {view.version} didn’t install.</span>
                 <span className="text-zinc-300"> {view.error} This version keeps working.</span>
               </>
             )}
-            {view.kind === 'updated' && <span className="font-medium">Updated to kwant bots {view.version}.</span>}
+            {view.kind === 'updated' && <span className="font-medium">Updated to kwant {view.version}.</span>}
           </span>
         </p>
 
@@ -99,7 +99,7 @@ export const AppUpdateBannerView: React.FC<ViewProps> = ({ view, onUpdate, onDis
         {view.kind === 'downloading' && (
           <div
             role="progressbar"
-            aria-label={`Downloading kwant bots ${view.version}`}
+            aria-label={`Downloading kwant ${view.version}`}
             aria-valuemin={0}
             aria-valuemax={100}
             aria-valuenow={view.progress == null ? undefined : Math.round(view.progress * 100)}

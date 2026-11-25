@@ -500,7 +500,10 @@ async fn pin_lock_after_five_hard_lock_after_ten_and_the_reset_code() {
     let id = r.body["me"]["id"].as_str().unwrap().to_string();
     let first_key = r.cookie(&guest::guest_cookie(&code)).unwrap();
     let row = t.state.db.pocket_player(&code, &id).await.unwrap().unwrap();
-    assert!(row.pin_hash.as_deref().is_some_and(|h| h.len() == 64 && !h.contains("4821")), "only an argon2 hash is kept");
+    // The stored value is the argon2 hash of the PIN with this player's salt, not the PIN. (Not
+    // `!h.contains("4821")`: four hex digits turn up in a random 64-character hash about 1 run in 1,075.)
+    let (hash, salt) = (row.pin_hash.as_deref().unwrap_or_default(), row.pin_salt.as_deref().unwrap_or_default());
+    assert!(hash.len() == 64 && hash.bytes().all(|b| b.is_ascii_hexdigit()) && hash == keys::hash_secret("4821", salt), "only an argon2 hash is kept: {hash}");
     // 4 wrong tries: the page is told how many are left
     for left in [4, 3, 2, 1] {
         let r = rejoin(&t, &code, json!({ "name": "Mia", "pin": "0000" })).await;
@@ -741,7 +744,8 @@ async fn no_private_field_reaches_another_guest_the_host_or_the_screen() {
     // The page's PIN hash, salt and keys never go out
     for v in [&b_poll, &host_poll] {
         let s = v.to_string();
-        assert!(!s.contains("pin_hash") && !s.contains("salt") && !s.contains("key"), "{s}");
+        // "key" is checked on field names only: a random code or player id can spell "key" by chance.
+        assert!(!s.contains("pin_hash") && !s.contains("salt") && !field_names(v).iter().any(|n| n.contains("key")), "{s}");
     }
 }
 
@@ -892,5 +896,14 @@ async fn the_page_is_no_cache_and_its_boot_is_public() {
     assert!(!listener::reconcile(&t.state).await);
     for path in [format!("/p/{code}"), "/p/_a/g-nosuchfile.js".to_string()] {
         assert_eq!(send(&t.guest, "GET", &path, None, &Req::default()).await.status, StatusCode::NOT_FOUND, "{path}");
+    }
+}
+
+/// Every object field name in `v`, at any depth.
+fn field_names(v: &Value) -> Vec<String> {
+    match v {
+        Value::Object(m) => m.iter().flat_map(|(k, v)| std::iter::once(k.clone()).chain(field_names(v))).collect(),
+        Value::Array(a) => a.iter().flat_map(field_names).collect(),
+        _ => vec![],
     }
 }

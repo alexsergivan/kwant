@@ -55,7 +55,7 @@ test('an older server without device login: no device button, the link leads', (
 test('waiting: the code, what to do with it, the time left and Cancel', () => {
   const html = m.wait({ kind: 'waiting', request, expiresAt: NOW + 9 * 60_000 + 41_000 }, NOW);
   const t = text(html);
-  assert.match(t, /where you're already signed in to kwant bots, open it and approve this code/);
+  assert.match(t, /where you're already signed in to kwant, open it and approve this code/);
   assert.match(t, /BCDF-2345/);
   assert.match(t, /Waiting for approval · 9:41 left/);
   assert.match(html, /role="status"/);
