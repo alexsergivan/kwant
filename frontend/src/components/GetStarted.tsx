@@ -947,7 +947,7 @@ export interface GetStartedProps {
   /** Reads /api/engines again (after an install or a sign-in). */
   reloadEngines: () => void;
   /** The card goes for good ("Keep the starter bots" after step 2). */
-  onDismissed: () => void;
+  onDismissed?: () => void;
   loginApiOverride?: LoginApi;
   /** For tests and shots: the address it's opened on. */
   hostOverride?: string | null;
@@ -1040,7 +1040,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
   const keep = () => {
     if (v.done2) {
       dismiss(space);
-      onDismissed();
+      onDismissed?.();
     } else markStarted(space, 'kept');
   };
   // Start with @team: today's Keep, then the composer, so the next thing is the first ask.
@@ -1053,7 +1053,7 @@ export const GetStarted: React.FC<GetStartedProps> = ({ space, bots, engines, re
   const importedBots = () => {
     if (v.done2) {
       dismiss(space);
-      onDismissed();
+      onDismissed?.();
     } else markStarted(space, 'imported');
   };
 
