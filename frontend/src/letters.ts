@@ -241,9 +241,9 @@ export function deleteErrorText(e: unknown): { text: string; calm: boolean } {
 
 /** Where a letter's reply goes. Nothing is ever sent from kwant. */
 export function draftChannelText(channel: string): string {
-  if (channel === 'email') return 'Nothing is sent from kwant bots. Copy the reply, or open it in your own mail app and send it from there.';
-  if (channel === 'letter') return 'Nothing is sent from kwant bots. This is a paper reply: copy it, then print or write it out and post it yourself.';
-  return 'Nothing is sent from kwant bots. Copy it and send it yourself.';
+  if (channel === 'email') return 'Nothing is sent from kwant. Copy the reply, or open it in your own mail app and send it from there.';
+  if (channel === 'letter') return 'Nothing is sent from kwant. This is a paper reply: copy it, then print or write it out and post it yourself.';
+  return 'Nothing is sent from kwant. Copy it and send it yourself.';
 }
 
 export const isLetter = (c: Pick<LooseCase, 'source'>) => c.source === 'document';
