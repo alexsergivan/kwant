@@ -23,7 +23,7 @@ import { approvalLine } from '../approvals';
 import { localClock } from '../clock';
 import type { InboxItem } from '../api/inbox';
 import { useDevMode } from './DevModeSwitch';
-import { MovedPointer, SpaceSubline } from './FirstScreenBits';
+import { SpaceSubline } from './FirstScreenBits';
 import { DevDeskRow } from './DevDesk';
 import { GlobeSlot, WatchGlobe, useFadeOut, useLingeringIds } from './WatchLive';
 import type { Browsing } from '../watchLive';
@@ -180,10 +180,6 @@ export interface SidebarProps {
   onOpenDevDesk?: () => void;
   /** Dev mode Connect (flow F5): opens Loose ends on the GitHub form; after connecting the app returns to the Dev desk. */
   onConnectDevGitHub?: () => void;
-  /** First-screen A (0.9.8 and 0.9.9): "Dev mode and Approvals moved to this space's settings." for past users. */
-  movedPointer?: boolean;
-  onOpenMoved?: () => void;
-  onHideMoved?: () => void;
   /** Idea jar (0.7): ready takes for the violet badge, whether its page is open, how to open it, and the quick-add. Hidden on phone, which has the Jar tab. */
   ideaJarCount?: number;
   ideaJarActive?: boolean;
@@ -404,9 +400,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
   missionsActive = false,
   devDeskActive = false,
   onOpenDevDesk,
-  movedPointer = false,
-  onOpenMoved,
-  onHideMoved,
   onOpenMissions,
   onOpenRoutines,
   ideaJarCount = 0,
@@ -1048,7 +1041,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
             </button>
           </div>
         )}
-        {movedPointer && onOpenMoved && onHideMoved && <MovedPointer phone={phone} onOpen={onOpenMoved} onHide={onHideMoved} />}
         {phone && switcherOpen && (
           <SpaceSwitcher
             spaces={spaces}

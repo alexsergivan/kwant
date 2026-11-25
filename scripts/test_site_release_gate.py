@@ -124,8 +124,8 @@ class WhatsNew(unittest.TestCase):
     def test_limits(self):
         h = whatsnew()["highlights"][0]
         cases = [
-            (whatsnew(highlights=[h]), "1 highlights, needs 2-6"),
-            (whatsnew(highlights=[dict(h, id=f"h{i}") for i in range(7)]), "7 highlights, needs 2-6"),
+            (whatsnew(highlights=[]), "0 highlights, needs 1-6"),
+            (whatsnew(highlights=[dict(h, id=f"h{i}") for i in range(7)]), "7 highlights, needs 1-6"),
             (whatsnew(highlights=[dict(h, title="x" * 61), dict(h, id="b")]), "title is 61 characters, max 60"),
             (whatsnew(highlights=[dict(h, text="x" * 201), dict(h, id="b")]), "text is 201 characters, max 200"),
             (whatsnew(highlights=[h, h]), "is used twice"),
@@ -141,6 +141,15 @@ class WhatsNew(unittest.TestCase):
                 found = gate.whatsnew_gaps("0.7.2", self.root)
                 self.assertEqual(len(found), 1, found)
                 self.assertIn(want, found[0])
+
+    def test_one_highlight_is_enough(self):
+        # A release whose only change people see is one fix ships with that one highlight (never a made-up second).
+        h = whatsnew()["highlights"][0]
+        self.write(whatsnew(highlights=[h]))
+        self.assertEqual(gate.whatsnew_gaps("0.7.2", self.root), [])
+
+    def test_missing_file_names_the_highlight_range(self):
+        self.assertIn("(1-6 highlights and the fixes", gate.whatsnew_gaps("0.7.2", self.root)[0])
 
     def test_limits_count_characters_not_bytes(self):
         h = whatsnew()["highlights"][0]
