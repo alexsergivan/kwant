@@ -2390,7 +2390,7 @@ export const TaskDetailBody: React.FC<{
           </span>
           {t.budget_tokens > 0 && (
             <span className="block mt-1">
-              <SpendBar spent={t.spent_tokens} budget={t.budget_tokens} label="Task token limit used" />
+              <SpendBar spent={t.spent_tokens} budget={t.budget_tokens} label="Task AI use limit used" />
             </span>
           )}
           {onSetBudget && !limitHit && t.state !== 'verified' && t.state !== 'cancelled' && (

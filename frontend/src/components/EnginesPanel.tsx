@@ -270,7 +270,7 @@ export const EnginesPanel: React.FC<{
     <section aria-labelledby="engines-title" className="bg-zinc-950/60 p-3 sm:p-4 rounded-xl border border-zinc-800 space-y-3">
       <div className="flex items-center gap-2">
         <Cpu size={15} className="shrink-0 text-sky-400" aria-hidden="true" />
-        <h3 id="engines-title" className="text-xs font-semibold text-zinc-200 whitespace-nowrap">Engines &amp; accounts</h3>
+        <h3 id="engines-title" className="text-xs font-semibold text-zinc-200 whitespace-nowrap">AIs &amp; accounts</h3>
         {ago && <span className="ml-auto min-w-0 truncate text-[10.5px] text-zinc-500" title={`Checked ${ago}`}><span className="hidden sm:inline">Checked </span>{ago}</span>}
         <button
           type="button"
