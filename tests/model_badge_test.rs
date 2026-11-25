@@ -172,7 +172,7 @@ async fn turns_say_what_they_run_on_and_the_bot_list_remembers_it() {
     std::env::set_var("PATH", format!("{}:/usr/bin:/bin", bin.display()));
     std::env::set_var("HOME", tmp.path());
     std::env::set_var("FAKE_DIR", tmp.path());
-    for var in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "OLLAMA_MODEL", "CLAUDE_CONFIG_DIR"] {
+    for var in ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "XAI_API_KEY", "MISTRAL_API_KEY", "OLLAMA_MODEL", "CLAUDE_CONFIG_DIR"] {
         std::env::remove_var(var);
     }
     std::env::set_var("OLLAMA_URL", "http://127.0.0.1:9");

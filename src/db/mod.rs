@@ -267,6 +267,8 @@ impl Database {
             db.seed_defaults().await?;
             db.migrate_space_archive().await?;
             db.migrate_custom_api().await?;
+            // 35a: Mistral API accounts (rebuilds `llm_profiles` once more)
+            db.migrate_mistral_engine().await?;
             db.migrate_mcp_suggestions().await?;
             db.migrate_bot_actions().await?;
             db.migrate_hires().await?;

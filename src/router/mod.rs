@@ -47,7 +47,7 @@ pub struct RouteDecision {
 /// A kwant's `preferred_model`, read.
 ///
 /// - `auto` (or empty): Laya picks the engine family and the model tier.
-/// - `<family>` (`claude`, `codex`, `grok`, `ollama`/`local_ollama`): Laya picks only the tier.
+/// - `<family>` (`claude`, `codex`, `grok`, `mistral`, `ollama`/`local_ollama`): Laya picks only the tier.
 /// - `<family>/<model>` or `<family>:<model>` (`claude/sonnet`, `codex:gpt-6.1-sol`,
 ///   `ollama/llama3.2:latest`): that model, fixed.
 /// - Anything else is an older pin of a model id (`claude-opus-5-5`, `gpt-5.5`): fixed to it, on
@@ -66,6 +66,7 @@ fn family_id(name: &str) -> Option<&'static str> {
         "codex" => Some("codex"),
         "grok" => Some("grok"),
         "custom" => Some("custom"),
+        "mistral" => Some("mistral"),
         "ollama" | "local_ollama" => Some("local_ollama"),
         _ => None,
     }
@@ -169,4 +170,27 @@ pub fn parse_laya_response(data: &serde_json::Value) -> Option<RouteDecision> {
         tier: None,
         model: None,
     })
+}
+
+#[cfg(test)]
+mod mistral_pin_tests {
+    use super::*;
+
+    /// 35a: "mistral" is a family a bot can be pinned to, alone or with a model.
+    #[test]
+    fn mistral_pins_read_as_its_family() {
+        assert_eq!(parse_pin("mistral"), Pin { family: Some("mistral".into()), model: None });
+        assert_eq!(parse_pin("Mistral"), Pin { family: Some("mistral".into()), model: None });
+        assert_eq!(
+            parse_pin("mistral/mistral-large-latest"),
+            Pin { family: Some("mistral".into()), model: Some("mistral-large-latest".into()) }
+        );
+        // An older pin of a bare model id lands on the family its name belongs to
+        assert_eq!(
+            parse_pin("devstral-small-2507"),
+            Pin { family: Some("mistral".into()), model: Some("devstral-small-2507".into()) }
+        );
+        // Ollama's mistral stays Ollama's
+        assert_eq!(parse_pin("ollama/mistral").family.as_deref(), Some("local_ollama"));
+    }
 }
