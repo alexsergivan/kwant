@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- Keyboard and screen-reader users can now jump past the sidebar with a "Skip to conversation" link, the content pane is a `<main>` landmark, sidebar rows no longer nest a button inside a button, small sidebar icon buttons have a bigger tap target, long code blocks are keyboard-reachable, and the background goes inert while the New bot modal is open (#1186)
+
 ## [Mac 0.9.50] - 2026-11-25
 
 kwant 0.9.50: your sent message showing right away on your other open screens and a smaller message box, with one chip that shows who answers.

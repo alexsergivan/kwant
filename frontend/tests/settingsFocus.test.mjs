@@ -223,14 +223,20 @@ test('D1: the remove confirm keeps Tab inside, closes on Escape and gives focus 
   const x = v.host.querySelector('[data-remove-member="k2"]');
   const inDialog = () => !!document.activeElement?.closest('[role="dialog"]');
 
-  // Enter on the ✕ is for the ✕: it doesn't also open Lin's chat behind the confirm (the row's own Enter does).
+  // The ✕ and the row are both real buttons now (Finding 1), siblings rather than nested, so a
+  // browser gives each its own Enter for free; a click stands in for that native Enter-on-a-focused-
+  // button activation, which jsdom's dispatchEvent doesn't replay.
   x.focus();
-  await key('Enter');
-  assert.deepEqual(selected, [], 'Enter on the ✕ leaves the row alone');
-  const row = v.host.querySelector('[data-bot-row="k2"]');
+  await click(x);
+  assert.ok(inDialog(), 'activating the ✕ opens its own confirm');
+  assert.deepEqual(selected, [], 'not the row\'s chat');
+  await key('Escape');
+  assert.equal(q('[role="dialog"]'), null, 'back to a clean slate');
+  // The row just holds the data hooks; its one real button is what gets focused.
+  const row = v.host.querySelector('[data-bot-row="k2"] button');
   row.focus();
-  await key('Enter');
-  assert.deepEqual(selected, ['k2'], 'Enter on the row opens its chat');
+  await click(row);
+  assert.deepEqual(selected, ['k2'], 'activating the row opens its chat');
 
   x.focus();
   await click(x);
@@ -262,6 +268,6 @@ test('D1: after Remove, focus goes to the bot\'s row, since its ✕ left with th
   await click(button('Remove'));
   assert.equal(q('[role="dialog"]'), null);
   assert.equal(q('[data-remove-member="k2"]'), null, 'Lin is out of the team');
-  focused(q('aside [data-bot-row="k2"]'), 'focus is on Lin\'s row, now outside the team');
+  focused(q('aside [data-bot-row="k2"] button'), 'focus is on Lin\'s row, now outside the team');
   v.unmount();
 });
