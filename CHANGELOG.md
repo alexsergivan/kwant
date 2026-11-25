@@ -8,6 +8,23 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.50] - 2026-11-25
+
+kwant 0.9.50: your sent message showing right away on your other open screens and a smaller message box, with one chip that shows who answers.
+
+### Changed
+- The message box takes less room: one Answers chip shows who answers and opens the member list, the tip line goes after your first message, and suggestions stay hidden while a bot replies (#1173)
+
+### Fixed
+- A message you send now shows at once on your other open screens, not when the bot's turn ends (#1172)
+
+## [Mac 0.9.49] - 2026-11-24
+
+kwant 0.9.49: two chat fixes: no blank strip above the message box after you accept a request, and a long new message landing in view.
+
+### Fixed
+- After you accept a request in a chat, the message box moves back under the last message instead of leaving a blank strip, and a long message that arrives while you're at the bottom now lands in view (#1166)
+
 ## [Mac 0.9.48] - 2026-11-24
 
 kwant 0.9.48: a History button on a routine's row in a chat that opens its History in Routines, "Answered later" on a routine run you answered after it stopped to ask and a Run again button on a failed routine's Needs-you card and Inbox row, and Open routine on its notice.
