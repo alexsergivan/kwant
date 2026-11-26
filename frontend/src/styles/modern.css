@@ -877,7 +877,10 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 }
 
 /* The blueprint grid: only the main pane, fading down it; cards stay opaque on top. The pane's own
-   root background goes transparent so the grid sits between the surface and the content. */
+   root background goes transparent so the grid sits between the surface and the content.
+   It stays at the pane's two edges only: full in the 24 px gutter, clear by 72 px, where a reply's
+   text starts (24 px pad + 36 px avatar + 14 px gap), so no line runs behind words. Phones have no
+   gutter to keep, so there the grid goes. */
 .kw-blueprint { position: relative; isolation: isolate; background-color: var(--kw-surface-main); }
 .kw-blueprint > * { background-color: transparent !important; }
 .kw-blueprint::before {
@@ -888,10 +891,17 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
     linear-gradient(to right, rgb(157 143 255 / 0.045) 1px, transparent 1px),
     linear-gradient(to bottom, rgb(157 143 255 / 0.045) 1px, transparent 1px);
   background-size: 120px 120px, 120px 120px, 24px 24px, 24px 24px;
-  -webkit-mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.25) 100%);
-  mask-image: linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.25) 100%);
+  -webkit-mask-image:
+    linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.25) 100%),
+    linear-gradient(90deg, #000 0, #000 24px, transparent 72px, transparent calc(100% - 72px), #000 calc(100% - 24px), #000 100%);
+  -webkit-mask-composite: source-in;
+  mask-image:
+    linear-gradient(180deg, #000 0%, rgb(0 0 0 / 0.25) 100%),
+    linear-gradient(90deg, #000 0, #000 24px, transparent 72px, transparent calc(100% - 72px), #000 calc(100% - 24px), #000 100%);
+  mask-composite: intersect;
   animation: kw-dv-grid 200ms var(--kw-ease) both;
 }
+@media (max-width: 639.98px) { .kw-blueprint::before { display: none; } }
 @keyframes kw-dv-grid { from { opacity: 0; } to { opacity: 1; } }
 
 @media (prefers-reduced-motion: reduce) {
@@ -1124,6 +1134,34 @@ button.dv-sha { cursor: copy; } button.dv-sha:hover { color: var(--accent); bord
 @media (prefers-reduced-motion: no-preference) {
   .kw-needs-fade { animation: kw-needs-fade 120ms var(--kw-ease, ease-out); }
   .kw-needs-leave { opacity: 0; transition: opacity 120ms var(--kw-ease, ease-out); }
+}
+
+/* pa11b: the queue's counter sign. Print only (A6 portrait), black on white; on screen it never shows unless a
+   fixture asks for the preview. Printing the sign hides the rest of the app for that one page. */
+.kw-print-sign { display: none; }
+.kw-print-sign--preview,
+.kw-print-sign {
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 3mm;
+  color: black;
+  background: white;
+  font-family: var(--kw-font-sans, system-ui, sans-serif);
+}
+.kw-print-sign--preview { display: flex; width: 105mm; min-height: 148mm; padding: 9mm 8mm; box-sizing: border-box; }
+.kw-print-sign .kw-sign-name { font-size: 15pt; font-weight: 700; margin: 0; }
+.kw-print-sign .kw-sign-head { font-size: 26pt; font-weight: 800; line-height: 1.05; margin: 0; }
+.kw-print-sign .kw-sign-qr { width: 58mm; padding: 2mm; border: 0.6mm solid black; border-radius: 3mm; }
+.kw-print-sign .kw-sign-qr svg { display: block; width: 100%; height: auto; }
+.kw-print-sign .kw-sign-how { font-size: 11pt; line-height: 1.3; margin: 0; max-width: 80mm; }
+.kw-print-sign .kw-sign-line { font-size: 10pt; font-weight: 600; margin: 0; }
+.kw-print-sign .kw-sign-foot { font-size: 8.5pt; margin: auto 0 0; color: black; opacity: 0.75; }
+@page sign { size: A6 portrait; margin: 9mm 8mm; }
+@media print {
+  body:has(> .kw-print-sign) > *:not(.kw-print-sign) { display: none !important; }
+  body:has(> .kw-print-sign) { background: white !important; }
+  body > .kw-print-sign { display: flex !important; page: sign; break-inside: avoid; }
 }
 
 /* 36e: Settings › All spaces › "Find a setting" hides rows and blocks without the typed words. */

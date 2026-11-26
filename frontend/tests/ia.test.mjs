@@ -112,15 +112,17 @@ const base = {
   onSummonKwant: noop, onCreateTeam: noop, onOpenInbox: noop, onOpenParallel: noop, onOpenMissions: noop, missionBoard: true,
 };
 
-test('the top rows are Search, Inbox, Mission board and Parallel Universe, nothing else', () => {
-  const html = ui.sidebar(base);
+test('the top rows are Search, Inbox and More, nothing else, in a fresh space', () => {
+  const html = ui.sidebar({ ...base, space: { ...space, id: 'spc_ia_fresh' } });
   const rows = html.match(/data-utility-rows[\s\S]*?<\/nav>|data-utility-rows[\s\S]*$/)[0];
-  for (const t of ['Search', 'Inbox', 'Mission board', 'Parallel Universe']) assert.match(rows, new RegExp(t), t);
+  for (const t of ['Search', 'Inbox', '>More<']) assert.match(rows, new RegExp(t), t);
   for (const gone of ['While you were away', 'Loose ends', 'Connections', 'Routines']) assert.doesNotMatch(html, new RegExp(gone), `${gone} is not a sidebar row`);
-  // 14c: a "More" menu with one item is gone; its one place is a plain row
-  assert.doesNotMatch(html, /data-more-menu|aria-haspopup="menu"[^>]*>(?:(?!<\/button>)[\s\S])*More</, 'no one-item More menu');
-  assert.match(html, /data-parallel-row/);
-  assert.doesNotMatch(ui.sidebar({ ...base, onOpenParallel: undefined }), /Parallel Universe/, 'no row without the page');
+  // 36i: Mission board and Parallel Universe wait under a closed More (a disclosure, not a menu)
+  assert.match(html, /aria-expanded="false" aria-controls="kw-sidebar-more"/);
+  assert.doesNotMatch(html, /aria-haspopup="menu"/);
+  assert.doesNotMatch(html, /Parallel Universe|Mission board/);
+  assert.match(ui.sidebar({ ...base, parallelActive: true }), /data-parallel-row/, 'the open page is at the top');
+  assert.doesNotMatch(ui.sidebar({ ...base, onOpenParallel: undefined, missionBoard: false }), /Parallel Universe|>More</, 'no row without the page, no empty More');
 });
 
 test('the Inbox row keeps the unseen badge and marks the open page', () => {

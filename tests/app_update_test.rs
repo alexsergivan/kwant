@@ -312,8 +312,8 @@ async fn notifies_once_per_version() {
     let sent = notifications(&mut events, wait).await;
     assert_eq!(sent.len(), 1, "{sent:?}");
     assert_eq!(sent[0].0, "app_update");
-    assert_eq!(sent[0].1, "kwant bots 0.1.2 is ready");
-    assert_eq!(sent[0].2, "Open kwant bots to update and restart.");
+    assert_eq!(sent[0].1, "kwant 0.1.2 is ready");
+    assert_eq!(sent[0].2, "Open kwant to update and restart.");
 
     // The 6-hourly check finds the same version again: no second notification
     hub.check().unwrap();
