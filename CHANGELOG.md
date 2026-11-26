@@ -8,6 +8,26 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.53] - 2026-11-26
+
+kwant 0.9.53: restarts keep programs your bots left running, no double messages in Telegram, a shorter sidebar, Dev mode's grid out from behind your messages, /api/health shows whether routines are still being checked, /api/health and the log name a scheduler step that runs too long, plain words in the chat, pushes and the Mac menu, easier-to-read routine labels, one reply to a hello and steps that say what each command did.
+
+### Added
+- /api/health has a new "scheduler" field with the time of the last finished pass of the loop that runs routines, follow-ups and parked work, and "stale": true when it hasn't finished one in 90 s; the server logs a warning then too, and "status" and HTTP 200 are unchanged (#1210)
+- /api/health's "scheduler" field now also shows which step of the routines loop is running and since when ("step", "step_started_at"), and the server log names a step that runs longer than 60 s, then logs once more when it ends (#1212)
+
+### Changed
+- The systemd unit in the README, the install docs and install.sh now sets KillMode=process, so restarting or updating kwant on Linux no longer stops programs a bot left running in the background; `systemctl status kwnt` lists them and `kill <pid>` stops one (#1206)
+- The sidebar's top block shows Search, Inbox and Routines; Mission board, Idea jar and Parallel Universe sit under a closed More and move up once you open them in that space, or while the Idea jar has ideas ready (#1207)
+- Dev mode's blueprint grid now stays at the edges of the chat pane and fades out before your messages, so no lines run behind text; phones don't show it (#1209)
+- The chat no longer shows a "Running on … tier" line (it goes to the server log; Details still shows the model), and pushes, the Mac menu and the terminal say "kwant" instead of "kwant bots" (#1195)
+- The routine form's labels and hints are a little larger and easier to read, and the Done button in the Needs you strip now says "Needs you" to screen readers, as the screen does (#1213)
+- Steps say what each command did ("Checking git status", "Reading shop.toml", "Fetching shop.example.com") instead of "Running a command"; built-in tools such as ToolSearch read in words, and the working line under the composer no longer shows a raw command (#1224)
+
+### Fixed
+- A Telegram message whose answer got lost after sending (a timeout, a dropped connection or a Telegram server error) is no longer sent a second time, so replies and question cards don't show up twice; a message that never left still retries (#1208)
+- Saying hi, thanks or goodbye to a team gets one reply back instead of hand-offs to every bot that reply names; a go-ahead such as "ok, go ahead" still hands work on (#1215)
+
 ## [Mac 0.9.52] - 2026-11-25
 
 kwant 0.9.52: one working scene instead of a strip and a steps card, plain words for AIs and AI use, plain words on the sign-in, team and update screens, a shorter New routine form, plain words in the folder picker and the thinking note, silent stops show up in Needs you, four short Settings pages and "AI" instead of "engine" on the New bot form.

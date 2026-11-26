@@ -2286,3 +2286,77 @@ async fn a_stop_on_the_hand_off_while_it_reports_skips_the_lead() {
     assert!(resumes.is_empty(), "the person stopped the hand-off, so its lead isn't resumed; got {} resume(s)", resumes.len());
     assert!(!env.state.turns.has_job(&id) && !env.state.turns.has_job(&channel), "the hand-off and its chat read idle");
 }
+
+/// A person message the test puts in `channel`'s history without a turn: the fake CLI reads its
+/// MENTION marker from the chat history in the next prompt, so the reply to a later "hi team!"
+/// @mentions teammates though the greeting itself carries no marker.
+async fn seed_history(env: &Env, channel: &str, text: &str) {
+    let m = kwnt::db::models::NewMessage {
+        channel_id: Some(channel.to_string()),
+        direct_kwant_id: None,
+        sender_role: "user".into(),
+        sender_id: "user".into(),
+        text: text.to_string(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    };
+    env.state.db.insert_message(&m).await.unwrap();
+}
+
+/// Hand-offs started from `channel`: delegations from it and direct hand-off turns in it.
+async fn greeting_handoffs(env: &Env, channel: &str) -> (usize, usize) {
+    let delegations = env
+        .state
+        .db
+        .list_delegations(None, None, 50)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|d| d.origin_channel_id.as_deref() == Some(channel))
+        .count();
+    let chip = |m: &kwnt::db::models::Message| {
+        meta_kind(m).is_some_and(|k| ["handoff_refused", "delegation_started", "delegation_result"].contains(&k.as_str()))
+    };
+    let replies = channel_messages(env, channel).await.into_iter().filter(|m| m.sender_role == "kwant" && !chip(m)).count();
+    (delegations, replies)
+}
+
+/// Onboarding AUDIT F6 / earlier-audit rows B2+F6 (0.9.53): "hi" to a team got three long intros.
+/// A greeting, a thank-you or a goodbye gets one reply back: a reply that greets with "@Scribe and
+/// @Analyst are here too" names them, it doesn't hand them the turn (no delegation, no hand-off
+/// turn, no notice under the reply). A message that asks for something, and a go-ahead after the
+/// lead proposed hand-offs ("ok, go ahead"), still hand on.
+#[tokio::test]
+async fn a_greeting_to_the_team_gets_one_reply_and_no_hand_offs() {
+    let env = setup().await;
+    let (lead, specialist) = (name(&env, &env.lead).await, name(&env, &env.specialist).await);
+    let scribe = add_bot(&env, "Scribe").await;
+    for (i, said) in ["hi team!", "thanks!", "ok, see you tomorrow", &format!("@{lead} hello everyone")].iter().enumerate() {
+        let channel = team_channel_with(&env, &format!("greet-{i}"), &[&env.lead, &env.specialist, &scribe]).await;
+        seed_history(&env, &channel, &format!("Earlier: say hi to everyone GREETMARK{i} MENTION:{specialist}+Scribe")).await;
+        say_in(&env, &channel, said).await;
+        wait_for("the reply to the greeting", || async { greeting_handoffs(&env, &channel).await.1 >= 1 }).await;
+        // Settle: a hand-off would be created right after the reply
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        let msgs = channel_messages(&env, &channel).await;
+        let reply = msgs.iter().find(|m| m.sender_role == "kwant").unwrap();
+        assert!(reply.text.contains(&format!("@{specialist}")) && reply.text.contains("@Scribe"), "the reply names both: {}", reply.text);
+        assert_eq!(greeting_handoffs(&env, &channel).await, (0, 1), "{said:?}: one reply, no hand-offs: {:?}", msgs.iter().map(|m| &m.text).collect::<Vec<_>>());
+        assert!(refusals(&msgs).is_empty(), "{said:?}: nothing reported under the reply: {:?}", refusals(&msgs));
+        assert!(prompts_with(&format!("GREETMARK{i}")).iter().all(|p| !p.contains("mentioned you")), "{said:?}: no teammate was handed the greeting");
+    }
+
+    // Controls: a request that greets first, and a go-ahead, still hand the work on
+    for (i, said) in [format!("@{lead} hi, have @Scribe draft the intro"), format!("@{lead} ok, go ahead")].iter().enumerate() {
+        let channel = team_channel_with(&env, &format!("ask-{i}"), &[&env.lead, &env.specialist, &scribe]).await;
+        seed_history(&env, &channel, &format!("Earlier: plan the intro ASKMARK{i} MENTION:Scribe")).await;
+        say_in(&env, &channel, said).await;
+        wait_for("the hand-off to Scribe", || async {
+            env.state.db.list_delegations(Some(&env.lead), None, 50).await.unwrap().iter().any(|d| {
+                d.origin_channel_id.as_deref() == Some(channel.as_str()) && d.specialist_kwant_id == scribe
+            })
+        })
+        .await;
+    }
+}

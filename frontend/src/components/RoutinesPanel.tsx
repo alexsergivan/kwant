@@ -271,13 +271,13 @@ export const RoutineForm: React.FC<{
           <div>
             <label htmlFor={id('at')} className="sr-only">Date and time</label>
             <input id={id('at')} type="datetime-local" value={s.onceAt} onChange={(e) => setS({ onceAt: e.target.value })} className={inputClass} />
-            <p className="mt-1 text-[11px] text-zinc-500">In your time zone ({zoneLabel(defaultTimeZone())}). Turns itself off after it runs.</p>
+            <p className="mt-1 text-meta text-zinc-500">In your time zone ({zoneLabel(defaultTimeZone())}). Turns itself off after it runs.</p>
           </div>
         )}
 
         {s.type === 'cron' && (
           <div>
-            <label htmlFor={id('cron')} className="text-[11px] text-zinc-500">Rule</label>
+            <label htmlFor={id('cron')} className="text-meta text-zinc-500">Rule</label>
             <input
               id={id('cron')}
               value={s.cron}
@@ -288,7 +288,7 @@ export const RoutineForm: React.FC<{
               aria-describedby={id('cron-hint')}
               className={`${inputClass} font-mono`}
             />
-            <p id={id('cron-hint')} className="mt-1 text-[11px] text-zinc-500 leading-relaxed">
+            <p id={id('cron-hint')} className="mt-1 text-meta text-zinc-500 leading-relaxed">
               Five parts: minute, hour, day of month, month, weekday. <span className="font-mono text-zinc-400">0 9 * * MON#2</span> is 09:00 on the
               second Monday; <span className="font-mono text-zinc-400">0 18 L * *</span> is 18:00 on the last day of the month.
             </p>
@@ -299,13 +299,13 @@ export const RoutineForm: React.FC<{
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
             {s.type !== 'cron' && (
               <div>
-                <label htmlFor={id('time')} className="text-[11px] text-zinc-500">At</label>
+                <label htmlFor={id('time')} className="text-meta text-zinc-500">At</label>
                 <input id={id('time')} type="time" value={s.time} onChange={(e) => setS({ time: e.target.value })} className={inputClass} />
               </div>
             )}
             {tzOpen ? (
               <div>
-                <label htmlFor={id('tz')} className="text-[11px] text-zinc-500">Time zone</label>
+                <label htmlFor={id('tz')} className="text-meta text-zinc-500">Time zone</label>
                 <input ref={tzRef} id={id('tz')} list={id('tzs')} value={s.tz} onChange={(e) => setS({ tz: e.target.value })} className={inputClass} spellCheck={false} />
                 <datalist id={id('tzs')}>
                   {timeZoneOptions(s.tz).map((z) => (
@@ -315,7 +315,7 @@ export const RoutineForm: React.FC<{
               </div>
             ) : (
               <div>
-                <span id={id('tz-label')} className="text-[11px] text-zinc-500">Time zone</span>
+                <span id={id('tz-label')} className="text-meta text-zinc-500">Time zone</span>
                 <div className="min-h-11 sm:min-h-[34px] flex items-center gap-2 text-sm sm:text-xs" title={s.tz} role="group" aria-labelledby={id('tz-label')} data-tz-row>
                   <span className="text-zinc-100">{zoneLabel(s.tz)}</span>
                   {zoneOffset(s.tz) && <span className="text-zinc-400">{zoneOffset(s.tz)}</span>}
@@ -407,13 +407,13 @@ export const RoutineForm: React.FC<{
                 Last day
               </button>
             </div>
-            <p className="text-[11px] text-zinc-500">A day a month doesn't have, like the 31st in April, runs on that month's last day.</p>
+            <p className="text-meta text-zinc-500">A day a month doesn't have, like the 31st in April, runs on that month's last day.</p>
           </div>
         )}
 
         {s.type === 'interval' && (
           <div className="flex items-center gap-2">
-            <label htmlFor={id('every')} className="text-[11px] text-zinc-500 shrink-0">Every</label>
+            <label htmlFor={id('every')} className="text-meta text-zinc-500 shrink-0">Every</label>
             <input
               id={id('every')}
               type="number"
@@ -424,7 +424,7 @@ export const RoutineForm: React.FC<{
               onChange={(e) => setS({ everyMinutes: e.target.value })}
               className={`${inputClass} w-24`}
             />
-            <span className="text-[11px] text-zinc-500">minutes (5 to 10080)</span>
+            <span className="text-meta text-zinc-500">minutes (5 to 10080)</span>
           </div>
         )}
       </fieldset>

@@ -1328,7 +1328,34 @@ fn taken_ask_rule(lead: &str) -> String {
     )
 }
 
+/// Whether the person's message only greets, thanks or says goodbye ("hi team!", "thanks!", "ok, see
+/// you tomorrow", "@Lead hello everyone"), with the names it opens by addressing left out. A reply's
+/// @mentions then name teammates and hand them nothing (onboarding AUDIT F6: "hi" got three long
+/// intros). A go-ahead ("ok, go ahead", "yes please", "lgtm") is not one: it may be the yes to the
+/// hand-offs the reply before it proposed. [`crate::router::analyzer::needs_no_plan`] decides, plus
+/// a greeting to the room ("hi team!", "hey guys"), which its word lists don't cover.
+pub(crate) fn only_greets(user_prompt: &str) -> bool {
+    const GREETS: [&str; 19] = [
+        "hi", "hello", "hey", "hiya", "yo", "morning", "evening", "afternoon", "night", "thanks", "thank", "thx", "ty",
+        "tysm", "cheers", "bye", "goodbye", "tomorrow", "later",
+    ];
+    /// Who a greeting is said to: "hi team!", "hey guys", "morning all"
+    const TO_THE_ROOM: [&str; 12] = ["team", "guys", "folks", "everyone", "everybody", "all", "there", "friends", "you", "ya", "y", "good"];
+    const GO_AHEAD: [&str; 12] = ["yes", "yeah", "yep", "sure", "ahead", "go", "do", "continue", "proceed", "agreed", "please", "lgtm"];
+    let said = user_prompt.split_whitespace().skip_while(|w| w.starts_with('@')).collect::<Vec<_>>().join(" ");
+    let lower = said.to_lowercase();
+    let words: Vec<&str> = lower.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let to_the_room = words.len() <= 6 && words.iter().all(|w| GREETS.contains(w) || TO_THE_ROOM.contains(w));
+    (to_the_room || crate::router::analyzer::needs_no_plan(&said))
+        && words.iter().any(|w| GREETS.contains(w))
+        && !words.iter().any(|w| GO_AHEAD.contains(w))
+}
+
 async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(Kwant, String)], user_prompt: &str) {
+    // "Hi! @Writer and @Analyst are here too" to a "hi team!" names them; it doesn't start two more turns
+    if only_greets(user_prompt) {
+        return;
+    }
     let named: Vec<(String, String)> = replies.iter().map(|(k, t)| (k.name.clone(), t.clone())).collect();
     if super::budget::pause_if_over(scope, already_spoken, &named, user_prompt).await {
         return;
@@ -2963,6 +2990,28 @@ pub(super) async fn stall_limit(db: &crate::db::Database) -> Option<std::time::D
     (secs > 0).then(|| std::time::Duration::from_secs(secs))
 }
 
+/// 36h: the server log line for what a turn runs on (it used to be a "Running on …" thinking line).
+/// Kept out of `run_kwant_turn_inner` so the event's fields don't grow that future's stack frame.
+#[inline(never)]
+fn log_turn_runs_on(
+    kwant: &str,
+    turn: &dyn std::fmt::Display,
+    engine: crate::drivers::engines::EngineId,
+    profile: Option<&crate::db::models::LlmProfile>,
+    model: Option<&str>,
+    tier: Option<&str>,
+) {
+    tracing::info!(
+        kwant = %kwant,
+        turn = %turn,
+        engine = %engine.name(),
+        account = %super::profile_turn::account_name(profile, engine).unwrap_or_default(),
+        model = %model.unwrap_or("default model"),
+        tier = %tier.unwrap_or(""),
+        "turn runs on"
+    );
+}
+
 async fn run_kwant_turn_inner(
     scope: &TurnScope,
     target_kwant: &Kwant,
@@ -3137,8 +3186,8 @@ async fn run_kwant_turn_inner(
         let pinned_family = crate::router::parse_pin(pin).family.is_some();
 
         // 32d: the routing decision is for the server log only. As a thinking line it became the
-        // live reply's status line until "Running on …" replaced it; the model badge and Details'
-        // "Ran on … · <effort>" already tell the person what ran
+        // live reply's status line; the model badge and Details' "Ran on … · <effort>" already tell
+        // the person what ran
         tracing::info!(
             kwant = %target_kwant.id,
             turn = %tag.turn_id,
@@ -3716,20 +3765,20 @@ async fn run_kwant_turn_inner(
                 }
             }
             let last_model = input.model.clone().or_else(|| choice.as_ref().map(|c| c.label.clone()));
+            // 36h: what the turn runs on is for the server log only. As a thinking line ("Running on
+            // Claude Code CLI · This machine · sonnet (balanced tier)") it was the live reply's status
+            // line; the model badge and Details' "Ran on …" already say it, from `turn_runs_on`
+            // Logged from its own frame: inline here, the event's fields sat in this future's poll
+            // frame, which keep_going_test's debug stack can't spare (TurnOpts, #787)
             if let Some(e) = runs_on {
-                event_broadcast.send(RuntimeEvent::ThinkingDelta(format!(
-                    "Running on {}{} · {}{}",
-                    e.name(),
-                    super::profile_turn::account_name(profile.as_ref(), e)
-                        .map(|a| format!(" · {a}"))
-                        .unwrap_or_default(),
-                    input.model.as_deref().unwrap_or("default model"),
-                    choice
-                        .as_ref()
-                        .and_then(|c| c.tier)
-                        .map(|t| format!(" ({} tier)", t.as_str()))
-                        .unwrap_or_default(),
-                )));
+                log_turn_runs_on(
+                    &target_kwant.id,
+                    &tag.turn_id,
+                    e,
+                    profile.as_ref(),
+                    input.model.as_deref(),
+                    choice.as_ref().and_then(|c| c.tier).map(|t| t.as_str()),
+                );
             }
             if ran_on.is_none() {
                 if let Some(note) = runs_on.and_then(|e| crate::drivers::activity::thinking_note(e.as_str())) {
@@ -8198,5 +8247,29 @@ mod tests {
         assert!(!keyed.contains("sk-path-secret"));
         assert_eq!(scrub_urls("down: https://llm.example"), "down: https://llm.example");
         assert_eq!(scrub_urls("not logged in; run `codex login`"), "not logged in; run `codex login`");
+    }
+
+    /// 0.9.53 greeting-no-handoffs: a greeting, a thank-you or a goodbye hands nothing on; a request,
+    /// a go-ahead or an approval still does.
+    #[test]
+    fn only_a_greeting_thanks_or_goodbye_keeps_mentions_from_handing_on() {
+        use super::only_greets;
+        for greets in ["hi team!", "Hey guys!", "good morning all", "Hi", "hello everyone", "thanks!", "Thank you!", "ok, see you tomorrow", "@Ada hello everyone", "@Ada @Bea hi!", "great, thanks!", "bye"] {
+            assert!(only_greets(greets), "{greets:?}");
+        }
+        for asks in [
+            "hi, @Writer draft the intro",
+            "@Ada ok, go ahead",
+            "yes please",
+            "ok",
+            "lgtm",
+            "thanks, go ahead",
+            "thanks, now publish it",
+            "hi, can you check the logs?",
+            "continue",
+            "",
+        ] {
+            assert!(!only_greets(asks), "{asks:?}");
+        }
     }
 }

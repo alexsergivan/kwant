@@ -39,6 +39,22 @@ card_art: team
   </div>
 </nav>
 
+<section id="new-0953" class="fgroup">
+  <div class="wrap">
+    <div class="section-head">
+      <p class="kicker">New in 0.9.53</p>
+      <h2>Restarting or updating kwant on Linux no longer stops programs your bots left running, and a Telegram message that may already have gone out is no longer sent twice</h2>
+    </div>
+    <div class="row">
+      <div class="row-copy">
+        <h3 id="fixes-0953">Smaller changes in 0.9.53</h3>
+        <p>On Linux, a restart or update of kwant keeps programs your bots left running. Telegram replies and question cards no longer show up twice when Telegram's answer to a send gets lost. The sidebar starts with Search, Inbox and Routines; Mission board, Idea jar and Parallel Universe wait under More until you open them. Dev mode's grid no longer runs behind your messages. /api/health shows when routines and follow-ups were last checked, and says stale if that stopped. /api/health shows which scheduler step is running, and the log names one that runs over 60 s. The chat drops the "Running on … tier" line; the Mac menu says "Downloading kwant …" and "Restarting kwant …". Routine labels are a little bigger, and screen readers say Needs you like the screen does. Saying hi or thanks to a team gets one hello back, not a round of hand-offs. Steps say what each command did, and the working line no longer shows a raw command.</p>
+      </div>
+      <div class="frame">{{shot:v0953-sidebar-more|kwant in the Trailhead Outfitters space, dark. The sidebar lists Search, Inbox and Routines, then More, opened to show Mission board, Idea jar and Parallel Universe. Below are Channels (#general) and Bots (5): the @Shop team with Ann (lead), Ben and Cody, and the @Ops team with Quant, Ben and Fay. On the right, #general is empty and asks 'What do you want done?' under a Dev mode banner.}}</div>
+    </div>
+  </div>
+</section>
+
 <section id="new-0952" class="fgroup">
   <div class="wrap">
     <div class="section-head">
@@ -50,7 +66,7 @@ card_art: team
         <h3 id="fixes-0952">Smaller changes in 0.9.52</h3>
         <p>While a bot works, the chat shows the bot at its laptop with one line on what it's doing; Steps opens the full list. Settings › AIs & accounts, the New bot form and the usage panel use plain words: AI, kwant picks, AI use. The sign-in, team, update and phone-app screens use plain words: "kwant", "Team folder", "your team of AI bots". New routines ask for a name, what to do and when; the bot and where it posts fold into one line with a Change button. The folder picker asks for a folder for your team, and the thinking note says "AI" instead of "engine". A reply kwant stops for silence now also shows up once in Needs you. Settings › All spaces has four short pages with one Save; Find a setting looks across all four. The New bot form and Apps & accounts say "AI" instead of "engine".</p>
       </div>
-      <div class="frame">{{shot:v0952-working-scene|A kwant direct chat with Fay, the Trailhead Outfitters buyer bot. You asked 'Count every tent in all three stores and tell me which store runs out first.' Fay's scene reads 'Fay is running a command on fort-collins.store.test' with 'Working · 0:08 · Steps 3'. Steps is open: commands on boulder.store.test and denver.store.test are done, fort-collins.store.test is still running, and the footer says 'Claude is out until 9:43 PM · answered on Codex (gpt-5.5)'.}}</div>
+      <div class="frame">{{shot:v0952-working-scene|A kwant direct chat with Fay, the Trailhead Outfitters buyer bot. You asked 'Count every tent in all three stores and tell me which store runs out first.' A chip says 'Claude is out until 05:19 UTC · Fay is answering on Codex (gpt-5.5)'. Fay's scene reads 'Fay is searching the files on fort-collins.store.test' with 'Working · 0:09 · Steps 3'. Steps is open: searching the files on boulder.store.test and denver.store.test is done, and fort-collins.store.test is still running. The footer reads 'Claude is out until 5:19 AM · answered on Codex (gpt-5.5)'.}}</div>
     </div>
   </div>
 </section>
@@ -66,7 +82,7 @@ card_art: team
         <h3 id="fixes-0951">Smaller changes in 0.9.51</h3>
         <p>A step the bot recovered from now says Retried in grey, and a command step reads "Running a command on <host>" with the exact command under Show command. Pressing Stop leaves "Stopped. You stopped this reply." from the bot, with the steps it had taken; it raises no badge or notification. The router card is one line, "Sent to Quant, the team lead", with Why and Who else one tap away; "Laya is offline" left the chat and stays in Details. When kwant gets busy, Telegram still gets each bot question and approval once, and cards handled in kwant meanwhile lose their buttons. When kwant gets busy, the push or webhook notice that a bot waits for your approval still goes out, once; cards already answered send nothing. New bot opens with Name and "What should it do?"; Soul is now Personality, and editing a bot with its own settings opens More options. Space icons in the sidebar, switcher and pickers now use kwant's pixel glyphs; icons without a glyph keep their emoji. If the app missed the end of a reply, it re-reads what is running when it reconnects, comes back to the front or you press Stop, so the working strip goes away. The Connect sheet starts with every bot ticked and folds the list behind Choose bots; a bot's own Connect card still ticks only that bot. Press Tab for a "Skip to conversation" link; sidebar rows are one button each, and small sidebar buttons are easier to tap. Get started, the start picker and API keys have a Mistral key; it's paid per use, since Mistral's free plan is too limited for bots.</p>
       </div>
-      <div class="frame">{{shot:v0951-step-retried|A kwant direct chat with Quant, the Trailhead Outfitters store-ops bot. You asked 'Please restart the shop server, checkout is hanging.' Quant's steps are open: 'A command on 203.0.113.66 didn't connect, so Quant tried again' carries a grey Retried chip with its ssh command shown, then two finished commands. Quant replies that the shop is back up and no orders were lost.}}</div>
+      <div class="frame">{{shot:v0951-step-retried|A kwant direct chat with Quant, the Trailhead Outfitters store-ops bot. You asked 'Please restart the shop server, checkout is hanging.' Quant's steps are open: 'A command on 203.0.113.66 didn't connect, so Quant tried again' carries a grey Retried chip with its ssh command shown, then 'Restarting trailhead-shop on 203.0.113.66' and 'Fetching shop.trailhead.test'. Quant replies that the shop is back up, trailhead-shop is active, shop.trailhead.test answers 200, and no orders were lost.}}</div>
     </div>
   </div>
 </section>
