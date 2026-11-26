@@ -1,3 +1,4 @@
+import { RED_PROOF_PAD } from './redProofPad';
 // Entry for /p/<code>. Reads the optional v1 state the server put in the page, picks the screens by the pocket's kit
 // (Secret Santa, gather, the Wall and the front desk load their own chunks; everything else is the quiz, exactly as before), then joins the live pocket.
 import './guest.css';
@@ -117,3 +118,6 @@ async function main(): Promise<void> {
 }
 
 void main();
+
+// RED PROOF ONLY: keeps the pad in the bundle.
+if (location.hash === '#red-proof-pad') console.debug(RED_PROOF_PAD.slice(0, location.hash.length));

@@ -1,3 +1,4 @@
+import { RED_PROOF_PAD } from './redProofPad';
 import React from 'react';
 import ReactDOM from 'react-dom/client';
 import { App } from './Shell';
@@ -34,3 +35,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </AuthGate>
   </React.StrictMode>,
 );
+
+// RED PROOF ONLY: keeps the pad in the bundle.
+if (location.hash === '#red-proof-pad') console.debug(RED_PROOF_PAD.slice(0, location.hash.length));

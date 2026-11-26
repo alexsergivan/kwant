@@ -168,6 +168,9 @@ window.__harness = {
         while (sent < due) {
           const tok = tokens[sent % tokens.length];
           streamed += tok;
+          // RED PROOF ONLY (ui-perf-budget, never merged): 30 ms of busy main thread per streamed token.
+          const busyUntil = performance.now() + 30;
+          while (performance.now() < busyUntil);
           emit({ type: 'TextDelta', kwant_id: 'k1', context_id: CTX, turn_id: 't1', data: tok });
           sent++;
         }
