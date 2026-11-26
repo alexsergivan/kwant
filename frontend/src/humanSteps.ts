@@ -36,6 +36,17 @@ export interface HumanStep {
   message_id: string | null;
   created_at: string;
   closed_at: string | null;
+  /** 0.9.55 (#1262): `"tools"` when the fix is in Tools › MCP servers, not in the browser: the bot has tools for the site, but they can't connect. */
+  fix_in?: string | null;
+  /** The tool server to fix (its name, and its id for opening its row). */
+  tools_server?: string | null;
+  tools_server_id?: string | null;
+}
+
+/** Where the person fixes a tools step: the server's name and id (either may be missing). */
+export interface ToolsFix {
+  server: string | null;
+  serverId: string | null;
 }
 
 /** `meta` of the card message. */
@@ -51,6 +62,8 @@ export interface HumanStepMeta {
   target: CaptchaTarget | null;
   source: 'bot' | 'auto';
   status: HumanStepStatus;
+  /** 0.9.55: set when the step is fixed in Tools › MCP servers rather than in the browser (`fix_in: "tools"`). */
+  tools: ToolsFix | null;
 }
 
 const STEP_KINDS: HumanStepKind[] = ['sign_in', 'captcha', 'two_factor', 'other'];
@@ -82,7 +95,38 @@ export function parseHumanStepMeta(raw: unknown): HumanStepMeta | null {
     target: parseCaptchaTarget(m.target),
     source: m.source === 'auto' ? 'auto' : 'bot',
     status: statusOf(m.status),
+    tools: toolsFixOf(m),
   };
+}
+
+const text = (v: unknown): string | null => (typeof v === 'string' && v.trim() ? v.trim() : null);
+
+/**
+ * 0.9.55 (#1262): a step the person fixes in Tools › MCP servers (`fix_in: "tools"`), with the server
+ * to open, else null. Read from a card's meta, a step record or a Needs-you item alike. Anything else,
+ * including a server that doesn't send the marker, stays a browser step.
+ */
+export function toolsFixOf(raw: { fix_in?: unknown; tools_server?: unknown; tools_server_id?: unknown } | null | undefined): ToolsFix | null {
+  if (!raw || raw.fix_in !== 'tools') return null;
+  return { server: text(raw.tools_server), serverId: text(raw.tools_server_id) };
+}
+
+/** True for a step the person fixes in Tools, not in the browser. */
+export const fixesInTools = (raw: { fix_in?: unknown } | null | undefined): boolean => raw?.fix_in === 'tools';
+
+/**
+ * Needs-you items (`/api/away`) name a step only by its id: they get the step's Tools marker from the
+ * step record when the item itself doesn't carry it, so the strip and Inbox word it the same as the card.
+ */
+export function withToolsFix<T extends { human_step_id?: string | null; fix_in?: unknown }>(items: T[], steps: Record<string, HumanStep>): T[] {
+  let changed = false;
+  const out = items.map((i) => {
+    const st = i.human_step_id ? steps[i.human_step_id] : undefined;
+    if (i.fix_in !== undefined || !st || !fixesInTools(st)) return i;
+    changed = true;
+    return { ...i, fix_in: st.fix_in, tools_server: st.tools_server ?? null, tools_server_id: st.tools_server_id ?? null };
+  });
+  return changed ? out : items;
 }
 
 /** Card state: the live record from `human_step_updated` wins over the (possibly stale) meta. */
@@ -95,6 +139,7 @@ export function humanStepView(meta: HumanStepMeta, live?: HumanStep | null): Hum
     sandbox_target: live.sandbox_target ?? meta.sandbox_target,
     page_key: live.page_key ?? meta.page_key,
     target: parseCaptchaTarget(live.target) ?? meta.target,
+    tools: meta.tools ?? toolsFixOf(live),
   };
 }
 
@@ -134,10 +179,10 @@ export function captchaStepFor(map: Record<string, HumanStep>, sandboxId: string
 export const humanStepContextId = (s: Pick<HumanStep, 'thread_id' | 'channel_id' | 'direct_kwant_id'>) =>
   s.thread_id || s.channel_id || s.direct_kwant_id || null;
 
-/** Open steps per bot, for the sidebar badge. */
-export function openStepsByKwant(map: Record<string, HumanStep>): Record<string, number> {
+/** Open steps per bot, for the sidebar badge. `tools`: only the steps fixed in Tools (true) or in the browser (false). */
+export function openStepsByKwant(map: Record<string, HumanStep>, tools?: boolean): Record<string, number> {
   const out: Record<string, number> = {};
-  for (const s of Object.values(map)) if (s.status === 'open') out[s.kwant_id] = (out[s.kwant_id] ?? 0) + 1;
+  for (const s of Object.values(map)) if (s.status === 'open' && (tools === undefined || fixesInTools(s) === tools)) out[s.kwant_id] = (out[s.kwant_id] ?? 0) + 1;
   return out;
 }
 
@@ -156,10 +201,10 @@ export function latestOpenStep(map: Record<string, HumanStep>, kwantId: string):
   return best;
 }
 
-/** Turn ids paused on a step (waiting for the person, not working). */
-export function turnsAwaitingStep(map: Record<string, HumanStep>): Set<string> {
+/** Turn ids paused on a step (waiting for the person, not working). `tools`: only Tools steps (true) or browser steps (false). */
+export function turnsAwaitingStep(map: Record<string, HumanStep>, tools?: boolean): Set<string> {
   const out = new Set<string>();
-  for (const s of Object.values(map)) if (s.status === 'open' && s.turn_id) out.add(s.turn_id);
+  for (const s of Object.values(map)) if (s.status === 'open' && s.turn_id && (tools === undefined || fixesInTools(s) === tools)) out.add(s.turn_id);
   return out;
 }
 
@@ -173,6 +218,15 @@ export const KIND_TEXT: Record<HumanStepKind, { heading: string; closedHeading: 
   two_factor: { heading: 'Sign-in code needed', closedHeading: 'Sign-in code', done: 'Done, I entered the code' },
   other: { heading: 'Your help is needed', closedHeading: 'Browser step', done: 'Done' },
 };
+
+/** 0.9.55: a step fixed in Tools › MCP servers (the bot's tools for the site can't connect). */
+export const TOOLS_TEXT = { heading: 'Your help is needed', closedHeading: 'Tools step', done: 'Done, it’s fixed' } as const;
+
+/** An open Tools step's heading names whose tools are broken (Mira D1); the generic heading said nothing about what's wrong. */
+export const toolsHeading = (kwantName: string) => `${kwantName}’s tools need a fix`;
+
+/** The card's words for a step: the Tools words for a Tools step, else its kind's. */
+export const stepText = (meta: Pick<HumanStepMeta, 'step_kind' | 'tools'>) => (meta.tools ? TOOLS_TEXT : KIND_TEXT[meta.step_kind]);
 
 /**
  * What a Done or Skip that came too late says, for a step that is already closed (the 409 path).

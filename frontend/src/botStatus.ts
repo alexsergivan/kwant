@@ -72,11 +72,13 @@ export const STATUS_DOT: Record<BotStatus, string> = {
  * The line under each busy bot's name. Running beats queued so it agrees with the dot; other chats
  * come before the open one, which reads "here" instead of naming itself.
  */
-export function busyLines({ turns, openCtx, awaiting, browser, describe, names, titles }: {
+export function busyLines({ turns, openCtx, awaiting, browser, tools, describe, names, titles }: {
   turns: Iterable<StatusTurn>;
   openCtx: string;
   awaiting?: ReadonlySet<string>;
   browser?: ReadonlySet<string>;
+  /** 0.9.55 (#1262): turns waiting on a step fixed in Tools › MCP servers, not in the browser. */
+  tools?: ReadonlySet<string>;
   describe: (contextId: string, kwantId: string) => string;
   /** Bot names, for an audit turn's line (14a). */
   names?: Record<string, string>;
@@ -88,12 +90,12 @@ export function busyLines({ turns, openCtx, awaiting, browser, describe, names, 
   for (const t of [...turns].sort((x, y) => later(x) - later(y))) {
     if (!t?.kwant_id || out[t.kwant_id]) continue;
     // 14a: an audit's turn says whose work it double-checks and why, not "Working here".
-    if (t.audit && t.state === 'running' && !browser?.has(t.turn_id) && !awaiting?.has(t.turn_id)) {
+    if (t.audit && t.state === 'running' && !browser?.has(t.turn_id) && !tools?.has(t.turn_id) && !awaiting?.has(t.turn_id)) {
       out[t.kwant_id] = auditShortLine(t.audit, names ?? {});
       if (titles) titles[t.kwant_id] = auditTurnLine(t.audit, names ?? {}, { subject: false });
       continue;
     }
-    const what = t.state === 'queued' ? 'Waiting to work' : browser?.has(t.turn_id) ? 'Needs you in the browser' : awaiting?.has(t.turn_id) ? 'Asked you a question' : 'Working';
+    const what = t.state === 'queued' ? 'Waiting to work' : browser?.has(t.turn_id) ? 'Needs you in the browser' : tools?.has(t.turn_id) ? 'Needs you in Tools' : awaiting?.has(t.turn_id) ? 'Asked you a question' : 'Working';
     out[t.kwant_id] =
       t.context_id === openCtx ? `${what} here` : `${what} ${t.state === 'queued' || what === 'Working' ? 'on' : 'in'} ${describe(t.context_id ?? '', t.kwant_id)}`;
   }

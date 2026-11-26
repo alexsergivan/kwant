@@ -596,7 +596,7 @@ async fn directory_sync_waits_for_the_first_search() {
         assert!(started.elapsed() < std::time::Duration::from_secs(15), "the first search never started the sync");
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
-    assert_eq!(e.state.mcp_directory.copy().unwrap().entries.len(), 4);
+    assert_eq!(e.state.mcp_directory.copy().unwrap().len(), 4);
     assert_eq!(dir_search(&e, "echo").await["source"], "copy");
     // One sync loop only: a later search doesn't start another
     assert!(!e.state.mcp_directory.start_sync());
