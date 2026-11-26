@@ -19,12 +19,15 @@ timed is kwnt, not a model or the network. Per run it takes:
 
 Memory is read in the first --memory-runs runs only (each costs 2 x --idle-seconds of waiting); the other measures
 are taken in all --runs. The median of the runs is compared with scripts/perf_budget.json. A median over its limit
-FAILS (exit 1); a median at its limit passes.
+FAILS; a median at its limit passes. Only a FAIL in a *blocking* measure (perf_budget.json "blocking") exits 1 and turns
+CI red; a measure that is not blocking (browser_launch_s for now) shows WARN instead and exits 0.
 
 Usage:
   python3 scripts/perf_budget.py --kwnt target/debug/kwnt [--browser /usr/bin/chromium] [--out perf-results.json]
   python3 scripts/perf_budget.py --kwnt ... --update-baseline     # rewrite perf_budget.json from this run (on purpose)
   python3 scripts/perf_budget.py --kwnt ... --limits /tmp/tiny.json   # try other limits, e.g. to see a FAIL
+  python3 scripts/perf_budget.py --judge perf-results.json            # judge a saved results file again (no kwnt run),
+                                                                      # e.g. a doctored one, to prove a FAIL exits 1
 
 Limits: baseline x 1.5 for times, x 1.3 for memory, rounded up (see compute_limits). Linux only (reads /proc).
 Needs no packages: standard library only.
@@ -101,12 +104,21 @@ def compute_limits(baseline):
     return {k: round_up(v * MEASURES[k][2], MEASURES[k][3]) for k, v in baseline.items() if k in MEASURES and v is not None}
 
 
-def judge(medians, limits, skipped=None):
-    """One row per measure: {id, median, limit, status, reason}. Status is PASS (at or under the limit), FAIL (over),
-    SKIP (not measured, e.g. no browser, or Chrome would not start; `skipped` maps a measure id to why) or NO LIMIT
-    (measured, but perf_budget.json has no limit for it: not a failure). `reason` is set on a SKIP row only."""
+def blocking_of(limits_file_data):
+    """The measures whose FAIL blocks CI: perf_budget.json's "blocking" list. A file without the key blocks on every
+    measure (the old behaviour), so an older limits file is never silently weaker. Unknown ids are ignored."""
+    listed = limits_file_data.get("blocking")
+    return set(MEASURES) if listed is None else {k for k in listed if k in MEASURES}
+
+
+def judge(medians, limits, skipped=None, blocking=None):
+    """One row per measure: {id, median, limit, status, reason, blocking}. Status is PASS (at or under the limit), FAIL
+    (over, in a blocking measure), WARN (over, in a measure that does not block), SKIP (not measured, e.g. no browser,
+    or Chrome would not start; `skipped` maps a measure id to why) or NO LIMIT (measured, but perf_budget.json has no
+    limit for it: not a failure). `reason` is set on a SKIP row only. `blocking` defaults to every measure."""
     rows = []
     skipped = skipped or {}
+    blocking = set(MEASURES) if blocking is None else set(blocking)
     for key in MEASURES:
         med, limit = medians.get(key), limits.get(key)
         reason = None
@@ -116,8 +128,8 @@ def judge(medians, limits, skipped=None):
         elif limit is None:
             status = "NO LIMIT"
         else:
-            status = "PASS" if med <= limit else "FAIL"
-        rows.append({"id": key, "median": med, "limit": limit, "status": status, "reason": reason})
+            status = "PASS" if med <= limit else ("FAIL" if key in blocking else "WARN")
+        rows.append({"id": key, "median": med, "limit": limit, "status": status, "reason": reason, "blocking": key in blocking})
     return rows
 
 
@@ -147,7 +159,7 @@ def summary_markdown(rows):
 
 
 def exit_code(rows):
-    """1 when any median is over its limit, else 0."""
+    """1 when a blocking measure's median is over its limit (a FAIL row), else 0. WARN rows never fail the run."""
     return 1 if any(r["status"] == "FAIL" for r in rows) else 0
 
 
@@ -439,7 +451,8 @@ def one_run(kwnt, browser, idle_seconds, take_memory, log, browser_wait=60):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--kwnt", required=True, help="path to the kwnt binary")
+    ap.add_argument("--kwnt", help="path to the kwnt binary (required unless --judge)")
+    ap.add_argument("--judge", metavar="RESULTS_JSON", help="judge a saved perf-results.json against the limits again, without running kwnt")
     ap.add_argument("--browser", help="Chrome or Chromium for the browser measure (default: found on PATH; none = skipped)")
     ap.add_argument("--runs", type=int, default=5, help="runs per measure (default 5)")
     ap.add_argument("--memory-runs", type=int, default=3, help="runs that also read memory (default 3; each waits 2 x idle-seconds)")
@@ -449,14 +462,19 @@ def main():
     ap.add_argument("--out", default="perf-results.json", help="where the results are written")
     ap.add_argument("--update-baseline", action="store_true", help="rewrite the limits file from this run (on purpose, not in CI)")
     args = ap.parse_args()
+    limits_path = Path(args.limits)
+    limits_data = json.loads(limits_path.read_text()) if limits_path.is_file() else {}
+    limits, blocking = limits_data.get("limits", {}), blocking_of(limits_data)
+    if args.judge:
+        return judge_saved(Path(args.judge), limits, blocking)
+    if not args.kwnt:
+        ap.error("--kwnt is required (or --judge a saved results file)")
 
     kwnt = Path(args.kwnt).resolve()
     if not kwnt.is_file():
         sys.exit(f"no kwnt binary at {kwnt}")
     if not sys.platform.startswith("linux"):
         sys.exit("perf_budget.py reads /proc, so it runs on Linux only")
-    limits_path = Path(args.limits)
-    limits = json.loads(limits_path.read_text()).get("limits", {}) if limits_path.is_file() else {}
     browser = find_browser(args.browser)
     skipped = {}
     diagnosis = None
@@ -478,7 +496,7 @@ def main():
             browser = None  # Chrome cannot start here: the remaining runs do not try it again
 
     medians = {k: median([r.get(k) for r in runs]) for k in MEASURES}
-    rows = judge(medians, limits, skipped)
+    rows = judge(medians, limits, skipped, blocking)
     print("\n" + table(rows))
 
     results = {
@@ -503,12 +521,30 @@ def main():
             "baseline": baseline,
             "baseline_from": {"date": results["when"], "runs": args.runs, "kwnt": kwnt.name},
             "limits": compute_limits(baseline),
+            "blocking": sorted(blocking),
         }, indent=2) + "\n")
         print(f"rewrote {limits_path}")
         return 0
+    return report_exit(rows)
+
+
+def report_exit(rows):
     code = exit_code(rows)
-    print("performance budget: " + ("FAILED, a median is over its limit" if code else "ok"))
+    warned = [r["id"] for r in rows if r["status"] == "WARN"]
+    print("performance budget: " + ("FAILED, a blocking median is over its limit" if code else "ok")
+          + (f" (warn only, not blocking: {', '.join(warned)})" if warned else ""))
     return code
+
+
+def judge_saved(path, limits, blocking):
+    """--judge: the medians of a saved results file's samples, judged against today's limits. Runs nothing."""
+    saved = json.loads(path.read_text())
+    samples = saved.get("samples", {})
+    medians = {k: median(samples.get(k) or []) for k in MEASURES}
+    skipped = {"browser_launch_s": saved["browser_skip"]} if saved.get("browser_skip") else {}
+    rows = judge(medians, limits, skipped, blocking)
+    print(f"judging {path} (no kwnt run)\n" + table(rows))
+    return report_exit(rows)
 
 
 if __name__ == "__main__":
