@@ -2,6 +2,8 @@
 // card say what a bot does in words ("opening a pull request on GitHub"), never the raw
 // `create_pull_request (github)`. A tool we don't know falls back to its name with spaces.
 
+import { shellWords } from './shellWords';
+
 /** How a few well-known servers are written. Others are shown as they come. */
 const SERVERS: Record<string, string> = {
   github: 'GitHub',
@@ -53,13 +55,40 @@ const VERBS: Record<string, Verb> = {
   read_file: ['reading a file', 'read a file'],
   write_file: ['writing a file', 'write a file'],
   edit_file: ['changing a file', 'change a file'],
+  // specific-step-titles: Claude Code's and Codex's other built-ins, so no step reads "Using ToolSearch"
+  toolsearch: ['finding the right tool', 'find the right tool'],
+  todowrite: ['updating its to-do list', 'update its to-do list'],
+  update_plan: ['updating its plan', 'update its plan'],
+  exitplanmode: ['sharing its plan', 'share its plan'],
+  search_files: ['searching the files', 'search the files'],
+  find_files: ['looking for files', 'look for files'],
+  list_dir: ['listing files', 'list files'],
+  ask_helper: ['asking a helper', 'ask a helper'],
+  notebookedit: ['changing a notebook', 'change a notebook'],
+  apply_patch: ['changing files', 'change files'],
+  bashoutput: ['checking a running command', 'check a running command'],
+  killshell: ['stopping a running command', 'stop a running command'],
+  killbash: ['stopping a running command', 'stop a running command'],
+  use_skill: ['using a skill', 'use a skill'],
 };
 
 /**
  * Claude's own built-in names and the key they read as (tool_words.rs `BUILT_IN_ALIASES`, 33u). Only for a
- * built-in (no server): an MCP server's own `read` tool isn't Claude's Read.
+ * built-in (no server): an MCP server's own `read` or `task` tool isn't Claude's Read or Task.
  */
-const BUILT_IN_ALIASES: Record<string, string> = { read: 'read_file', write: 'write_file', edit: 'edit_file', multiedit: 'edit_file' };
+const BUILT_IN_ALIASES: Record<string, string> = {
+  read: 'read_file',
+  write: 'write_file',
+  edit: 'edit_file',
+  multiedit: 'edit_file',
+  // specific-step-titles: names a server's own tool could share, so only for a built-in
+  glob: 'find_files',
+  grep: 'search_files',
+  ls: 'list_dir',
+  task: 'ask_helper',
+  agent: 'ask_helper',
+  skill: 'use_skill',
+};
 
 /**
  * Claude Code's bundled browser tools, `agent_browser_<x>` (seen as `mcp__browser__agent_browser_snapshot`), 33u:
@@ -345,20 +374,26 @@ function plainHost(dest: string): string | null {
 const NO_CONNECT = /connection (timed out|refused|reset|closed)|could not resolve|no route to host|network is unreachable|operation timed out|connect to host|timed out/i;
 
 /**
- * 36a: a shell step's title in words, with the host it ran on when it is ssh ("Running a command on 203.0.113.66").
- * A step the bot retried after says what happened: "A command on 203.0.113.66 didn't connect, so Quant tried again".
- * `host` is set so the row can set it in bold. Null for any other step (its title stays as readableStepTitle makes it).
+ * A shell step's title in words, specific enough to tell rows apart (specific-step-titles, Nov 25): "Checking git
+ * status", "Reading config.toml", "Restarting trailhead-shop on 203.0.113.66"; an unknown program reads "Running
+ * <program>", and "Running a command" only when nothing plain is readable (shellWords.ts). The exact command stays
+ * behind "Show command". A step the bot retried after says what happened (36a): "A command on 203.0.113.66 didn't
+ * connect, so Quant tried again". `host` is set so the row can set it in bold. Null for any other step (its title
+ * stays as readableStepTitle makes it).
  */
 export function plainShellTitle(step: { title: string; detail?: string }, retried = false, who?: string): { text: string; host: string | null } | null {
   const cmd = shellCommandOf(step.title);
   if (!cmd) return null;
-  const host = sshHost(cmd);
   if (retried) {
+    const host = sshHost(cmd);
     const verb = NO_CONNECT.test(step.detail ?? '') ? 'didn’t connect' : 'didn’t work';
     const name = who?.trim() || 'the bot';
     return { text: `${host ? `A command on ${host}` : 'A command'} ${verb}, so ${name} tried again`, host };
   }
-  return { text: host ? `Running a command on ${host}` : 'Running a command', host };
+  // The whole command when the step carries it (running or done); a failed step's detail is its error, so then the
+  // title's, which the server cuts at 80 with "…".
+  const full = shellCommandText(step) ?? cmd;
+  return shellWords(full, full === cmd && cmd.endsWith('…'));
 }
 
 /**

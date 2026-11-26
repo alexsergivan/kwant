@@ -39,8 +39,8 @@ test('36d: a shell step names the host in bright type, draws the command glyph, 
     { id: 's2', kind: 'tool', status: 'running', title: 'Running `ssh root@203.0.113.66 ls state/`', started_at: '2026-11-25T00:00:03Z' },
   ] };
   const html = scene('Quant', { live, idBase: 'live-t1', footer: 'Runs on Claude Code CLI · this machine' });
-  assert.match(html, /data-scene-line=""><span class="font-medium text-zinc-50">Quant<\/span> is running a command on <span class="font-medium text-zinc-50">203\.0\.113\.66<\/span><\/p>/);
-  assert.match(html, /data-scene-said="">Quant is running a command on 203\.0\.113\.66\.<\/p>/);
+  assert.match(html, /data-scene-line=""><span class="font-medium text-zinc-50">Quant<\/span> is listing files in state on <span class="font-medium text-zinc-50">203\.0\.113\.66<\/span><\/p>/, 'specific-step-titles: the scene says what the command does, as its row does');
+  assert.match(html, /data-scene-said="">Quant is listing files in state on 203\.0\.113\.66\.<\/p>/);
   assert.match(html, /data-glyph="command"/);
   for (const [x, y] of [[19, 8], [20, 9], [19, 10]]) assert.match(html, new RegExp(`<rect x="${x}" y="${y}" width="1" height="1" fill="var\\(--kw-wa-type\\)"`));
   assert.match(html, /class="kw-wa-l kw-wa-l1" x="22" y="9" width="9"/);

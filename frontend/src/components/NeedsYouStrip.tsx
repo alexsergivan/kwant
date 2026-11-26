@@ -330,7 +330,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
           data-strip-dismiss
           disabled={clearing || leaving}
           aria-busy={clearing || undefined}
-          aria-label="Done, clear it from Needs attention"
+          aria-label="Done, clear it from Needs you"
           onClick={() => void clear()}
           className={`kw-btn-ghost ${btnH} ${phone ? 'flex-1' : ''} disabled:opacity-60 disabled:cursor-default`}
         >

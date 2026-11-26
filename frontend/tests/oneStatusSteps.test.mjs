@@ -79,7 +79,8 @@ test('(a) saved: "Retried" when the bot went on, rose "Failed" when the turn end
   assert.match(ended, /lucide-list-tree[^"]*text-rose-300/, 'the summary icon is rose only here');
   assert.match(text(ended), /1 step · 1 failed/);
   assert.doesNotMatch(text(ended), /retried|tried again/);
-  assert.match(text(ended), /Running a command on 203\.0\.113\.66/);
+  // specific-step-titles: the failed step's title is cut at 80, so its half-read cp says "Copying files"
+  assert.match(text(ended), /Copying files on 203\.0\.113\.66/);
   assert.equal(m.activitySummary({ steps: [sshFailed, sshOk, { ...sshFailed, id: 's4' }], dropped: 0 }), 'Worked 0:07 · 3 steps · 1 failed · 1 retried');
 });
 
@@ -91,7 +92,7 @@ test('(b) the phone row reads "Steps · 2 · 1 retried", with no red mark', () =
   assert.doesNotMatch(text(clean), /retried/);
 });
 
-test('(c) shell titles in words: ssh names its host; other commands say "Running a command"; non-shell steps unchanged', () => {
+test('(c) shell titles in words: ssh names its host; other commands say what they do (specific-step-titles); non-shell steps unchanged', () => {
   assert.equal(m.sshHost(SSH), '203.0.113.66');
   assert.equal(m.sshHost('ssh -p 2222 -i ~/.ssh/k deploy@box.example.com uptime'), 'box.example.com');
   assert.equal(m.sshHost('ssh -tt ops@[2001:db8::1]:22 ls'), '2001:db8::1');
@@ -99,8 +100,8 @@ test('(c) shell titles in words: ssh names its host; other commands say "Running
   assert.equal(m.sshHost('ssh -o ConnectTimeout=30'), null, 'no host');
   assert.equal(m.sshHost('scp a b'), null);
   assert.equal(m.sshHost('ssh "$HOST" ls'), null, 'not a plain host: words only');
-  assert.deepEqual(m.plainShellTitle({ title: titleOf(SSH) }), { text: 'Running a command on 203.0.113.66', host: '203.0.113.66' });
-  assert.deepEqual(m.plainShellTitle({ title: 'Running `cargo test -q`' }), { text: 'Running a command', host: null });
+  assert.deepEqual(m.plainShellTitle({ title: titleOf(SSH), detail: SSH }), { text: 'Copying trend-state.json on 203.0.113.66', host: '203.0.113.66' });
+  assert.deepEqual(m.plainShellTitle({ title: 'Running `cargo test -q`' }), { text: 'Running tests', host: null });
   assert.equal(m.plainShellTitle({ title: 'Running `npm test`', detail: 'exit 1' }, true).text, 'A command didn’t work, so the bot tried again');
   assert.equal(m.plainShellTitle({ title: 'Opening github.com' }), null);
   const html = m.saved({ activity: { steps: [{ id: 'w', kind: 'tool', tool: 'WebFetch', status: 'ok', title: 'Opening github.com', started_at: at(0) }], dropped: 0 }, idBase: 'x', defaultOpen: true });

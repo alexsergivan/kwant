@@ -64,11 +64,39 @@ const VERBS: &[Verb] = &[
     ("read_file", "reading a file", "read a file", false),
     ("write_file", "writing a file", "write a file", false),
     ("edit_file", "changing a file", "change a file", false),
+    // specific-step-titles: Claude Code's and Codex's other built-ins, so no step reads "using ToolSearch"
+    ("toolsearch", "finding the right tool", "find the right tool", false),
+    ("todowrite", "updating its to-do list", "update its to-do list", false),
+    ("update_plan", "updating its plan", "update its plan", false),
+    ("exitplanmode", "sharing its plan", "share its plan", false),
+    ("search_files", "searching the files", "search the files", false),
+    ("find_files", "looking for files", "look for files", false),
+    ("list_dir", "listing files", "list files", false),
+    ("ask_helper", "asking a helper", "ask a helper", false),
+    ("notebookedit", "changing a notebook", "change a notebook", false),
+    ("apply_patch", "changing files", "change files", false),
+    ("bashoutput", "checking a running command", "check a running command", false),
+    ("killshell", "stopping a running command", "stop a running command", false),
+    ("killbash", "stopping a running command", "stop a running command", false),
+    ("use_skill", "using a skill", "use a skill", false),
 ];
 
 /// Claude's own built-in names and the key they read as (toolLabel.ts `BUILT_IN_ALIASES`). Only
 /// for a built-in: an MCP server's own `read` tool isn't claude's Read.
-const BUILT_IN_ALIASES: &[(&str, &str)] = &[("read", "read_file"), ("write", "write_file"), ("edit", "edit_file"), ("multiedit", "edit_file")];
+/// specific-step-titles: `glob`, `grep`, `ls`, `task`, `agent` and `skill` too, names a server's
+/// own tool could share.
+const BUILT_IN_ALIASES: &[(&str, &str)] = &[
+    ("read", "read_file"),
+    ("write", "write_file"),
+    ("edit", "edit_file"),
+    ("multiedit", "edit_file"),
+    ("glob", "find_files"),
+    ("grep", "search_files"),
+    ("ls", "list_dir"),
+    ("task", "ask_helper"),
+    ("agent", "ask_helper"),
+    ("skill", "use_skill"),
+];
 
 /// Claude Code's bundled browser tools, `agent_browser_<x>` (seen as
 /// `mcp__browser__agent_browser_snapshot`), 33u: `<x>` reads as `browser_<x>` when that key exists,
@@ -250,7 +278,22 @@ mod tests {
             ("mcp__browser__agent_browser_snapshot", None, "reading the browser page"),
             ("mcp__browser__agent_browser_open", None, "opening a page"),
             ("mcp__browser__agent_browser_tab_new", None, "using the browser"),
-            ("Task", None, "using Task"),
+            // specific-step-titles: Claude Code's other built-ins read as what they do too
+            ("Task", None, "asking a helper"),
+            ("Agent", None, "asking a helper"),
+            ("ToolSearch", None, "finding the right tool"),
+            ("TodoWrite", None, "updating its to-do list"),
+            ("Glob", None, "looking for files"),
+            ("Grep", None, "searching the files"),
+            ("LS", None, "listing files"),
+            ("NotebookEdit", None, "changing a notebook"),
+            ("BashOutput", None, "checking a running command"),
+            ("KillShell", None, "stopping a running command"),
+            ("apply_patch", None, "changing files"),
+            ("update_plan", None, "updating its plan"),
+            // ...but a server's own `task` or `grep` keeps its name
+            ("mcp__linear__task", None, "using task (linear)"),
+            ("grep", Some("fs"), "using grep (fs)"),
             ("apply-patch", None, "using apply patch"),
             ("", None, "using a tool"),
             ("mcp__x____", None, "using a tool (x)"),
