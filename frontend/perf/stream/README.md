@@ -54,3 +54,16 @@ node perf/stream/typing.mjs --n 100 --width 390 --motion no-preference
 node perf/stream/typing.mjs --n 14 --results 0               # a short chat, to compare
 node perf/stream/typing.mjs --dist /path/to/other/dist ...   # another build (before and after on one machine)
 ```
+
+## The UI budget in CI (ui-perf-budget)
+
+CI job `ui-perf` runs `perf/ui_budget.mjs`: this harness 3 times (`--n 300 --tokens 2000 --rate 50`, median of
+commitsPerSecond and p95FrameMs, lastWordsShown in every run) plus the gzip size of the app and the guest page from the
+normal build, against `perf/ui_budget.json`. Over a limit fails the job. Numbers and how the limits were set:
+autonomy/ui-perf-budget/impl.md. To set new limits, run the job with `--calibrate` on 3 runners and take the median.
+
+```sh
+cd frontend
+npm run build && npx vite build --config perf/stream/vite.config.mts   # on the team server: through bin/heavy
+node perf/ui_budget.mjs --dist dist --out results.json                  # PLAYWRIGHT_CORE, CHROMIUM as above
+```
