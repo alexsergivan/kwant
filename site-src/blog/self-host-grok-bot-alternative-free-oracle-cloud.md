@@ -260,6 +260,8 @@ If you already have bots in Grok Bot, you do not have to start over. kwant has t
 
 Either way, nothing is created until you check the preview and press **Import**. Coming from somewhere else? The same dialog also brings a custom GPT or ChatGPT Project, a Claude Project, or any other bot.
 
+Still choosing where to move? See [open-source Grok Bot alternatives compared](https://kwant.si/alternatives/grok-bot#open-source), with kwant, Rakazo, OpenClaw and Hermes Agent side by side.
+
 <figure>
   <div class="frame"><img src="{{root}}assets/media/oracle-free-kwant-import.webp" width="1200" height="1056" loading="lazy" decoding="async" alt="kwant's Import bots dialog: Bring a bot from Grok, ChatGPT, Claude or another app, or upload a file such as a Grok Bot export"></div>
   <figcaption>Settings → This space → Import & export → Import bots. From our test run.</figcaption>
