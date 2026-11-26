@@ -194,6 +194,11 @@ jobs:
     runs-on: ubuntu-latest
     needs: frontend
     timeout-minutes: 45
+    # THROWAWAY (probe draft): 3 samples on 3 machines for the limits; sample 1 also profiles the heap
+    strategy:
+      fail-fast: false
+      matrix:
+        sample: [1, 2, 3]
     steps:
       - uses: actions/checkout@v4
         with:
@@ -229,8 +234,28 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           # one per attempt, so a re-run (another sample for the limits) keeps the earlier file
-          name: perf-results-release-${{ github.run_attempt }}
+          name: perf-results-release-${{ github.run_attempt }}-s${{ matrix.sample }}
           path: ${{ runner.temp }}/perf-results-release.json
+          if-no-files-found: ignore
+          retention-days: 30
+      # THROWAWAY (probe draft): A3, one heaptrack profile of the same release kwnt at idle
+      - name: Heap profile (heaptrack, idle)
+        if: always() && matrix.sample == 1
+        continue-on-error: true
+        timeout-minutes: 15
+        run: |
+          sudo apt-get update -q && sudo apt-get install -y -q heaptrack
+          python3 scripts/heap_probe.py target/release/kwnt "$RUNNER_TEMP/heap"
+          f=$(ls "$RUNNER_TEMP"/heap/kwnt-idle*.zst "$RUNNER_TEMP"/heap/kwnt-idle*.gz 2>/dev/null | head -1)
+          heaptrack_print --print-leaks 1 --print-peaks 1 --print-temporary 0 --print-allocators 0 -n 25 -s 12 "$f" > "$RUNNER_TEMP/heap/heaptrack-print.txt" || true
+          heaptrack_print --print-leaks 1 --print-peaks 0 --print-allocators 0 --merge-backtraces 0 -n 40 -s 0 "$f" > "$RUNNER_TEMP/heap/heaptrack-leaks-flat.txt" || true
+          tail -c 20000 "$RUNNER_TEMP/heap/heaptrack-print.txt"
+      - name: Heap profile results
+        if: always() && matrix.sample == 1
+        uses: actions/upload-artifact@v4
+        with:
+          name: heap-profile-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/heap
           if-no-files-found: ignore
           retention-days: 30
 
