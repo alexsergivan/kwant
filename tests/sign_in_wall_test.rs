@@ -251,3 +251,111 @@ async fn a_turn_that_never_opened_the_browser_asks_nothing() {
     send(&env, &bot, "just say hi").await;
     assert!(steps_of(&env, &bot, None).await.is_empty());
 }
+
+/// Answers every request with 401, like an MCP server refusing the key saved for it.
+async fn refusing_mcp() -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((mut stream, _)) = listener.accept().await {
+            tokio::spawn(async move {
+                let mut buf = [0u8; 8192];
+                let _ = stream.read(&mut buf).await;
+                let reply = "HTTP/1.1 401 Unauthorized\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}";
+                let _ = stream.write_all(reply.as_bytes()).await;
+            });
+        }
+    });
+    format!("http://127.0.0.1:{port}/mcp/")
+}
+
+/// Oleks's `github` server: one key header, in the bots' space.
+async fn github_server(env: &Env) -> String {
+    let mut headers = std::collections::BTreeMap::new();
+    headers.insert("X-API-Key".to_string(), "old-key-123".to_string());
+    let server = kwnt::db::models::McpServer {
+        id: String::new(),
+        name: "github".into(),
+        transport: "http".into(),
+        command: None,
+        args: Vec::new(),
+        url: Some(refusing_mcp().await),
+        env: Default::default(),
+        headers,
+        enabled: true,
+        timeout_secs: 5,
+        created_at: None,
+    };
+    env.state.db.create_mcp_server(&kwnt::db::spaces::SpaceId::default_space(), &server).await.unwrap().id
+}
+
+/// The login page on a "github" host: Chrome sends any *.localhost name to this machine.
+fn github_login(env: &Env) -> String {
+    format!("{}/login", env.site.replace("127.0.0.1", "github.localhost"))
+}
+
+/// sign-in-wall-uses-tools B (failing tools) and D: the bot has a `github` server whose saved key
+/// is refused, and its turn ends on github's sign-in page. The person isn't asked to sign in in the
+/// browser: one step names the real problem and where to fix it, and holds no browser page. Their
+/// typed reply ("you have github mcp access!") closes it, and the turn that reply starts, ending on
+/// the same wall, doesn't ask again.
+#[tokio::test]
+async fn a_sign_in_wall_on_a_site_whose_tools_fail_asks_to_fix_the_tools_not_to_sign_in() {
+    let Some(env) = setup().await else { return };
+    let bot = add_bot(&env, "Arch").await;
+    github_server(&env).await;
+    std::fs::write(behave_dir().join("Arch.curl"), github_login(&env)).unwrap();
+    send(&env, &bot, "open the PR on github").await;
+    assert_eq!(read("Arch", "status"), "200", "the bot opened the page");
+
+    let all = steps_of(&env, &bot, None).await;
+    assert_eq!(all.len(), 1, "{all:?}");
+    let step = &all[0];
+    assert_eq!((step.kind.as_str(), step.source.as_str(), step.status.as_str()), ("other", "auto", "open"));
+    assert_eq!(
+        step.reason,
+        "Arch's github tools can't connect: the key saved for github was rejected. Put a new key in Tools › MCP servers, then press Done."
+    );
+    assert!(!step.reason.contains("old-key-123"));
+    assert_eq!((step.page_key.as_deref(), step.sandbox_target.as_deref()), (None, None), "not a browser step");
+    let page = kwnt::server::browser_pages::job_page_key(&bot, &bot, &bot).unwrap();
+    assert!(!kwnt::server::human_steps::browser_is_held(&env.state, &page).await, "the bot keeps its browser");
+    let card = env.state.db.get_message(step.message_id.as_deref().unwrap()).await.unwrap().unwrap();
+    assert!(card.text.starts_with("Your help is needed: Arch's github tools can't connect"), "{}", card.text);
+    assert!(!card.text.contains("browser panel"), "{}", card.text);
+
+    // The person answers in words: the card closes, and the new turn (on the same wall) asks nothing
+    send(&env, &bot, "you have github mcp access!").await;
+    let all = steps_of(&env, &bot, None).await;
+    assert_eq!(all.len(), 1, "no second ask within 12 h: {all:?}");
+    assert_eq!(all[0].status, "left_for_message");
+}
+
+/// sign-in-wall-uses-tools B (working tools): the turn ends on github's sign-in page, and the bot's
+/// `github` server works (its last test passed). No card: one follow-up turn tells the bot to use
+/// the tools. That turn ends on the same wall too, and no further turn starts.
+#[tokio::test]
+async fn a_sign_in_wall_on_a_site_whose_tools_work_starts_one_follow_up_turn() {
+    let Some(env) = setup().await else { return };
+    let bot = add_bot(&env, "Gus").await;
+    let server = github_server(&env).await;
+    kwnt::server::connections::record_mcp_check(&server, &json!({"ok": true}));
+    std::fs::write(behave_dir().join("Gus.curl"), github_login(&env)).unwrap();
+    send(&env, &bot, "open the PR on github").await;
+    let follow_up = "[Your browser stopped at github.localhost's sign-in page]\nYou have the `github` tools for github.localhost";
+    for _ in 0..300 {
+        if read("Gus", "prompt").contains(follow_up) {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert!(read("Gus", "prompt").contains(follow_up), "{}", read("Gus", "prompt"));
+    assert!(read("Gus", "prompt").contains("request_human_step"));
+    settle(&env).await;
+    // The follow-up ended on the same wall: no further turn, and never a sign-in card
+    std::fs::remove_file(behave_dir().join("Gus.prompt")).unwrap();
+    tokio::time::sleep(Duration::from_secs(2)).await;
+    settle(&env).await;
+    assert!(read("Gus", "prompt").is_empty(), "a second follow-up started: {}", read("Gus", "prompt"));
+    assert!(steps_of(&env, &bot, None).await.is_empty(), "{:?}", steps_of(&env, &bot, None).await);
+}

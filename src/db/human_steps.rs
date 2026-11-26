@@ -368,6 +368,37 @@ impl Database {
         Ok(n > 0)
     }
 
+    /// sign-in-wall-uses-tools B: whether kwnt asked the person to fix this bot's tools for `site`
+    /// (its scheme, host and port, see [`sign_in_site`]) since `since`. Per bot, not per page: the
+    /// fix is in Tools, whichever page met the wall.
+    pub async fn tools_step_asked_since(&self, kwant_id: &str, site: &str, since: DateTime<Utc>) -> Result<bool, DbError> {
+        let n: i64 = sqlx::query_scalar(
+            "SELECT COUNT(*) FROM human_steps WHERE kind = 'other' AND source = 'auto' AND kwant_id = ?1 \
+             AND substr(url, 1, length(?2)) = ?2 AND created_at >= ?3",
+        )
+        .bind(kwant_id)
+        .bind(site)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(n > 0)
+    }
+
+    /// sign-in-wall-uses-tools D: the open steps kwnt raised by itself (`source = 'auto'`) for a
+    /// sign-in in one chat of one bot (`chat`: the thread, else the channel, else the 1:1, as
+    /// `human_steps::chat_key`): a sign-in, a sign-in code, or the tools step of a covered wall.
+    /// Never a CAPTCHA, and never a step the bot asked for.
+    pub async fn open_auto_sign_in_steps(&self, kwant_id: &str, chat: &str) -> Result<Vec<HumanStep>, DbError> {
+        Ok(sqlx::query_as::<_, HumanStep>(
+            "SELECT * FROM human_steps WHERE status = 'open' AND source = 'auto' AND kind IN ('sign_in', 'two_factor', 'other') \
+             AND kwant_id = ?1 AND COALESCE(thread_id, channel_id, direct_kwant_id) = ?2 ORDER BY created_at",
+        )
+        .bind(kwant_id)
+        .bind(chat)
+        .fetch_all(&self.pool)
+        .await?)
+    }
+
     /// The open steps of one turn.
     pub async fn open_human_steps_for_turn(&self, turn_id: &str) -> Result<Vec<HumanStep>, DbError> {
         Ok(sqlx::query_as::<_, HumanStep>("SELECT * FROM human_steps WHERE status = 'open' AND turn_id = ?")
@@ -443,6 +474,75 @@ mod tests {
         assert!(!db.sign_in_asked_since("k", "https://www.tiktok.com/", hour_ago).await.unwrap());
         assert!(!db.sign_in_asked_since("k#job1", "https://x.com/", hour_ago).await.unwrap());
         assert!(!db.sign_in_asked_since("k#job1", "https://www.tiktok.com/", Utc::now() + chrono::Duration::hours(1)).await.unwrap());
+    }
+
+    /// sign-in-wall-uses-tools B: the "fix your tools" step is asked once per bot and site in the
+    /// window, whatever page met the wall, and a browser sign-in step doesn't count for it.
+    #[tokio::test]
+    async fn a_failing_tools_step_is_asked_once_per_bot_and_site() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let place = |kwant: &str, turn: &str| HumanStepPlace {
+            kwant_id: kwant.into(),
+            direct_kwant_id: Some(kwant.into()),
+            turn_id: Some(turn.into()),
+            ..Default::default()
+        };
+        let hour_ago = Utc::now() - chrono::Duration::hours(1);
+        let gh = "https://github.com/";
+        db.create_human_step_with_card(&place("k", "t0"), "sign_in", "Sign in", Some("https://github.com/login"), None, "auto", |_| None)
+            .await
+            .unwrap();
+        assert!(!db.tools_step_asked_since("k", gh, hour_ago).await.unwrap(), "a browser sign-in isn't the tools step");
+        db.create_human_step_with_card(&place("k", "t1"), "other", "Fix the key", Some("https://github.com/login"), None, "bot", |_| None)
+            .await
+            .unwrap();
+        assert!(!db.tools_step_asked_since("k", gh, hour_ago).await.unwrap(), "a step the bot asked for isn't either");
+        let (s, _, _) = db
+            .create_human_step_with_card(&place("k", "t2"), "other", "Fix the key", Some("https://github.com/login"), None, "auto", |_| None)
+            .await
+            .unwrap();
+        assert!(db.tools_step_asked_since("k", gh, hour_ago).await.unwrap());
+        assert!(db.close_human_step(&s.id, "done").await.unwrap());
+        assert!(db.tools_step_asked_since("k", gh, hour_ago).await.unwrap(), "answered still counts");
+        assert!(!db.tools_step_asked_since("other-bot", gh, hour_ago).await.unwrap());
+        assert!(!db.tools_step_asked_since("k", "https://gitlab.com/", hour_ago).await.unwrap());
+        assert!(!db.tools_step_asked_since("k", gh, Utc::now() + chrono::Duration::hours(1)).await.unwrap());
+    }
+
+    /// sign-in-wall-uses-tools D: a chat's open auto sign-in steps are its bot's own, in that
+    /// chat, raised by kwnt, and never a CAPTCHA.
+    #[tokio::test]
+    async fn a_chats_auto_sign_in_steps_are_found_by_bot_and_chat() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let dm = |kwant: &str, turn: &str| HumanStepPlace {
+            kwant_id: kwant.into(),
+            direct_kwant_id: Some(kwant.into()),
+            turn_id: Some(turn.into()),
+            ..Default::default()
+        };
+        let in_thread = |turn: &str| HumanStepPlace { thread_id: Some("th".into()), channel_id: Some("c".into()), ..dm("k", turn) };
+        let make = |place: HumanStepPlace, kind: &'static str, source: &'static str| {
+            let db = db.clone();
+            async move { db.create_human_step_with_card(&place, kind, "Do it", None, None, source, |_| None).await.unwrap().0 }
+        };
+        let sign_in = make(dm("k", "t1"), "sign_in", "auto").await;
+        let code = make(dm("k", "t2"), "two_factor", "auto").await;
+        let tools = make(dm("k", "t3"), "other", "auto").await;
+        let captcha = make(dm("k", "t4"), "captcha", "auto").await;
+        let asked = make(dm("k", "t5"), "sign_in", "bot").await;
+        make(dm("k2", "t6"), "sign_in", "auto").await;
+        let ids = |v: Vec<HumanStep>| v.into_iter().map(|s| s.id).collect::<Vec<_>>();
+        assert_eq!(ids(db.open_auto_sign_in_steps("k", "k").await.unwrap()), [sign_in.id.clone(), code.id, tools.id]);
+        // (a bot has at most MAX_OPEN_PER_KWANT open steps: room for the thread's)
+        assert!(db.close_human_step(&captcha.id, "done").await.unwrap());
+        assert!(db.close_human_step(&asked.id, "done").await.unwrap());
+        let thread = make(in_thread("t7"), "sign_in", "auto").await;
+        assert_eq!(ids(db.open_auto_sign_in_steps("k", "th").await.unwrap()), [thread.id]);
+        assert!(db.open_auto_sign_in_steps("k", "c").await.unwrap().is_empty(), "a thread's step isn't its channel's");
+        assert!(db.close_human_step(&sign_in.id, "done").await.unwrap());
+        assert_eq!(db.open_auto_sign_in_steps("k", "k").await.unwrap().len(), 2, "closed ones are gone");
     }
 
     #[test]

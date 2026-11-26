@@ -415,3 +415,43 @@ async fn a_file_wakes_only_the_wait_in_its_own_thread() {
     wait_reply(&env, &thread.id, "answer t2").await;
     assert!(invocations_with("REPLYTAG:t2").iter().any(|p| p.contains("[Attached files]") && p.contains(&format!("id {file}"))));
 }
+
+/// sign-in-wall-uses-tools D: the person types in a bot's chat while sign-in cards kwnt raised by
+/// itself are up there and no turn waits on them ("you have github mcp access!"). Those close as
+/// `left_for_message`, so the "needs you" strip clears. A step the bot asked for, a CAPTCHA, a
+/// step in another chat of the bot, and another bot's step stay open. (A step a turn still waits
+/// on stays open on typed text: `a_file_sent_in_the_chat_returns_the_turn_waiting_on_its_step`.)
+#[tokio::test]
+async fn typed_text_closes_the_sign_in_cards_kwnt_raised_that_nobody_waits_on() {
+    use kwnt::db::human_steps::HumanStepPlace;
+    let env = setup().await;
+    let thread = env.state.db.create_thread(&env.a, "Elsewhere", "chat", None, "user").await.unwrap();
+    let dm = |kwant: &str, turn: &str| HumanStepPlace {
+        kwant_id: kwant.into(),
+        direct_kwant_id: Some(kwant.into()),
+        turn_id: Some(turn.into()),
+        ..Default::default()
+    };
+    let make = |place: HumanStepPlace, kind: &'static str, source: &'static str| {
+        let db = env.state.db.clone();
+        async move { db.create_human_step_with_card(&place, kind, "Sign in to github.com", None, None, source, |_| None).await.unwrap().0.id }
+    };
+    let sign_in = make(dm(&env.a, "ended-1"), "sign_in", "auto").await;
+    let tools = make(dm(&env.a, "ended-2"), "other", "auto").await;
+    let captcha = make(dm(&env.a, "ended-3"), "captcha", "auto").await;
+    let asked = make(dm(&env.a, "ended-4"), "sign_in", "bot").await;
+    let in_thread = make(HumanStepPlace { thread_id: Some(thread.id.clone()), ..dm(&env.a, "ended-5") }, "sign_in", "auto").await;
+    let other_bot = make(dm(&env.b, "ended-6"), "sign_in", "auto").await;
+
+    send_direct(&env, &env.a, "you have github mcp access! REPLYTAG:d1", json!({})).await;
+    for (id, status) in [
+        (&sign_in, "left_for_message"),
+        (&tools, "left_for_message"),
+        (&captcha, "open"),
+        (&asked, "open"),
+        (&in_thread, "open"),
+        (&other_bot, "open"),
+    ] {
+        assert_eq!(step(&env, id).await["step"]["status"], status, "{id}");
+    }
+}

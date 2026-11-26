@@ -4412,7 +4412,8 @@ async fn run_kwant_turn_inner(
                 Box::pin(super::busy_retry::after_turn(scope, target_kwant, &park_prompt, step, opts.busy_retries)).await;
             } else if !continues && !opts.no_tools && stop_asks(scope, &opts) {
                 let probe = super::human_steps::ask_for_sign_in_wall(state, &turn_scope, &turn_page);
-                let _ = tokio::time::timeout(std::time::Duration::from_secs(10), probe).await;
+                // 15 s: a covered site may test its MCP server first (bounded at 6 s)
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(15), probe).await;
             }
             return Ok(reply_text);
         }
@@ -5389,9 +5390,17 @@ fn direct_chat(payload: &SendChatPayload) -> Option<&str> {
 /// `left_for_message`), so this message's turn isn't held behind the wait for up to 290 s. Only a
 /// message with files from the person wakes it: typed text ("signing in now…") must not take the
 /// browser back from someone mid sign-in, so it waits as before (H3).
+///
+/// sign-in-wall-uses-tools D: any message the person types there also closes the sign-in steps
+/// kwnt raised by itself that no turn waits on ("you have github mcp access!" answers the card),
+/// and a sign-in wall in the turns it starts may get its own tools follow-up again.
 async fn file_wakes_browser_wait(state: &AppState, kwant_id: &str, chat: Option<&str>, has_files: bool, from_person: bool) {
-    let Some(chat) = chat.filter(|_| has_files && from_person) else { return };
-    super::human_steps::wake_chat(state, kwant_id, chat).await;
+    let Some(chat) = chat.filter(|_| from_person) else { return };
+    if has_files {
+        super::human_steps::wake_chat(state, kwant_id, chat).await;
+    }
+    super::human_steps::close_unwaited_auto_steps(state, kwant_id, chat).await;
+    super::wall_tools::forget_chat(kwant_id, chat);
 }
 
 /// Holds a chat or 1:1 message to `kwant` while it is stuck or waits on the person elsewhere (H3).

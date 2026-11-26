@@ -42,6 +42,7 @@ pub mod questions;
 pub mod activity;
 pub mod bot_status;
 pub mod human_steps;
+pub mod wall_tools;
 pub mod browser_pages;
 pub mod skills;
 pub mod spaces;

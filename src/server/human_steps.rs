@@ -518,6 +518,9 @@ async fn raise_step(
             }
             text.push_str(if s.kind == "captcha" {
                 "\n\nSolve it in the browser panel. The bot carries on by itself once the check is gone (or press Done)."
+            } else if is_tools_step(s) {
+                // its reason already says where to fix it and to press Done
+                ""
             } else {
                 "\n\nDo it in the browser panel, then press Done."
             });
@@ -594,8 +597,16 @@ async fn raise_step(
                 kwant_id: scope.kwant_id.clone(),
                 kwant_name: scope.kwant_name.clone(),
                 channel_id: origin.channel_id.clone(),
-                title: format!("{} needs you in the browser", scope.kwant_name),
-                body: format!("{}. Open the chat, do it in the browser panel, then press Done.", kind_label(&step.kind)),
+                title: if is_tools_step(&step) {
+                    format!("{} needs you in Tools", scope.kwant_name)
+                } else {
+                    format!("{} needs you in the browser", scope.kwant_name)
+                },
+                body: if is_tools_step(&step) {
+                    step.reason.clone()
+                } else {
+                    format!("{}. Open the chat, do it in the browser panel, then press Done.", kind_label(&step.kind))
+                },
                 thread_id: step.thread_id.clone(),
                 card_id: None,
             },
@@ -703,6 +714,13 @@ pub async fn ask_for_sign_in_wall(state: &AppState, scope: &SelfScope, page: &st
     let url = crate::db::human_steps::clean_url(&raw)?;
     let site = crate::db::human_steps::sign_in_site(&url)?;
     let host = url::Url::parse(&url).ok()?.host_str()?.trim_start_matches("www.").to_string();
+    // sign-in-wall-uses-tools B: the bot has tools for this site (a `github` server for
+    // github.com): no browser sign-in card. It's told to use them, or the person hears what is
+    // wrong with them
+    let covering = crate::mcp::covers::for_kwant(&state.db, &scope.kwant_id, &host).await;
+    if !covering.is_empty() {
+        return super::wall_tools::on_covered_wall(state, scope, &url, &site, &host, &covering).await;
+    }
     let since = chrono::Utc::now() - chrono::Duration::hours(SIGN_IN_REASK_HOURS);
     if state.db.sign_in_asked_since(page, &site, since).await.unwrap_or(true) {
         return None;
@@ -716,6 +734,29 @@ pub async fn ask_for_sign_in_wall(state: &AppState, scope: &SelfScope, page: &st
         Err(e) => {
             tracing::warn!(kwant_id = %scope.kwant_id, error = %e, "couldn't ask the person to sign in");
             None
+        }
+    }
+}
+
+/// sign-in-wall-uses-tools B: the step kwnt raises when a turn ended on the sign-in page of a site
+/// the bot has tools for, but those tools are failing (kind `other`, source `auto`).
+pub fn is_tools_step(s: &HumanStep) -> bool {
+    s.kind == "other" && s.source == "auto"
+}
+
+/// B: asks the person to fix the bot's failing tools (`reason` says what and where). Not a
+/// browser step: it holds no browser page, so the bot keeps its browser meanwhile; its Done
+/// starts a new turn. Whether it asked.
+pub(super) async fn ask_to_fix_tools(state: &AppState, scope: &SelfScope, reason: &str, url: &str) -> bool {
+    let not_the_browser = SelfScope { sandbox_target: None, ..scope.clone() };
+    match raise_step(state, &not_the_browser, None, "other", reason, Some(url), None, "auto", false).await {
+        Ok(_) => {
+            tracing::info!(kwant_id = %scope.kwant_id, "a turn ended on a sign-in wall its tools cover, but they fail: asked the person to fix them");
+            true
+        }
+        Err(e) => {
+            tracing::warn!(kwant_id = %scope.kwant_id, error = %e, "couldn't ask the person to fix the bot's tools");
+            false
         }
     }
 }
@@ -907,6 +948,11 @@ async fn resume(state: &AppState, s: &HumanStep, outcome: Outcome) {
         return;
     };
     let prompt = match outcome {
+        Outcome::Done if is_tools_step(s) => format!(
+            "[The person fixed your tools in Tools › MCP servers]\nStep: {}\n\nCarry on with the task using those tools rather than the \
+             browser. If they still can't connect, tell the person plainly what the error says.",
+            s.reason
+        ),
         Outcome::Done => format!(
             "[The person did the browser step you asked for earlier]\nStep: {}\n\nLook at the browser page again and continue the task.",
             s.reason
@@ -952,6 +998,26 @@ pub async fn wake_chat(state: &AppState, kwant: &str, chat: &str) -> usize {
         }
     }
     woke
+}
+
+/// sign-in-wall-uses-tools D: the person typed a message to `kwant` in `chat`. The sign-in steps
+/// kwnt raised there by itself (a sign-in, a sign-in code, or the tools step of a covered sign-in
+/// wall) that no turn waits on close as `left_for_message`: the message is their answer, and the
+/// "needs you" strip clears. A step a turn still waits on stays open (H3: typed text doesn't take
+/// the browser back mid sign-in), and so does any step the bot asked for itself. Returns how many
+/// closed.
+pub async fn close_unwaited_auto_steps(state: &AppState, kwant: &str, chat: &str) -> usize {
+    let mut closed = 0;
+    for s in state.db.open_auto_sign_in_steps(kwant, chat).await.unwrap_or_default() {
+        if state.human_steps.is_waiting(&s.id) {
+            continue;
+        }
+        if close(state, &s.id, Outcome::Message.status()).await.is_some() {
+            closed += 1;
+            tracing::info!(human_step_id = %s.id, kwant_id = %kwant, "the person wrote in the chat: closed a sign-in step kwnt raised that nobody waited on");
+        }
+    }
+    closed
 }
 
 /// After a turn was stopped: its open steps are cancelled and the browser handed back.
