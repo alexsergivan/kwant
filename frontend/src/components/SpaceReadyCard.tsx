@@ -62,7 +62,7 @@ export const SpaceReadyCard: React.FC<SpaceReadyCardProps> = ({ spaceName, tile,
     : {
         done: botCount > 0,
         title: 'Add your first bot',
-        detail: `${spaceName}'s #general opens with it.`,
+        detail: '#general opens with it.',
         action: { label: 'New bot', icon: <Bot size={13} />, onClick: onNewBot },
       };
 
@@ -83,7 +83,7 @@ export const SpaceReadyCard: React.FC<SpaceReadyCardProps> = ({ spaceName, tile,
           action: { label: 'Add an account', icon: <KeyRound size={13} />, onClick: onAddAccount },
         },
     botsStep,
-    { done: false, title: 'Message #general', detail: `The best fit answers, only from ${spaceName}'s bots.` },
+    { done: false, title: 'Message #general', detail: `The best fit answers, only from bots in ${spaceName}.` },
   ];
 
   return (
