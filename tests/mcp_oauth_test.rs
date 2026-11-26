@@ -332,6 +332,9 @@ async fn user_authorization_header_wins_over_sign_in() {
     assert_eq!(tested["ok"], false);
     assert!(tested.get("auth_required").is_none(), "{tested}");
     assert!(tested["error"].as_str().unwrap().contains("401"));
+    // sign-in-wall-uses-tools E: it names the refused key, not a sign-in
+    assert!(tested["error"].as_str().unwrap().contains("the key saved for this server was rejected"), "{tested}");
+    assert!(!tested["error"].as_str().unwrap().contains("sign in"), "{tested}");
     assert!(!tested.to_string().contains("user-own-key") && !tested.to_string().contains(&token.access_token));
     assert!(stored_token(&e, &id).await.is_some(), "kwnt's sign-in is kept");
 
@@ -346,6 +349,29 @@ async fn user_authorization_header_wins_over_sign_in() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(updated["oauth"]["connected"], false);
     assert!(stored_token(&e, &id).await.is_none());
+}
+
+/// sign-in-wall-uses-tools E: a server whose only credential is a saved key header (not
+/// `Authorization`) and whose key is refused isn't offered a sign-in: the test names the key.
+#[tokio::test]
+async fn a_refused_key_header_is_a_key_error_not_a_sign_in() {
+    let e = env(oauth_mock::MockOptions::default()).await;
+    let url = format!("{}/mcp", e.mock.base_url);
+    let (status, created) = call(
+        &e.app,
+        "POST",
+        "/api/mcp/servers",
+        Some(json!({"name": "keyed", "transport": "http", "url": url, "headers": {"X-API-Key": "old-key-123"}})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{created}");
+    let id = created["id"].as_str().unwrap();
+    let (_, tested) = call(&e.app, "POST", &format!("/api/mcp/servers/{id}/test"), None).await;
+    assert_eq!(tested["ok"], false);
+    assert!(tested.get("auth_required").is_none(), "{tested}");
+    let error = tested["error"].as_str().unwrap();
+    assert!(error.contains("401") && error.contains("the key saved for this server was rejected"), "{tested}");
+    assert!(!tested.to_string().contains("old-key-123"));
 }
 
 #[tokio::test]
