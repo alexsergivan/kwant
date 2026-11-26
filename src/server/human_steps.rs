@@ -743,7 +743,7 @@ pub async fn ask_for_sign_in_wall(state: &AppState, scope: &SelfScope, page: &st
     // wrong with them
     let covering = crate::mcp::covers::for_kwant(&state.db, &scope.kwant_id, &host).await;
     if !covering.is_empty() {
-        return super::wall_tools::on_covered_wall(state, scope, &url, &site, &host, &covering).await;
+        return Box::pin(super::wall_tools::on_covered_wall(state, scope, &url, &site, &host, &covering)).await;
     }
     let since = chrono::Utc::now() - chrono::Duration::hours(SIGN_IN_REASK_HOURS);
     if state.db.sign_in_asked_since(page, &site, since).await.unwrap_or(true) {

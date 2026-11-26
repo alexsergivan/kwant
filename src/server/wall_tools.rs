@@ -98,7 +98,7 @@ async fn health(state: &AppState, server: &McpServer) -> Health {
     if let Some(h) = cached_health(server, Some(CHECK_FRESH)) {
         return h;
     }
-    match tokio::time::timeout(TEST_LIMIT, super::mcp_routes::run_test(state, server)).await {
+    match tokio::time::timeout(TEST_LIMIT, Box::pin(super::mcp_routes::run_test(state, server))).await {
         Ok(outcome) => health_of(
             outcome["ok"] == Value::Bool(true),
             outcome["auth_required"] == Value::Bool(true),

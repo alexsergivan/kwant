@@ -4411,7 +4411,9 @@ async fn run_kwant_turn_inner(
                 // boxed: inline, its state made this turn's future overflow a test thread's stack
                 Box::pin(super::busy_retry::after_turn(scope, target_kwant, &park_prompt, step, opts.busy_retries)).await;
             } else if !continues && !opts.no_tools && stop_asks(scope, &opts) {
-                let probe = super::human_steps::ask_for_sign_in_wall(state, &turn_scope, &turn_page);
+                // Boxed: a covered wall tests MCP servers and may start a turn, and that state
+                // inline made this turn's future overflow a test thread's stack (#1262 round 6)
+                let probe = Box::pin(super::human_steps::ask_for_sign_in_wall(state, &turn_scope, &turn_page));
                 // 15 s: a covered site may test its MCP server first (bounded at 6 s)
                 let _ = tokio::time::timeout(std::time::Duration::from_secs(15), probe).await;
             }

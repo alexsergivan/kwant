@@ -951,7 +951,7 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
     // sign-in-wall-uses-tools C: the page is on a site the bot has tools for (github.com and a
     // `github` server): say so once per turn and site, before it tries to sign in there
     if !is_error {
-        if let Some(hint) = super::wall_tools::browser_hint(state, scope, page.as_ref()).await {
+        if let Some(hint) = Box::pin(super::wall_tools::browser_hint(state, scope, page.as_ref())).await {
             return (format!("{text}\n\n{hint}"), false);
         }
     }

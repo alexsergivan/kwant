@@ -437,7 +437,14 @@ async fn typed_text_closes_the_sign_in_cards_kwnt_raised_that_nobody_waits_on() 
         async move { db.create_human_step_with_card(&place, kind, "Sign in to github.com", None, None, source, |_| None).await.unwrap().0.id }
     };
     let sign_in = make(dm(&env.a, "ended-1"), "sign_in", "auto").await;
-    let tools = make(dm(&env.a, "ended-2"), "other", "auto").await;
+    // The tools step carries its marker (fix_in "tools"), as ask_to_fix_tools raises it; a plain
+    // `other` step kwnt raised without it isn't a sign-in step and stays open
+    let tools_place = HumanStepPlace {
+        tools: Some(kwnt::db::human_steps::ToolsFix { server_id: "mcp-gh".into(), server: "github".into() }),
+        ..dm(&env.a, "ended-2")
+    };
+    let tools = make(tools_place, "other", "auto").await;
+    let plain_other = make(dm(&env.a, "ended-7"), "other", "auto").await;
     let captcha = make(dm(&env.a, "ended-3"), "captcha", "auto").await;
     let asked = make(dm(&env.a, "ended-4"), "sign_in", "bot").await;
     let in_thread = make(HumanStepPlace { thread_id: Some(thread.id.clone()), ..dm(&env.a, "ended-5") }, "sign_in", "auto").await;
@@ -447,12 +454,13 @@ async fn typed_text_closes_the_sign_in_cards_kwnt_raised_that_nobody_waits_on() 
     for (id, status) in [
         (&sign_in, "left_for_message"),
         (&tools, "left_for_message"),
+        (&plain_other, "open"),
         (&captcha, "open"),
         (&asked, "open"),
         (&in_thread, "open"),
         (&other_bot, "open"),
     ] {
-        assert_eq!(step(&env, id).await["step"]["status"], status, "{id}");
+        assert_eq!(step(&env, id).await["step"]["status"], status, "{id} should be {status}");
     }
 }
 
