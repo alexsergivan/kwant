@@ -408,6 +408,8 @@ pub(crate) fn card(i: &CardInput) -> Card {
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Red proof only: the limit the fix adds, so the new tests compile on main
+    const WIFI_NOTE_MAX: usize = 40;
     use crate::pocket::kits::Kit;
 
     fn mira_spec() -> Value {
@@ -440,11 +442,45 @@ mod tests {
     #[test]
     fn a_quick_tunnel_never_reaches_the_card_and_anywhere_needs_its_kind() {
         let j = santa_join(&json!({"mode": "anywhere", "anywhere_url": "https://x.trycloudflare.com/p/abc", "anywhere_kind": "quick", "wifi_url": "http://192.168.1.2:7480/p/abc", "quick_tunnel": false, "tunnel": {"state": "off"}})).unwrap();
-        assert_eq!(j, json!({"mode": "wifi", "anywhere_kind": null, "anywhere_url": null, "wifi_url": "http://192.168.1.2:7480/p/abc"}));
+        assert_eq!(j, json!({"mode": "wifi", "anywhere_kind": null, "anywhere_url": null, "wifi_url": "http://192.168.1.2:7480/p/abc", "wifi_note": null}));
         let j = santa_join(&json!({"mode": "anywhere", "anywhere_url": "https://mac.ts.net/p/abc", "anywhere_kind": "funnel", "wifi_url": null})).unwrap();
         assert_eq!((j["mode"].as_str(), j["anywhere_kind"].as_str()), (Some("anywhere"), Some("funnel")));
         let j = santa_join(&json!({"mode": "none", "anywhere_url": null, "wifi_url": null})).unwrap();
         assert_eq!(j["mode"], "none");
+    }
+
+    /// santa-join-wifi-note: a box that only answers 127.0.0.1 has no Wi-Fi link, and its note
+    /// reaches the card from chat, so "only this computer" shows before (or without) the live read.
+    #[test]
+    fn a_box_that_only_answers_this_computer_keeps_its_wifi_note() {
+        let from = crate::pocket::address::choose("abcdef", None, None, None, None, Some("this_computer_only"));
+        let j = santa_join(&from).unwrap();
+        assert_eq!(j, json!({"mode": "none", "anywhere_kind": null, "anywhere_url": null, "wifi_url": null, "wifi_note": "this_computer_only"}));
+        // ...and it is in the card's block from the first paint
+        let spec = mira_spec();
+        let st = santa::Santa.init(&spec);
+        let c = card(&input(&spec, &st, &[], Some(j)));
+        assert_eq!(c.santa["join"]["wifi_note"], "this_computer_only");
+        // With Funnel on the same box the note still rides along (the card words the Wi-Fi hint)
+        let from = crate::pocket::address::choose("abcdef", None, Some("https://mac.ts.net"), None, None, Some("this_computer_only"));
+        let j = santa_join(&from).unwrap();
+        assert_eq!((j["mode"].as_str(), j["wifi_note"].as_str()), (Some("anywhere"), Some("this_computer_only")));
+        // Any other short note (no_network, listener_off) goes through as is; the card reads only its own
+        let j = santa_join(&json!({"mode": "none", "anywhere_url": null, "wifi_url": null, "wifi_note": "no_network"})).unwrap();
+        assert_eq!(j["wifi_note"], "no_network");
+    }
+
+    #[test]
+    fn a_long_or_odd_wifi_note_is_dropped() {
+        let base = |note: Value| santa_join(&json!({"mode": "none", "anywhere_url": null, "wifi_url": null, "wifi_note": note})).unwrap();
+        assert_eq!(base(json!("a".repeat(WIFI_NOTE_MAX)))["wifi_note"].as_str().map(str::len), Some(WIFI_NOTE_MAX), "40 fits");
+        assert!(base(json!("é".repeat(WIFI_NOTE_MAX)))["wifi_note"].is_string(), "counted in UTF-16 units, like the client, not bytes");
+        for bad in [json!("a".repeat(WIFI_NOTE_MAX + 1)), json!("😀".repeat(WIFI_NOTE_MAX / 2 + 1)), json!(""), json!("   "), json!("<b>x</b>"), json!("a\nb"), json!(7), json!({"x": 1}), Value::Null] {
+            assert!(base(bad.clone())["wifi_note"].is_null(), "{bad}");
+        }
+        // No note at all is null, never a missing key: the block keeps one shape
+        let j = santa_join(&json!({"mode": "none"})).unwrap();
+        assert!(j.as_object().unwrap().contains_key("wifi_note") && j["wifi_note"].is_null());
     }
 
     #[test]
