@@ -778,7 +778,7 @@ def set_release_limits(limits_path, limits_data, result_files):
     section = dict(limits_data.get("release") or {})
     section.setdefault("blocking", sorted(DEFAULT_RELEASE_BLOCKING))
     section["baseline"] = baseline
-    section["baseline_from"] = {"files": [f.name for f in result_files], "when": [r.get("when") for r in saved],
+    section["baseline_from"] = {"files": [f"{f.parent.name}/{f.name}" for f in result_files], "when": [r.get("when") for r in saved],
                                 "rule": f"median of the runs' medians x {RELEASE_HEADROOM}, rounded up"}
     section["limits"] = limits
     limits_data["release"] = section
