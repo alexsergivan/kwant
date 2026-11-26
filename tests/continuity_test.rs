@@ -2177,11 +2177,11 @@ async fn approval_push_says_what_the_tool_does_with_the_bots_description() {
 
     // No description: the plain words and where to answer
     let bare = builtin("Bash", json!({"command": "ls"}));
-    assert_eq!(approval_push_body(&state, "g2", "Bash", bare).await, "Concierge wants to run a command. Open kwant bots to allow or deny it.");
+    assert_eq!(approval_push_body(&state, "g2", "Bash", bare).await, "Concierge wants to run a command. Open kwant to allow or deny it.");
 
     // A blank or multi-line description is one trimmed line; a blank one counts as none
     let blank = builtin("Bash", json!({"command": "ls", "description": "  \n "}));
-    assert_eq!(approval_push_body(&state, "g3", "Bash", blank).await, "Concierge wants to run a command. Open kwant bots to allow or deny it.");
+    assert_eq!(approval_push_body(&state, "g3", "Bash", blank).await, "Concierge wants to run a command. Open kwant to allow or deny it.");
     let lines = builtin("Edit", json!({"file_path": "/a", "description": "  Fix the\n  typo  "}));
     assert_eq!(approval_push_body(&state, "g4", "Edit", lines).await, "Concierge wants to change a file: Fix the typo");
 
@@ -2201,7 +2201,7 @@ async fn approval_push_says_what_the_tool_does_with_the_bots_description() {
     // The other built-ins in plain words, matched case-insensitively
     for (tool, words) in [("Write", "write a file"), ("MultiEdit", "change a file"), ("WebFetch", "open a page"), ("websearch", "search the web")] {
         let body = approval_push_body(&state, &format!("g-{tool}"), tool, builtin(tool, json!({}))).await;
-        assert_eq!(body, format!("Concierge wants to {words}. Open kwant bots to allow or deny it."), "{tool}");
+        assert_eq!(body, format!("Concierge wants to {words}. Open kwant to allow or deny it."), "{tool}");
     }
 
     // An unknown built-in keeps its name
@@ -2215,11 +2215,11 @@ async fn approval_push_says_what_the_tool_does_with_the_bots_description() {
     let body = approval_push_body(&state, "g8", "mcp__github__create_issue", mcp).await;
     assert!(body.contains("create_issue") && body.contains("github"), "{body}");
     assert!(!body.contains("ISSUE-BODY-33G"), "{body}");
-    assert!(body.ends_with("Open kwant bots to allow or deny it."), "{body}");
+    assert!(body.ends_with("Open kwant to allow or deny it."), "{body}");
 
     // 33u (33g QA Finding 3): an MCP card named `Bash` with an empty server isn't claude's Bash
     let mcp_bash = json!({"source": "mcp", "server": "", "tool": "Bash", "arguments": {"description": "MCP-BASH-33U"}, "kwant_id": k.id, "kwant_name": "Concierge"});
     let body = approval_push_body(&state, "g9", "Bash", mcp_bash).await;
-    assert_eq!(body, "Concierge wants to use Bash. Open kwant bots to allow or deny it.");
+    assert_eq!(body, "Concierge wants to use Bash. Open kwant to allow or deny it.");
     handle.abort();
 }
