@@ -998,6 +998,22 @@ async fn resume(state: &AppState, s: &HumanStep, outcome: Outcome) {
         // Not an answer: nothing to tell a new turn. A message's own turn reads the message.
         Outcome::AlreadyAsked | Outcome::Message => return,
     };
+    spawn_turn(scope, kwant, prompt, job);
+}
+
+/// Starts a new turn of `kwant` in the background, holding `job` until it ends: Done on a step
+/// ([`resume`]) and a covered sign-in wall's follow-up ([`super::wall_tools::on_covered_wall`])
+/// both start theirs here. Not `async` on purpose: the wall's follow-up is started from inside a
+/// turn (`try_kwant_turn` → `ask_for_sign_in_wall` → `on_covered_wall`), and spawning a turn in
+/// the body of an async fn on that path asks rustc to prove the turn's own future `Send` while
+/// it is still working that future out, which it can't (round 4, #1262). A plain fn's body isn't
+/// part of any future, so the cycle never forms.
+pub(super) fn spawn_turn(
+    scope: super::routes::TurnScope,
+    kwant: crate::db::models::Kwant,
+    prompt: String,
+    job: super::turns::JobGuard,
+) {
     tokio::spawn(async move {
         let _job = job;
         let _ = try_kwant_turn(&scope, &kwant, prompt, TurnOpts::default()).await;

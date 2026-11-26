@@ -12,7 +12,7 @@
 //! are there (or that they're failing and the person should fix them in Tools).
 
 use super::continuity::SelfScope;
-use super::routes::{scope_for, try_kwant_turn, TurnOpts};
+use super::routes::scope_for;
 use super::AppState;
 use crate::db::models::McpServer;
 use crate::mcp::client::UNAUTHORIZED_KEY_HINT;
@@ -215,11 +215,7 @@ pub async fn on_covered_wall(
                 return None;
             }
         };
-        let text = prompt.clone();
-        tokio::spawn(async move {
-            let _job = job;
-            let _ = try_kwant_turn(&turn_scope, &kwant, text, TurnOpts::default()).await;
-        });
+        super::human_steps::spawn_turn(turn_scope, kwant, prompt.clone(), job);
         tracing::info!(kwant_id = %scope.kwant_id, host, tools = ?names, "a turn ended on a sign-in wall it has tools for: follow-up turn started");
         return Some(prompt);
     }
