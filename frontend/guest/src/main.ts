@@ -3,6 +3,7 @@
 import './guest.css';
 import { codeFrom, Env } from './api';
 import { GuestApp } from './app';
+import { isGone, renderGone } from './gone';
 import { remoteToken } from './remote/link';
 import { screenToken } from './screen/link';
 
@@ -61,6 +62,8 @@ function store() {
 
 async function main(): Promise<void> {
   const b = boot();
+  // santa-gone-page: the pocket was deleted, expired or never existed. One static screen; nothing to ask or listen for.
+  if (isGone(b)) return renderGone(root);
   let app: { start(boot: unknown): Promise<void>; wake(): void };
   if (screen !== undefined) {
     const still = w.matchMedia?.('(prefers-reduced-motion: reduce)');

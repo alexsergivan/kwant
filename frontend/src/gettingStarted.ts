@@ -480,6 +480,14 @@ export function showCard(opts: { dismissed: boolean; canRun: boolean | null; gen
   return opts.generalMessages === 0 && opts.teams <= 1;
 }
 
+/** Up to three names, then "and N more": "A", "A and B", "A, B and C", "A, B and 3 more". */
+function shortNameList(names: string[]): string {
+  const shown = names.slice(0, names.length > 3 ? 2 : 3);
+  const rest = names.length - shown.length;
+  if (rest > 0) return `${shown.join(', ')} and ${rest} more`;
+  return shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
+}
+
 /**
  * Step 3's "keep" tile outside the main space: the bots this space already has, never the main space's
  * starters. Up to three names, then "and N more".
@@ -487,10 +495,16 @@ export function showCard(opts: { dismissed: boolean; canRun: boolean | null; gen
 export function keepOwnBotsLine(names: string[], spaceName: string): string {
   const where = `already in ${spaceName}.`;
   if (!names.length) return `The bots ${where}`;
-  const shown = names.slice(0, names.length > 3 ? 2 : 3);
-  const rest = names.length - shown.length;
-  const list = rest > 0 ? `${shown.join(', ')} and ${rest} more` : shown.length === 1 ? shown[0] : `${shown.slice(0, -1).join(', ')} and ${shown[shown.length - 1]}`;
-  return `${list}, ${where}`;
+  return `${shortNameList(names)}, ${where}`;
+}
+
+/**
+ * Step 3's "keep" tile in the main space: the starter bots that are actually there (a fresh install seeds
+ * the helpers team, so "Assistant, Researcher and Writer, in #general."). Never hard-coded names.
+ */
+export function keepStarterBotsLine(names: string[]): string {
+  if (!names.length) return 'The bots in #general.';
+  return `${shortNameList(names)}, in #general.`;
 }
 
 /**

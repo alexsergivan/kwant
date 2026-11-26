@@ -42,7 +42,9 @@ pub struct QuizView {
     pub leaderboard: Option<Vec<BoardRow>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team_board: Option<Vec<TeamRow>>,
-    /// Lobby: who is in (names and teams).
+    /// Who is in (names, teams, creatures): in the lobby for everyone, and in every phase for the
+    /// big screen, whose roster (answered row, podium crews) is built from these rows even when it
+    /// opens after the start or a guest joins late.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lobby: Option<Vec<LobbyRow>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -153,6 +155,9 @@ pub struct LobbyRow {
     pub name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub team: Option<String>,
+    /// The creature the guest picked; the big screen draws them as it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
 }
 
 /// The public pre-join view: what the join screen needs before anyone has a seat. Keys are always
@@ -472,8 +477,11 @@ impl QuizGame {
         let leaderboard = show_board.then(|| Self::board_rows(&board, me_id, limit));
         let team_board =
             (show_board && self.spec.teams.mode == TeamMode::Teams).then(|| Self::team_rows(&self.team_board()));
-        let lobby = (self.phase == Phase::Lobby)
-            .then(|| live.iter().map(|p| LobbyRow { name: p.name.clone(), team: p.team.clone() }).collect());
+        let lobby = (self.phase == Phase::Lobby || is_screen).then(|| {
+            live.iter()
+                .map(|p| LobbyRow { name: p.name.clone(), team: p.team.clone(), avatar: p.avatar.clone() })
+                .collect()
+        });
 
         let me = me_id.and_then(|id| self.player(id)).map(|p| {
             let rec = in_play.then(|| self.record(q, &p.id)).flatten();

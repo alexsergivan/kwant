@@ -259,6 +259,20 @@ export interface RecipeBlock extends BlockCommon<'recipe'> {
 /** Pocket apps (pa4): where a pocket is in its life. `paused` is a flag on `live`, not a state. */
 export type PocketState = 'writing' | 'checking' | 'dry_run_stopped' | 'ready' | 'live' | 'ended';
 export type PocketJoinMode = 'wifi' | 'anywhere';
+/** The quick tunnel's state as the box reports it on `GET /api/pockets/:code` (never in the chat block). */
+export type PocketTunnelState = 'off' | 'starting' | 'on' | 'failed';
+/**
+ * How friends join. The chat block carries mode and the two URLs (null today: the server leaves them out of the card);
+ * the quiz card's live read adds `wifi_note` ("this_computer_only" on a box bound to 127.0.0.1) and the tunnel.
+ */
+export interface PocketJoinInfo {
+  mode: PocketJoinMode;
+  wifi_url: string | null;
+  anywhere_url: string | null;
+  quick_tunnel?: boolean;
+  wifi_note?: string | null;
+  tunnel?: { state: PocketTunnelState; note: string | null };
+}
 export interface PocketRound {
   /** "Round 1" */
   label: string;
@@ -684,7 +698,7 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   /** Live: the game so far. */
   live: { players: number; teams: number; leader: { name: string; points: number } | null; now: string | null; palettes: string[] } | null;
   /** Ready and live: how friends join. A URL that isn't known yet is null. */
-  join: { mode: PocketJoinMode; wifi_url: string | null; anywhere_url: string | null; quick_tunnel?: boolean } | null;
+  join: PocketJoinInfo | null;
   /** pa11: the class quiz's own line (`pocket.notice`), shown as is. Absent on a normal quiz. */
   notice?: string;
   /** Ended: "10:12 PM", the winner, the stats line, the deletion date ("Fri, Dec 4"). */

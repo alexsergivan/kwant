@@ -41,7 +41,7 @@
     <a class="nl" href="/features">Features</a>
     <a class="nl" href="/docs/quickstart">Docs</a>
     <a class="nl" href="/blog/">Blog</a>
-    <a class="nl stars" href="https://github.com/alexsergivan/kwant" rel="noopener" aria-label="kwant on GitHub, 712 stars"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><b>★ 712</b></a>
+    <a class="nl stars" href="https://github.com/alexsergivan/kwant" rel="noopener" aria-label="kwant on GitHub, 711 stars"><svg viewBox="0 0 16 16" width="17" height="17" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/></svg><b>★ 711</b></a>
     <a class="btn btn-solid btn-get px" href="/docs/quickstart">Get started</a>
   </nav>
 </header>
@@ -49,8 +49,8 @@
 <section class="page-head">
   <div class="wrap">
     <p class="kicker">Alternatives · Grok Bot</p>
-    <h1>A Grok Bot alternative you run yourself</h1>
-    <p class="lede">kwant is an open-source, self-hosted team of AI bots in one binary. It runs on your laptop, a VPS or Docker, and it can import your Grok Bot export.</p>
+    <h1>An open-source Grok Bot alternative you run yourself</h1>
+    <p class="lede">kwant is an open-source (AGPL-3.0), self-hosted team of AI bots in one binary. It runs on your laptop, a VPS or Docker, and bots hand work to each other with @mentions. It can bring your Grok bot across: send it a message kwant gives you, then paste the reply back.</p>
     <div class="cta">
       <a class="btn btn-violet" href="/docs/install">Install kwant</a>
       <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">View on GitHub</a>
@@ -61,7 +61,7 @@
 <div class="wrap">
   <article class="prose solo">
 <p>Grok Bot is xAI's agent app. According to <a href="https://www.igeeksblog.com/grok-bot-macos-ios-launch/" rel="noopener">launch coverage</a>, it runs always-on agents, each with its own computer in the cloud. kwant works the other way round: your bots run on a machine you control, with the logins you already have, and the source code is public. You keep the machine, the logins and the code.</p>
-<p>If you want to try kwant without starting over, it can read a Grok Bot export and recreate your bot. <a href="#import">See how the import works</a>.</p>
+<p>If you want to try kwant without starting over, it can recreate your bot: send your Grok bot a message kwant gives you and paste its reply back, or upload a Grok Bot export file if you have one. <a href="#import">See how the import works</a>.</p>
 
 <h2 id="why">Why people look for a Grok Bot alternative</h2>
 <p>The reasons are usually practical:</p>
@@ -85,13 +85,31 @@
     <tr><th scope="row">Where it runs</th><td>Each agent has its own computer in the cloud, according to launch coverage</td><td>Your laptop, a VPS or Docker, on hardware you control</td></tr>
     <tr><th scope="row">Scheduled work</th><td>Always-on agents, according to launch coverage</td><td>Routines and cron rules on your own machine; they run while the machine is on</td></tr>
     <tr><th scope="row">Models</th><td>See xAI's site</td><td>Claude, Codex or Grok CLI logins, API keys, local Ollama or any OpenAI-compatible server, with failover across accounts</td></tr>
-    <tr><th scope="row">Importing a Grok Bot</th><td>Not applicable</td><td>Reads a Grok Bot export and recreates the bot (<a href="#import">details</a>)</td></tr>
+    <tr><th scope="row">Importing a Grok Bot</th><td>Not applicable</td><td>Send your Grok bot a message kwant gives you and paste its reply back, or upload a Grok Bot export file if you have one (<a href="#import">details</a>)</td></tr>
   </tbody>
 </table>
 </div>
 
+<h2 id="open-source">Open-source Grok Bot alternatives compared</h2>
+<p>Several open-source projects cover parts of what Grok Bot does. This table lists what each project says about itself, checked on its own repository or site on 25 Nov 2026. We have not tested the other projects, so we do not rank them.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th scope="col">Topic</th><th scope="col"><a href="https://github.com/alexsergivan/kwant#readme" rel="noopener">kwant</a></th><th scope="col"><a href="https://github.com/elie222/rakazo#readme" rel="noopener">Rakazo</a></th><th scope="col"><a href="https://github.com/openclaw/openclaw#readme" rel="noopener">OpenClaw</a></th><th scope="col"><a href="https://github.com/NousResearch/hermes-agent#readme" rel="noopener">Hermes Agent</a></th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Licence</th><td>AGPL-3.0 (commercial licence available)</td><td>Apache-2.0</td><td>MIT</td><td>MIT</td></tr>
+    <tr><th scope="row">Language</th><td>Rust</td><td>TypeScript</td><td>TypeScript</td><td>Python</td></tr>
+    <tr><th scope="row">What it is</th><td>A team of AI bots that share chats and hand work to each other with @mentions, with a Mission board where a task counts as Verified only when a check passes</td><td>Persistent AI teammates with memory, routines and their own computer; the README calls it an open-source, self-hosted alternative to Grok Bot</td><td>An AI assistant on your own devices that answers in the chat apps you already use (Discord, iMessage, Slack, Teams, Telegram, WhatsApp and 20+ more)</td><td>A self-improving agent that creates skills from experience and keeps memory across sessions, reachable from Telegram, Discord, Slack, WhatsApp, Signal and the CLI</td></tr>
+    <tr><th scope="row">Where it runs</th><td>Your laptop, a VPS or Docker</td><td>Your own machine or server with Docker; web, desktop, iPhone and Android apps</td><td>Your own computer; macOS, iOS, Android, Windows and Linux apps</td><td>A $5 VPS, a GPU cluster or serverless; terminal backends include local, Docker, SSH, Modal, Daytona and Vercel Sandbox</td></tr>
+    <tr><th scope="row">Models</th><td>Claude, Codex or Grok CLI logins, API keys, local Ollama or any OpenAI-compatible server</td><td>Any model, with your own keys</td><td>Claude, Codex and local models are swappable plugins</td><td>Any model: Nous Portal, OpenRouter, OpenAI or your own endpoint</td></tr>
+    <tr><th scope="row">Imports a Grok Bot</th><td>Yes, with a message you send to your Grok bot (<a href="#import">details</a>)</td><td>Not stated</td><td>Not stated</td><td>Not stated</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Sources: <a href="https://github.com/alexsergivan/kwant#readme" rel="noopener">kwant README</a>, <a href="https://github.com/elie222/rakazo#readme" rel="noopener">Rakazo README</a>, <a href="https://github.com/openclaw/openclaw#readme" rel="noopener">OpenClaw README</a>, <a href="https://github.com/NousResearch/hermes-agent#readme" rel="noopener">Hermes Agent README</a>. Licences from each repository's GitHub page, 25 Nov 2026.</p>
+<p>Which one fits depends on what you want. Rakazo is the closest to Grok Bot's "every bot gets a computer" idea. OpenClaw is built around chatting with one assistant in your messaging apps. Hermes Agent is built around an agent that learns skills over time. kwant is for people who want a small team of bots with handoffs, approvals and a Mission board that checks the work, on a machine they control. If you only need one assistant in WhatsApp or Telegram, one of the others is likely simpler.</p>
+
 <h2 id="import">Bring your Grok Bot into kwant</h2>
-<p>Open a space's settings and choose <strong>Import bots</strong>. Upload your Grok Bot export file, and kwant reads it and recreates the bot. It brings across:</p>
+<p>Open a space's settings and choose <strong>Import bots</strong>. Under <strong>Bring a bot from…</strong>, pick Grok, and kwant gives you a message to send to your Grok bot. Paste the bot's reply back into kwant and it recreates the bot from that. It brings across:</p>
 <ul>
   <li>the bot's name and role</li>
   <li>its instructions</li>
@@ -101,8 +119,7 @@
   <li>its list of plugins</li>
 </ul>
 <p>Plugins arrive as setup notes, not working connections. You reconnect the tools you want yourself, for example through kwant's <a href="/docs/mcp">MCP tools</a>.</p>
-<p>If the export holds only the bot's details, kwant warns you that the instructions may be missing, so check the result before you rely on it.</p>
-<p>There is also a paste-in route. Under <strong>Bring a bot from…</strong>, pick Grok, and kwant gives you a prompt to send to your existing Grok bot. Paste the bot's reply back into kwant and it builds the bot from that.</p>
+<p>Or upload a Grok Bot export file if you have one: choose <strong>Upload a file</strong> in the same dialog and kwant reads it the same way. If the export holds only the bot's details, kwant warns you that the instructions may be missing, so check the result before you rely on it.</p>
 <p>That is everything the import does. Review the imported bot, then give it a task.</p>
 
 <h2 id="after">What you get in kwant after you move</h2>
@@ -132,10 +149,12 @@
 <h2 id="faq-title">FAQ</h2>
 <h3>What is the best open-source alternative to Grok Bot?</h3>
 <p>It depends on what you need, but kwant is an open-source (AGPL-3.0), self-hosted option: a team of AI bots in one binary that runs on your laptop, a VPS or Docker, with bots that hand work to each other with @mentions.</p>
+<h3>Which open-source Grok Bot alternatives are there?</h3>
+<p>Besides kwant, projects people compare include Rakazo, OpenClaw and Hermes Agent. They differ in what they focus on: Rakazo gives each bot its own computer, OpenClaw answers inside your messaging apps, Hermes Agent learns skills over time, and kwant runs a team of bots that hand work to each other. See the <a href="#open-source">comparison above</a>, with sources.</p>
 <h3>Can I self-host a Grok Bot?</h3>
-<p>Check xAI's site for what Grok Bot offers. If you want your bots on your own machine, kwant runs on a laptop, a VPS or Docker, and it can import a Grok Bot export to recreate your bot there.</p>
+<p>Check xAI's site for what Grok Bot offers. If you want your bots on your own machine, kwant runs on a laptop, a VPS or Docker, and it can recreate your bot there: send your Grok bot a message kwant gives you and paste its reply back, or upload a Grok Bot export file if you have one.</p>
 <h3>Can I import my Grok Bot into kwant?</h3>
-<p>Yes. kwant's import reads a Grok Bot export file and recreates the bot with its name, role, instructions, memories, skills, scheduled routines and plugin list. Plugins come across as setup notes, not working connections. If the export only holds the bot's details, kwant warns you that the instructions may be missing. You can also use a prompt kwant gives you: send it to your existing Grok bot and paste the reply back.</p>
+<p>Yes. kwant gives you a message to send to your Grok bot; paste its reply back and kwant recreates the bot with its name, role, instructions, memories, skills, scheduled routines and plugin list. Plugins come across as setup notes, not working connections. Or upload a Grok Bot export file if you have one; if the export only holds the bot's details, kwant warns you that the instructions may be missing.</p>
 <h3>Do I need a Grok account to use kwant?</h3>
 <p>No. kwant bots can run on a Claude, Codex or Grok CLI login, an API key, local Ollama or any OpenAI-compatible server. A Grok login is one option among several.</p>
 <h3>Is kwant free?</h3>
@@ -197,7 +216,7 @@
 </footer>
 <script src="../assets/js/site.js?v=02a491b838" defer></script>
 <script src="../assets/js/pixel.js?v=0a1a3bf1e2" defer></script>
-<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/alternatives/grok-bot","name":"Grok Bot Alternative: Open-Source & Self-Hosted","description":"kwant is an open-source, self-hosted alternative to Grok Bot. Run a team of AI bots on your own machine and import your Grok Bot in minutes.","url":"https://kwant.si/alternatives/grok-bot","image":"https://kwant.si/assets/og/alternatives-grok-bot.png?v=d6512a1080","inLanguage":"en","dateModified":"2026-10-29","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Grok Bot Alternative","item":"https://kwant.si/alternatives/grok-bot"}]},{"@type":"FAQPage","@id":"https://kwant.si/alternatives/grok-bot#faq","url":"https://kwant.si/alternatives/grok-bot","mainEntity":[{"@type":"Question","name":"What is the best open-source alternative to Grok Bot?","acceptedAnswer":{"@type":"Answer","text":"It depends on what you need, but kwant is an open-source (AGPL-3.0), self-hosted option: a team of AI bots in one binary that runs on your laptop, a VPS or Docker, with bots that hand work to each other with @mentions."}},{"@type":"Question","name":"Can I self-host a Grok Bot?","acceptedAnswer":{"@type":"Answer","text":"Check xAI's site for what Grok Bot offers. If you want your bots on your own machine, kwant runs on a laptop, a VPS or Docker, and it can import a Grok Bot export to recreate your bot there."}},{"@type":"Question","name":"Can I import my Grok Bot into kwant?","acceptedAnswer":{"@type":"Answer","text":"Yes. kwant's import reads a Grok Bot export file and recreates the bot with its name, role, instructions, memories, skills, scheduled routines and plugin list. Plugins come across as setup notes, not working connections. If the export only holds the bot's details, kwant warns you that the instructions may be missing. You can also use a prompt kwant gives you: send it to your existing Grok bot and paste the reply back."}},{"@type":"Question","name":"Do I need a Grok account to use kwant?","acceptedAnswer":{"@type":"Answer","text":"No. kwant bots can run on a Claude, Codex or Grok CLI login, an API key, local Ollama or any OpenAI-compatible server. A Grok login is one option among several."}},{"@type":"Question","name":"Is kwant free?","acceptedAnswer":{"@type":"Answer","text":"The software is free under the AGPL-3.0, and commercial licenses are available. You pay for whatever model accounts or API keys you connect. kwant sends no telemetry to its developers."}},{"@type":"Question","name":"What is kwnt?","acceptedAnswer":{"@type":"Answer","text":"It is the program you install and run for kwant. Start it with kwnt serve."}}]}]}</script>
+<script type="application/ld+json">{"@context":"https://schema.org","@graph":[{"@type":"WebPage","@id":"https://kwant.si/alternatives/grok-bot","name":"Grok Bot Alternative: Open-Source & Self-Hosted","description":"kwant is an open-source, self-hosted alternative to Grok Bot. Run a team of AI bots on your own machine and import your Grok Bot in minutes.","url":"https://kwant.si/alternatives/grok-bot","image":"https://kwant.si/assets/og/alternatives-grok-bot.png?v=d6512a1080","inLanguage":"en","dateModified":"2026-11-26","about":{"@id":"https://kwant.si/#app"},"isPartOf":{"@id":"https://kwant.si/#website"}},{"@type":"BreadcrumbList","itemListElement":[{"@type":"ListItem","position":1,"name":"kwant","item":"https://kwant.si/"},{"@type":"ListItem","position":2,"name":"Grok Bot Alternative","item":"https://kwant.si/alternatives/grok-bot"}]},{"@type":"FAQPage","@id":"https://kwant.si/alternatives/grok-bot#faq","url":"https://kwant.si/alternatives/grok-bot","mainEntity":[{"@type":"Question","name":"What is the best open-source alternative to Grok Bot?","acceptedAnswer":{"@type":"Answer","text":"It depends on what you need, but kwant is an open-source (AGPL-3.0), self-hosted option: a team of AI bots in one binary that runs on your laptop, a VPS or Docker, with bots that hand work to each other with @mentions."}},{"@type":"Question","name":"Which open-source Grok Bot alternatives are there?","acceptedAnswer":{"@type":"Answer","text":"Besides kwant, projects people compare include Rakazo, OpenClaw and Hermes Agent. They differ in what they focus on: Rakazo gives each bot its own computer, OpenClaw answers inside your messaging apps, Hermes Agent learns skills over time, and kwant runs a team of bots that hand work to each other. See the comparison above, with sources."}},{"@type":"Question","name":"Can I self-host a Grok Bot?","acceptedAnswer":{"@type":"Answer","text":"Check xAI's site for what Grok Bot offers. If you want your bots on your own machine, kwant runs on a laptop, a VPS or Docker, and it can recreate your bot there: send your Grok bot a message kwant gives you and paste its reply back, or upload a Grok Bot export file if you have one."}},{"@type":"Question","name":"Can I import my Grok Bot into kwant?","acceptedAnswer":{"@type":"Answer","text":"Yes. kwant gives you a message to send to your Grok bot; paste its reply back and kwant recreates the bot with its name, role, instructions, memories, skills, scheduled routines and plugin list. Plugins come across as setup notes, not working connections. Or upload a Grok Bot export file if you have one; if the export only holds the bot's details, kwant warns you that the instructions may be missing."}},{"@type":"Question","name":"Do I need a Grok account to use kwant?","acceptedAnswer":{"@type":"Answer","text":"No. kwant bots can run on a Claude, Codex or Grok CLI login, an API key, local Ollama or any OpenAI-compatible server. A Grok login is one option among several."}},{"@type":"Question","name":"Is kwant free?","acceptedAnswer":{"@type":"Answer","text":"The software is free under the AGPL-3.0, and commercial licenses are available. You pay for whatever model accounts or API keys you connect. kwant sends no telemetry to its developers."}},{"@type":"Question","name":"What is kwnt?","acceptedAnswer":{"@type":"Answer","text":"It is the program you install and run for kwant. Start it with kwnt serve."}}]}]}</script>
 <script type="application/json" id="cf-beacon">{"token": "7f6ed395033a43eea3885ad0943890c2"}</script>
 </body>
 </html>

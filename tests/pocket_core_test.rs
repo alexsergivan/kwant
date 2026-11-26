@@ -899,6 +899,48 @@ async fn the_page_is_no_cache_and_its_boot_is_public() {
     }
 }
 
+/// santa-gone-page: a link whose pocket was deleted (Delete now, the expiry) or never existed gets the
+/// guest page with a boot of exactly `{"gone":true}` and status 404, under the same headers as a
+/// live page; nothing about the pocket is in it. A build without the page keeps the placeholder.
+#[tokio::test]
+async fn a_deleted_or_unknown_link_gets_the_gone_page() {
+    let t = setup(true).await;
+    let (code, _) = make(&t, json!({ "title": "Office Santa Kriss" })).await;
+    let (_, key) = joined(&t, &code, "Mia").await;
+    pocket::delete(&t.state, &code).await.unwrap();
+    for (path, req) in [
+        (format!("/p/{code}"), Req::default()),
+        (format!("/p/{code}"), guest_req(&code, &key)),
+        ("/p/zzzzzz".to_string(), Req::default()),
+        ("/p/NOTACODE".to_string(), Req::default()),
+        (format!("/p/{}", "a".repeat(300)), Req::default()),
+    ] {
+        let r = send(&t.guest, "GET", &path, None, &req).await;
+        assert_eq!(r.status, StatusCode::NOT_FOUND, "{path}");
+        assert_eq!(r.headers["content-type"], "text/html; charset=utf-8", "{path}");
+        assert_eq!(r.headers["cache-control"], "no-cache", "{path}");
+        assert_eq!(r.headers["content-security-policy"], guest::CSP, "{path}");
+        assert_eq!(r.headers["x-frame-options"], "DENY", "{path}");
+        let html = r.body.as_str().unwrap();
+        assert!(!html.contains("Kriss") && !html.contains("Mia"), "{path}: {html}");
+        if guest::has_page() {
+            let open = r#"<script type="application/json" id="pocket-boot">"#;
+            let start = html.find(open).expect("the guest page") + open.len();
+            let boot: Value = serde_json::from_str(&html[start..start + html[start..].find("</script>").unwrap()]).unwrap();
+            assert_eq!(boot, json!({ "gone": true }), "{path}");
+        } else {
+            assert!(html.contains("There&#39;s no pocket app here.") || html.contains("There's no pocket app here."), "{path}: {html}");
+            assert!(!html.contains("<script"), "{path}: {html}");
+        }
+    }
+    // The switch off still answers nothing: no page, gone or not
+    t.state.db.set_setting(pocket::SETTING, "off").await.unwrap();
+    assert!(!listener::reconcile(&t.state).await);
+    let r = send(&t.guest, "GET", &format!("/p/{code}"), None, &Req::default()).await;
+    assert_eq!(r.status, StatusCode::NOT_FOUND);
+    assert!(!r.body.to_string().contains("pocket-boot"), "{}", r.body);
+}
+
 /// Every object field name in `v`, at any depth.
 fn field_names(v: &Value) -> Vec<String> {
     match v {

@@ -35,15 +35,17 @@ test('on a phone the ghost row does not wrap and the smart actions get their own
   assert.match(css, /\[data-smart-row\]:has\(> \[data-smart-actions\]:empty\) \{\s*display: none;/);
 });
 
-test('on a phone "From this reply" is quiet text; desktop evidenceClass is unchanged', () => {
-  const phoneRule = css.match(/@media \(max-width: 767px\) and \(pointer: coarse\) \{\s*\[data-smart-row\] \[data-evidence\] \{([^}]*)\}/);
-  assert.ok(phoneRule, 'phone-only rule on the evidence span');
-  assert.match(phoneRule[1], /border-color: transparent/);
-  assert.match(phoneRule[1], /background: transparent/);
-  assert.equal(
-    m.evidenceClass,
-    'inline-flex items-center gap-1.5 min-h-9 min-w-0 max-w-full px-3 rounded-lg border border-hairline bg-white/[0.03] text-xs font-medium text-zinc-300 [&>svg]:text-muted',
-  );
+test('the source line ("From task checks") is a quiet caption at every width, not a chip', () => {
+  // no phone-only override any more: phone and desktop share evidenceClass
+  assert.doesNotMatch(css, /\[data-evidence\]/);
+  const cls = m.evidenceClass.split(' ');
+  for (const chip of ['border', 'border-hairline', 'rounded-lg', 'px-3', 'min-h-9', 'font-medium']) {
+    assert.ok(!cls.includes(chip), `no chip class ${chip}`);
+  }
+  assert.ok(!cls.some((c) => c.startsWith('bg-') || c.startsWith('hover:') || c.startsWith('active:')), 'no background or hover');
+  for (const quiet of ['text-zinc-500', 'font-normal', 'cursor-default', 'items-center', 'self-center', 'min-w-0', '[&>svg]:text-zinc-500']) {
+    assert.ok(cls.includes(quiet), `has ${quiet}`);
+  }
 });
 
 test('a 14 px avatar that needs you gets the 6 px dot, not the 7×7 plate; 24 px keeps the plate', () => {
