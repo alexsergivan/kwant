@@ -179,7 +179,9 @@ class ShippedFiles(unittest.TestCase):
 
     def test_memory_cold_start_and_first_reply_block_and_the_browser_only_warns(self):
         data = json.loads((ROOT / "scripts" / "perf_budget.json").read_text())
-        self.assertEqual(pb.blocking_of(data), {"cold_start_s", "first_reply_s", "idle_rss_mb", "after_reply_rss_mb"})
+        self.assertEqual(pb.blocking_of(data), {"cold_start_s", "first_reply_s", "idle_rss_mb", "after_reply_rss_mb", "after_search_rss_mb"})
+        # A2: a synced Find a tool copy may cost about 20 MB over idle, not the ~150 MB it did
+        self.assertLessEqual(data["limits"]["after_search_rss_mb"], data["limits"]["idle_rss_mb"] + 20)
         self.assertLessEqual(data["limits"]["idle_rss_mb"], 132)
         self.assertLessEqual(data["limits"]["after_reply_rss_mb"], 132)
 
@@ -225,7 +227,8 @@ class JudgeASavedFile(unittest.TestCase):
 
     def samples(self, idle):
         return {"samples": {"cold_start_s": [0.5] * 5, "first_reply_s": [0.05] * 5, "idle_rss_mb": idle,
-                            "after_reply_rss_mb": [128.0, 128.1, 127.9], "browser_launch_s": [9.3] * 5}}
+                            "after_reply_rss_mb": [128.0, 128.1, 127.9], "after_search_rss_mb": [140.0, 141.0, 139.0],
+                            "browser_launch_s": [9.3] * 5}}
 
     def test_the_shipped_limits_pass_the_pr_numbers_and_fail_a_doctored_idle(self):
         shipped = json.loads((ROOT / "scripts" / "perf_budget.json").read_text())
@@ -237,6 +240,48 @@ class JudgeASavedFile(unittest.TestCase):
         results["samples"]["browser_launch_s"] = [None] * 5
         results["browser_skip"] = "Chrome did not start"
         self.assertEqual(self.run_main(results, {"limits": LIMITS}), 0)
+
+
+class FakeMcpRegistry(unittest.TestCase):
+    """after_search_rss_mb syncs kwnt's copy from this fake registry: it pages like the real one and searches by name."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.reg = pb.FakeRegistry(entries=1200, page=500)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.reg.close()
+
+    def get(self, query):
+        import urllib.request
+        with urllib.request.urlopen(f"{self.reg.url}/v0.1/servers?{query}") as r:
+            return json.loads(r.read())
+
+    def test_pages_follow_next_cursor_through_every_entry(self):
+        names, cursor, pages = [], None, 0
+        while True:
+            page = self.get("version=latest&limit=100" + (f"&cursor={cursor}" if cursor else ""))
+            names += [s["server"]["name"] for s in page["servers"]]
+            pages += 1
+            cursor = page["metadata"].get("nextCursor")
+            if not cursor:
+                break
+        self.assertEqual((pages, len(names), len(set(names))), (3, 1200, 1200))
+
+    def test_search_and_updated_since(self):
+        hits = self.get("search=stripe&version=latest&limit=30")["servers"]
+        self.assertTrue(hits)
+        self.assertTrue(all("stripe" in h["server"]["name"] for h in hits))
+        self.assertEqual(self.get("version=latest&updated_since=2026-11-26T00:00:00Z")["servers"], [])
+
+    def test_entries_are_one_click_remote_or_npm_and_deterministic(self):
+        kinds = {("remotes" in pb.fake_registry_entry(i)["server"], "packages" in pb.fake_registry_entry(i)["server"]) for i in range(6)}
+        self.assertEqual(kinds, {(True, False), (False, True)})
+        self.assertEqual(pb.fake_registry_entry(42), pb.fake_registry_entry(42))
+        self.assertTrue(all("{" not in r["url"] for i in range(30) for r in pb.fake_registry_entry(i)["server"].get("remotes", [])))
+        self.assertLess(len(json.dumps({"servers": [pb.fake_registry_entry(i) for i in range(pb.FAKE_REGISTRY_PAGE)]})), 2 * 1024 * 1024,
+                        "a page fits kwnt's 2 MB answer limit")
 
 
 class BarePathHasWhatChromesLauncherNeeds(unittest.TestCase):

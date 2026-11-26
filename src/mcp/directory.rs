@@ -18,8 +18,11 @@
 //! stdio; then registry order. Typos are only looked for when closer matches leave room.
 
 use super::registry::{publisher_name, McpRegistry, RegistryEntry, GENERIC_SERVER_PARTS};
-use serde::Serialize;
-use std::collections::BTreeMap;
+use serde::{Deserialize, Serialize};
+use std::fs::File;
+use std::io::{Read, Seek, SeekFrom, Write};
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio_util::sync::CancellationToken;
@@ -35,9 +38,11 @@ const RETRY_FIRST: Duration = Duration::from_secs(120);
 const RETRY_MAX: Duration = Duration::from_secs(3600);
 /// A pause between pages, to be gentle with a free service.
 const PAGE_PAUSE: Duration = Duration::from_millis(150);
-/// Safety stops for a registry that never ends.
-const MAX_PAGES: usize = 1000;
-const MAX_ENTRIES: usize = 60_000;
+/// Safety stops for a registry that never ends. Not a cap on the real one: it had 749 pages and
+/// 74,866 entries on Nov 26, 2026 (the old 60,000 stop cut off the end of the alphabet), and a
+/// kept entry is now ~200 bytes in memory (perf-idle-memory A2).
+const MAX_PAGES: usize = 5000;
+const MAX_ENTRIES: usize = 400_000;
 /// `updated_since` starts this much before the last sync began, so nothing falls in a gap.
 const OVERLAP: Duration = Duration::from_secs(600);
 
@@ -99,29 +104,219 @@ pub enum Match {
     TypoStart,
 }
 
-/// One entry of the copy, with what matching needs worked out once.
+/// What matching needs about one entry, packed into one string (perf-idle-memory A2): the
+/// registry name, then the title, the registry name, the slug, the words (space separated) and
+/// the publisher label and key, all normalised. About 150 bytes an entry, where a whole
+/// [`RegistryEntry`] with its plan and seven separate strings took ~2.5 KB (a full copy of the
+/// registry was +153 MB). The rows to show live in [`RowFile`] on disk until they are a hit.
 #[derive(Debug, Clone)]
-pub struct DirEntry {
-    pub entry: RegistryEntry,
-    pub publisher: Publisher,
-    /// The registry's title, else a name made from its registry name.
-    pub title: String,
-    title_norm: String,
-    slug_norm: String,
-    name_norm: String,
-    words: Vec<String>,
-    /// Dot and slash separated parts of the registry name.
-    parts: Vec<String>,
+pub struct Key {
+    /// Shared, so carrying an unchanged entry over to the next copy costs no copy of the text.
+    text: Arc<str>,
+    /// Where each part of `text` ends: name, title, name normalised, slug, words, publisher label
+    /// (the publisher key is the rest; empty for none).
+    ends: [u16; 6],
+    demoted: bool,
+    remote: bool,
+}
+
+impl Key {
+    /// `None` when the text would not fit the packed offsets (64 KB: no real entry is near it).
+    fn new(name: &str, title: &str, publisher: &Publisher, demoted: bool, remote: bool) -> Option<Self> {
+        let slug = name.rsplit('/').next().unwrap_or(name);
+        let mut ws = words(title);
+        for w in words(slug) {
+            if !ws.contains(&w) {
+                ws.push(w);
+            }
+        }
+        let parts = [
+            name.to_string(),
+            normalize(title),
+            normalize(name),
+            normalize(slug),
+            ws.join(" "),
+            normalize(&publisher.label),
+            publisher_key(publisher).unwrap_or_default(),
+        ];
+        let mut text = String::with_capacity(parts.iter().map(String::len).sum());
+        let mut ends = [0u16; 6];
+        for (i, part) in parts.iter().enumerate() {
+            text.push_str(part);
+            if let Some(end) = ends.get_mut(i) {
+                *end = u16::try_from(text.len()).ok()?;
+            }
+        }
+        u16::try_from(text.len()).ok()?;
+        Some(Self { text: text.into(), ends, demoted, remote })
+    }
+
+    fn part(&self, i: usize) -> &str {
+        let from = if i == 0 { 0 } else { usize::from(self.ends[i - 1]) };
+        let to = self.ends.get(i).map_or(self.text.len(), |e| usize::from(*e));
+        &self.text[from..to]
+    }
+
+    /// The registry name, as the registry spells it.
+    pub fn name(&self) -> &str {
+        self.part(0)
+    }
+    fn title_norm(&self) -> &str {
+        self.part(1)
+    }
+    fn name_norm(&self) -> &str {
+        self.part(2)
+    }
+    fn slug_norm(&self) -> &str {
+        self.part(3)
+    }
+    fn words(&self) -> impl Iterator<Item = &str> + Clone {
+        self.part(4).split(' ').filter(|w| !w.is_empty())
+    }
+    /// The publisher label normalised (`stripecom`).
+    fn publisher_norm(&self) -> &str {
+        self.part(5)
+    }
     /// The publisher's own name: `stripe` for stripe.com (two-label domains only, so a subdomain
     /// such as pg.ddx.io or stripecheckup.vercel.app isn't taken for its owner), `getsentry` for
     /// github.com/getsentry.
-    publisher_key: Option<String>,
-    /// The publisher label normalised (`stripecom`).
-    publisher_norm: String,
-    /// `title_norm` NUL `name_norm`: every closer match is a piece of it, so one search of it
-    /// rules most entries out.
-    hay: String,
-    demoted: bool,
+    fn publisher_key(&self) -> Option<&str> {
+        Some(self.part(6)).filter(|k| !k.is_empty())
+    }
+    /// Dot and slash separated parts of the registry name, normalised. Worked out when asked:
+    /// only an entry that already contains the query gets this far.
+    fn parts(&self) -> impl Iterator<Item = String> + '_ {
+        self.name().split(['.', '/']).map(normalize).filter(|p| !p.is_empty())
+    }
+
+    /// The publisher is the query itself (`stripe` → stripe.com).
+    fn publisher_is(&self, q: &str) -> bool {
+        self.publisher_key() == Some(q) || self.publisher_norm() == q
+    }
+
+    fn direct_match(&self, q: &str) -> Option<Match> {
+        if self.title_norm().starts_with(q) || self.slug_norm().starts_with(q) || self.publisher_is(q) {
+            Some(Match::Prefix)
+        } else if self.words().any(|w| w.starts_with(q)) {
+            Some(Match::WordPrefix)
+        } else {
+            None
+        }
+    }
+
+    /// Every match but a typo.
+    fn close_match(&self, q: &Query) -> Option<Match> {
+        // The title, its words, the registry name, its parts and the publisher's name are all
+        // pieces of the normalised title or name; only the publisher label (`stripecom`) isn't.
+        let may = |t: &str| self.title_norm().contains(t) || self.name_norm().contains(t) || self.publisher_norm() == t;
+        if !may(&q.text) && !q.alias.as_deref().is_some_and(may) {
+            return None;
+        }
+        if let Some(m) = self.direct_match(&q.text) {
+            return Some(m);
+        }
+        if q.alias.as_deref().is_some_and(|a| self.direct_match(a).is_some()) {
+            return Some(Match::Alias);
+        }
+        if self.parts().any(|p| p.starts_with(q.text.as_str())) {
+            return Some(Match::NamePart);
+        }
+        if self.title_norm().contains(q.text.as_str()) || self.name_norm().contains(q.text.as_str()) {
+            return Some(Match::Contains);
+        }
+        None
+    }
+
+    fn typo_match(&self, q: &Query) -> Option<Match> {
+        if q.budget == 0 {
+            return None;
+        }
+        let all = || self.words().chain([self.title_norm(), self.slug_norm()]);
+        let whole = |w: &str| within(&q.text, q.chars, w, q.budget);
+        if all().any(whole) {
+            return Some(Match::Typo);
+        }
+        let start = |w: &str| match w.char_indices().nth(q.chars) {
+            Some((end, _)) if q.budget == 1 => one_edit_same_length(&q.text, &w[..end]),
+            Some((end, _)) => osa_within(&q.text, &w[..end], q.budget),
+            None => false,
+        };
+        all().any(start).then_some(Match::TypoStart)
+    }
+
+    /// How `q` matches this entry, if at all.
+    pub fn matches(&self, q: &str) -> Option<Match> {
+        let q = Query::new(q)?;
+        self.close_match(&q).or_else(|| self.typo_match(&q))
+    }
+
+    fn exact(&self, q: &str) -> bool {
+        self.title_norm() == q || self.slug_norm() == q
+    }
+
+    /// The sort key; lower comes first.
+    fn key(&self, q: &Query, m: Match, order: usize) -> SortKey {
+        let publisher = self.publisher_is(&q.text);
+        let publisher_typo = !publisher && q.budget > 0 && self.publisher_key().is_some_and(|k| within(&q.text, q.chars, k, q.budget));
+        // Among typo matches, the name or title itself a typo away (`gmial` → gmail) first
+        let exact = self.exact(&q.text) || (m == Match::Typo && [self.title_norm(), self.slug_norm()].iter().any(|t| within(&q.text, q.chars, t, q.budget)));
+        (self.demoted, !publisher, m, !publisher_typo, !exact, !self.remote, order)
+    }
+}
+
+impl AsRef<Key> for Key {
+    fn as_ref(&self) -> &Key {
+        self
+    }
+}
+
+/// One input the person fills in on the form.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RowInput {
+    pub name: String,
+    pub description: String,
+    pub required: bool,
+    pub secret: bool,
+}
+
+/// What Find a tool shows for one entry (and what "already added" compares). Installing fetches
+/// the entry from the registry again, so nothing else is kept.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Row {
+    pub registry_name: String,
+    pub version: String,
+    /// The registry's title, else a name made from its registry name.
+    pub title: String,
+    pub description: String,
+    /// "http" or "stdio".
+    pub transport: String,
+    pub url: Option<String>,
+    pub command: Option<String>,
+    pub args: Vec<String>,
+    pub inputs: Vec<RowInput>,
+}
+
+impl Row {
+    pub fn publisher(&self) -> Publisher {
+        publisher_of(&self.registry_name)
+    }
+    pub fn is_remote(&self) -> bool {
+        self.transport == "http"
+    }
+}
+
+/// One entry as a search ranks it: what matching needs and the row to show.
+#[derive(Debug, Clone)]
+pub struct DirEntry {
+    pub row: Row,
+    pub publisher: Publisher,
+    key: Key,
+}
+
+impl AsRef<Key> for DirEntry {
+    fn as_ref(&self) -> &Key {
+        &self.key
+    }
 }
 
 /// The title to show: the registry's own, else the part after the slash, else for a generic
@@ -142,110 +337,32 @@ fn display_title(e: &RegistryEntry) -> String {
 impl DirEntry {
     /// `None` for an entry kwnt can't set up in one click: the directory doesn't show those.
     pub fn new(entry: RegistryEntry) -> Option<Self> {
-        entry.plan.as_ref().ok()?;
+        let plan = entry.plan.as_ref().ok()?;
         let publisher = publisher_of(&entry.name);
         let title = display_title(&entry);
-        let slug = entry.name.rsplit('/').next().unwrap_or(&entry.name);
-        let mut ws = words(&title);
-        for w in words(slug) {
-            if !ws.contains(&w) {
-                ws.push(w);
-            }
-        }
-        let publisher_key = publisher_key(&publisher);
-        let (title_norm, name_norm) = (normalize(&title), normalize(&entry.name));
-        Some(Self {
-            hay: format!("{title_norm}\0{name_norm}"),
-            title_norm,
-            slug_norm: normalize(slug),
-            name_norm,
-            words: ws,
-            parts: entry.name.split(['.', '/']).map(normalize).filter(|p| !p.is_empty()).collect(),
-            demoted: entry.name.to_ascii_lowercase().starts_with("ai.smithery/") || entry.placeholder_url,
-            publisher_key,
-            publisher_norm: normalize(&publisher.label),
-            publisher,
+        let demoted = entry.name.to_ascii_lowercase().starts_with("ai.smithery/") || entry.placeholder_url;
+        let key = Key::new(&entry.name, &title, &publisher, demoted, plan.transport == "http")?;
+        let row = Row {
+            transport: plan.transport.clone(),
+            url: plan.url.clone(),
+            command: plan.command.clone(),
+            args: plan.args.clone(),
+            inputs: plan
+                .inputs
+                .iter()
+                .map(|i| RowInput { name: i.name.clone(), description: i.description.clone(), required: i.required, secret: i.secret })
+                .collect(),
+            registry_name: entry.name,
+            version: entry.version,
             title,
-            entry,
-        })
-    }
-
-    fn is_remote(&self) -> bool {
-        self.entry.plan.as_ref().is_ok_and(|p| p.transport == "http")
-    }
-
-    /// The publisher is the query itself (`stripe` → stripe.com).
-    fn publisher_is(&self, q: &str) -> bool {
-        self.publisher_key.as_deref() == Some(q) || self.publisher_norm == q
-    }
-
-    fn direct_match(&self, q: &str) -> Option<Match> {
-        if self.title_norm.starts_with(q) || self.slug_norm.starts_with(q) || self.publisher_is(q) {
-            Some(Match::Prefix)
-        } else if self.words.iter().any(|w| w.starts_with(q)) {
-            Some(Match::WordPrefix)
-        } else {
-            None
-        }
-    }
-
-    /// Every match but a typo.
-    fn close_match(&self, q: &Query) -> Option<Match> {
-        // The title, its words, the registry name, its parts and the publisher's name are all
-        // pieces of `hay`; only the publisher label (`stripecom`) isn't.
-        let may = |t: &str| self.hay.contains(t) || self.publisher_norm == t;
-        if !may(&q.text) && !q.alias.as_deref().is_some_and(may) {
-            return None;
-        }
-        if let Some(m) = self.direct_match(&q.text) {
-            return Some(m);
-        }
-        if q.alias.as_deref().is_some_and(|a| self.direct_match(a).is_some()) {
-            return Some(Match::Alias);
-        }
-        if self.parts.iter().any(|p| p.starts_with(q.text.as_str())) {
-            return Some(Match::NamePart);
-        }
-        if self.title_norm.contains(q.text.as_str()) || self.name_norm.contains(q.text.as_str()) {
-            return Some(Match::Contains);
-        }
-        None
-    }
-
-    fn typo_match(&self, q: &Query) -> Option<Match> {
-        if q.budget == 0 {
-            return None;
-        }
-        let all = || self.words.iter().chain([&self.title_norm, &self.slug_norm]).map(String::as_str);
-        let whole = |w: &str| within(&q.text, q.chars, w, q.budget);
-        if all().any(whole) {
-            return Some(Match::Typo);
-        }
-        let start = |w: &str| match w.char_indices().nth(q.chars) {
-            Some((end, _)) if q.budget == 1 => one_edit_same_length(&q.text, &w[..end]),
-            Some((end, _)) => osa_within(&q.text, &w[..end], q.budget),
-            None => false,
+            description: entry.description,
         };
-        all().any(start).then_some(Match::TypoStart)
+        Some(Self { row, publisher, key })
     }
 
     /// How `q` matches this entry, if at all.
     pub fn matches(&self, q: &str) -> Option<Match> {
-        let q = Query::new(q)?;
-        self.close_match(&q).or_else(|| self.typo_match(&q))
-    }
-
-    fn exact(&self, q: &str) -> bool {
-        self.title_norm == q || self.slug_norm == q
-    }
-
-    /// The sort key; lower comes first.
-    fn key(&self, q: &Query, m: Match, order: usize) -> SortKey {
-        let publisher = self.publisher_is(&q.text);
-        let publisher_typo = !publisher && q.budget > 0 && self.publisher_key.as_deref().is_some_and(|k| within(&q.text, q.chars, k, q.budget));
-        // Among typo matches, the name or title itself a typo away (`gmial` → gmail) first
-        let exact = self.exact(&q.text) || (m == Match::Typo && [&self.title_norm, &self.slug_norm].iter().any(|t| within(&q.text, q.chars, t, q.budget)));
-        (self.demoted, !publisher, m, !publisher_typo, !exact, !self.is_remote(), order)
+        self.key.matches(q)
     }
 }
 
@@ -405,16 +522,17 @@ fn osa_bounded(a: &str, b: &str, max: usize) -> usize {
 }
 
 /// The best `limit` entries for `query`, in order. `entries` is in registry order.
-pub fn rank<'a>(query: &str, entries: impl IntoIterator<Item = &'a DirEntry>, limit: usize) -> Vec<&'a DirEntry> {
+pub fn rank<'a, T: AsRef<Key>>(query: &str, entries: impl IntoIterator<Item = &'a T>, limit: usize) -> Vec<&'a T> {
     let Some(q) = Query::new(query) else { return Vec::new() };
     let mut hits = Vec::new();
     let mut rest = Vec::new();
     let mut shown = 0usize;
     for (order, e) in entries.into_iter().enumerate() {
-        match e.close_match(&q) {
+        let k = e.as_ref();
+        match k.close_match(&q) {
             Some(m) => {
-                shown += usize::from(!e.demoted);
-                hits.push((e.key(&q, m, order), e));
+                shown += usize::from(!k.demoted);
+                hits.push((k.key(&q, m, order), e));
             }
             None if q.budget > 0 => rest.push((order, e)),
             None => {}
@@ -423,19 +541,180 @@ pub fn rank<'a>(query: &str, entries: impl IntoIterator<Item = &'a DirEntry>, li
     // A typo match ranks below every closer match that isn't demoted, so typos are only
     // looked for when those leave room.
     if shown < limit {
-        hits.extend(rest.into_iter().filter_map(|(order, e)| e.typo_match(&q).map(|m| (e.key(&q, m, order), e))));
+        hits.extend(rest.into_iter().filter_map(|(order, e)| e.as_ref().typo_match(&q).map(|m| (e.as_ref().key(&q, m, order), e))));
     }
     hits.sort_unstable_by_key(|h| h.0);
     hits.into_iter().take(limit).map(|(_, e)| e).collect()
 }
 
-/// The copy itself: every one-click entry's latest version, by registry name.
-#[derive(Debug, Default)]
+/// Where one entry's [`Row`] sits in its [`RowFile`].
+#[derive(Debug, Clone, Copy)]
+struct RowAt {
+    offset: u32,
+    len: u32,
+}
+
+/// One entry of the copy: its packed [`Key`] in memory, its row on disk.
+#[derive(Debug, Clone)]
+pub struct Item {
+    key: Key,
+    row: RowAt,
+}
+
+impl AsRef<Key> for Item {
+    fn as_ref(&self) -> &Key {
+        &self.key
+    }
+}
+
+/// The rows of a copy, one JSON object after another in a file of kwnt's own (perf-idle-memory
+/// A2: in memory they were most of the +153 MB a full copy cost). A search reads back only its
+/// hits. Written once by the first sync, then only appended to; removed when the last copy
+/// that uses it goes.
+pub struct RowFile {
+    path: PathBuf,
+    file: Mutex<File>,
+}
+
+impl std::fmt::Debug for RowFile {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RowFile").field("path", &self.path).finish()
+    }
+}
+
+/// The largest a row file may grow (offsets are 32 bits).
+const MAX_ROW_FILE: u64 = u32::MAX as u64;
+
+impl RowFile {
+    fn create(path: PathBuf) -> Result<Self, String> {
+        if let Some(dir) = path.parent() {
+            std::fs::create_dir_all(dir).map_err(|e| format!("MCP directory: can't make {}: {e}", dir.display()))?;
+        }
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .open(&path)
+            .map_err(|e| format!("MCP directory: can't write {}: {e}", path.display()))?;
+        Ok(Self { path, file: Mutex::new(file) })
+    }
+
+    fn append(&self, row: &Row) -> Result<RowAt, String> {
+        let bytes = serde_json::to_vec(row).map_err(|e| e.to_string())?;
+        let mut f = self.file.lock().map_err(|_| "MCP directory: row file lock poisoned".to_string())?;
+        let offset = f.seek(SeekFrom::End(0)).map_err(|e| e.to_string())?;
+        if offset + bytes.len() as u64 > MAX_ROW_FILE {
+            return Err("MCP directory: the row file is full".into());
+        }
+        f.write_all(&bytes).map_err(|e| format!("MCP directory: can't write a row: {e}"))?;
+        Ok(RowAt { offset: offset as u32, len: bytes.len() as u32 })
+    }
+
+    fn read(&self, at: RowAt) -> Option<Row> {
+        let mut buf = vec![0u8; at.len as usize];
+        {
+            let mut f = self.file.lock().ok()?;
+            f.seek(SeekFrom::Start(u64::from(at.offset))).ok()?;
+            f.read_exact(&mut buf).ok()?;
+        }
+        serde_json::from_slice(&buf).map_err(|e| tracing::warn!(error = %e, "MCP directory: a row didn't read back")).ok()
+    }
+}
+
+impl Drop for RowFile {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// The copy itself: every one-click entry's latest version, sorted by registry name.
+#[derive(Debug)]
 pub struct Copy {
-    pub entries: BTreeMap<String, DirEntry>,
+    items: Vec<Item>,
+    rows: Arc<RowFile>,
     /// When the sync that made this copy started (the next `updated_since`).
     pub synced_from: Option<SystemTime>,
 }
+
+impl Copy {
+    pub fn len(&self) -> usize {
+        self.items.len()
+    }
+    pub fn is_empty(&self) -> bool {
+        self.items.is_empty()
+    }
+    /// Registry names, in order.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.items.iter().map(|i| i.key.name())
+    }
+    /// The row of one entry, read back from disk.
+    pub fn row(&self, name: &str) -> Option<Row> {
+        let at = self.items.binary_search_by(|i| i.key.name().cmp(name)).ok()?;
+        self.rows.read(self.items[at].row)
+    }
+}
+
+/// One entry a sync page brought: a new or changed entry, or one that's gone (deleted, or no
+/// longer one click).
+enum Change {
+    Put(Item),
+    Gone(String),
+}
+
+impl Change {
+    fn name(&self) -> &str {
+        match self {
+            Change::Put(i) => i.key.name(),
+            Change::Gone(n) => n,
+        }
+    }
+}
+
+/// `previous` (sorted by name) with `changes` (in arrival order) applied: the last change to a
+/// name wins. Sorted by name; at most `max` entries (the rest, last in name order, are dropped).
+fn merge(previous: &[Item], mut changes: Vec<Change>, max: usize) -> Vec<Item> {
+    // A stable sort keeps arrival order among one name's changes; keep each name's last one.
+    changes.sort_by(|a, b| a.name().cmp(b.name()));
+    let mut last: Vec<Change> = Vec::with_capacity(changes.len());
+    for c in changes {
+        match last.last_mut() {
+            Some(l) if l.name() == c.name() => *l = c,
+            _ => last.push(c),
+        }
+    }
+    let mut out = Vec::with_capacity(previous.len() + last.len());
+    let (mut old, mut new) = (previous.iter().peekable(), last.into_iter().peekable());
+    loop {
+        let take_new = match (old.peek(), new.peek()) {
+            (None, None) => break,
+            (Some(_), None) => false,
+            (None, Some(_)) => true,
+            (Some(o), Some(n)) => match o.key.name().cmp(n.name()) {
+                std::cmp::Ordering::Less => false,
+                std::cmp::Ordering::Greater => true,
+                std::cmp::Ordering::Equal => {
+                    old.next();
+                    true
+                }
+            },
+        };
+        if take_new {
+            if let Some(Change::Put(i)) = new.next() {
+                out.push(i);
+            }
+        } else if let Some(o) = old.next() {
+            out.push(o.clone());
+        }
+    }
+    if out.len() > max {
+        tracing::warn!(kept = max, dropped = out.len() - max, "MCP directory: more entries than the safety stop; the rest are left out");
+        out.truncate(max);
+    }
+    out
+}
+
+static ROW_FILES: AtomicUsize = AtomicUsize::new(0);
 
 /// The directory: the copy, once the first sync finished. The registry it syncs from is passed
 /// in (`AppState::mcp_registry`, which `KWNT_MCP_REGISTRY_URL` and tests point elsewhere).
@@ -445,6 +724,8 @@ pub struct Directory {
     /// What the background sync needs, from [`Directory::arm`] until the first search takes it
     /// and starts the sync. `None` before arming (tests) and after the sync started.
     armed: Mutex<Option<(Arc<McpRegistry>, CancellationToken)>>,
+    /// Where the row file goes (kwnt's data folder); the system temp folder when unset (tests).
+    rows_dir: Option<PathBuf>,
 }
 
 /// Where a search answer came from.
@@ -456,13 +737,18 @@ pub enum Source {
 }
 
 pub struct SearchAnswer {
-    pub entries: Vec<DirEntry>,
+    pub entries: Vec<Row>,
     pub source: Source,
     /// Neither a copy nor the registry could answer.
     pub unavailable: bool,
 }
 
 impl Directory {
+    /// A directory whose row file goes in `rows_dir` (kwnt's data folder).
+    pub fn new(rows_dir: PathBuf) -> Self {
+        Self { rows_dir: Some(rows_dir), ..Self::default() }
+    }
+
     /// The current copy, if the first sync has finished.
     pub fn copy(&self) -> Option<Arc<Copy>> {
         self.copy.read().ok().and_then(|c| c.clone())
@@ -472,6 +758,16 @@ impl Directory {
         if let Ok(mut c) = self.copy.write() {
             *c = Some(Arc::new(copy));
         }
+    }
+
+    /// A fresh row file: in kwnt's data folder, or a unique name in the temp folder.
+    fn new_row_file(&self) -> Result<RowFile, String> {
+        let n = ROW_FILES.fetch_add(1, Ordering::Relaxed);
+        let path = match &self.rows_dir {
+            Some(dir) => dir.join(format!("mcp-directory-{n}.rows")),
+            None => std::env::temp_dir().join(format!("kwnt-mcp-directory-{}-{n}.rows", std::process::id())),
+        };
+        RowFile::create(path)
     }
 
     /// Startup: the background sync starts on the first search ([`Directory::search`]), not now.
@@ -493,7 +789,7 @@ impl Directory {
     pub async fn search(self: &Arc<Self>, registry: &McpRegistry, query: &str) -> SearchAnswer {
         self.start_sync();
         if let Some(copy) = self.copy() {
-            let entries = rank(query, copy.entries.values(), MAX_RESULTS).into_iter().cloned().collect();
+            let entries = rank(query, copy.items.iter(), MAX_RESULTS).into_iter().filter_map(|i| copy.rows.read(i.row)).collect();
             return SearchAnswer { entries, source: Source::Copy, unavailable: false };
         }
         if normalize(query).chars().count() < MIN_QUERY_CHARS {
@@ -502,7 +798,7 @@ impl Directory {
         match registry.search(query).await {
             Ok(hits) => {
                 let all: Vec<DirEntry> = hits.into_iter().filter_map(DirEntry::new).collect();
-                let entries = rank(query, all.iter(), MAX_RESULTS).into_iter().cloned().collect();
+                let entries = rank(query, all.iter(), MAX_RESULTS).into_iter().map(|e| e.row.clone()).collect();
                 SearchAnswer { entries, source: Source::Live, unavailable: false }
             }
             Err(e) => {
@@ -521,10 +817,13 @@ impl Directory {
             let t = t.checked_sub(OVERLAP).unwrap_or(t);
             chrono::DateTime::<chrono::Utc>::from(t).to_rfc3339_opts(chrono::SecondsFormat::Secs, true)
         });
-        let mut entries = match (&previous, &since) {
-            (Some(c), Some(_)) => c.entries.clone(),
-            _ => BTreeMap::new(),
+        // An update appends to the copy's own row file (readers only ever read rows written
+        // before they ranked); the first sync starts a new one.
+        let (base, rows): (&[Item], Arc<RowFile>) = match (&previous, &since) {
+            (Some(c), Some(_)) => (&c.items, c.rows.clone()),
+            _ => (&[], Arc::new(self.new_row_file()?)),
         };
+        let mut changes = Vec::new();
         let mut cursor: Option<String> = None;
         let mut seen = 0usize;
         for page_no in 0..MAX_PAGES {
@@ -535,13 +834,8 @@ impl Directory {
             seen += page.items.len();
             for (name, entry) in page.items {
                 match entry.and_then(DirEntry::new) {
-                    Some(e) if entries.len() < MAX_ENTRIES || entries.contains_key(&name) => {
-                        entries.insert(name, e);
-                    }
-                    Some(_) => {}
-                    None => {
-                        entries.remove(&name);
-                    }
+                    Some(e) => changes.push(Change::Put(Item { row: rows.append(&e.row)?, key: e.key })),
+                    None => changes.push(Change::Gone(name)),
                 }
             }
             match page.next_cursor {
@@ -549,8 +843,9 @@ impl Directory {
                 _ => break,
             }
         }
-        let kept = entries.len();
-        self.set(Copy { entries, synced_from: Some(started) });
+        let items = merge(base, changes, MAX_ENTRIES);
+        let kept = items.len();
+        self.set(Copy { items, rows, synced_from: Some(started) });
         tracing::info!(listed = seen, kept, full = since.is_none(), "MCP directory synced");
         Ok(kept)
     }
@@ -594,7 +889,7 @@ mod tests {
     }
 
     fn names(query: &str, list: &[DirEntry]) -> Vec<String> {
-        rank(query, list.iter(), 50).into_iter().map(|e| e.entry.name.clone()).collect()
+        rank(query, list.iter(), 50).into_iter().map(|e| e.row.registry_name.clone()).collect()
     }
 
     #[test]
@@ -604,7 +899,7 @@ mod tests {
         assert_eq!(ranked[0], "com.stripe/mcp", "{ranked:?}");
         let top = &rank("stripe", list.iter(), 1)[0];
         assert_eq!(top.publisher, Publisher { label: "stripe.com".into(), kind: "domain" });
-        assert_eq!(top.title, "Stripe");
+        assert_eq!(top.row.title, "Stripe");
         // eu.nordicmcp/stripe's only address is https://nordicmcp.eu/mcp/stripe/{token}: not one-click
         assert!(!ranked.iter().any(|n| n == "eu.nordicmcp/stripe"), "{ranked:?}");
         // mcpb packages aren't installable either
@@ -734,9 +1029,9 @@ mod tests {
         // pg.ddx.io's owner is ddx.io, not "pg": the alias for PostgreSQL comes first
         assert_eq!(names("pg", &list), ["io.github.x/postgresql-tools", "io.ddx.pg/archive"]);
         // stripecheckup.vercel.app isn't Vercel's own
-        assert_eq!(list[4].publisher_key, None);
-        assert_eq!(list[1].publisher_key.as_deref(), Some("github"));
-        assert_eq!(list[0].publisher_key.as_deref(), Some("robinsonaisystems"));
+        assert_eq!(list[4].key.publisher_key(), None);
+        assert_eq!(list[1].key.publisher_key(), Some("github"));
+        assert_eq!(list[0].key.publisher_key(), Some("robinsonaisystems"));
     }
 
     #[test]
@@ -746,12 +1041,90 @@ mod tests {
         let list = remotes(&named.iter().map(|(n, t)| (n.as_str(), t.as_str())).collect::<Vec<_>>());
         let top = rank("stripe", list.iter(), MAX_RESULTS);
         assert_eq!(top.len(), MAX_RESULTS);
-        assert!(top.iter().all(|e| e.entry.name.starts_with("com.acme")));
+        assert!(top.iter().all(|e| e.row.registry_name.starts_with("com.acme")));
         let ranked = names("stripe", &list);
         assert_eq!((ranked.len(), ranked.last().map(String::as_str)), (21, Some("info.stride/stride")), "{ranked:?}");
         // With room left, the typo match is there, last
         assert_eq!(names("stride", &list)[0], "info.stride/stride");
-        assert_eq!(rank("stripe", list[15..].iter(), MAX_RESULTS).last().map(|e| e.entry.name.as_str()), Some("info.stride/stride"));
+        assert_eq!(rank("stripe", list[15..].iter(), MAX_RESULTS).last().map(|e| e.row.registry_name.as_str()), Some("info.stride/stride"));
+    }
+
+    /// perf-idle-memory A2: an entry of the copy is a packed key plus where its row sits.
+    #[test]
+    fn a_kept_entry_is_small_and_its_key_reads_back() {
+        assert!(std::mem::size_of::<Item>() <= 40, "{}", std::mem::size_of::<Item>());
+        let list = fixture(STRIPE);
+        let stripe = list.iter().find(|e| e.row.registry_name == "com.stripe/mcp").unwrap();
+        let k = &stripe.key;
+        assert_eq!(k.name(), "com.stripe/mcp");
+        assert_eq!((k.title_norm(), k.name_norm(), k.slug_norm()), ("stripe", "comstripemcp", "mcp"));
+        assert_eq!(k.words().collect::<Vec<_>>(), ["stripe", "mcp"]);
+        assert_eq!((k.publisher_norm(), k.publisher_key()), ("stripecom", Some("stripe")));
+        assert_eq!(k.parts().collect::<Vec<_>>(), ["com", "stripe", "mcp"]);
+        assert!(k.remote && !k.demoted);
+        // What matching keeps is a small part of the entry: no description, plan or inputs
+        assert!(k.text.len() < 64, "{}", k.text.len());
+        let full = serde_json::to_vec(&stripe.row).unwrap().len();
+        assert!(k.text.len() * 2 < full, "{} vs {full}", k.text.len());
+    }
+
+    fn item(name: &str, n: u32) -> Item {
+        let p = publisher_of(name);
+        Item { key: Key::new(name, name, &p, false, true).unwrap(), row: RowAt { offset: n, len: 1 } }
+    }
+
+    fn put(name: &str, n: u32) -> Change {
+        Change::Put(item(name, n))
+    }
+
+    #[test]
+    fn merge_keeps_name_order_and_the_last_change_wins() {
+        let previous = vec![item("a.x/one", 0), item("b.x/two", 1), item("c.x/three", 2)];
+        let changes = vec![
+            put("d.x/four", 10),
+            Change::Gone("b.x/two".into()),
+            put("a.x/one", 11),
+            put("a.x/one", 12),
+            put("e.x/five", 13),
+            Change::Gone("e.x/five".into()),
+            Change::Gone("zz.x/never-there".into()),
+        ];
+        let out = merge(&previous, changes, 100);
+        let got: Vec<(&str, u32)> = out.iter().map(|i| (i.key.name(), i.row.offset)).collect();
+        assert_eq!(got, [("a.x/one", 12), ("c.x/three", 2), ("d.x/four", 10)]);
+        // A gone entry that comes back later in the same sync is kept
+        let out = merge(&[], vec![put("a.x/one", 1), Change::Gone("a.x/one".into()), put("a.x/one", 3)], 100);
+        assert_eq!(out.iter().map(|i| i.row.offset).collect::<Vec<_>>(), [3]);
+    }
+
+    /// The registry had 74,866 entries on Nov 26 and the old 60,000 stop cut off the end of the
+    /// alphabet. Every entry is kept now; the stop only guards a registry that never ends.
+    #[test]
+    fn more_than_sixty_thousand_entries_are_all_kept() {
+        let changes: Vec<Change> = (0..75_000u32).map(|i| put(&format!("io.github.u{i:05}/tool"), i)).collect();
+        let out = merge(&[], changes, MAX_ENTRIES);
+        assert_eq!(out.len(), 75_000);
+        assert_eq!(out.last().map(|i| i.key.name()), Some("io.github.u74999/tool"));
+        assert!(out.windows(2).all(|w| w[0].key.name() < w[1].key.name()));
+        assert_eq!(merge(&out, vec![], 10).len(), 10, "the safety stop still holds");
+    }
+
+    #[test]
+    fn rows_wait_on_disk_and_the_file_goes_with_the_copy() {
+        let dir = std::env::temp_dir().join(format!("kwnt-dir-rows-test-{}", std::process::id()));
+        let d = Directory::new(dir.clone());
+        let rows = d.new_row_file().unwrap();
+        let path = rows.path.clone();
+        assert!(path.starts_with(&dir));
+        let list = fixture(NOTION);
+        let at: Vec<RowAt> = list.iter().map(|e| rows.append(&e.row).unwrap()).collect();
+        for (e, at) in list.iter().zip(&at).rev() {
+            assert_eq!(rows.read(*at).as_ref(), Some(&e.row));
+        }
+        assert!(rows.read(RowAt { offset: at[0].offset, len: at[0].len - 1 }).is_none(), "a cut row isn't half read");
+        drop(rows);
+        assert!(!path.exists(), "the row file is removed with its copy");
+        let _ = std::fs::remove_dir_all(dir);
     }
 
     #[test]
