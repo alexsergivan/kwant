@@ -17,7 +17,7 @@ const arg = (k, d) => {
 };
 const SECONDS = Number(arg('seconds', 20));
 const SHOT = arg('shot', '');
-const { chromium } = await import(process.env.PLAYWRIGHT_CORE ?? '/home/maus/work/iris-ft-shots/node_modules/playwright-core/index.mjs');
+const { chromium } = await import(process.env.PLAYWRIGHT_CORE ?? '/home/maus/work/iris-agb-shots/node_modules/playwright-core/index.mjs');
 const exe = process.env.CHROMIUM ?? '/home/maus/.cache/ms-playwright/chromium_headless_shell-1248/chrome-headless-shell-linux-arm64/chrome-headless-shell';
 
 const dist = path.join(path.dirname(fileURLToPath(import.meta.url)), 'dist');

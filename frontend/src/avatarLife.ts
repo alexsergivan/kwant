@@ -1,3 +1,5 @@
+import { useEffect } from 'react';
+
 // Living avatars (autonomy/living-avatars/design.md, "Idle life" and "Speed"): ONE shared clock for every live avatar
 // in the app. It never renders React: ModernAvatar draws the rest face plus hidden frame groups, and this module only
 // sets `data-life` (which frame shows) and `data-hop` (the body up one cell) on the avatar's root. CSS does the rest.
@@ -6,7 +8,9 @@
 //   - One shared IntersectionObserver: avatars off screen get no idle events.
 //   - The document hidden (or the Mac app's window hidden): the timer is cleared, any frame in flight ends at rest.
 //   - Reduced motion: nothing registers, nothing is scheduled; faces still follow the mood (ModernAvatar).
-//   - Caps: at most 3 avatars mid-event, at least 400 ms between idle event starts, one sidebar blink per 1.5 s.
+//   - Caps: at most 3 avatars mid-event (moments count too, though they never wait), at least 400 ms between idle
+//     event starts, one sidebar blink per 1.5 s, and each avatar rests 1 s after its own event before the next idle
+//     one (so no avatar flips more than ~3 times a second; Mira's design check, Nov 26).
 //
 // The timings are life.js's (design/life.js), which Mira's mockup proved.
 
@@ -40,6 +44,8 @@ export const MAX_ACTIVE = 3;
 export const MIN_GAP = 400;
 export const LIST_GAP = 1500;
 export const FIRST_MIN = 600;
+/** An avatar rests this long after its own event ends before its next idle event or hover glance. */
+export const REST_AFTER = 1000;
 const HELLO_WAIT = 5000;
 
 /** The root element a live avatar is drawn in (an HTMLElement in the app; any attribute holder in tests). */
@@ -63,8 +69,10 @@ interface Entry {
   kwantId?: string;
   quirk: LifeQuirk;
   busy: boolean;
-  /** Counted in the 3-at-once cap (idle events and hover; moments are not capped but still count). */
+  /** Counted in the 3-at-once cap. Idle events and hover wait for a free slot; moments start at once but count. */
   counted: boolean;
+  /** When this avatar's last event ended (or was cut short): it rests REST_AFTER from here. */
+  lastEnd: number;
   visible: boolean;
   nextBlink: number;
   nextQuirk: number;
@@ -120,6 +128,7 @@ export function createLife(env: LifeEnv) {
       e.busy = false;
       if (e.counted) active--;
       e.counted = false;
+      e.lastEnd = env.now();
     }
     show(e, null, false);
   };
@@ -139,6 +148,7 @@ export function createLife(env: LifeEnv) {
       e.busy = false;
       if (e.counted) active--;
       e.counted = false;
+      e.lastEnd = env.now();
     });
     // A step due now shows now (before paint, for the blink-through), not on the next timer.
     if (delay <= 0) drain(env.now());
@@ -153,7 +163,7 @@ export function createLife(env: LifeEnv) {
     if (!e.visible || e.busy) return Infinity;
     const due = Math.min(e.nextBlink, e.nextQuirk);
     if (!Number.isFinite(due)) return Infinity;
-    return Math.max(due, lastStart + MIN_GAP, e.zone === 'list' ? lastList + LIST_GAP : -Infinity);
+    return Math.max(due, lastStart + MIN_GAP, e.lastEnd + REST_AFTER, e.zone === 'list' ? lastList + LIST_GAP : -Infinity);
   };
 
   function arm() {
@@ -215,7 +225,7 @@ export function createLife(env: LifeEnv) {
     /** Start idle life on an avatar root. Returns the unregister function. Under reduced motion: nothing. */
     register(el: LifeEl, o: LifeOptions): () => void {
       if (env.reduced()) return () => undefined;
-      const e: Entry = { el, zone: o.zone, mood: o.mood ?? 'idle', kwantId: o.kwantId, quirk: o.quirk ?? 'none', busy: false, counted: false, visible: true, nextBlink: Infinity, nextQuirk: Infinity, lastBulb: -Infinity };
+      const e: Entry = { el, zone: o.zone, mood: o.mood ?? 'idle', kwantId: o.kwantId, quirk: o.quirk ?? 'none', busy: false, counted: false, lastEnd: -Infinity, visible: true, nextBlink: Infinity, nextQuirk: Infinity, lastBulb: -Infinity };
       firstEvents(e, env.now());
       entries.set(el, e);
       started++;
@@ -245,7 +255,7 @@ export function createLife(env: LifeEnv) {
       if (mood !== 'failed' && from !== 'finished') steps.push(['closed', false, BLINK_THROUGH]);
       if (mood === 'finished') steps.push([null, true, HOP], [null, false, HOP]);
       if (mood === 'needs_you') steps.push([null, true, HOP], [null, false, HOP], [null, true, HOP]);
-      if (steps.length) play(e, steps, false);
+      if (steps.length) play(e, steps, true);
       else cancel(e);
       arm();
     },
@@ -273,7 +283,7 @@ export function createLife(env: LifeEnv) {
     /** Perk-up: you sent this bot a message. After today's 160 ms blink: wide eyes, "o" and one hop. */
     perk(kwantId: string) {
       if (paused) return;
-      for (const e of entries.values()) if (e.kwantId === kwantId && e.visible) play(e, [['perk', true, HOP]], false, NOTICE_BLINK);
+      for (const e of entries.values()) if (e.kwantId === kwantId && e.visible) play(e, [['perk', true, HOP]], true, NOTICE_BLINK);
       arm();
     },
     /** Hello: a bot that just joined the space. Plays now on its live avatars, or on the next one to mount (5 s). */
@@ -302,13 +312,16 @@ export function createLife(env: LifeEnv) {
   };
 
   function playHello(e: Entry) {
-    play(e, [['happy', true, HOP], ['happy', false, HOP], ['happy', true, HOP], ['happy', false, BULB_HOLD]], false);
+    play(e, [['happy', true, HOP], ['happy', false, HOP], ['happy', true, HOP], ['happy', false, BULB_HOLD]], true);
   }
 
   // The hover step is one shared function, so a pointer moving on can find and drop it.
   function hoverStart() {
     const e = hoverEl ? entries.get(hoverEl) : undefined;
     if (!e || e.busy || !BLINKS.has(e.mood) || active >= MAX_ACTIVE) return;
+    // Still resting after its own event: glance once the rest is over, if the pointer is still there.
+    const restUntil = e.lastEnd + REST_AFTER;
+    if (env.now() < restUntil) return push(restUntil, e, hoverStart);
     play(e, e.mood === 'idle' ? [['closed', false, BLINK], [null, false, 200], ['glanceR', false, GLANCE]] : [['closed', false, BLINK]], true);
     if (e.zone === 'list') lastList = env.now();
   }
@@ -348,6 +361,15 @@ function appLife(): Life {
   if (typeof IntersectionObserver !== 'undefined')
     io = new IntersectionObserver((es) => es.forEach((x) => life.setVisible(x.target as HTMLElement, x.isIntersecting)));
   return life;
+}
+
+/** Join the one shared clock from a component (no timer of its own): life on `ref`'s element while mounted. */
+export function useLife(ref: { current: HTMLElement | null }, o: LifeOptions): void {
+  const { zone, mood, kwantId, quirk } = o;
+  useEffect(() => {
+    if (!ref.current) return;
+    return registerLife(ref.current, { zone, mood, kwantId, quirk });
+  }, [ref, zone, mood, kwantId, quirk]);
 }
 
 /** ModernAvatar: start idle life on its root (when `life` is set). Returns the cleanup. */

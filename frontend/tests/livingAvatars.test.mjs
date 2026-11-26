@@ -40,7 +40,9 @@ test('glasses always use the lens-safe frames; the headband does except for glan
       else assert.deepEqual(got, s.EYES[e], `${id} ${e}`);
     }
   }
-  // Scoped to the lens-safe frames: sad's brows (y8-9) still cross the rim, flagged to Mira in impl.md.
+  // Scoped to the lens-safe frames. Sad is exempt on purpose (Mira's design check, Nov 26): glasses and the headband
+  // draw in front of the face, so on glasses only the two inner brow cells show above the rim (they read as worried),
+  // the headband hides all four, and the sad eyes, frown and × badge still read as failed.
   for (const [e, cells] of Object.entries(s.LENS_SAFE))
     for (const [x, y, w, h] of cells) assert.ok(x >= 10 && x + w <= 16 && y >= 10 && y + h <= 13, `${e} [${x},${y},${w},${h}]`);
 });
@@ -299,6 +301,80 @@ test('no frame flips faster than every 100 ms (at most 3 flips in any 333 ms per
     last = now;
   });
   for (let i = 1; i < flips.length; i++) assert.ok(flips[i] - flips[i - 1] >= 100, `flip gap ${flips[i] - flips[i - 1]}`);
+});
+
+test('moments start at once but count toward the 3-at-once cap: 4 bots perk, no idle event starts until fewer than 3 move', () => {
+  const f = fakeEnv({ seed: 5 });
+  const life = s.createLife(f.env);
+  const perked = Array.from({ length: 4 }, () => el());
+  perked.forEach((e, i) => life.register(e, { zone: 'full', kwantId: `p${i}` }));
+  const others = Array.from({ length: 6 }, () => el());
+  others.forEach((e, i) => life.register(e, { zone: 'full', kwantId: `o${i}` }));
+  perked.forEach((_, i) => life.perk(`p${i}`));
+  assert.equal(life.stats().active, 4, 'all four count');
+  f.advance(s.NOTICE_BLINK);
+  for (const e of perked) assert.equal(e.attrs['data-life'], 'perk', 'every perk plays at once, uncapped');
+  // While 4 are mid-moment, no idle event may start on anyone else.
+  let idleDuringMoments = 0;
+  const until = f.now() + s.HOP;
+  const before = others.map((e) => e.log.length);
+  f.advance(s.HOP - 1, () => (idleDuringMoments += others.reduce((n, e, i) => n + (e.log.length > before[i] ? 1 : 0), 0)));
+  assert.ok(f.now() < until);
+  assert.equal(idleDuringMoments, 0, 'idle life waits');
+  f.advance(1);
+  assert.equal(life.stats().active, 0, 'moments released their slots');
+  // Afterwards the idle clock still never has more than 3 moving.
+  let maxMoving = 0;
+  f.advance(60000, () => (maxMoving = Math.max(maxMoving, moving([...perked, ...others]))));
+  assert.ok(maxMoving <= s.MAX_ACTIVE, `moving ${maxMoving}`);
+});
+
+test('each avatar rests 1 s after its own event: no avatar changes frame more than 6 times in any 1 s window', () => {
+  for (const seed of [2, 11, 23, 41]) {
+    const f = fakeEnv({ seed });
+    const life = s.createLife(f.env);
+    const a = el();
+    const row = el();
+    life.register(a, { zone: 'full', kwantId: 'a', quirk: 'twitch' });
+    life.register(row, { zone: 'list', kwantId: 'r' });
+    const flips = new Map([[a, []], [row, []]]);
+    const last = new Map([[a, '{}'], [row, '{}']]);
+    let hoverAt = 0;
+    f.advance(180000, (t) => {
+      for (const e of [a, row]) {
+        const now = JSON.stringify(e.attrs);
+        if (now !== last.get(e)) flips.get(e).push(t);
+        last.set(e, now);
+      }
+      // Keep pointing at the row now and then, so hover glances mix with its idle blinks.
+      if (t - hoverAt > 2500) {
+        hoverAt = t;
+        life.hover(row);
+      }
+    });
+    for (const [e, ts] of flips) {
+      assert.ok(ts.length > 10, `seed ${seed}: it moves`);
+      for (let i = 0; i + 6 < ts.length; i++) assert.ok(ts[i + 6] - ts[i] >= 1000, `seed ${seed}: 7 flips in ${ts[i + 6] - ts[i]} ms`);
+    }
+  }
+});
+
+test('one bot on screen while it works: the scene hides the row avatar behind a same-size slot; the landed reply hops once', async () => {
+  const { readFileSync } = await import('node:fs');
+  const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
+  const css = readFileSync(new URL('../src/styles/modern.css', import.meta.url), 'utf8');
+  const liveRow = chat.slice(chat.indexOf('data-live-row=""'), chat.indexOf('data-live-bubble-body=""'));
+  // The slots hold the avatar's exact size (w-9 = 36 px, w-5 = 20 px), so nothing moves when the reply lands.
+  assert.match(chat, /const REPLY_AVATAR = 36;/);
+  assert.match(chat, /const REPLY_AVATAR_PHONE = 20;/);
+  assert.match(liveRow, /\{sceneShown \? \(\s+<span className="hidden sm:block w-9 h-9 shrink-0" aria-hidden="true" data-live-avatar-slot="" \/>\s+\) : \(\s+<span className="hidden sm:contents">\s+<ModernAvatar role=\{liveName\} name=\{liveName\} size=\{REPLY_AVATAR\} \/>/);
+  assert.match(liveRow, /\{sceneShown \? \(\s+<span className="sm:hidden shrink-0 w-5 h-5" aria-hidden="true" data-live-avatar-slot="" \/>\s+\) : \(\s+<span className="sm:hidden shrink-0 inline-flex">\s+<ModernAvatar role=\{liveName\} name=\{liveName\} size=\{REPLY_AVATAR_PHONE\} \/>/);
+  // Queued / waiting on the person: no scene, so the avatar stays (sceneShown is false there).
+  assert.match(chat, /const sceneShown = bubble === 'starting' \|\| \(bubble === 'text' && /);
+  // The landed reply (a stream handing over to its saved copy) hops once, both on desktop and phone.
+  assert.equal((chat.match(/!isStreaming && newestReplies\.has\(msg\.id\) && freshTrack\.current\.landed\.has\(msg\.id\) \? 'kw-avatar-land' : ''/g) ?? []).length, 2);
+  assert.match(css, /\.kw-avatar-land \.kw-avatar-body \{ animation: kw-avatar-land 240ms steps\(1, end\) 1; \}/);
+  assert.match(css, /prefers-reduced-motion: reduce\) \{\s+\.kw-avatar-land \.kw-avatar-body \{ animation: none; \}/);
 });
 
 // ---- The rail moment ----

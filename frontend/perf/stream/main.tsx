@@ -132,6 +132,7 @@ declare global {
       message: (kind?: 'reply' | 'question') => string;
       approval: () => string;
       withdraw: (id: string) => void;
+      end: () => void;
     };
   }
 }
@@ -190,6 +191,8 @@ window.__harness = {
     emit({ type: 'ApprovalRequired', kwant_id: 'k1', context_id: CTX, data: { id, tool_name: 'Bash', details: { kwant_id: 'k1', kwant_name: 'Ada', channel_id: CTX, context_id: CTX, command: 'npm run build && npm test', description: 'Build and test the app' } } });
     return id;
   },
+  // The turn ends after its reply landed (living-avatars shots: the live row hands over to the saved reply).
+  end: () => emit({ type: 'turn_ended', kwant_id: 'k1', context_id: CTX, data: { turn_id: 't1', kwant_id: 'k1', context_id: CTX, outcome: 'completed' } }),
   withdraw: (id) => emit({ type: 'ApprovalWithdrawn', kwant_id: 'k1', context_id: CTX, data: { id } }),
   // Sends `count` tokens at `perSecond`, on a timer, the way the server's events arrive.
   stream: (count, perSecond) =>
