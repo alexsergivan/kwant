@@ -76,11 +76,20 @@ function box(answer) {
 const NOW = Date.parse('2026-11-25T12:00:00Z');
 const OPENS = '2026-11-27T19:30:00Z';
 
-test('opensLabel: "Fri 7:30 PM" in the person’s own time zone (same shape as the Gather card)', () => {
+test('opensLabel: under six days away, "Fri 7:30 PM" in the person’s own time zone (same shape as the Gather card)', () => {
   const at = Date.parse(OPENS);
   const want = new Date(at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }).replace(',', '');
-  assert.equal(m.opensLabel(at), want);
-  assert.match(m.opensLabel(at), /^[A-Z][a-z]{2} \d{1,2}:\d{2} [AP]M$/);
+  assert.equal(m.opensLabel(at, NOW), want);
+  assert.match(m.opensLabel(at, NOW), /^[A-Z][a-z]{2} \d{1,2}:\d{2} [AP]M$/);
+  assert.match(m.opensLabel(NOW + 6 * 86_400_000 - 60_000, NOW), /^[A-Z][a-z]{2} \d{1,2}:\d{2} [AP]M$/, 'a minute under six days: still weekday only');
+});
+
+test('opensLabel: six days or more away, the date too ("Fri, Dec 4, 7:30 PM"), so it can’t name the wrong Friday', () => {
+  const at = Date.parse('2026-12-04T19:30:00Z');
+  const want = new Date(at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+  assert.equal(m.opensLabel(at, NOW), want);
+  assert.match(m.opensLabel(at, NOW), /^[A-Z][a-z]{2}, [A-Z][a-z]{2} \d{1,2}, \d{1,2}:\d{2} [AP]M$/);
+  assert.equal(m.opensLabel(NOW + 6 * 86_400_000, NOW).split(',').length, 3, 'exactly six days: dated');
 });
 
 test('opensAhead: only a live card whose read says open with opens_at still ahead; past, missing or junk opens_at stays Live', () => {
@@ -136,6 +145,8 @@ test('results card: Delete now asks first (safe answer focused), Escape and Keep
   const dlg = v.host.querySelector('[role="alertdialog"][data-confirm="delete"]');
   assert.ok(dlg);
   assert.equal(dlg.getAttribute('aria-label'), m.RESULTS_DELETE.q);
+  assert.match(dlg.textContent, /Players' names and answers are deleted from this Mac now, not (on .+|on the deletion date)\. This card stays in your chat as it is\. This can't be undone\./);
+  assert.doesNotMatch(dlg.textContent, /scores/, 'the card keeps showing scores, so the copy doesn’t promise they go');
   assert.equal(document.activeElement?.textContent.trim(), 'Keep until then');
   assert.equal(calls.length, 0, 'nothing sent before Yes');
   dlg.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
@@ -154,9 +165,9 @@ test('results card: Delete it all calls DELETE /api/pockets/:code once, then the
   await click(button(v, 'Delete now'));
   await click(button(v, 'Delete it all'));
   assert.deepEqual(calls, [['DELETE', '/api/pockets/fq7k2m']]);
-  assert.equal(v.host.querySelector('[role="status"][data-done="ok"]').textContent.trim(), m.RESULTS_DELETE.done);
+  assert.equal(v.host.querySelector('[role="status"][data-done="ok"]').textContent.trim(), "Deleted. Players' names and answers are gone from this Mac.");
   for (const t of ['Delete now', 'Run it again next Friday', 'Reuse with new questions', 'Keep the results']) assert.equal(button(v, t), undefined, `${t} is gone`);
-  assert.match(v.host.querySelector('footer').textContent, /gone from this Mac/);
+  assert.equal(v.host.querySelector('footer').textContent.trim(), 'Only this card is left, in your chat.');
   assert.ok(v.host.querySelector('[data-winner]'), 'the results stay on the card');
 });
 

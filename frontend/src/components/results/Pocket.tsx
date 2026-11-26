@@ -336,7 +336,11 @@ export const TeamCreature: React.FC<{ palette: string; size?: number }> = ({ pal
 const teamPalette = (t: PocketTeam, i: number) => t.palette ?? TEAM_PALETTES[i % TEAM_PALETTES.length];
 
 /** "Fri 7:30 PM" in the person's own time zone (the same day/time shape as the Gather card). */
-export const opensLabel = (at: number) => new Date(at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }).replace(',', '');
+/** "Fri 7:30 PM" within six days; further out the date too, "Fri, Dec 4, 7:30 PM", so it can't name the wrong Friday (same rule as failover.ts clockTime). */
+export const opensLabel = (at: number, now = Date.now()) =>
+  at - now < 6 * 86_400_000
+    ? new Date(at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }).replace(',', '')
+    : new Date(at).toLocaleString('en-US', { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 
 /** `opens`: the doors' time while they're still shut (Mira's ux-pass-0952 minor b): a calm chip, not Live. */
 const StateChip: React.FC<{ block: PocketBlock; opens?: number | null }> = ({ block, opens = null }) => {
@@ -1103,10 +1107,10 @@ const EditButton: React.FC<{ onClick: () => void; expanded: boolean; controls: s
 export const RESULTS_DELETE = {
   q: 'Delete it all now?',
   text: (b: PocketBlock) =>
-    `Players' names, answers and scores are deleted from this Mac now, not ${b.ended?.deletes_on ? `on ${b.ended.deletes_on}` : 'on the deletion date'}. This card stays in your chat. This can't be undone.`,
+    `Players' names and answers are deleted from this Mac now, not ${b.ended?.deletes_on ? `on ${b.ended.deletes_on}` : 'on the deletion date'}. This card stays in your chat as it is. This can't be undone.`,
   yes: 'Delete it all',
   no: 'Keep until then',
-  done: 'Deleted. Nothing of it is left on this Mac.',
+  done: "Deleted. Players' names and answers are gone from this Mac.",
 };
 
 const ResultsDeleteConfirm: React.FC<{ block: PocketBlock; busy: boolean; onYes: () => void; onNo: () => void }> = ({ block, busy, onYes, onNo }) => {
@@ -1298,7 +1302,7 @@ const ResultsCard: React.FC<{ block: PocketBlock; results: PocketResults; ask: (
       )}
       <footer className="relative -mx-4 -mb-4 flex items-start gap-2 border-t border-hairline px-4 py-3 text-meta text-zinc-400 sm:-mx-[18px] sm:-mb-[18px] sm:px-[18px]">
         <Lock size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
-        <span>{deleted ? 'Names, answers and scores are gone from this Mac. This card stays in your chat.' : `${deletionLine(block)} Keeping the results saves names and scores only.`}</span>
+        <span>{deleted ? 'Only this card is left, in your chat.' : `${deletionLine(block)} Keeping the results saves names and scores only.`}</span>
       </footer>
     </section>
   );
