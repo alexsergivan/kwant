@@ -92,6 +92,8 @@ function fakeServer(over = {}) {
     const u = new URL(String(url), 'http://localhost');
     const body = init.body ? JSON.parse(init.body) : null;
     const method = init.method ?? 'GET';
+    // The quiz card's own live read (quiz-card-live-link): an open pocket with no join, kept out of `calls`.
+    if (method === 'GET' && /^\/api\/pockets\/[^/]+$/.test(u.pathname)) return json({ pocket: { state: 'open', ended_at: null }, summary: null, removed: 0, join: null });
     calls.push({ method, path: u.pathname, search: u.search, body });
     if (s.next) {
       const r = s.next;
