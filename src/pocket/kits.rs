@@ -238,6 +238,11 @@ pub trait Kit: Send + Sync + 'static {
     fn finished(&self, _state: &Value) -> bool {
         false
     }
+    /// The words for who took part in the ended line, `(one, many)`: "player"/"players" by
+    /// default; Secret Santa says "person"/"people" (Mira's UX pass Minor e).
+    fn taking_part(&self) -> (&'static str, &'static str) {
+        ("player", "players")
+    }
     /// pa7: the results the person's chat gets once the pocket has ended, in the `results` shape
     /// of the chat's pocket card (Pixel's pa4/impl.md "PocketBlock"): `{teams: [{name, players,
     /// points, palette, members}] (1-12, best first), margin, missed, near_misses,

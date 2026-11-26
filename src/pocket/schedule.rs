@@ -185,11 +185,17 @@ pub fn reminder_copy(title: &str, zone: &Zone, starts_at: DateTime<Utc>, opens_a
 /// The results' words: `(notification title, notification body, chat line)`. Counts only, the
 /// same for every kit (Mira's copy check: the title says which pocket, the body the outcome).
 pub fn results_copy(title: &str, players: usize, has_chat: bool) -> (String, String, String) {
+    results_copy_as(("player", "players"), title, players, has_chat)
+}
+
+/// [`results_copy`] with the kit's words for who took part ([`super::kits::Kit::taking_part`]):
+/// "6 people took part." for a Secret Santa.
+pub fn results_copy_as((one, many): (&str, &str), title: &str, players: usize, has_chat: bool) -> (String, String, String) {
     let t = short_title(title);
     let who = match players {
         0 => "Nobody joined.".to_string(),
-        1 => "1 player took part.".to_string(),
-        n => format!("{n} players took part."),
+        1 => format!("1 {one} took part."),
+        n => format!("{n} {many} took part."),
     };
     let body = if has_chat && players > 0 { format!("{who} The results are in your chat.") } else { who.clone() };
     (format!("{t} has ended"), body, format!("{t} has ended. {who}"))
@@ -517,7 +523,8 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
     let row = state.db.pocket_schedule(code).await?;
     let zone = Zone::parse(row.as_ref().map_or("UTC", |r| r.zone.as_str()));
     let origin = row.as_ref().and_then(origin_of);
-    let (_, _, line) = results_copy(&s.row.title, s.player_count(), true);
+    let words = s.kit().map_or(("player", "players"), |k| k.taking_part());
+    let (_, _, line) = results_copy_as(words, &s.row.title, s.player_count(), true);
     let posted = match &origin {
         Some(o) => {
             let mut block = ended_block(&s, row.as_ref(), &zone);
@@ -538,7 +545,7 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
         }
         None => false,
     };
-    let (title, body, _) = results_copy(&s.row.title, s.player_count(), posted);
+    let (title, body, _) = results_copy_as(words, &s.row.title, s.player_count(), posted);
     notify(state, origin.as_ref(), &s, title, body).await;
     Ok(true)
 }
@@ -682,6 +689,20 @@ mod tests {
         assert_eq!(remind_at(w, &berlin, before), Some(utc(2026, 10, 24, 17, 0)));
         assert_eq!(clock(berlin.local(w)), "8 PM");
         assert_eq!(clock(berlin.local(w - Duration::minutes(LOBBY_BEFORE_MINUTES))), "7:30 PM");
+    }
+
+    #[test]
+    fn a_secret_santa_ends_with_people_not_players() {
+        use crate::pocket::{kits::Kit, quiz_kit::QuizPocket, santa::Santa};
+        let s = |a: &str, b: &str, c: &str| (a.to_string(), b.to_string(), c.to_string());
+        let santa = Santa.taking_part();
+        assert_eq!(results_copy_as(santa, "Office Santa", 6, true), s("Office Santa has ended", "6 people took part. The results are in your chat.", "Office Santa has ended. 6 people took part."));
+        assert_eq!(results_copy_as(santa, "Office Santa", 1, false), s("Office Santa has ended", "1 person took part.", "Office Santa has ended. 1 person took part."));
+        assert_eq!(results_copy_as(santa, "Office Santa", 0, true).2, "Office Santa has ended. Nobody joined.");
+        // Every other kit keeps "players", byte for byte
+        let quiz = QuizPocket.taking_part();
+        assert_eq!(results_copy_as(quiz, "Pub quiz", 9, true), results_copy("Pub quiz", 9, true));
+        assert_eq!(results_copy_as(quiz, "Pub quiz", 1, false), results_copy("Pub quiz", 1, false));
     }
 
     #[test]
