@@ -47,10 +47,19 @@ const NOTE_WORDS: NoteWords<'static> = NoteWords {
     who: ", a guest of the host's place, writing on the host's guest page",
     answer_from: "the host's facts below",
     hand_off_when: "one of the rules below, a booking, a refund, a late check-out, a complaint, anything the host has to decide",
-    reason: "a short label for the host first (like \"Late check-out: 2 PM, Sun Dec 8\")",
+    reason: REQUEST_RULE_GUIDE,
     then: "that the host will reply",
     sender: "guest",
 };
+
+/// desk-inbox-rows-server: the label, and the one rule that marks a yes/no permission ask with
+/// [`desk::REQUEST_PREFIX`] (the server strips it; the host's row gets `ask: "request"`).
+const REQUEST_RULE_GUIDE: &str = "a short label for the host first (like \"Late check-out: 2 PM, Sun Dec 8\"); \
+     when the guest asks to be allowed something only the host can allow (a late check-out, an early check-in, an extra guest), \
+     start the label with Request: (like \"Request: Late check-out: 2 PM, Sun Dec 8\")";
+const REQUEST_RULE_BOOKING: &str = "a short label for the host first (like \"Group of 4: Sat 2 PM\"); \
+     when the guest asks to be allowed something only the host can allow (an extra guest, bringing a pet), \
+     start the label with Request: (like \"Request: Bring my dog\")";
 
 /// What a front desk bot never does on its own, whatever the pack says.
 pub const DESK_NEVER: &str = "Confirm a booking, a refund, a late check-out or an early check-in yourself";
@@ -60,7 +69,7 @@ const BOOKING_WORDS: NoteWords<'static> = NoteWords {
     who: ", a guest writing on the host's booking page",
     answer_from: "the host's facts and the open times below",
     hand_off_when: "one of the rules below, a time that isn't listed, a group, a discount, a change, money or payment, a refund, a complaint, anything the host has to decide",
-    reason: "a short label for the host first (like \"Group of 4: Sat 2 PM\")",
+    reason: REQUEST_RULE_BOOKING,
     then: "that the host will reply",
     sender: "guest",
 };
@@ -380,8 +389,12 @@ pub async fn resume(state: &AppState) {
     }
 }
 
-/// Needs-you items: one per guest of an open desk pocket who waits for the host, for desks
-/// answered by this space's bots.
+/// Needs-you items: one per thing a guest of an open desk pocket waits for, for desks answered by
+/// this space's bots. desk-inbox-rows-server: a guest with a booking request and a hand-off has
+/// two rows. The hand-off row (`ask` `handoff`, `request` or `daily_cap`) keeps the id
+/// `desk:<code>:<guest>`; the booking row's is `desk:<code>:<guest>@<slot start>` (the app's own
+/// key for it; the slot's id when its start is gone). `waiting` is the capped guest's message
+/// count on a `daily_cap` row, 0 on every other.
 pub async fn needs_you(state: &AppState, kwants: &[Kwant]) -> Vec<(chrono::DateTime<chrono::Utc>, Value)> {
     let mut items = Vec::new();
     if !pocket::enabled(&state.db).await {
@@ -406,13 +419,13 @@ pub async fn needs_you(state: &AppState, kwants: &[Kwant]) -> Vec<(chrono::DateT
             }
         };
         let mode = if desk::is_booking(&s.spec) { desk::MODE_BOOKING } else { desk::MODE_GUIDE };
-        for desk::WaitingGuest { guest, why, quote, at, thread, booking, ask } in desk::waiting_guests(&s.spec, &s.kit_state) {
+        for desk::WaitingGuest { guest, why, quote, at, thread, booking, ask, waiting } in desk::waiting_guests(&s.spec, &s.kit_state) {
             let thread = thread.filter(|_| live);
             let Some(p) = s.players.iter().find(|p| p.id == guest) else { continue };
             let why = if ask == desk::WAIT_BOOKING { desk::asks_for_time(&p.name) } else { why };
             items.push((at, json!({
                 "kind": "pocket_desk",
-                "id": format!("desk:{code}:{guest}"),
+                "id": row_id(&code, &guest, booking.as_ref()),
                 "pocket_code": code,
                 "pocket_title": s.row.title,
                 "guest_id": guest,
@@ -429,6 +442,7 @@ pub async fn needs_you(state: &AppState, kwants: &[Kwant]) -> Vec<(chrono::DateT
                 "reminded_at": null,
                 "mode": mode,
                 "ask": ask,
+                "waiting": waiting,
                 "slot": booking.as_ref().map(|b| b["slot"].clone()),
                 "slot_start": booking.as_ref().map(|b| b["start"].clone()),
                 "booking": booking,
@@ -436,6 +450,15 @@ pub async fn needs_you(state: &AppState, kwants: &[Kwant]) -> Vec<(chrono::DateT
         }
     }
     items
+}
+
+/// A Needs-you row's id: `desk:<code>:<guest>` for a hand-off, `…@<slot start>` for a booking
+/// request (the slot's id when its start is gone), so both rows of one guest stay apart.
+fn row_id(code: &str, guest: &str, booking: Option<&Value>) -> String {
+    match booking {
+        Some(b) => format!("desk:{code}:{guest}@{}", b["start"].as_str().or(b["slot"].as_str()).unwrap_or("")),
+        None => format!("desk:{code}:{guest}"),
+    }
 }
 
 #[cfg(test)]
@@ -471,6 +494,22 @@ mod tests {
         assert!(!n.contains("say the host will send"), "{n}");
         // The Guest Guide's note is unchanged
         assert!(!desk_note("Ann", &[], "g").contains("only the host confirms"));
+    }
+
+    #[test]
+    fn both_notes_say_how_to_mark_a_yes_no_request() {
+        for n in [desk_note("Ann", &[], "Wi-Fi: sea123"), booking_note("Ann", &[], "", "Open times:\n")] {
+            assert!(n.contains("start the label with Request: (like \"Request: "), "{n}");
+            assert!(n.contains("only the host can allow"), "{n}");
+        }
+    }
+
+    #[test]
+    fn a_booking_row_and_a_hand_off_row_have_their_own_ids() {
+        let b = json!({ "slot": "s1", "label": "Morning cut", "start": "2026-12-08T09:30" });
+        assert_eq!(row_id("ABC", "pl_ann", None), "desk:ABC:pl_ann");
+        assert_eq!(row_id("ABC", "pl_ann", Some(&b)), "desk:ABC:pl_ann@2026-12-08T09:30");
+        assert_eq!(row_id("ABC", "pl_ann", Some(&json!({ "slot": "s1", "start": null }))), "desk:ABC:pl_ann@s1");
     }
 
     #[test]
