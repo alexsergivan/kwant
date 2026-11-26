@@ -61,6 +61,7 @@ pub mod connection_suggest;
 pub mod bot_actions;
 pub mod quiz_draft_api;
 pub mod quizmaster_tools;
+pub mod santa_tool;
 pub mod quizmaster_live;
 pub mod desk_turns;
 pub mod outsider_turns;
