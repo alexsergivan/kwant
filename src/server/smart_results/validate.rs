@@ -519,8 +519,21 @@ fn check_pocket(p: &super::Pocket) -> Result<(), String> {
             check_text(t, max, what)?;
         }
     }
-    if !p.rounds.is_empty() || p.live.is_some() || p.ended.is_some() || p.budget.is_some() || p.results.is_some() {
+    if !p.rounds.is_empty() || p.live.is_some() || p.budget.is_some() {
         return Err("a pocket part kwant doesn't fill".into());
+    }
+    // quiz-card-and-results: an ended pocket's results message carries how it ended and the
+    // scores, in the shape the chat's results card takes (`validEnded`, `validResults`)
+    if p.ended.is_some() || p.results.is_some() {
+        if p.state != "ended" {
+            return Err("pocket results before the end".into());
+        }
+        if let Some(e) = &p.ended {
+            check_pocket_ended(e)?;
+        }
+        if let Some(r) = &p.results {
+            check_pocket_results(r)?;
+        }
     }
     // pa11: the only join kwant fills says "no quick link" on a ready or live card
     if let Some(j) = &p.join {
@@ -537,6 +550,251 @@ fn check_pocket(p: &super::Pocket) -> Result<(), String> {
     }
     if p.yours.is_some_and(|n| n > 10_000) {
         return Err("pocket yours".into());
+    }
+    // santa-create-from-chat: kit `santa` carries `santa` and nothing else does
+    if (p.kit == crate::pocket::santa::ID) != p.santa.is_some() {
+        return Err("a pocket's santa part".into());
+    }
+    if let Some(s) = &p.santa {
+        check_santa(p, s)?;
+    }
+    Ok(())
+}
+
+/// Keys that would put a match, the loop, a wish or a question's words on a Secret Santa's card
+/// (frontend `MATCH_KEYS`): any of them, at any depth of the block, refuses it.
+pub(super) const SANTA_MATCH_KEYS: [&str; 41] = [
+    "match", "matches", "my_match", "pair", "pairs", "pairing", "pairings", "gives_to", "giving_to", "buys_for", "buying_for",
+    "receives_from", "giver", "givers", "receiver", "receivers", "recipient", "recipients", "assigned", "assignment", "assignments",
+    "santa_of", "my_santa", "loop", "ring", "reveal_loop", "derangement", "draw_result",
+    "questions", "question", "asks", "ask", "answers", "answer", "q", "a", "text", "body", "wish", "wishes", "wish_list",
+];
+
+/// The first key of [`SANTA_MATCH_KEYS`] (or `my_wish`) anywhere in `v`, as a path.
+pub(super) fn find_match_like(v: &serde_json::Value, path: &str, depth: usize) -> Option<String> {
+    use serde_json::Value;
+    if depth > 8 {
+        return None;
+    }
+    match v {
+        Value::Array(a) => a.iter().enumerate().find_map(|(i, x)| find_match_like(x, &format!("{path}[{i}]"), depth + 1)),
+        Value::Object(o) => o.iter().find_map(|(k, x)| {
+            let low = k.to_lowercase();
+            if SANTA_MATCH_KEYS.contains(&low.as_str()) || low == "my_wish" {
+                Some(format!("{path}.{k}"))
+            } else {
+                find_match_like(x, &format!("{path}.{k}"), depth + 1)
+            }
+        }),
+        _ => None,
+    }
+}
+
+/// A Secret Santa's card (frontend `validSanta` and `validPocket`'s Santa rules): its phase and
+/// the block's state agree, counts stay within who joined, joins never offer a quick tunnel, and
+/// nothing anywhere in the block names a match or carries a question's words.
+fn check_santa(p: &super::Pocket, s: &serde_json::Value) -> Result<(), String> {
+    use serde_json::Value;
+    const PHASES: [&str; 4] = ["collecting", "drawn", "reveal_day", "ended"];
+    const MAX_PEOPLE: usize = 60;
+    let whole = serde_json::to_value(p).map_err(|e| e.to_string())?;
+    if let Some(at) = find_match_like(&whole, "", 0) {
+        return Err(format!("a match-like key on a Secret Santa card ({at})"));
+    }
+    let Some(o) = s.as_object() else { return Err("a santa part that isn't an object".into()) };
+    let phase = o.get("phase").and_then(Value::as_str).filter(|ph| PHASES.contains(ph)).ok_or("a santa phase")?;
+    if p.state != if phase == "ended" { "ended" } else { "live" } {
+        return Err(format!("a {} Secret Santa in phase {phase}", p.state));
+    }
+    if p.join.is_some() || p.results.is_some() || p.checks.is_some() || p.dry_run.is_some() || p.progress.is_some() || p.draft.is_some() || p.yours.is_some() {
+        return Err("a quiz part on a Secret Santa card".into());
+    }
+    let count = |k: &str| -> Result<Option<u64>, String> {
+        match o.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v.as_u64().filter(|n| *n <= 100_000).map(Some).ok_or_else(|| format!("santa {k}")),
+        }
+    };
+    let joined = count("joined")?.ok_or("santa joined")?;
+    count("expected")?;
+    for k in ["looked", "gifts_ready"] {
+        if count(k)?.is_some_and(|n| n > joined) {
+            return Err(format!("santa {k} over joined"));
+        }
+    }
+    let (asked, answered) = (count("asks_asked")?, count("asks_answered")?);
+    if answered.is_some_and(|a| asked.is_none_or(|q| a > q)) {
+        return Err("santa answers over questions".into());
+    }
+    let list = |k: &str| -> Result<Vec<Value>, String> {
+        match o.get(k) {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::Array(a)) if a.len() <= MAX_PEOPLE => Ok(a.clone()),
+            Some(_) => Err(format!("santa {k}")),
+        }
+    };
+    let first_name = |v: &Value| v.as_str().map(|n| check_text(n, 40, "santa name")).unwrap_or_else(|| Err("santa name".into()));
+    for n in list("waiting_for")? {
+        first_name(&n)?;
+    }
+    for pair in list("keep_apart")? {
+        match pair.as_array().map(Vec::as_slice) {
+            Some([a, b]) => {
+                first_name(a)?;
+                first_name(b)?;
+            }
+            _ => return Err("santa keep_apart".into()),
+        }
+    }
+    for person in list("people")? {
+        let id = person.get("id").and_then(Value::as_str).ok_or("santa person id")?;
+        check_text(id, 64, "santa person id")?;
+        first_name(&person["name"])?;
+        if let Some(a) = person.get("avatar").filter(|a| !a.is_null()) {
+            let ok = a.as_str().is_some_and(|a| (1..=32).contains(&a.len()) && a.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'));
+            if !ok {
+                return Err("santa person avatar".into());
+            }
+        }
+        for f in ["looked", "gift_ready", "you", "locked"] {
+            if person.get(f).is_some_and(|v| !v.is_null() && !v.is_boolean()) {
+                return Err(format!("santa person {f}"));
+            }
+        }
+    }
+    for (k, max) in [("draw_rule", 200), ("drawn_at", 60), ("reveal_at", 40), ("revealed_at", 60), ("deletes_on", 40), ("ended_on", 40), ("blocked", 300)] {
+        match o.get(k) {
+            None | Some(Value::Null) => {}
+            Some(Value::String(t)) => check_text(t, max, &format!("santa {k}"))?,
+            Some(_) => return Err(format!("santa {k}")),
+        }
+    }
+    if o.get("reveal").is_some_and(|r| !r.is_null() && !matches!(r.as_str(), Some("scheduled" | "shown" | "skipped" | "never"))) {
+        return Err("santa reveal".into());
+    }
+    if o.get("can_draw").is_some_and(|v| !v.is_null() && !v.is_boolean()) {
+        return Err("santa can_draw".into());
+    }
+    if let Some(j) = o.get("join").filter(|j| !j.is_null()) {
+        let mode = j["mode"].as_str().filter(|m| matches!(*m, "anywhere" | "wifi" | "none")).ok_or("santa join mode")?;
+        let url = |k: &str| -> Result<Option<&str>, String> {
+            match &j[k] {
+                Value::Null => Ok(None),
+                Value::String(u) if u.len() <= 2048 && (u.starts_with("https://") || u.starts_with("http://")) => {
+                    let host = u.split('/').nth(2).unwrap_or("");
+                    if host.contains('@') || host.split(':').next().unwrap_or("").to_ascii_lowercase().ends_with(".trycloudflare.com") {
+                        return Err("a santa join that offers a quick tunnel".into());
+                    }
+                    Ok(Some(u))
+                }
+                _ => Err(format!("santa join {k}")),
+            }
+        };
+        let anywhere = url("anywhere_url")?;
+        url("wifi_url")?;
+        let kind = match &j["anywhere_kind"] {
+            Value::Null => None,
+            Value::String(k) if k == "https" || k == "funnel" => Some(k),
+            _ => return Err("santa join kind".into()),
+        };
+        if j["quick_tunnel"] == Value::Bool(true) {
+            return Err("a santa join that offers a quick tunnel".into());
+        }
+        if mode == "anywhere" && (anywhere.is_none() || kind.is_none()) {
+            return Err("a santa join from anywhere without its address".into());
+        }
+    }
+    Ok(())
+}
+
+/// The palettes a team's colour may name (the client's `PALETTES` in `ModernAvatar.tsx`).
+const POCKET_PALETTES: [&str; 23] = [
+    "yellow", "green", "pink", "cyan", "violet", "orange", "blue", "coral", "teal", "red", "gold", "lilac", "mint", "sky", "magenta", "slate", "amber",
+    "ocean", "berry", "lime", "peach", "steel", "blossom",
+];
+
+/// `null` or absent, else a text within `max` (the client's `optText`).
+fn opt_pocket_text(v: Option<&serde_json::Value>, max: usize, what: &str) -> Result<(), String> {
+    match v {
+        None | Some(serde_json::Value::Null) => Ok(()),
+        Some(serde_json::Value::String(t)) => check_text(t, max, what),
+        Some(_) => Err(format!("a {what} that isn't text")),
+    }
+}
+
+/// A whole number from 0 to 100,000 (the client's `isCount` in `Pocket.tsx`).
+fn pocket_count(v: &serde_json::Value) -> Option<u64> {
+    v.as_u64().filter(|n| *n <= 100_000)
+}
+
+/// Points: a finite number within ten million either way.
+fn pocket_points(v: &serde_json::Value) -> bool {
+    v.as_f64().is_some_and(|n| n.is_finite() && n.abs() <= 10_000_000.0)
+}
+
+/// `{name, points}` (the client's `validScore`).
+fn check_pocket_score(v: &serde_json::Value) -> Result<(), String> {
+    check_text(v.get("name").and_then(|n| n.as_str()).ok_or("a pocket score without a name")?, 40, "pocket team name")?;
+    if !v.get("points").is_some_and(pocket_points) {
+        return Err("pocket points".into());
+    }
+    Ok(())
+}
+
+/// How a pocket ended (the client's `validEnded`).
+fn check_pocket_ended(e: &serde_json::Value) -> Result<(), String> {
+    check_text(e.get("at").and_then(|a| a.as_str()).ok_or("a pocket end without a time")?, 40, "pocket end time")?;
+    match e.get("winner") {
+        None | Some(serde_json::Value::Null) => {}
+        Some(w) => check_pocket_score(w)?,
+    }
+    opt_pocket_text(e.get("stats"), 200, "pocket stats")?;
+    opt_pocket_text(e.get("deletes_on"), 40, "pocket deletion date")
+}
+
+/// The scores (the client's `validResults`, `validTeam`, `validMiss`): 1 to 12 teams, up to 3
+/// missed questions, and counts that agree.
+fn check_pocket_results(r: &serde_json::Value) -> Result<(), String> {
+    let teams = r.get("teams").and_then(|t| t.as_array()).filter(|t| (1..=12).contains(&t.len())).ok_or("pocket results teams")?;
+    for t in teams {
+        check_text(t.get("name").and_then(|n| n.as_str()).ok_or("a pocket team without a name")?, 40, "pocket team name")?;
+        if t.get("players").and_then(pocket_count).is_none() || !t.get("points").is_some_and(pocket_points) {
+            return Err("a pocket team's counts".into());
+        }
+        match t.get("palette") {
+            None | Some(serde_json::Value::Null) => {}
+            Some(c) if c.as_str().is_some_and(|c| POCKET_PALETTES.contains(&c)) => {}
+            Some(_) => return Err("a pocket team colour".into()),
+        }
+        let members = match t.get("members") {
+            None | Some(serde_json::Value::Null) => &[][..],
+            Some(m) => m.as_array().filter(|m| m.len() <= 12).ok_or("a pocket team's members")?.as_slice(),
+        };
+        for m in members {
+            check_text(m.as_str().ok_or("a pocket player name that isn't text")?, 24, "pocket player name")?;
+        }
+    }
+    let missed = match r.get("missed") {
+        None | Some(serde_json::Value::Null) => &[][..],
+        Some(m) => m.as_array().filter(|m| m.len() <= 3).ok_or("pocket missed questions")?.as_slice(),
+    };
+    for m in missed {
+        check_text(m.get("label").and_then(|l| l.as_str()).ok_or("a missed question without a label")?, 12, "missed question label")?;
+        check_text(m.get("question").and_then(|q| q.as_str()).ok_or("a missed question without its words")?, 200, "missed question")?;
+        opt_pocket_text(m.get("answer"), 80, "missed answer")?;
+        if !m.get("pct_right").and_then(|p| p.as_f64()).is_some_and(|p| (0.0..=100.0).contains(&p)) {
+            return Err("a missed question's share".into());
+        }
+    }
+    let count = |k: &str| match r.get(k) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => pocket_count(v).map(Some).ok_or(format!("pocket {k}")),
+    };
+    let (_, near, accepted) = (count("margin")?, count("near_misses")?, count("near_misses_accepted")?);
+    if let (Some(n), Some(a)) = (near, accepted) {
+        if a > n {
+            return Err("more near misses accepted than there were".into());
+        }
     }
     Ok(())
 }

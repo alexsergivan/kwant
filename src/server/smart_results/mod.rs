@@ -24,7 +24,7 @@ mod selector;
 mod validate;
 mod verification;
 
-pub use compose::compute_for_message;
+pub use compose::{compute_for_message, pocket_results};
 pub use present_result::{tools as present_result_tools, handles as present_result_handles, call as present_result_call};
 pub use selector::{candidates, rank, PRIORITY};
 pub use validate::validate;
@@ -287,6 +287,11 @@ pub struct Pocket {
     /// pa11: the kit's line shown before anyone types (`pocket.notice`); absent on the wire when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub notice: Option<String>,
+    /// santa-create-from-chat: a Secret Santa's card (frontend `validSanta`), on kit `santa` only
+    /// and only there. Counts, first names and ticks from the kit's host view; never a match or a
+    /// question's words. Absent on the wire when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub santa: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

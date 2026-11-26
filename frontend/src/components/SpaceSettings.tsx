@@ -34,8 +34,8 @@ import { RoutinesPanel, type RoutineFocus } from './RoutinesPanel';
 import type { MessageTarget } from './DoneDetail';
 import { HirePolicyPanel } from './HirePolicyPanel';
 import { ModernAvatar } from './ModernAvatar';
-import { PickerGlyph, SpaceTile } from './Spaces';
-import { pixelIconFor } from '../spaceIcons';
+import { SpaceIconPicker, SpaceTile, useJustPicked } from './Spaces';
+import { iconKey } from '../spaceIcons';
 import { ImportDialog, RecentImports } from './ImportDialog';
 import { ImportError, ImportRecord, downloadExport, importApi, importErrorText } from '../imports';
 import { memberIdsOf, type Channel, type Kwant, type Team } from './Sidebar';
@@ -504,6 +504,9 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
   const [archiving, setArchiving] = useState(false);
   const nameErr = spaceNameError(name, spaces.filter((s) => s.id !== space.id).map((s) => s.name));
   const dirty = name.trim() !== space.name || icon !== space.icon || color !== initialColor;
+  const { just, onJustEnd } = useJustPicked(icon, color);
+  const picked = SPACE_ICONS.some((i) => iconKey(i) === iconKey(icon));
+  const tileColour = spaceColor({ id: space.id, color });
 
   const save = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -542,7 +545,7 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
 
       <form onSubmit={save} {...editorProps(dirty)} className={`${card} p-4 space-y-4`}>
         <div className="flex items-center gap-3">
-          <SpaceTile space={{ id: space.id, icon, color: color || null }} size={44} />
+          <SpaceTile space={{ id: space.id, icon, color: color || null }} size={44} foil={picked} just={!!just} onJustEnd={onJustEnd} />
           <div className="flex-1 min-w-0">
             <label htmlFor="space-rename" className="block text-xs font-medium text-zinc-300 mb-1">
               Name {space.is_default && <span className="ml-1 px-1.5 py-px rounded bg-zinc-800 text-[10px] text-zinc-400">Default</span>}
@@ -559,23 +562,18 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
             <p id="space-rename-error" className="mt-1 text-[11px] text-rose-300 min-h-[1em]">{nameErr}</p>
           </div>
         </div>
-        <fieldset>
-          <legend className="text-xs font-medium text-zinc-300 mb-1.5">Icon</legend>
-          <div className="flex flex-wrap gap-1.5">
-            {SPACE_ICONS.map((i) => (
-              <button
-                key={i}
-                type="button"
-                aria-pressed={icon === i}
-                aria-label={`Icon: ${pixelIconFor(i)?.name ?? i}`}
-                onClick={() => setIcon(i)}
-                className={`w-9 h-9 max-md:w-11 max-md:h-11 rounded-lg text-lg flex items-center justify-center border ${icon === i ? 'border-sky-400 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-600'}`}
-              >
-                <PickerGlyph icon={i} colour={spaceColor({ id: space.id, color })} />
-              </button>
-            ))}
-          </div>
-        </fieldset>
+        <SpaceIconPicker
+          id="space-settings-icon"
+          value={icon}
+          colour={tileColour}
+          onChange={setIcon}
+          just={just}
+          onJustEnd={onJustEnd}
+          gridClass="max-md:grid-cols-6 md:grid-cols-8 md:w-max"
+          buttonClass="max-md:aspect-square max-md:min-h-11 md:h-9 md:w-9"
+          glyphClass="max-md:w-[27px] max-md:h-[27px]"
+          disabled={saving}
+        />
         <fieldset>
           <legend className="text-xs font-medium text-zinc-300 mb-1.5">Colour</legend>
           <div className="flex flex-wrap gap-2">
