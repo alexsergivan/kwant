@@ -27,6 +27,7 @@ import {
   Archive,
   Smartphone,
   Square,
+  Trash2,
   Trophy,
   Users,
   Wifi,
@@ -334,7 +335,11 @@ export const TeamCreature: React.FC<{ palette: string; size?: number }> = ({ pal
 );
 const teamPalette = (t: PocketTeam, i: number) => t.palette ?? TEAM_PALETTES[i % TEAM_PALETTES.length];
 
-const StateChip: React.FC<{ block: PocketBlock }> = ({ block }) => {
+/** "Fri 7:30 PM" in the person's own time zone (the same day/time shape as the Gather card). */
+export const opensLabel = (at: number) => new Date(at).toLocaleString('en-US', { weekday: 'short', hour: 'numeric', minute: '2-digit' }).replace(',', '');
+
+/** `opens`: the doors' time while they're still shut (Mira's ux-pass-0952 minor b): a calm chip, not Live. */
+const StateChip: React.FC<{ block: PocketBlock; opens?: number | null }> = ({ block, opens = null }) => {
   const spin = <Loader2 size={12} className="motion-safe:animate-spin" aria-hidden="true" />;
   switch (block.state) {
     case 'writing':
@@ -356,6 +361,13 @@ const StateChip: React.FC<{ block: PocketBlock }> = ({ block }) => {
         </span>
       );
     case 'live':
+      if (opens !== null)
+        return (
+          <span className="kw-chip" data-chip="opens">
+            <CalendarClock size={12} aria-hidden="true" />
+            Opens {opensLabel(opens)}
+          </span>
+        );
       return (
         <span className="flex flex-wrap justify-start gap-1.5 sm:justify-end">
           {block.paused && (
@@ -451,6 +463,8 @@ export interface BoxRead {
   code: string;
   state: 'open' | 'ended' | 'gone';
   endedAt: string | null;
+  /** The pocket's `opens_at` in ms, or null when it has none (or it isn't a date). */
+  opensAt?: number | null;
   join: PocketJoinInfo | null;
 }
 export const fromRead = (code: string, r: PocketRead): BoxRead => {
@@ -459,6 +473,7 @@ export const fromRead = (code: string, r: PocketRead): BoxRead => {
     code,
     state: p?.state === 'ended' ? 'ended' : 'open',
     endedAt: typeof p?.ended_at === 'string' ? p.ended_at : null,
+    opensAt: typeof p?.opens_at === 'string' && Number.isFinite(Date.parse(p.opens_at)) ? Date.parse(p.opens_at) : null,
     join: isObj(r) ? readJoin(r.join) : null,
   };
 };
@@ -477,6 +492,10 @@ export function withRead(b: PocketBlock, r: BoxRead | null): PocketBlock {
 }
 
 /** A box bound to 127.0.0.1 with no from-anywhere address: a quick link is the only way phones get in. */
+/** Live but the doors aren't open yet: `opens_at` (from the read) still ahead of `now`. Otherwise null: Live as before. */
+export const opensAhead = (b: PocketBlock, r: BoxRead | null, now: number): number | null =>
+  b.state === 'live' && r && r.code === b.code && r.state === 'open' && typeof r.opensAt === 'number' && r.opensAt > now ? r.opensAt : null;
+
 export const needsPhoneLink = (join: PocketBlock['join']) => !!join && join.wifi_note === THIS_COMPUTER_ONLY && !join.anywhere_url && join.quick_tunnel !== false;
 
 export interface PhoneLinkCtl {
@@ -1080,7 +1099,71 @@ const EditButton: React.FC<{ onClick: () => void; expanded: boolean; controls: s
 // ---------------------------------------------------------------------------------------------------
 // Results card (design.md §6)
 
+// Minor h: the same Delete now as Santa, Wall and Desk (Santa's confirm wording, Wall's safe-answer focus).
+export const RESULTS_DELETE = {
+  q: 'Delete it all now?',
+  text: (b: PocketBlock) =>
+    `Players' names, answers and scores are deleted from this Mac now, not ${b.ended?.deletes_on ? `on ${b.ended.deletes_on}` : 'on the deletion date'}. This card stays in your chat. This can't be undone.`,
+  yes: 'Delete it all',
+  no: 'Keep until then',
+  done: 'Deleted. Nothing of it is left on this Mac.',
+};
+
+const ResultsDeleteConfirm: React.FC<{ block: PocketBlock; busy: boolean; onYes: () => void; onNo: () => void }> = ({ block, busy, onYes, onNo }) => {
+  // Focus the safe answer, so Enter or Space right after opening never deletes anything.
+  const no = useRef<HTMLButtonElement | null>(null);
+  useEffect(() => no.current?.focus(), []);
+  return (
+    <div
+      role="alertdialog"
+      aria-label={RESULTS_DELETE.q}
+      onKeyDown={(e) => e.key === 'Escape' && !busy && onNo()}
+      className="kw-fade-in relative flex flex-col gap-3 rounded-xl border border-rose-300/35 bg-rose-300/[0.06] p-3.5"
+      data-confirm="delete"
+    >
+      <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">
+        <strong className="font-semibold">{RESULTS_DELETE.q}</strong> {RESULTS_DELETE.text(block)}
+      </p>
+      <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap">
+        <button type="button" onClick={onYes} disabled={busy} className={`inline-flex items-center justify-center gap-1.5 rounded-xl bg-rose-600 px-3.5 font-semibold text-white hover:bg-rose-700 disabled:opacity-60 kw-focus ${BTN}`} data-action="delete-yes">
+          {busy && <Loader2 size={14} className="motion-safe:animate-spin" aria-hidden="true" />}
+          {RESULTS_DELETE.yes}
+        </button>
+        <button ref={no} type="button" onClick={onNo} disabled={busy} className={GHOST} data-action="delete-no">
+          {RESULTS_DELETE.no}
+        </button>
+      </div>
+    </div>
+  );
+};
+
 const ResultsCard: React.FC<{ block: PocketBlock; results: PocketResults; ask: (t: string) => void }> = ({ block, results, ask }) => {
+  const [confirm, setConfirm] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<Done>(null);
+  const opener = useRef<HTMLDivElement | null>(null);
+  const focusAfter = useFocusAfterRender();
+  const remove = async () => {
+    setBusy(true);
+    try {
+      await pocketApi.remove(block.code);
+      setDone({ kind: 'ok', text: RESULTS_DELETE.done });
+      setConfirm(false);
+    } catch (e) {
+      // Already gone (expired, or deleted from another window): the same end state.
+      if (e instanceof PocketApiError && e.status === 404 && e.code === 'not_found') {
+        setDone({ kind: 'ok', text: RESULTS_DELETE.done });
+        setConfirm(false);
+      } else setDone({ kind: 'error', text: `Couldn't delete it: ${e instanceof PocketApiError ? e.message : 'something went wrong.'} Try again.` });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const closeConfirm = () => {
+    setConfirm(false);
+    focusAfter(() => opener.current?.querySelector<HTMLButtonElement>('[data-action="delete"]'));
+  };
+  const deleted = done?.kind === 'ok';
   const [win, ...rest] = results.teams;
   const winPalette = teamPalette(win, 0);
   const startAt = Math.max(0, TEAM_PALETTES.indexOf(winPalette as (typeof TEAM_PALETTES)[number]));
@@ -1181,24 +1264,41 @@ const ResultsCard: React.FC<{ block: PocketBlock; results: PocketResults; ask: (
           </ul>
         </div>
       </div>
-      <div className="relative grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
-        <button type="button" className={`${PRIMARY} col-span-2 sm:col-span-1`} onClick={() => ask(`Run ${block.name} again next Friday with new questions`)} data-action="again">
-          <Repeat size={14} aria-hidden="true" />
-          Run it again next Friday
-        </button>
-        <button type="button" className={`${GHOST} col-span-2 sm:col-span-1`} onClick={() => ask(`Reuse ${block.name} with new questions`)} data-action="reuse">
-          <Pencil size={14} aria-hidden="true" />
-          Reuse with new questions
-        </button>
-        <LaterButton icon={<Archive size={14} aria-hidden="true" />} why={LATER.keep} className="col-span-2 border-transparent bg-transparent text-sky-300 sm:ml-auto">
-          Keep the results
-        </LaterButton>
-      </div>
+      {done ? (
+        <p role="status" className={`relative flex items-start gap-2 text-[15px] sm:text-[13px] ${done.kind === 'ok' ? 'text-ok' : 'text-bad'}`} data-done={done.kind}>
+          {done.kind === 'ok' ? <Check size={15} className={ICON} aria-hidden="true" /> : <AlertTriangle size={15} className={ICON} aria-hidden="true" />}
+          {done.text}
+        </p>
+      ) : null}
+      {confirm ? (
+        <ResultsDeleteConfirm block={block} busy={busy} onYes={() => void remove()} onNo={closeConfirm} />
+      ) : deleted ? null : (
+        <div ref={opener} className="relative grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center">
+          <button type="button" className={`${PRIMARY} col-span-2 sm:col-span-1`} onClick={() => ask(`Run ${block.name} again next Friday with new questions`)} data-action="again">
+            <Repeat size={14} aria-hidden="true" />
+            Run it again next Friday
+          </button>
+          <button type="button" className={`${GHOST} col-span-2 sm:col-span-1`} onClick={() => ask(`Reuse ${block.name} with new questions`)} data-action="reuse">
+            <Pencil size={14} aria-hidden="true" />
+            Reuse with new questions
+          </button>
+          <LaterButton icon={<Archive size={14} aria-hidden="true" />} why={LATER.keep} className="col-span-2 border-transparent bg-transparent text-sky-300 sm:ml-auto">
+            Keep the results
+          </LaterButton>
+          <button
+            type="button"
+            onClick={() => setConfirm(true)}
+            className={`inline-flex items-center justify-center gap-1.5 rounded-xl px-3 font-medium text-zinc-300 hover:bg-white/[0.04] hover:text-zinc-100 kw-focus ${BTN} col-span-2 sm:ml-auto`}
+            data-action="delete"
+          >
+            <Trash2 size={14} aria-hidden="true" />
+            Delete now
+          </button>
+        </div>
+      )}
       <footer className="relative -mx-4 -mb-4 flex items-start gap-2 border-t border-hairline px-4 py-3 text-meta text-zinc-400 sm:-mx-[18px] sm:-mb-[18px] sm:px-[18px]">
         <Lock size={13} className="mt-0.5 shrink-0" aria-hidden="true" />
-        <span>
-          {deletionLine(block)} Keeping the results saves names and scores only.
-        </span>
+        <span>{deleted ? 'Names, answers and scores are gone from this Mac. This card stays in your chat.' : `${deletionLine(block)} Keeping the results saves names and scores only.`}</span>
       </footer>
     </section>
   );
@@ -1280,6 +1380,14 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, as
   }, [chatBlock.code, watch, fast]);
   const block = withRead(base, read);
   const gone = read?.state === 'gone' && block !== base;
+  // Minor b: "Opens Fri 7:30 PM" until opens_at, then Live by itself (a timer to that moment; every read re-checks too).
+  const [, setNowTick] = useState(0);
+  const opens = opensAhead(block, read, Date.now());
+  useEffect(() => {
+    if (opens === null) return;
+    const t = setTimeout(() => setNowTick((n) => n + 1), Math.min(2_147_000_000, Math.max(0, opens - Date.now()) + 50));
+    return () => clearTimeout(t);
+  }, [opens]);
   const [phoneLinkState, setPhoneLinkState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
   const phoneLink: PhoneLinkCtl = {
     ...phoneLinkState,
@@ -1431,14 +1539,14 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, as
           <h3 className="text-[20px] font-bold leading-[26px] text-zinc-50 sm:text-[19px]">{block.name}</h3>
           {/* Phone: the state chip sits under the name, so a long name keeps the width. */}
           <span className="mt-1.5 block sm:hidden">
-            <StateChip block={block} />
+            <StateChip block={block} opens={opens} />
           </span>
           {(block.state === 'live' ? block.live?.now ?? block.when : block.when) && (
             <p className="text-[13px] text-zinc-300">{block.state === 'live' ? block.live?.now ?? block.when : block.when}</p>
           )}
         </div>
         <span className="hidden shrink-0 sm:block">
-          <StateChip block={block} />
+          <StateChip block={block} opens={opens} />
         </span>
       </header>
       <div className="relative flex flex-col gap-4">
