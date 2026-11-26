@@ -551,6 +551,159 @@ fn check_pocket(p: &super::Pocket) -> Result<(), String> {
     if p.yours.is_some_and(|n| n > 10_000) {
         return Err("pocket yours".into());
     }
+    // santa-create-from-chat: kit `santa` carries `santa` and nothing else does
+    if (p.kit == crate::pocket::santa::ID) != p.santa.is_some() {
+        return Err("a pocket's santa part".into());
+    }
+    if let Some(s) = &p.santa {
+        check_santa(p, s)?;
+    }
+    Ok(())
+}
+
+/// Keys that would put a match, the loop, a wish or a question's words on a Secret Santa's card
+/// (frontend `MATCH_KEYS`): any of them, at any depth of the block, refuses it.
+pub(super) const SANTA_MATCH_KEYS: [&str; 41] = [
+    "match", "matches", "my_match", "pair", "pairs", "pairing", "pairings", "gives_to", "giving_to", "buys_for", "buying_for",
+    "receives_from", "giver", "givers", "receiver", "receivers", "recipient", "recipients", "assigned", "assignment", "assignments",
+    "santa_of", "my_santa", "loop", "ring", "reveal_loop", "derangement", "draw_result",
+    "questions", "question", "asks", "ask", "answers", "answer", "q", "a", "text", "body", "wish", "wishes", "wish_list",
+];
+
+/// The first key of [`SANTA_MATCH_KEYS`] (or `my_wish`) anywhere in `v`, as a path.
+pub(super) fn find_match_like(v: &serde_json::Value, path: &str, depth: usize) -> Option<String> {
+    use serde_json::Value;
+    if depth > 8 {
+        return None;
+    }
+    match v {
+        Value::Array(a) => a.iter().enumerate().find_map(|(i, x)| find_match_like(x, &format!("{path}[{i}]"), depth + 1)),
+        Value::Object(o) => o.iter().find_map(|(k, x)| {
+            let low = k.to_lowercase();
+            if SANTA_MATCH_KEYS.contains(&low.as_str()) || low == "my_wish" {
+                Some(format!("{path}.{k}"))
+            } else {
+                find_match_like(x, &format!("{path}.{k}"), depth + 1)
+            }
+        }),
+        _ => None,
+    }
+}
+
+/// A Secret Santa's card (frontend `validSanta` and `validPocket`'s Santa rules): its phase and
+/// the block's state agree, counts stay within who joined, joins never offer a quick tunnel, and
+/// nothing anywhere in the block names a match or carries a question's words.
+fn check_santa(p: &super::Pocket, s: &serde_json::Value) -> Result<(), String> {
+    use serde_json::Value;
+    const PHASES: [&str; 4] = ["collecting", "drawn", "reveal_day", "ended"];
+    const MAX_PEOPLE: usize = 60;
+    let whole = serde_json::to_value(p).map_err(|e| e.to_string())?;
+    if let Some(at) = find_match_like(&whole, "", 0) {
+        return Err(format!("a match-like key on a Secret Santa card ({at})"));
+    }
+    let Some(o) = s.as_object() else { return Err("a santa part that isn't an object".into()) };
+    let phase = o.get("phase").and_then(Value::as_str).filter(|ph| PHASES.contains(ph)).ok_or("a santa phase")?;
+    if p.state != if phase == "ended" { "ended" } else { "live" } {
+        return Err(format!("a {} Secret Santa in phase {phase}", p.state));
+    }
+    if p.join.is_some() || p.results.is_some() || p.checks.is_some() || p.dry_run.is_some() || p.progress.is_some() || p.draft.is_some() || p.yours.is_some() {
+        return Err("a quiz part on a Secret Santa card".into());
+    }
+    let count = |k: &str| -> Result<Option<u64>, String> {
+        match o.get(k) {
+            None | Some(Value::Null) => Ok(None),
+            Some(v) => v.as_u64().filter(|n| *n <= 100_000).map(Some).ok_or_else(|| format!("santa {k}")),
+        }
+    };
+    let joined = count("joined")?.ok_or("santa joined")?;
+    count("expected")?;
+    for k in ["looked", "gifts_ready"] {
+        if count(k)?.is_some_and(|n| n > joined) {
+            return Err(format!("santa {k} over joined"));
+        }
+    }
+    let (asked, answered) = (count("asks_asked")?, count("asks_answered")?);
+    if answered.is_some_and(|a| asked.is_none_or(|q| a > q)) {
+        return Err("santa answers over questions".into());
+    }
+    let list = |k: &str| -> Result<Vec<Value>, String> {
+        match o.get(k) {
+            None | Some(Value::Null) => Ok(Vec::new()),
+            Some(Value::Array(a)) if a.len() <= MAX_PEOPLE => Ok(a.clone()),
+            Some(_) => Err(format!("santa {k}")),
+        }
+    };
+    let first_name = |v: &Value| v.as_str().map(|n| check_text(n, 40, "santa name")).unwrap_or_else(|| Err("santa name".into()));
+    for n in list("waiting_for")? {
+        first_name(&n)?;
+    }
+    for pair in list("keep_apart")? {
+        match pair.as_array().map(Vec::as_slice) {
+            Some([a, b]) => {
+                first_name(a)?;
+                first_name(b)?;
+            }
+            _ => return Err("santa keep_apart".into()),
+        }
+    }
+    for person in list("people")? {
+        let id = person.get("id").and_then(Value::as_str).ok_or("santa person id")?;
+        check_text(id, 64, "santa person id")?;
+        first_name(&person["name"])?;
+        if let Some(a) = person.get("avatar").filter(|a| !a.is_null()) {
+            let ok = a.as_str().is_some_and(|a| (1..=32).contains(&a.len()) && a.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-'));
+            if !ok {
+                return Err("santa person avatar".into());
+            }
+        }
+        for f in ["looked", "gift_ready", "you", "locked"] {
+            if person.get(f).is_some_and(|v| !v.is_null() && !v.is_boolean()) {
+                return Err(format!("santa person {f}"));
+            }
+        }
+    }
+    for (k, max) in [("draw_rule", 200), ("drawn_at", 60), ("reveal_at", 40), ("revealed_at", 60), ("deletes_on", 40), ("ended_on", 40), ("blocked", 300)] {
+        match o.get(k) {
+            None | Some(Value::Null) => {}
+            Some(Value::String(t)) => check_text(t, max, &format!("santa {k}"))?,
+            Some(_) => return Err(format!("santa {k}")),
+        }
+    }
+    if o.get("reveal").is_some_and(|r| !r.is_null() && !matches!(r.as_str(), Some("scheduled" | "shown" | "skipped" | "never"))) {
+        return Err("santa reveal".into());
+    }
+    if o.get("can_draw").is_some_and(|v| !v.is_null() && !v.is_boolean()) {
+        return Err("santa can_draw".into());
+    }
+    if let Some(j) = o.get("join").filter(|j| !j.is_null()) {
+        let mode = j["mode"].as_str().filter(|m| matches!(*m, "anywhere" | "wifi" | "none")).ok_or("santa join mode")?;
+        let url = |k: &str| -> Result<Option<&str>, String> {
+            match &j[k] {
+                Value::Null => Ok(None),
+                Value::String(u) if u.len() <= 2048 && (u.starts_with("https://") || u.starts_with("http://")) => {
+                    let host = u.split('/').nth(2).unwrap_or("");
+                    if host.contains('@') || host.split(':').next().unwrap_or("").to_ascii_lowercase().ends_with(".trycloudflare.com") {
+                        return Err("a santa join that offers a quick tunnel".into());
+                    }
+                    Ok(Some(u))
+                }
+                _ => Err(format!("santa join {k}")),
+            }
+        };
+        let anywhere = url("anywhere_url")?;
+        url("wifi_url")?;
+        let kind = match &j["anywhere_kind"] {
+            Value::Null => None,
+            Value::String(k) if k == "https" || k == "funnel" => Some(k),
+            _ => return Err("santa join kind".into()),
+        };
+        if j["quick_tunnel"] == Value::Bool(true) {
+            return Err("a santa join that offers a quick tunnel".into());
+        }
+        if mode == "anywhere" && (anywhere.is_none() || kind.is_none()) {
+            return Err("a santa join from anywhere without its address".into());
+        }
+    }
     Ok(())
 }
 

@@ -18,6 +18,9 @@ use serde_json::Value;
 use sqlx::SqliteConnection;
 
 use crate::db::models::{MessageExtra, NewMessage};
+use crate::db::pocket::PocketRow;
+use crate::pocket::kits::Player;
+use crate::server::santa_tool;
 use crate::db::quiz_drafts::QuizDraftRow;
 use crate::mcp::SELF_SERVER_NAME;
 use crate::quizmaster::card::{Card, State};
@@ -35,16 +38,11 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
     if input.sender_role != "kwant" {
         return None;
     }
-    let named = draft_named(input)?;
+    // The turn's last call that names a card wins: a Secret Santa made after a quiz call shows
+    // the Santa, and a quiz call after `santa_create` shows the quiz.
+    let called = last_named(input)?;
     let on = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?").bind(qt::SETTING).fetch_optional(&mut *conn).await.ok()?;
     if on.as_deref() != Some("on") {
-        return None;
-    }
-    let row = match named {
-        Named::Id(id) => sqlx::query_as::<_, QuizDraftRow>("SELECT * FROM quiz_drafts WHERE id = ?").bind(id.as_str()).fetch_optional(&mut *conn).await.ok()??,
-        Named::MadeThisTurn => made_this_turn(&mut *conn, input, extra).await?,
-    };
-    if !belongs(&mut *conn, &row, input, extra).await {
         return None;
     }
     let tz = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
@@ -53,7 +51,127 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
         .await
         .ok()
         .flatten();
+    let named = match called {
+        Called::Quiz(named) => named,
+        Called::Santa(code) => return santa_candidate(&mut *conn, &code, input, extra, tz.as_deref()).await,
+    };
+    let row = match named {
+        Named::Id(id) => sqlx::query_as::<_, QuizDraftRow>("SELECT * FROM quiz_drafts WHERE id = ?").bind(id.as_str()).fetch_optional(&mut *conn).await.ok()??,
+        Named::MadeThisTurn => made_this_turn(&mut *conn, input, extra).await?,
+    };
+    if !belongs(&mut *conn, &row.kwant_id, &row.space_id, input, extra).await {
+        return None;
+    }
     Some(Block::Pocket(Box::new(block(&row, &qt::card_of(&row), tz.as_deref()))))
+}
+
+/// What the turn's last card-naming call named.
+#[derive(Debug, PartialEq)]
+enum Called {
+    /// A Quizmaster draft.
+    Quiz(Named),
+    /// The code of a Secret Santa `santa_create` made.
+    Santa(String),
+}
+
+fn last_named(input: &NewMessage) -> Option<Called> {
+    match (draft_named_at(input), santa_named_at(input)) {
+        (Some((qi, _)), Some((si, code))) if si > qi => Some(Called::Santa(code)),
+        (Some((_, named)), _) => Some(Called::Quiz(named)),
+        (None, Some((_, code))) => Some(Called::Santa(code)),
+        (None, None) => None,
+    }
+}
+
+/// The code the turn's last `santa_create` call that made a Secret Santa answered with (its text
+/// starts `Pocket app · Secret Santa [<code>]`), and that call's place in the turn. A failed call,
+/// a call that only asked for the rules, or another server's tool of the same name names nothing.
+/// Shape-checked only; whose pocket it is gets checked against the stored row.
+fn santa_named_at(input: &NewMessage) -> Option<(usize, String)> {
+    let calls = input.tool_calls.as_ref()?.as_array()?;
+    calls.iter().enumerate().rev().find_map(|(i, c)| {
+        if c.get("server").and_then(Value::as_str) != Some(SELF_SERVER_NAME) || c.get("tool").and_then(Value::as_str) != Some(santa_tool::TOOL) {
+            return None;
+        }
+        if c.get("status").and_then(Value::as_str) != Some("ok") {
+            return None;
+        }
+        let rest = c.get("result").and_then(Value::as_str)?.trim_start().strip_prefix(santa_tool::CARD_TEXT_HEAD)?;
+        let code = &rest[..rest.find(']')?];
+        valid_code(code).then(|| (i, code.to_string()))
+    })
+}
+
+/// A Secret Santa's card: the stored pocket (kit `santa`, open or ended, owned by the reply's
+/// sender, in the reply's space) through [`santa_tool::card`], never the call's text.
+async fn santa_candidate(conn: &mut SqliteConnection, code: &str, input: &NewMessage, extra: &MessageExtra, tz: Option<&str>) -> Option<Block> {
+    let sql = format!("SELECT {} FROM pocket_apps WHERE code = ?", crate::db::pocket::POCKET_COLS);
+    let row = sqlx::query_as::<_, PocketRow>(&sql).bind(code).fetch_optional(&mut *conn).await.ok()??;
+    if row.kit != crate::pocket::santa::ID {
+        return None;
+    }
+    let owner = row.owner_kwant_id.clone()?;
+    let space = sqlx::query_scalar::<_, String>("SELECT space_id FROM kwants WHERE id = ?").bind(&owner).fetch_optional(&mut *conn).await.ok()??;
+    if !belongs(&mut *conn, &owner, &space, input, extra).await {
+        return None;
+    }
+    let players: Vec<Player> = sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
+        "SELECT id, name, avatar, team, joined_at FROM pocket_players WHERE pocket_code = ? AND removed_at IS NULL ORDER BY joined_at, id",
+    )
+    .bind(code)
+    .fetch_all(&mut *conn)
+    .await
+    .ok()?
+    .into_iter()
+    .map(|(id, name, avatar, team, joined_at)| Player { id, name, avatar, team, joined_at })
+    .collect();
+    let spec: Value = serde_json::from_str(&row.spec).ok()?;
+    let kit_state: Value = serde_json::from_str(&row.kit_state).unwrap_or(Value::Null);
+    let c = santa_tool::card(&santa_tool::CardInput {
+        title: &row.title,
+        spec: &spec,
+        kit_state: &kit_state,
+        players: &players,
+        ended: row.state != crate::db::pocket::OPEN,
+        ended_at: row.ended_at,
+        expires_at: row.expires_at,
+        tz,
+        now: Utc::now(),
+        join: santa_tool::join_for(code),
+    });
+    Some(Block::Pocket(Box::new(santa_block(&row.code, c))))
+}
+
+/// The `pocket` block for a Secret Santa's card: kit `santa`, its `santa` part, and none of the
+/// quiz's parts.
+fn santa_block(code: &str, c: santa_tool::Card) -> Pocket {
+    Pocket {
+        id: "b0".into(),
+        title: None,
+        source: Source::slot(),
+        provenance: Provenance::kwant_data(format!("pocket:{code}")),
+        code: code.to_string(),
+        kit: crate::pocket::santa::ID.into(),
+        name: fit(&c.name, 80),
+        when: c.when.map(|w| fit(&w, 160)),
+        state: c.state.into(),
+        paused: false,
+        progress: None,
+        rounds: Vec::new(),
+        checks: None,
+        dry_run: None,
+        eta: None,
+        opens_line: None,
+        live: None,
+        join: None,
+        ended: None,
+        budget: None,
+        results: None,
+        draft: None,
+        yours: None,
+        notice: None,
+        santa: Some(c.santa),
+    }
 }
 
 /// Which draft a turn's Quizmaster calls name.
@@ -74,9 +192,15 @@ enum Named {
 /// never its answer; a draft still being written comes back as an "error" whose answer is that
 /// draft's own card (so the bot fixes it), and counts too. Any other failure doesn't. Shape-checked
 /// only; whose draft it is gets checked against the stored row.
+#[cfg(test)]
 fn draft_named(input: &NewMessage) -> Option<Named> {
+    draft_named_at(input).map(|(_, named)| named)
+}
+
+/// [`draft_named`], with that call's place in the turn.
+fn draft_named_at(input: &NewMessage) -> Option<(usize, Named)> {
     let calls = input.tool_calls.as_ref()?.as_array()?;
-    calls.iter().rev().find_map(|c| {
+    calls.iter().enumerate().rev().find_map(|(i, c)| {
         if c.get("server").and_then(Value::as_str) != Some(SELF_SERVER_NAME) {
             return None;
         }
@@ -91,7 +215,7 @@ fn draft_named(input: &NewMessage) -> Option<Named> {
             // A create with a spec that ran, with no answer kept: the draft it made
             None if tool == "pocket_create" && status == "allowed" && result.is_none() => {
                 let spec = c.get("arguments").and_then(|a| a.get("spec")).filter(|s| !s.is_null());
-                return spec.map(|_| Named::MadeThisTurn);
+                return spec.map(|_| (i, Named::MadeThisTurn));
             }
             // Any other call without an id names the draft its card answered with
             None => card_id.clone()?,
@@ -101,7 +225,7 @@ fn draft_named(input: &NewMessage) -> Option<Named> {
             "error" => card_id.as_deref() == Some(id.as_str()),
             _ => false,
         };
-        (answered && valid_id(&id)).then_some(Named::Id(id))
+        (answered && valid_id(&id)).then_some((i, Named::Id(id)))
     })
 }
 
@@ -155,28 +279,28 @@ pub(crate) fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() <= 64 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
 }
 
-/// The draft is the reply sender's own, in the reply's space.
-async fn belongs(conn: &mut SqliteConnection, row: &QuizDraftRow, input: &NewMessage, extra: &MessageExtra) -> bool {
-    let writer = match sqlx::query_as::<_, (String, String)>("SELECT name, space_id FROM kwants WHERE id = ?").bind(&row.kwant_id).fetch_optional(&mut *conn).await {
+/// The draft (or pocket) of `kwant_id` in `space_id` is the reply sender's own, in the reply's space.
+async fn belongs(conn: &mut SqliteConnection, kwant_id: &str, space_id: &str, input: &NewMessage, extra: &MessageExtra) -> bool {
+    let writer = match sqlx::query_as::<_, (String, String)>("SELECT name, space_id FROM kwants WHERE id = ?").bind(kwant_id).fetch_optional(&mut *conn).await {
         Ok(w) => w,
         Err(_) => return false,
     };
     let Some((name, space)) = writer else { return false };
-    if name != input.sender_id || space != row.space_id {
+    if name != input.sender_id || space != space_id {
         return false;
     }
     // A card that names its bot must name this one
     if let Some(k) = extra.meta.as_ref().and_then(|m| m.get("kwant_id")) {
-        if k.as_str() != Some(row.kwant_id.as_str()) {
+        if k.as_str() != Some(kwant_id) {
             return false;
         }
     }
     match (&input.direct_kwant_id, &input.channel_id) {
-        (Some(direct), _) => *direct == row.kwant_id,
+        (Some(direct), _) => direct == kwant_id,
         (None, Some(channel)) => {
             let space =
                 sqlx::query_scalar::<_, String>("SELECT space_id FROM channels WHERE id = ?").bind(channel).fetch_optional(&mut *conn).await.ok().flatten();
-            space.as_deref() == Some(row.space_id.as_str())
+            space.as_deref() == Some(space_id)
         }
         (None, None) => false,
     }
@@ -319,6 +443,7 @@ fn block(row: &QuizDraftRow, card: &Card, tz: Option<&str>) -> Pocket {
         draft: Some(card.id.clone()),
         yours: Some(card.yours as u64),
         notice,
+        santa: None,
     }
 }
 
@@ -396,6 +521,7 @@ mod tests {
             draft: Some("qd_0123456789ab".into()),
             yours: Some(1),
             notice: None,
+            santa: None,
         }
     }
 
