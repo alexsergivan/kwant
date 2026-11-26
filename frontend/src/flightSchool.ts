@@ -136,7 +136,7 @@ export function tierReason(details: Record<string, unknown> | null | undefined):
 /** The Needs-you kind the engine guard (D7) raises, and what the person can do about it. */
 export const ENGINE_CANT_SANDBOX = 'engine_cant_sandbox';
 export const engineCantSandboxText = (bot: string | null) =>
-  `${bot ?? 'Its bot'} runs on an engine that can’t be held to a lower tier, so nothing ran. Switch ${bot ?? 'the bot'} to a Claude model, or set its tier for this kind of work to Act, then press Unblock.`;
+  `${bot ?? 'Its bot'} runs on an AI that can’t be held to a lower tier, so nothing ran. Switch ${bot ?? 'the bot'} to a Claude model, or set its tier for this kind of work to Act, then press Unblock.`;
 
 /** Task fields Flight School adds; `owner_tier` is null while the setting is off. */
 export interface TaskTier {

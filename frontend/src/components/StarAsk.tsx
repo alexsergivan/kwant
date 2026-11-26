@@ -25,9 +25,9 @@ export const StarAskView: React.FC<ViewProps> = ({ onStar, onLater, onNever }) =
     <img src="/icons/icon-192.png" alt="" width={36} height={36} className="shrink-0 rounded-lg [image-rendering:pixelated]" />
     <div className="flex-1 min-w-0">
       <p id="star-ask-title" className="font-medium text-zinc-100">
-        kwant bots run on coffee and GitHub stars <span aria-hidden="true">⭐</span>
+        kwant runs on coffee and GitHub stars <span aria-hidden="true">⭐</span>
       </p>
-      <p className="mt-0.5 text-zinc-400 leading-relaxed">If your bots have been handy, toss one our way? It helps other people find kwant bots.</p>
+      <p className="mt-0.5 text-zinc-400 leading-relaxed">If your bots have been handy, toss one our way? It helps other people find kwant.</p>
       <div className="mt-2 flex flex-wrap items-center gap-2">
         <a
           href={STAR_REPO_URL}
@@ -96,7 +96,7 @@ export const StarAskSettingsLink: React.FC<{ store?: StarAskStore }> = ({ store 
   >
     <Star size={15} className="text-amber-300" aria-hidden="true" />
     <span className="flex-1">
-      Star kwant bots on GitHub<span className="sr-only"> (opens in your browser)</span>
+      Star kwant on GitHub<span className="sr-only"> (opens in your browser)</span>
     </span>
     <ExternalLink size={13} className="text-zinc-500" aria-hidden="true" />
   </a>

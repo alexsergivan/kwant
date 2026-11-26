@@ -180,6 +180,7 @@ unit="$home/.config/systemd/user/kwnt.service"
 check "the unit file is written" [ -f "$unit" ]
 check "it runs ~/.local/bin/kwnt serve" grep -qx 'ExecStart=%h/.local/bin/kwnt serve' "$unit"
 check "it reads ~/.kwnt/kwnt.env if present" grep -qx 'EnvironmentFile=-%h/.kwnt/kwnt.env' "$unit"
+check "a restart leaves programs a bot left running alone" grep -qx 'KillMode=process' "$unit"
 check "it is enabled and restarted" sh -c "grep -q 'enable kwnt.service' $home/systemctl.calls && grep -q 'restart kwnt.service' $home/systemctl.calls"
 check "linger was tried without a password prompt" grep -q 'enable-linger --no-ask-password tester' "$home/loginctl.calls"
 check "says it runs as a service" grep -qx '✓ Runs as a service for this user' /tmp/out

@@ -1289,13 +1289,33 @@ pub fn thinking_note(engine: &str) -> Option<&'static str> {
         "claude" | "codex" | "grok" => None,
         // the API drivers pass on reasoning only when the server returns it (reasoning_content,
         // reasoning, Anthropic thinking blocks); kwnt doesn't turn on extended thinking itself
-        _ => Some("This engine shares its thinking only when its model returns it; otherwise you'll see what it says between steps and each tool it runs."),
+        _ => Some("This AI shares its thinking only when it returns it; otherwise you'll see what it says between steps and each tool it runs."),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 36h plain-words (Mira's copy check): the note an API engine's turn opens with says "AI",
+    /// not "engine"; the engines that stream their thinking get no note.
+    #[test]
+    fn thinking_note_says_ai_not_engine() {
+        use crate::drivers::engines::EngineId;
+        for engine in EngineId::ALL {
+            let id = engine.as_str();
+            match id {
+                "claude" | "codex" | "grok" => assert_eq!(thinking_note(id), None, "{id}"),
+                _ => {
+                    let note = thinking_note(id).expect("an engine that doesn't stream thinking gets a note");
+                    assert!(!note.to_lowercase().contains("engine"), "{id}: {note}");
+                    assert!(note.starts_with("This AI shares its thinking"), "{id}: {note}");
+                }
+            }
+        }
+        let unknown = thinking_note("unknown").expect("an unknown engine gets the note");
+        assert!(!unknown.to_lowercase().contains("engine") && unknown.contains("AI"), "{unknown}");
+    }
 
     /// 26f: a Home Assistant step says what it acts on.
     #[test]

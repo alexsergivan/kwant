@@ -371,6 +371,11 @@ static GLOBAL_SENDS: LazyLock<tokio::sync::Mutex<VecDeque<Instant>>> = LazyLock:
 const GLOBAL_PER_SECOND: usize = 30;
 /// At least this long between two sends to one chat.
 const CHAT_GAP: Duration = Duration::from_millis(1000);
+/// One step of `with_retries`' backoff and of a 429's `retry_after` (short in unit tests).
+#[cfg(not(test))]
+const RETRY_UNIT: Duration = Duration::from_secs(1);
+#[cfg(test)]
+const RETRY_UNIT: Duration = Duration::from_millis(5);
 
 fn key(state: &AppState, space: &str) -> Key {
     (state.config.data_dir.clone(), space.to_string())
@@ -580,6 +585,8 @@ async fn send_one(state: &AppState, runner: &Runner, chat_id: i64, html: &str, m
 
 /// Runs `call`, waiting out 429s and short outages (a few tries). `None` when it never went
 /// through for a reason the caller can't fix; `Some(Err(BadRequest))` so the caller can fall back.
+/// A send whose answer was lost after Telegram may have posted it (`MaybeSent`) is never sent
+/// again: a rare lost message beats the same reply or ask card twice (telegram-send-once).
 async fn with_retries<T, F, Fut>(state: &AppState, runner: &Runner, mut call: F) -> Option<Result<T, api::TgError>>
 where
     F: FnMut() -> Fut,
@@ -600,15 +607,19 @@ where
                 }
                 tokio::select! {
                     _ = runner.cancel.cancelled() => return None,
-                    _ = tokio::time::sleep(Duration::from_secs(retry_after.min(60))) => {}
+                    _ = tokio::time::sleep(RETRY_UNIT * retry_after.min(60) as u32) => {}
                 }
             }
             Err(api::TgError::Network) | Err(api::TgError::Server(_)) => {
                 tokio::select! {
                     _ = runner.cancel.cancelled() => return None,
-                    _ = tokio::time::sleep(Duration::from_secs(backoff)) => {}
+                    _ = tokio::time::sleep(RETRY_UNIT * backoff as u32) => {}
                 }
                 backoff = (backoff * 2).min(30);
+            }
+            Err(api::TgError::MaybeSent) => {
+                tracing::info!(space = %runner.space, "telegram: Telegram's answer was lost after the send; not sending it again");
+                return None;
             }
             Err(api::TgError::Forbidden) => {
                 let _ = state.db.telegram_set_error(&runner.space, Some("blocked")).await;
@@ -762,5 +773,149 @@ mod tests {
         // The older floor's own reasons come first and stay as they were
         let d = json!({"source": "mcp", "server": "composio", "tool": "COMPOSIO_REMOTE_BASH_TOOL", "arguments": {"command": "ls"}});
         assert_eq!(link_only_reason(&d), Some("This step runs other actions inside it."));
+    }
+}
+
+/// telegram-send-once: a message is sent again only when the request never left (refused before
+/// connecting) or Telegram refused it with a 429; a lost answer after that is not resent. Edits
+/// keep today's retries. Every case counts the hits on a local stub.
+#[cfg(test)]
+mod send_once_tests {
+    use super::api::stub::{self, Reply::*};
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    const OK_SEND: &str = r#"{"ok":true,"result":{"message_id":7}}"#;
+    const OK_EDIT: &str = r#"{"ok":true,"result":true}"#;
+
+    struct Env {
+        state: AppState,
+        _tmp: tempfile::TempDir,
+    }
+
+    async fn setup() -> Env {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::init(tmp.path()).await.unwrap();
+        let config = crate::config::Config { data_dir: tmp.path().to_path_buf(), ..Default::default() };
+        let state = AppState::new(
+            config.clone(),
+            db,
+            crate::tools::ToolRunner::new(tmp.path().join("workspace")),
+            crate::broker::PermissionBroker::new(),
+            crate::router::LayaRouter::new(config.laya_url.clone()),
+        );
+        Env { state, _tmp: tmp }
+    }
+
+    fn runner(base: &str) -> Runner {
+        let token = ["12345", "6789:", &"Ab_-".repeat(9)[..35]].concat();
+        let (tx, _rx) = mpsc::unbounded_channel();
+        Runner {
+            space: "default".into(),
+            client: api::Client::for_stub(Zeroizing::new(token), base),
+            cancel: CancellationToken::new(),
+            status: Mutex::new(Status::Listening),
+            queued: AtomicUsize::new(0),
+            tx,
+            bad_code_replies: Mutex::new(HashMap::new()),
+            bad_codes: Mutex::new(HashMap::new()),
+        }
+    }
+
+    // (a) refused before connecting: nothing reached Telegram, so the send goes again
+    #[tokio::test]
+    async fn a_send_that_never_left_is_retried() {
+        let e = setup().await;
+        let refused = runner(&stub::refused_base());
+        let tries = AtomicUsize::new(0);
+        let got = with_retries(&e.state, &refused, || {
+            tries.fetch_add(1, Ordering::SeqCst);
+            refused.client.send_message(1, "hi", None, None)
+        })
+        .await;
+        assert_eq!(got, None);
+        assert_eq!(tries.load(Ordering::SeqCst), 5, "all five tries");
+
+        // Refused once, then Telegram is back: posted exactly once
+        let s = stub::start(vec![Answer(200, OK_SEND)]).await;
+        let up = runner(&s.base);
+        let tries = AtomicUsize::new(0);
+        let got = with_retries(&e.state, &up, || {
+            let first = tries.fetch_add(1, Ordering::SeqCst) == 0;
+            let c = if first { refused.client.clone() } else { up.client.clone() };
+            async move { c.send_message(1, "hi", None, None).await }
+        })
+        .await;
+        assert_eq!(got, Some(Ok(7)));
+        assert_eq!(tries.load(Ordering::SeqCst), 2);
+        assert_eq!(s.hits("sendMessage"), 1);
+    }
+
+    // (b) the request may have arrived: the send is not repeated, and send_one gives up
+    #[tokio::test]
+    async fn a_send_whose_answer_was_lost_goes_once() {
+        let e = setup().await;
+        for (why, reply) in [
+            ("reset after the request", Close),
+            ("proxy 502 page", Answer(502, "<html>Bad Gateway</html>")),
+            ("Telegram's own 500", Answer(500, r#"{"ok":false,"error_code":500,"description":"Internal Server Error"}"#)),
+            ("200 that isn't JSON", Answer(200, "<html>ok</html>")),
+        ] {
+            // Then a good answer, which a resend would get
+            let s = stub::start(vec![reply.clone(), Answer(200, OK_SEND)]).await;
+            let r = runner(&s.base);
+            let got = with_retries(&e.state, &r, || r.client.send_message(1, "hi", None, None)).await;
+            assert_eq!(got, None, "{why}");
+            assert_eq!(s.hits("sendMessage"), 1, "{why}: sent once, never again");
+
+            let s = stub::start(vec![reply, Answer(200, OK_SEND)]).await;
+            let r = runner(&s.base);
+            assert_eq!(send_one(&e.state, &r, 1, "<b>hi</b>", None, None).await, None, "{why}");
+            assert_eq!(s.hits("sendMessage"), 1, "{why}: send_one sends once");
+        }
+    }
+
+    // The plain-text fallback after a 400 is a send too: lost answer, no third try
+    #[tokio::test]
+    async fn the_plain_fallback_is_not_resent_either() {
+        let e = setup().await;
+        let s = stub::start(vec![Answer(400, r#"{"ok":false,"error_code":400,"description":"Bad Request: can't parse entities"}"#), Close, Answer(200, OK_SEND)]).await;
+        let r = runner(&s.base);
+        assert_eq!(send_one(&e.state, &r, 1, "<b>hi", None, None).await, None);
+        assert_eq!(s.hits("sendMessage"), 2, "the HTML try and one plain try");
+    }
+
+    // (c) an edit sent twice is harmless: it keeps today's retries on a reset and on a 5xx
+    #[tokio::test]
+    async fn an_edit_is_still_retried() {
+        let e = setup().await;
+        for (why, reply) in [("reset", Close), ("502", Answer(502, "<html>Bad Gateway</html>"))] {
+            let s = stub::start(vec![reply.clone(), reply, Answer(200, OK_EDIT)]).await;
+            let r = runner(&s.base);
+            let got = with_retries(&e.state, &r, || r.client.edit_message(1, 2, "hi", None)).await;
+            assert_eq!(got, Some(Ok(())), "{why}");
+            assert_eq!(s.hits("editMessageText"), 3, "{why}");
+        }
+        // And gives up after five, as today
+        let s = stub::start(vec![Close]).await;
+        let r = runner(&s.base);
+        assert_eq!(with_retries(&e.state, &r, || r.client.edit_message(1, 2, "hi", None)).await, None);
+        assert_eq!(s.hits("editMessageText"), 5);
+    }
+
+    // (d) a 429 is Telegram refusing the send, so it waits and sends again
+    #[tokio::test]
+    async fn a_429_waits_and_sends_again() {
+        let e = setup().await;
+        let s = stub::start(vec![
+            Answer(429, r#"{"ok":false,"error_code":429,"description":"Too Many Requests","parameters":{"retry_after":1}}"#),
+            Answer(200, OK_SEND),
+        ])
+        .await;
+        let r = runner(&s.base);
+        let got = with_retries(&e.state, &r, || r.client.send_message(1, "hi", None, None)).await;
+        assert_eq!(got, Some(Ok(7)));
+        assert_eq!(s.hits("sendMessage"), 2);
+        assert_eq!(r.status(), Status::Listening, "back from Throttled");
     }
 }

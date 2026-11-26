@@ -1269,7 +1269,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
             )}
             <div className="min-w-0">
               <h2 id="mcp-title" className="text-sm font-semibold text-zinc-100 truncate">
-                {editing === 'new' || picking ? 'Add a tool' : editing ? `Edit ${form.name || 'server'}` : 'Tools for your kwant bots'}
+                {editing === 'new' || picking ? 'Add a tool' : editing ? `Edit ${form.name || 'server'}` : 'Tools for your bots'}
               </h2>
               <p className="text-xs text-zinc-400 truncate">
                 {picking
