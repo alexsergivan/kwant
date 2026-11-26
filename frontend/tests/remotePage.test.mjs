@@ -3,6 +3,7 @@
 // button per phase (one tap reveals from an open question), near-miss judge bodies, ±100 adjusts with Undo, Remove and
 // End asking first, focus kept in sheets, and nothing written while the box is away.
 // The live half (the built page in Chrome under pa1's CSP, at 390) is guest/e2e/remote.mjs.
+import './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';

@@ -2,6 +2,7 @@
 // Vega's queue API (pa11/queue-impl.md), the copy (ordinal, minutes only with an average, the refusals with the 429
 // "limit"), what the buzz can honestly do per browser, the screen's own parser (no names, no ticket), and source rules
 // (no hex, no HTML from data, no style attributes, no React in the guest). The browser half is guest/e2e/queue.mjs.
+import './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { readFileSync, readdirSync } from 'node:fs';

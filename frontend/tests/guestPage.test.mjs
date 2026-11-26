@@ -1,6 +1,7 @@
 // pa5 guest page (autonomy/pocket-apps/pa5/brief.md): every phone screen from the fake server, reconnect and backoff,
 // first tap counts, the static half of the CSP rules, token drift, and the 80 KB gzipped budget.
 // The live half of the CSP test (the built page in Chrome under exactly pa1's policy) is guest/e2e/csp.mjs.
+import './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';

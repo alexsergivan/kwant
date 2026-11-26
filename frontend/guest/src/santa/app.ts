@@ -666,7 +666,7 @@ export class SantaApp {
             h('p', { class: 'center' }, this.linkButton('I have a reset code', () => this.setReset(true), 'use-code')),
           ],
       v.facts.phase === 'collecting' && !v.ended ? h('p', { class: 'center' }, this.linkButton('New here? Join the draw', () => this.leaveRejoin(), 'to-join')) : null,
-      v.facts.phase === 'drawn' && !v.ended ? this.newHere(host) : null,
+      v.facts.phase === 'drawn' && !v.ended && !d.reset ? this.newHere(host) : null,
       this.keep(v),
     );
     form.addEventListener('submit', (e) => {

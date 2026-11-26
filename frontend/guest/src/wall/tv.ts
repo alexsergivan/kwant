@@ -251,7 +251,7 @@ export class WallTV {
 
   private counter(extra = ''): Kid {
     const n = this.view?.count;
-    return n == null ? (extra ? extra.replace(/^ · /, '') : null) : `${n.toLocaleString('en-US')} ${n === 1 ? 'photo' : 'photos'}${extra}`;
+    return n == null ? (extra ? extra.replace(/^ · /, '') : null) : `${n.toLocaleString()} ${n === 1 ? 'photo' : 'photos'}${extra}`;
   }
 
   private corner(): HTMLElement {

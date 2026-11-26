@@ -42,7 +42,7 @@ export function dayLabel(iso: string, now: number): string {
   if (Number.isNaN(d.getTime())) return '';
   const t = new Date(now);
   if (d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate()) return 'Today';
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 const dayKey = (iso: string): string => {

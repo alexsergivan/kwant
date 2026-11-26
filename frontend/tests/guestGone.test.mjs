@@ -1,6 +1,7 @@
 // santa-gone-page (autonomy/santa-gone-page/brief.md): a deleted, expired or unknown /p/<code> gets the guest bundle with a
 // boot of exactly {"gone":true}. The entry (guest/src/main.ts) draws one static, kit-neutral ended screen and stops:
 // no /info fetch, no socket, no wake listeners.
+import './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
