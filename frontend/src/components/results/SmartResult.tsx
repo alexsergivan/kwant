@@ -51,10 +51,11 @@ const TYPE_LABEL: Record<SmartBlock['type'], string> = {
   pocket: 'Pocket app',
 };
 
-/** Where the block's data came from, in plain words (plan §A.6). */
-export function evidenceText(block: SmartBlock): string {
+/** Where the block's data came from, in plain words (plan §A.6). Null when it came from the reply itself: the card
+ *  sits inside that reply, so "From this reply" would say nothing (Oleks, Nov 26). */
+export function evidenceText(block: SmartBlock): string | null {
   const p = block.provenance;
-  if (p.kind !== 'kwant_data') return 'From this reply';
+  if (p.kind !== 'kwant_data') return null;
   if (p.ref.startsWith('task:')) return 'From task checks';
   if (p.ref.startsWith('pocket:')) return 'From your pocket app';
   const id = p.ref.slice('attachment:'.length);
@@ -216,6 +217,7 @@ export function verifiedCounts(block: SmartBlock): { passed: number; total: numb
 /** The footer every block shares, in the message's action row: (Verified), Show as text, Copy data, Evidence. */
 const Footer: React.FC<{ block: SmartBlock; messageId: string; asText: boolean; onToggle: () => void }> = ({ block, messageId, asText, onToggle }) => {
   const verified = verifiedCounts(block);
+  const evidence = evidenceText(block);
   return (
     <SmartActions messageId={messageId}>
       {verified && (
@@ -232,11 +234,13 @@ const Footer: React.FC<{ block: SmartBlock; messageId: string; asText: boolean; 
         Show as text
       </button>
       {block.type !== 'recipe' && <CopyData block={block} messageId={messageId} />}
-      {/* Where the numbers come from: a quiet caption, a fact rather than a button. */}
-      <span className={evidenceClass} data-evidence title={evidenceText(block)}>
-        <EvidenceIcon block={block} />
-        <span className="truncate">{evidenceText(block)}</span>
-      </span>
+      {/* Where the numbers come from, only when that isn't the reply itself: a quiet caption, a fact rather than a button. */}
+      {evidence && (
+        <span className={evidenceClass} data-evidence title={evidence}>
+          <EvidenceIcon block={block} />
+          <span className="truncate">{evidence}</span>
+        </span>
+      )}
     </SmartActions>
   );
 };

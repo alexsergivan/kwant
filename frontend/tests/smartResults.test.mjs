@@ -289,15 +289,11 @@ test('in a chat, the block’s buttons go in the message’s action row, so the 
   const rows = [...v.host.querySelectorAll('#row')];
   for (const row of rows) {
     assert.deepEqual([...row.querySelectorAll('button')].map((b) => b.textContent.trim()), ['Copy markdown', 'Show as text', 'Copy data']);
-    const ev = row.querySelector('[data-evidence]');
-    assert.equal(ev.textContent, 'From this reply');
-    // a caption, not a button: no role, no tab stop, no chip border; the full text stays on hover
-    assert.equal(ev.tagName, 'SPAN');
-    assert.equal(ev.getAttribute('role'), null);
-    assert.equal(ev.getAttribute('tabindex'), null);
-    assert.equal(ev.getAttribute('title'), 'From this reply');
-    assert.match(ev.className, /\bcursor-default\b/);
-    assert.doesNotMatch(ev.className, /\b(border|rounded-lg|bg-white)/);
+    // data from the reply itself: no "From this reply" line, and nothing empty left in the row to make a gap
+    assert.equal(row.querySelector('[data-evidence]'), null);
+    assert.doesNotMatch(row.textContent, /From this reply/);
+    const slot = row.querySelector('[data-smart-actions]');
+    assert.deepEqual([...slot.children].map((c) => c.textContent.trim()), ['Show as text', 'Copy data']);
   }
   assert.equal(other.childNodes.length, 0, 'only its own message’s row');
   const extra = (bubble) => [...bubble.querySelectorAll('button')].filter((b) => !b.closest('th') && !/^Ask about/.test(b.getAttribute('aria-label') ?? b.textContent));
@@ -503,7 +499,17 @@ test('a slot block renders after the reply with its title; Show as text gives it
     assert.equal(frame.getAttribute('role'), 'group');
     assert.equal(frame.firstElementChild.textContent, 'Outcome checks', 'a slot block shows its title');
     assert.match(bubble.firstElementChild.textContent, /The migration task is done/);
-    assert.equal(v.host.querySelector('[data-evidence]').textContent, 'From task checks');
+    // data from elsewhere (a task's checks): the source stays, as a quiet caption, not a button or chip
+    const ev = v.host.querySelector('[data-evidence]');
+    assert.equal(ev.textContent, 'From task checks');
+    assert.equal(ev.tagName, 'SPAN');
+    assert.equal(ev.getAttribute('role'), null);
+    assert.equal(ev.getAttribute('tabindex'), null);
+    assert.equal(ev.getAttribute('title'), 'From task checks');
+    assert.match(ev.className, /\bcursor-default\b/);
+    assert.match(ev.className, /\btext-zinc-500\b/);
+    assert.doesNotMatch(ev.className, /\b(border|rounded-lg|bg-white|min-h-9|px-3)\b/);
+    assert.equal(ev.closest('button, a, [role="button"]'), null);
     assert.equal(md(reply, { results: titled, messageId: 'mv', isStreaming: true }), md(reply, { isStreaming: true }), 'nothing while streaming');
     await click([...v.host.querySelectorAll('button')].find((b) => b.textContent === 'Show as text'));
     assert.equal(v.host.querySelector('[data-test-verification]'), null);
@@ -518,8 +524,10 @@ test('a slot block renders after the reply with its title; Show as text gives it
 
 test('evidence wording follows provenance', () => {
   const ev = (provenance, extra = {}) => m.evidenceText({ ...m.FIXTURES.files.results.blocks[0], provenance, ...extra });
-  assert.equal(ev({ kind: 'reply_text' }), 'From this reply');
-  assert.equal(ev({ kind: 'bot_declared', tool_call_id: 't1' }), 'From this reply');
+  // the card sits inside the reply, so a reply source gets no line at all
+  assert.equal(ev({ kind: 'reply_text' }), null);
+  assert.equal(ev({ kind: 'bot_declared', tool_call_id: 't1' }), null);
+  assert.equal(ev({ kind: 'kwant_data', ref: 'pocket:fq7k2m' }), 'From your pocket app');
   assert.equal(ev({ kind: 'kwant_data', ref: 'task:7f3a9c' }), 'From task checks');
   assert.equal(ev({ kind: 'kwant_data', ref: 'attachment:att-redirects' }), 'From attachment redirects.csv');
   assert.equal(ev({ kind: 'kwant_data', ref: 'attachment:gone' }), 'From attachments');

@@ -177,9 +177,10 @@
    in on them. Only on touch screens below 768px, so desktop and narrow mouse windows keep the
    compact look. Toggle switches, checkboxes and links inside text keep their size; anything else
    that must stay small can opt out with data-compact. */
-/* 19f: a phone reply's smart-result row (Show as text, Copy data, From this reply) sits under the ghost icons.
-   It hides when no block put anything in it. "From this reply" is quiet caption text at every width
-   (evidenceClass), so phone and desktop match and it never looks like a button it isn't. */
+/* 19f: a phone reply's smart-result row (Show as text, Copy data, From task checks) sits under the ghost icons.
+   It hides when no block put anything in it. The source line ("From task checks", "From attachment ...") is quiet
+   caption text at every width (evidenceClass), so phone and desktop match and it never looks like a button it
+   isn't; a block whose data came from the reply itself has no source line. */
 [data-smart-row]:has(> [data-smart-actions]:empty) {
   display: none;
 }

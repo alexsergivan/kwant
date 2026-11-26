@@ -10,7 +10,7 @@ export const SmartActionsSlot: React.FC<{ messageId: string }> = ({ messageId })
  *  button with an icon, readable at rest and lifted on hover. 36 px tall, 44 px on touch screens. */
 export const actionClass =
   'inline-flex items-center gap-1.5 min-h-9 px-3 rounded-lg border border-hairline-strong bg-white/[0.04] text-xs font-medium whitespace-nowrap shrink-0 text-zinc-200 hover:text-zinc-50 hover:bg-white/[0.08] hover:border-white/20 active:scale-[0.97] transition duration-150 motion-reduce:transition-none motion-reduce:active:scale-100 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400';
-/** A fact in the row ("From this reply"): a quiet caption with an icon, at every width. No border, background or
+/** Where the data came from, when not the reply ("From task checks"): a quiet caption with an icon, at every width. No border, background or
  *  chip padding, so it never reads as a button next to the real ones; it does nothing, so no hover either. */
 export const evidenceClass =
   'inline-flex items-center self-center gap-1.5 min-w-0 max-w-full px-1 text-xs font-normal text-zinc-500 cursor-default [&>svg]:text-zinc-500';

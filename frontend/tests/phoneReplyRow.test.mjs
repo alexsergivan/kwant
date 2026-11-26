@@ -35,7 +35,7 @@ test('on a phone the ghost row does not wrap and the smart actions get their own
   assert.match(css, /\[data-smart-row\]:has\(> \[data-smart-actions\]:empty\) \{\s*display: none;/);
 });
 
-test('"From this reply" is a quiet caption at every width, not a chip', () => {
+test('the source line ("From task checks") is a quiet caption at every width, not a chip', () => {
   // no phone-only override any more: phone and desktop share evidenceClass
   assert.doesNotMatch(css, /\[data-evidence\]/);
   const cls = m.evidenceClass.split(' ');
