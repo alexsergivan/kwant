@@ -112,7 +112,7 @@ import { IDEA_MAX, isIdeaCommand } from '../ideas';
 import { ideaBlockedLine, ideaLength } from '../ideaShell';
 import { JarIcon } from './JarIcon';
 import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhead } from '../decideFirst';
-import { approvalScrollAction, fullyVisible, isNearBottom, nextFollowing } from '../approvalVisibility';
+import { approvalScrollAction, fullyVisible, holdPlaceBy, inputStopsFollowing, isAtBottom, isNearBottom, lazyRowsHold, nextFollowing, scrollIntent } from '../approvalVisibility';
 import { approvalPillShows, stripStepsAside } from '../askHere';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
@@ -127,6 +127,9 @@ import { DictationAnnouncer, DictationLine, DictationSetupPopover, MicButton, us
 import { ReactResult, Reaction, ReplyRef, botNameOf, excerptOf, questionMessageId, reactionOf, replyRefOf } from '../reactReply';
 import type { FloorResolveOpts } from '../dev/types';
 import { useAfterRender } from '../focusAfterRender';
+
+// chat-scroll-holds-place: 33q's lazy rows only where they hold still (not WebKit, see lazyRowsHold).
+const LAZY_ROWS = typeof navigator === 'undefined' || lazyRowsHold(navigator.userAgent);
 
 /** 31q: px the desktop mention tag keeps clear below the composer's top hairline. */
 const NEW_TAG_CLEAR = 4;
@@ -1090,6 +1093,55 @@ export const ChatView: React.FC<ChatViewProps> = ({
     el.scrollTop = homeShowingRef.current ? 0 : el.scrollHeight;
     lastScrollTopRef.current = el.scrollTop;
   };
+  // chat-scroll-holds-place: while the person reads (not following), nothing but their own input moves the messages.
+  // `userScrollAtRef`: when their last scrolling input came (wheel, touch, a scrolling key, a scrollbar drag); a scroll
+  // event soon after it is theirs. `placeRef`: the message they're looking at (nearest the middle) and its offset.
+  const userScrollAtRef = useRef(-Infinity);
+  const scrollbarDragRef = useRef(false);
+  const placeRef = useRef<{ row: Element; top: number; atScrollTop: number } | null>(null);
+  const userScrolling = () => scrollbarDragRef.current || performance.now() - userScrollAtRef.current < 400;
+  /** Takes the reader's place: the message row at the middle of the chat (a few points tried, rows have gaps). */
+  const takePlace = () => {
+    const el = scrollRef.current;
+    // While earlier messages load, the reader keeps scrolling and rows keep settling: the place 33k restores once
+    // they're drawn is where the first message is now, not where it was when the load began.
+    const a = earlierAnchorRef.current;
+    if (el && a) {
+      const first = el.querySelector(`[data-message-id="${CSS.escape(a.id)}"]`);
+      if (first) a.top = first.getBoundingClientRect().top - el.getBoundingClientRect().top;
+      a.fromBottom = el.scrollHeight - el.scrollTop;
+    }
+    if (!el || stickRef.current || jumpingRef.current) {
+      placeRef.current = null;
+      return;
+    }
+    const box = el.getBoundingClientRect();
+    const x = box.left + box.width / 2;
+    let row: Element | null = null;
+    for (const dy of [0, -40, 40, -120, 120]) {
+      row = document.elementFromPoint?.(x, box.top + box.height / 2 + dy)?.closest('[data-message-id]') ?? null;
+      if (row && el.contains(row)) break;
+      row = null;
+    }
+    placeRef.current = row ? { row, top: row.getBoundingClientRect().top - box.top, atScrollTop: el.scrollTop } : null;
+  };
+  /** Puts the reader's message back where it was when something above it changed height (a row settling from its
+   *  33q estimate, a chart measuring itself, a card above opening). Runs from the ResizeObservers, before the paint. */
+  const holdPlace = () => {
+    const el = scrollRef.current;
+    const p = placeRef.current;
+    if (!el || !p || stickRef.current || jumpingRef.current) return;
+    // Its row drawn anew (React replaced the element): the same message, found by its id.
+    const id = p.row.getAttribute('data-message-id');
+    const row = p.row.isConnected ? p.row : id ? el.querySelector(`[data-message-id="${CSS.escape(id)}"]`) : null;
+    if (!row) return takePlace();
+    const by = holdPlaceBy(p, { top: row.getBoundingClientRect().top - el.getBoundingClientRect().top, scrollTop: el.scrollTop });
+    if (by) {
+      el.scrollTop += by;
+      lastScrollTopRef.current = el.scrollTop;
+    }
+    takePlace();
+  };
   // 33q: a jump (search hit, quote, waiting card) scrolls smoothly from the bottom. While it runs, rows it passes settle
   // from their kw-row-lazy estimate, and the row re-pin below must not pull the view back. When it ends, one instant
   // scroll lands it on the real heights (the smooth scroll set off from the estimates). Reduced motion is instant already.
@@ -1157,8 +1209,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (el) {
       // 33q: during a jump up, a move down at the bottom is the reader taking over (the jump itself only goes up).
       const backDown = jumpingRef.current && jumpUpRef.current && isNearBottom(el) && el.scrollTop > lastScrollTopRef.current + 1;
-      stickRef.current = nextFollowing(stickRef.current, { nearBottom: isNearBottom(el), scrollTop: el.scrollTop, lastScrollTop: lastScrollTopRef.current });
+      stickRef.current = nextFollowing(stickRef.current, {
+        nearBottom: isNearBottom(el),
+        atBottom: isAtBottom(el),
+        scrollTop: el.scrollTop,
+        lastScrollTop: lastScrollTopRef.current,
+        user: userScrolling(),
+      });
       lastScrollTopRef.current = el.scrollTop;
+      // A scroll event at the very position the place was taken at is one the chat made itself (33k's restore, a
+      // hold) arriving late: rows that settled since must still be held against that place, not baked into a new one.
+      const p = placeRef.current;
+      if (!p || userScrolling() || Math.abs(el.scrollTop - p.atScrollTop) > 0.5) takePlace();
       // 33q: a jump that left the bottom, then the reader came back to it: the jump is over and the re-pin is theirs again.
       if (jumpingRef.current) {
         if (!stickRef.current) jumpLeftRef.current = true;
@@ -1253,6 +1315,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!el || typeof ResizeObserver === 'undefined') return;
     const ro = new ResizeObserver(() => {
       if (stickRef.current) pinToBottom(el);
+      else holdPlace();
       checkApprovalVisible();
     });
     ro.observe(el);
@@ -1279,6 +1342,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         if (was !== undefined && Math.abs(was - h) > 0.5) grew = true;
       }
       if (grew && stickRef.current && !jumpingRef.current) pinToBottom(el);
+      // Reading: every callback, also a row's first one. Rows come under watch after they're drawn (this effect),
+      // so a new row that settled in between is no "change" here, yet it moved the messages below it.
+      else if (!stickRef.current) holdPlace();
     });
     el.querySelectorAll('[data-message-id]').forEach((r) => {
       if (!heights.has(r)) heights.set(r, r.getBoundingClientRect().height);
@@ -1287,8 +1353,69 @@ export const ChatView: React.FC<ChatViewProps> = ({
     return () => ro.disconnect();
   }, [messages, contextKey]);
   useEffect(() => () => jumpEndRef.current?.(), []);
+  // chat-scroll-holds-place: the person's own scrolling input, seen before the scroll it makes. Scrolling up (or
+  // dragging the scrollbar) stops following at once, so a streamed word or a row settling in the same frame can't pin
+  // the view back down over it; any of it ends a running jump without its late settle. Passive: scrolling stays as is.
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const took = (dir: 'up' | 'down' | null) => {
+      if (!dir) return;
+      userScrollAtRef.current = performance.now();
+      if (inputStopsFollowing(dir, el.scrollTop)) stickRef.current = false;
+      jumpEndRef.current?.();
+    };
+    let touchY: number | null = null;
+    const onWheel = (e: WheelEvent) => took(scrollIntent({ kind: 'wheel', deltaY: e.deltaY }));
+    const onTouchStart = (e: TouchEvent) => {
+      touchY = e.touches[0]?.clientY ?? null;
+    };
+    const onTouchMove = (e: TouchEvent) => {
+      const y = e.touches[0]?.clientY;
+      if (y === undefined) return;
+      if (touchY !== null) took(scrollIntent({ kind: 'touch', dy: y - touchY }));
+      touchY = y;
+    };
+    const onKey = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      // Only keys that scroll this chat: focus in it, or nowhere (the page). A focused button or field keeps its keys.
+      if (t && t !== document.body && !el.contains(t)) return;
+      const editable = !!t && (t.isContentEditable || /^(INPUT|TEXTAREA|SELECT|BUTTON)$/.test(t.tagName));
+      took(scrollIntent({ kind: 'key', key: e.key, shiftKey: e.shiftKey, editable }));
+    };
+    // The scrollbar: a press on the scroller itself, right of its content box (rows cover the rest).
+    const onDown = (e: PointerEvent) => {
+      if (e.target !== el || e.offsetX < el.clientWidth) return;
+      scrollbarDragRef.current = true;
+      took('up');
+    };
+    const onUp = () => {
+      if (!scrollbarDragRef.current) return;
+      scrollbarDragRef.current = false;
+      userScrollAtRef.current = performance.now();
+    };
+    const opts = { passive: true } as const;
+    el.addEventListener('wheel', onWheel, opts);
+    el.addEventListener('touchstart', onTouchStart, opts);
+    el.addEventListener('touchmove', onTouchMove, opts);
+    el.addEventListener('pointerdown', onDown, opts);
+    window.addEventListener('pointerup', onUp, opts);
+    window.addEventListener('pointercancel', onUp, opts);
+    document.addEventListener('keydown', onKey, opts);
+    return () => {
+      el.removeEventListener('wheel', onWheel);
+      el.removeEventListener('touchstart', onTouchStart);
+      el.removeEventListener('touchmove', onTouchMove);
+      el.removeEventListener('pointerdown', onDown);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+      document.removeEventListener('keydown', onKey);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
   useEffect(() => {
     stickRef.current = true;
+    placeRef.current = null;
     // 33k: an earlier page for the chat left behind never lands here.
     earlierAnchorRef.current = null;
     focusStartRef.current = false;
@@ -1357,10 +1484,18 @@ export const ChatView: React.FC<ChatViewProps> = ({
     if (!a || !el || firstId === a.id) return;
     earlierAnchorRef.current = null;
     const row = el.querySelector<HTMLElement>(`[data-message-id="${CSS.escape(a.id)}"]`);
-    if (row) el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - a.top;
+    // chat-scroll-holds-place: the message the reader is on goes back where it was. The old first one can change
+    // itself as earlier ones arrive in front of it (its name line folds into theirs), so it's only the fallback.
+    const p = placeRef.current;
+    const placeId = p?.row.getAttribute('data-message-id');
+    const placeRow = p && (p.row.isConnected ? p.row : placeId ? el.querySelector(`[data-message-id="${CSS.escape(placeId)}"]`) : null);
+    if (p && placeRow) el.scrollTop += placeRow.getBoundingClientRect().top - el.getBoundingClientRect().top - p.top;
+    else if (row) el.scrollTop += row.getBoundingClientRect().top - el.getBoundingClientRect().top - a.top;
     else el.scrollTop = el.scrollHeight - a.fromBottom;
     lastScrollTopRef.current = el.scrollTop;
     el.style.overflowAnchor = '';
+    // chat-scroll-holds-place: the new rows still hold their 33q estimate; as they settle, the place taken here holds.
+    takePlace();
     // At the start the button gives way to the start line: focus follows it there.
     if (a.hadFocus && !earlierBtnRef.current?.isConnected) chatStartRef.current?.focus({ preventScroll: true });
   }, [firstId]);
@@ -3050,7 +3185,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           <div
             ref={scrollRef}
             onScroll={onScroll}
-            className="relative flex-1 overflow-y-auto px-3 py-4 sm:p-6 space-y-5 sm:space-y-6"
+            className={`relative flex-1 overflow-y-auto px-3 py-4 sm:p-6 space-y-5 sm:space-y-6 ${LAZY_ROWS ? '' : 'kw-no-lazy'}`}
             role="log"
             aria-label={`Messages in ${title}`}
             aria-busy={isStreaming}

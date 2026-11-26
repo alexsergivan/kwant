@@ -5,9 +5,11 @@
 - a measure with no limit in perf_budget.json is reported, not failed;
 - limits are the baseline x 1.5 (memory x 1.3), rounded up;
 - the shipped perf_budget.json names only known measures, and every limit is above its baseline;
-- the CI step exists in the fresh-machine job and is not a required check yet.
+- the CI step exists in the fresh-machine job, has no continue-on-error, and only "blocking" measures exit 1;
+- --judge re-judges a saved results file without a kwnt (how a doctored file proves a FAIL turns the step red).
 """
 import json
+import os
 import re
 import sys
 import unittest
@@ -89,6 +91,24 @@ class Numbers(unittest.TestCase):
 DOWN = {"error": "The bot browser could not start kwant's Chrome on this computer: Chrome started but did not open its debugging port in time.", "is_running": False}
 
 
+class MemorySplit(unittest.TestCase):
+    STATUS = "Name:\tkwnt\nVmRSS:\t   91124 kB\nRssAnon:\t   28324 kB\nRssFile:\t   62800 kB\nRssShmem:\t       0 kB\n"
+
+    def test_heap_and_mapped_files_are_read_apart(self):
+        self.assertEqual(pb.rss_split(self.STATUS), {"anon_mb": 27.7, "file_mb": 61.3})
+
+    def test_a_kernel_without_the_fields_gives_none_not_an_error(self):
+        self.assertEqual(pb.rss_split("Name:\tkwnt\nVmRSS:\t 1 kB\n"), {"anon_mb": None, "file_mb": None})
+
+    def test_a_process_that_is_gone_gives_none(self):
+        self.assertIsNone(pb.rss_split_of(2 ** 22 + 12345))
+
+    def test_this_process_has_both(self):
+        split = pb.rss_split_of(os.getpid())
+        self.assertGreater(split["anon_mb"], 0)
+        self.assertGreater(split["file_mb"], 0)
+
+
 class ChromeThatWillNotStart(unittest.TestCase):
     """A runner where Chrome cannot start is SKIP with the reason, never FAIL; a Chrome that starts is still held to its limit."""
 
@@ -142,7 +162,7 @@ class ShippedFiles(unittest.TestCase):
             if key in data.get("baseline", {}):
                 self.assertGreaterEqual(limit, data["baseline"][key], key)
 
-    def test_the_ci_step_is_in_the_fresh_machine_job_and_not_required_yet(self):
+    def test_the_ci_step_is_in_the_fresh_machine_job(self):
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
         job = re.search(r"\n  fresh-machine:\n(.*?)\n  \w[\w-]*:\n", ci, re.S)
         self.assertTrue(job, "no fresh-machine job in ci.yml")
@@ -150,14 +170,73 @@ class ShippedFiles(unittest.TestCase):
         self.assertIn("scripts/perf_budget.py", job.group(1))
         self.assertNotIn("Performance budget", (ROOT / "scripts" / "release_required_checks.txt").read_text())
 
-    def test_the_step_has_continue_on_error_while_fresh_machine_is_a_required_check(self):
-        # fresh-machine is in release_required_checks.txt; a budget FAIL on a slow runner must not block a release.
-        # Drop continue-on-error only on purpose, when the budget becomes required.
+    def test_the_step_blocks_now_there_is_no_continue_on_error(self):
+        # Nov 26 (#1265): with continue-on-error idle memory went 109 -> 166 MB and nobody saw it. The step must fail the job.
         ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
         step = re.search(r"\n      - name: Performance budget\n(.*?)(?=\n      - name:|\Z)", ci, re.S)
         self.assertTrue(step, "no Performance budget step in ci.yml")
-        self.assertRegex(step.group(1), r"(?m)^        continue-on-error: true$")
-        self.assertIn("fresh-machine", (ROOT / "scripts" / "release_required_checks.txt").read_text())
+        self.assertNotIn("continue-on-error", step.group(1))
+
+    def test_memory_cold_start_and_first_reply_block_and_the_browser_only_warns(self):
+        data = json.loads((ROOT / "scripts" / "perf_budget.json").read_text())
+        self.assertEqual(pb.blocking_of(data), {"cold_start_s", "first_reply_s", "idle_rss_mb", "after_reply_rss_mb"})
+        self.assertLessEqual(data["limits"]["idle_rss_mb"], 132)
+        self.assertLessEqual(data["limits"]["after_reply_rss_mb"], 132)
+
+
+class Blocking(unittest.TestCase):
+    """Only a FAIL in a blocking measure exits 1; over the limit elsewhere is WARN."""
+
+    def test_over_the_limit_in_a_measure_that_does_not_block_warns_and_exits_0(self):
+        medians = {k: v / 2 for k, v in LIMITS.items()}
+        medians["browser_launch_s"] = LIMITS["browser_launch_s"] + 1
+        rows = pb.judge(medians, LIMITS, blocking={"cold_start_s", "idle_rss_mb"})
+        self.assertEqual(status(rows, "browser_launch_s"), "WARN")
+        self.assertEqual(pb.exit_code(rows), 0)
+        self.assertIn("WARN", pb.table(rows))
+        self.assertIn("| WARN |", pb.summary_markdown(rows))
+
+    def test_over_the_limit_in_a_blocking_measure_fails_and_exits_1(self):
+        medians = {k: v / 2 for k, v in LIMITS.items()}
+        medians["idle_rss_mb"] = LIMITS["idle_rss_mb"] + 0.01
+        rows = pb.judge(medians, LIMITS, blocking={"idle_rss_mb"})
+        self.assertEqual(status(rows, "idle_rss_mb"), "FAIL")
+        self.assertTrue(next(r for r in rows if r["id"] == "idle_rss_mb")["blocking"])
+        self.assertEqual(pb.exit_code(rows), 1)
+
+    def test_a_limits_file_without_the_list_blocks_on_everything(self):
+        self.assertEqual(pb.blocking_of({"limits": {}}), set(pb.MEASURES))
+        self.assertEqual(pb.blocking_of({"blocking": ["idle_rss_mb", "nonsense"]}), {"idle_rss_mb"})
+        self.assertEqual(pb.blocking_of({"blocking": []}), set())
+
+
+class JudgeASavedFile(unittest.TestCase):
+    """--judge: the proof that a value over the limit turns the step red, without building or running kwnt."""
+
+    def run_main(self, results, limits_data):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            res, lim = Path(d) / "perf-results.json", Path(d) / "limits.json"
+            res.write_text(json.dumps(results))
+            lim.write_text(json.dumps(limits_data))
+            with mock.patch.object(sys, "argv", ["perf_budget.py", "--judge", str(res), "--limits", str(lim)]), \
+                    mock.patch("builtins.print"):
+                return pb.main()
+
+    def samples(self, idle):
+        return {"samples": {"cold_start_s": [0.5] * 5, "first_reply_s": [0.05] * 5, "idle_rss_mb": idle,
+                            "after_reply_rss_mb": [128.0, 128.1, 127.9], "browser_launch_s": [9.3] * 5}}
+
+    def test_the_shipped_limits_pass_the_pr_numbers_and_fail_a_doctored_idle(self):
+        shipped = json.loads((ROOT / "scripts" / "perf_budget.json").read_text())
+        self.assertEqual(self.run_main(self.samples([129.2, 127.9, 127.4]), shipped), 0)  # browser 9.3 s only WARNs
+        self.assertEqual(self.run_main(self.samples([166.3, 166.2, 166.4]), shipped), 1)
+
+    def test_a_skipped_browser_in_the_saved_file_stays_skipped(self):
+        results = self.samples([100.0] * 3)
+        results["samples"]["browser_launch_s"] = [None] * 5
+        results["browser_skip"] = "Chrome did not start"
+        self.assertEqual(self.run_main(results, {"limits": LIMITS}), 0)
 
 
 class BarePathHasWhatChromesLauncherNeeds(unittest.TestCase):

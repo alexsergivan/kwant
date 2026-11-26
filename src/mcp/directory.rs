@@ -2,9 +2,13 @@
 //! official MCP Registry's latest versions, synced in the background, and the matching and
 //! ranking that turn a few typed letters into up to 12 rows in well under 50 ms.
 //!
-//! The first sync pages through the whole registry; after that kwnt asks only for what changed
-//! (`updated_since`) every 6 hours. Until the first sync has finished, a search goes to the
-//! registry's own (name-only) search instead. Only entries kwnt can set up in one click are kept.
+//! The copy is made on demand: startup only arms the sync ([`Directory::arm`]) and the first
+//! search starts it, so a kwnt where nobody opens Find a tool never holds the registry in memory
+//! (perf-idle-memory: holding it from startup cost ~35 MB of idle memory on CI, and the whole
+//! registry is ~75,000 entries). The first sync pages through the whole registry; after that
+//! kwnt asks only for what changed (`updated_since`) every 6 hours. Until the first sync has
+//! finished, a search goes to the registry's own (name-only) search instead. Only entries kwnt
+//! can set up in one click are kept.
 //!
 //! Ranking: entries from Smithery's proxy or with a `{placeholder}` address go last; then a
 //! publisher whose proven name is the query (`stripe` → stripe.com, `github` → github.com/github);
@@ -16,7 +20,7 @@
 use super::registry::{publisher_name, McpRegistry, RegistryEntry, GENERIC_SERVER_PARTS};
 use serde::Serialize;
 use std::collections::BTreeMap;
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, SystemTime};
 use tokio_util::sync::CancellationToken;
 use unicode_normalization::UnicodeNormalization;
@@ -438,6 +442,9 @@ pub struct Copy {
 #[derive(Default)]
 pub struct Directory {
     copy: RwLock<Option<Arc<Copy>>>,
+    /// What the background sync needs, from [`Directory::arm`] until the first search takes it
+    /// and starts the sync. `None` before arming (tests) and after the sync started.
+    armed: Mutex<Option<(Arc<McpRegistry>, CancellationToken)>>,
 }
 
 /// Where a search answer came from.
@@ -467,8 +474,24 @@ impl Directory {
         }
     }
 
-    /// Answers from the copy; before the first sync, from the registry's own search.
-    pub async fn search(&self, registry: &McpRegistry, query: &str) -> SearchAnswer {
+    /// Startup: the background sync starts on the first search ([`Directory::search`]), not now.
+    pub fn arm(&self, registry: Arc<McpRegistry>, shutdown: CancellationToken) {
+        if let Ok(mut a) = self.armed.lock() {
+            *a = Some((registry, shutdown));
+        }
+    }
+
+    /// Starts the armed background sync, once. True when this call started it.
+    pub fn start_sync(self: &Arc<Self>) -> bool {
+        let Some((registry, shutdown)) = self.armed.lock().ok().and_then(|mut a| a.take()) else { return false };
+        self.clone().spawn(registry, shutdown);
+        true
+    }
+
+    /// Answers from the copy; before the first sync, from the registry's own search. The first
+    /// search starts the armed sync.
+    pub async fn search(self: &Arc<Self>, registry: &McpRegistry, query: &str) -> SearchAnswer {
+        self.start_sync();
         if let Some(copy) = self.copy() {
             let entries = rank(query, copy.entries.values(), MAX_RESULTS).into_iter().cloned().collect();
             return SearchAnswer { entries, source: Source::Copy, unavailable: false };
