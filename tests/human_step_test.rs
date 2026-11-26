@@ -455,3 +455,56 @@ async fn typed_text_closes_the_sign_in_cards_kwnt_raised_that_nobody_waits_on() 
         assert_eq!(step(&env, id).await["step"]["status"], status, "{id}");
     }
 }
+
+/// A tools step (sign-in-wall-uses-tools B): kwnt raised it for a turn that already ended, so no
+/// turn waits on it, in Arch's direct chat.
+async fn tools_step(env: &Env, turn: &str, reason: &str) -> String {
+    use kwnt::db::human_steps::{HumanStepPlace, ToolsFix};
+    let place = HumanStepPlace {
+        kwant_id: env.a.clone(),
+        direct_kwant_id: Some(env.a.clone()),
+        turn_id: Some(turn.into()),
+        tools: Some(ToolsFix { server_id: "mcp-gh".into(), server: "github".into() }),
+        ..Default::default()
+    };
+    let (s, created, _) = env.state.db.create_human_step_with_card(&place, "other", reason, None, None, "auto", |_| None).await.unwrap();
+    assert!(created);
+    assert_eq!(s.fix_in.as_deref(), Some("tools"));
+    s.id
+}
+
+/// Rigel's F5: Done on a tools step starts exactly one new turn, told the tools were fixed.
+#[tokio::test]
+async fn done_on_a_tools_step_starts_one_turn_that_uses_the_tools() {
+    let env = setup().await;
+    let id = tools_step(&env, "tools-done-turn", "TOOLS_DONE_STEP the secret saved for github was rejected").await;
+    let (code, v) = call(&env.app, "POST", &format!("/api/human-steps/{id}/done"), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["resumed"], "new_turn");
+    wait_for("the resumed turn", || async { !invocations_with("Step: TOOLS_DONE_STEP").is_empty() }).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let turns = invocations_with("Step: TOOLS_DONE_STEP");
+    assert_eq!(turns.len(), 1, "exactly one turn");
+    assert!(turns[0].contains("[The person fixed your tools in Tools]\nStep: TOOLS_DONE_STEP"), "{}", turns[0]);
+    assert!(turns[0].contains("using those tools rather than the browser"), "{}", turns[0]);
+    assert_eq!(step(&env, &id).await["step"]["status"], "done");
+}
+
+/// Rigel's F5: Skip on a tools step starts exactly one new turn, told the person skipped fixing
+/// those tools (not that it declined a browser step it asked for).
+#[tokio::test]
+async fn skip_on_a_tools_step_starts_one_turn_that_carries_on_without_them() {
+    let env = setup().await;
+    let id = tools_step(&env, "tools-skip-turn", "TOOLS_SKIP_STEP the secret saved for github was rejected").await;
+    let (code, v) = call(&env.app, "POST", &format!("/api/human-steps/{id}/decline"), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["resumed"], "new_turn");
+    wait_for("the resumed turn", || async { !invocations_with("Step: TOOLS_SKIP_STEP").is_empty() }).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let turns = invocations_with("Step: TOOLS_SKIP_STEP");
+    assert_eq!(turns.len(), 1, "exactly one turn");
+    assert!(turns[0].contains("[The person skipped fixing your github tools]\nStep: TOOLS_SKIP_STEP"), "{}", turns[0]);
+    assert!(turns[0].contains("tell the person plainly what you can't do without them"), "{}", turns[0]);
+    assert!(!turns[0].contains("browser step"), "{}", turns[0]);
+    assert_eq!(step(&env, &id).await["step"]["status"], "declined");
+}

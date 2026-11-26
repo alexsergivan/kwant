@@ -982,6 +982,13 @@ async fn resume(state: &AppState, s: &HumanStep, outcome: Outcome) {
             "[The person did the browser step you asked for earlier]\nStep: {}\n\nLook at the browser page again and continue the task.",
             s.reason
         ),
+        // Skip on a tools step (#1262 F5): kwnt raised it, and it isn't a browser step
+        Outcome::Declined if is_tools_step(s) => format!(
+            "[The person skipped fixing your {} tools]\nStep: {}\n\nDon't ask them to fix those tools again unless they bring it up. \
+             Carry on without them if you can, or tell the person plainly what you can't do without them.",
+            s.tools_server.as_deref().unwrap_or("MCP"),
+            s.reason
+        ),
         Outcome::Declined => format!(
             "[The person declined the browser step you asked for earlier]\nStep: {}\n\nDon't ask for it again unless the person brings it up. Carry on without it if you can, or say plainly what is blocked.",
             s.reason

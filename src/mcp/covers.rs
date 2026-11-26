@@ -76,10 +76,55 @@ pub fn server_covers(server: &McpServer, label: &str) -> bool {
     if host_has {
         return true;
     }
-    // stdio: the command's and arguments' words (`npx -y @modelcontextprotocol/server-github`).
-    // Compared only, never shown: arguments can hold tokens
+    // stdio: the words of the command's file name and of the arguments that name what runs
+    // (`npx -y @modelcontextprotocol/server-github`, `github-mcp-server stdio`). Compared only,
+    // never shown: arguments can hold tokens
     server.transport == "stdio"
-        && server.command.iter().chain(server.args.iter()).any(|part| words(part).any(|w| w == label))
+        && server.command.as_deref().map(file_name).into_iter().chain(naming_args(&server.args)).any(|part| words(part).any(|w| w == label))
+}
+
+/// The last part of a path (`/usr/local/bin/github-mcp-server` → `github-mcp-server`): the folder
+/// a program sits in says nothing about what it is for.
+fn file_name(command: &str) -> &str {
+    command.rsplit(['/', '\\']).next().unwrap_or(command)
+}
+
+/// Whether an argument is a place on disk (`/Users/oleks/GitHub`, `~/github/kwant`, `./repo`,
+/// `C:\code`, `$HOME/src`) or an address (`git+https://github.com/x/y`): a folder or a source
+/// a server works on or comes from, not the site it is for (#1262 F2).
+fn is_place(arg: &str) -> bool {
+    let mut chars = arg.chars();
+    let (first, second) = (chars.next(), chars.next());
+    matches!(first, Some('/' | '~' | '.' | '\\' | '$' | '%'))
+        || (first.is_some_and(|c| c.is_ascii_alphabetic()) && second == Some(':'))
+        || arg.contains("://")
+}
+
+/// Long flags that take no value, so the argument after them is still the server's own
+/// (`docker run -i --rm ghcr.io/github/github-mcp-server`).
+const SWITCHES: [&str; 9] = ["--rm", "--yes", "--quiet", "--stdio", "--interactive", "--read-only", "--init", "--offline", "--prefer-offline"];
+
+/// The arguments that can say which site a stdio server is for: not paths or addresses, not the
+/// value of a long flag (`--repository ~/github/kwant`, `--dir=GitHub`), and only the name of a
+/// `NAME=value` pair. A one-letter flag (`-y`, `-e`) is taken as a switch: `npx -y <package>`.
+fn naming_args(args: &[String]) -> impl Iterator<Item = &str> + '_ {
+    let mut value_next = false;
+    args.iter().filter_map(move |arg| {
+        let arg = arg.trim();
+        if let Some(long) = arg.strip_prefix("--") {
+            value_next = !long.is_empty() && !long.contains('=') && !SWITCHES.contains(&arg);
+            return None;
+        }
+        if arg.starts_with('-') {
+            value_next = false;
+            return None;
+        }
+        if std::mem::take(&mut value_next) || is_place(arg) {
+            return None;
+        }
+        let name = arg.split('=').next().unwrap_or(arg);
+        (!name.is_empty()).then_some(name)
+    })
 }
 
 /// The servers among `servers` that cover `host`, in their order. Empty when the host has no
@@ -158,6 +203,36 @@ mod tests {
         assert_eq!(names(&servers, "gitlab.com"), ["gitlab"]);
         assert_eq!(names(&servers, "www.notion.so"), ["notion"]);
         assert!(names(&servers, "example.com").is_empty());
+    }
+
+    /// Rigel's F2: a folder or repository a stdio server works on isn't the site it is for.
+    #[test]
+    fn a_stdio_servers_folder_or_flag_value_doesnt_cover() {
+        let files = server("files", None, Some("npx"), &["-y", "@modelcontextprotocol/server-filesystem", "/Users/oleks/GitHub"]);
+        let git = server("git", None, Some("uvx"), &["mcp-server-git", "--repository", "~/github/kwant"]);
+        let git_eq = server("git", None, Some("uvx"), &["mcp-server-git", "--repository=github"]);
+        let windows = server("files", None, Some("npx.cmd"), &["-y", "@modelcontextprotocol/server-filesystem", "C:\\Users\\o\\GitHub"]);
+        let relative = server("files", None, Some("node"), &["./GitHub/server.js", "$HOME/github"]);
+        let from_github = server("tasks", None, Some("uvx"), &["--from", "git+https://github.com/someone/tasks-mcp", "tasks-mcp"]);
+        let in_github_dir = server("tasks", None, Some("/Users/oleks/GitHub/bin/tasks-mcp"), &[]);
+        for s in [files, git, git_eq, windows, relative, from_github, in_github_dir] {
+            assert!(names(std::slice::from_ref(&s), "github.com").is_empty(), "{:?} {:?} {:?}", s.name, s.command, s.args);
+        }
+    }
+
+    #[test]
+    fn a_github_stdio_server_still_covers_github() {
+        let servers = [
+            server("a", None, Some("npx"), &["-y", "@modelcontextprotocol/server-github"]),
+            server("b", None, Some("github-mcp-server"), &["stdio"]),
+            server("c", None, Some("C:\\tools\\github-mcp-server.exe"), &["stdio", "--toolsets", "repos"]),
+            server("d", None, Some("docker"), &["run", "-i", "--rm", "-e", "GITHUB_PERSONAL_ACCESS_TOKEN", "ghcr.io/github/github-mcp-server"]),
+            server("e", None, Some("docker"), &["run", "-i", "--rm", "ghcr.io/github/github-mcp-server"]),
+            server("f", None, Some("npx"), &["-y", "@modelcontextprotocol/server-github", "--dir", "/Users/oleks/GitHub"]),
+        ];
+        for s in &servers {
+            assert_eq!(names(std::slice::from_ref(s), "github.com").len(), 1, "{:?} {:?}", s.command, s.args);
+        }
     }
 
     #[test]

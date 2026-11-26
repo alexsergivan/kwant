@@ -15,7 +15,7 @@ use super::continuity::SelfScope;
 use super::routes::scope_for;
 use super::AppState;
 use crate::db::models::McpServer;
-use crate::mcp::client::UNAUTHORIZED_KEY_HINT;
+use crate::mcp::client::is_key_header;
 use crate::mcp::covers;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -36,8 +36,11 @@ const TEST_LIMIT: Duration = Duration::from_secs(6);
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Health {
     Works,
-    /// A 401/403 on a key the person saved.
+    /// An HTTP 401/403 from a server the person saved a secret (a key header) for.
     KeyRejected,
+    /// An HTTP 401/403 from a server with no secret saved: it refused kwnt, and only its own
+    /// error says why (#1262 F4).
+    Refused(u16),
     /// kwnt's sign-in to the server is gone (OAuth): sign in again from Tools.
     SignedOut,
     /// Any other failure (not reachable, didn't start, …).
@@ -45,39 +48,63 @@ pub enum Health {
 }
 
 /// A test's outcome (`ok`, `auth_required`, `error`, as the Tools screen gets it) as [`Health`].
-pub fn health_of(ok: bool, auth_required: bool, error: Option<&str>) -> Health {
+/// `has_key`: the server has a secret saved in a key header ([`has_key`]).
+pub fn health_of(ok: bool, auth_required: bool, error: Option<&str>, has_key: bool) -> Health {
     if ok {
-        Health::Works
-    } else if auth_required {
-        Health::SignedOut
-    } else if error.is_some_and(|e| e.contains(UNAUTHORIZED_KEY_HINT) || e.contains("401") || e.contains("403")) {
-        Health::KeyRejected
-    } else {
-        Health::NotConnecting
+        return Health::Works;
     }
+    if auth_required {
+        return Health::SignedOut;
+    }
+    match error.and_then(http_status) {
+        Some(401 | 403) if has_key => Health::KeyRejected,
+        Some(code @ (401 | 403)) => Health::Refused(code),
+        _ => Health::NotConnecting,
+    }
+}
+
+/// The HTTP status of an MCP transport error (`transport error: HTTP 403 Forbidden` → 403). Only
+/// that: a 403 elsewhere in an error (npm's `E403` while a stdio server starts, a port) isn't the
+/// server's answer (#1262 F4).
+fn http_status(error: &str) -> Option<u16> {
+    let rest = &error[error.find("transport error: HTTP ")? + "transport error: HTTP ".len()..];
+    let code = rest.get(..3)?;
+    let after = rest[3..].chars().next();
+    (code.bytes().all(|b| b.is_ascii_digit()) && !after.is_some_and(|c| c.is_ascii_digit())).then(|| code.parse().ok()).flatten()
+}
+
+/// Whether the person saved a secret for `server` in a key header (`Authorization`, `X-API-Key`…):
+/// only then is a 401/403 "the secret was rejected".
+pub fn has_key(server: &McpServer) -> bool {
+    server.headers.keys().any(|k| is_key_header(k))
 }
 
 /// A server's health from its last test only (no network): `None` when it hasn't been tested
 /// since kwnt started, or (with `fresh`) its last test is older than that.
-fn cached_health(server_id: &str, fresh: Option<Duration>) -> Option<Health> {
-    let (ok, auth_required, error, at) = super::connections::last_mcp_check(server_id)?;
+fn cached_health(server: &McpServer, fresh: Option<Duration>) -> Option<Health> {
+    let (ok, auth_required, error, at) = super::connections::last_mcp_check(&server.id)?;
     if let Some(fresh) = fresh {
         let age = (chrono::Utc::now() - at).to_std().unwrap_or_default();
         if age > fresh {
             return None;
         }
     }
-    Some(health_of(ok, auth_required, error.as_deref()))
+    Some(health_of(ok, auth_required, error.as_deref(), has_key(server)))
 }
 
 /// A server's health: its recent last test, else the Tools screen's test run now (bounded; a test
 /// that runs out of time counts as working, and the follow-up turn hears any real problem).
 async fn health(state: &AppState, server: &McpServer) -> Health {
-    if let Some(h) = cached_health(&server.id, Some(CHECK_FRESH)) {
+    if let Some(h) = cached_health(server, Some(CHECK_FRESH)) {
         return h;
     }
     match tokio::time::timeout(TEST_LIMIT, super::mcp_routes::run_test(state, server)).await {
-        Ok(outcome) => health_of(outcome["ok"] == Value::Bool(true), outcome["auth_required"] == Value::Bool(true), outcome["error"].as_str()),
+        Ok(outcome) => health_of(
+            outcome["ok"] == Value::Bool(true),
+            outcome["auth_required"] == Value::Bool(true),
+            outcome["error"].as_str(),
+            has_key(server),
+        ),
         Err(_) => Health::Works,
     }
 }
@@ -120,6 +147,9 @@ pub fn failing_reason(kwant_name: &str, server: &str, host: &str, health: Health
         Health::KeyRejected => format!(
             "{kwant_name} has {server} tools for {host}, but the secret saved for {server} was rejected. Edit {server} in Tools and paste a new secret, then press Done."
         ),
+        Health::Refused(code) => format!(
+            "{kwant_name} has {server} tools for {host}, but {server} refused the connection (HTTP {code}). Press Test connection on {server} in Tools to see why, then press Done."
+        ),
         Health::NotConnecting | Health::Works => format!(
             "{kwant_name} has {server} tools for {host}, but they aren't connecting. Press Test connection on {server} in Tools to see why, then press Done."
         ),
@@ -132,9 +162,10 @@ pub fn browser_hint_text(names: &[String], host: &str, health: Health) -> String
     let tools = ticked(names);
     let why = match health {
         Health::Works => return format!("You have the {tools} tools for {host}; use them rather than the browser."),
-        Health::KeyRejected => "the secret saved for it was rejected",
-        Health::SignedOut => "their sign-in has run out",
-        Health::NotConnecting => "they aren't connecting",
+        Health::KeyRejected => "the secret saved for it was rejected".to_string(),
+        Health::Refused(code) => format!("the server refused the connection (HTTP {code})"),
+        Health::SignedOut => "their sign-in has run out".to_string(),
+        Health::NotConnecting => "they aren't connecting".to_string(),
     };
     format!(
         "You have the {tools} tools for {host}, but they can't connect right now: {why}. Tell the person to fix it in Tools rather \
@@ -165,9 +196,35 @@ fn follow_up_key(kwant: &str, chat: &str, site: &str) -> String {
     format!("{kwant}\u{1f}{chat}\u{1f}{site}")
 }
 
-/// Whether this bot may get a follow-up turn for `site` in `chat` now (and counts it).
-pub fn may_follow_up(kwant: &str, chat: &str, site: &str) -> bool {
-    first_time(memo(&FOLLOWED_UP), follow_up_key(kwant, chat, site), FOLLOW_UP_WINDOW)
+/// This bot's follow-up turn for a site in a chat, held while it is being started: it counts
+/// only once [`FollowUpSlot::started`] is called. Dropped before that (the turn couldn't start,
+/// or the outer time bound cancelled the work), it is given back, so the wall can still get its
+/// one follow-up (#1262 F6). Held rather than counted after the start so two walls ending at
+/// once can't both start one.
+pub struct FollowUpSlot {
+    key: Option<String>,
+}
+
+impl FollowUpSlot {
+    /// The follow-up turn started: it now counts for [`FOLLOW_UP_WINDOW`].
+    pub fn started(mut self) {
+        self.key = None;
+    }
+}
+
+impl Drop for FollowUpSlot {
+    fn drop(&mut self) {
+        if let Some(key) = self.key.take() {
+            memo(&FOLLOWED_UP).lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+        }
+    }
+}
+
+/// The slot for this bot's follow-up turn for `site` in `chat`, or `None` when one already
+/// started (or is being started) in [`FOLLOW_UP_WINDOW`].
+pub fn follow_up_slot(kwant: &str, chat: &str, site: &str) -> Option<FollowUpSlot> {
+    let key = follow_up_key(kwant, chat, site);
+    first_time(memo(&FOLLOWED_UP), key.clone(), FOLLOW_UP_WINDOW).then_some(FollowUpSlot { key: Some(key) })
 }
 
 /// The person wrote in `chat` (D): a new chain of turns starts, so a sign-in wall in it may get
@@ -195,16 +252,15 @@ pub async fn on_covered_wall(
 ) -> Option<String> {
     let origin = scope.origin.clone()?;
     let chat = super::human_steps::chat_key(scope)?;
-    let mut checked = Vec::with_capacity(servers.len());
-    for s in servers {
-        checked.push((s.name.clone(), health(state, s).await));
-    }
+    // All at once, so a few untested servers fit inside the caller's time bound (#1262 F6)
+    let checked: Vec<(String, Health)> =
+        futures::future::join_all(servers.iter().map(|s| async move { (s.name.clone(), health(state, s).await) })).await;
     let (names, health) = pick(&checked);
     if health == Health::Works {
-        if !may_follow_up(&scope.kwant_id, &chat, site) {
+        let Some(slot) = follow_up_slot(&scope.kwant_id, &chat, site) else {
             tracing::info!(kwant_id = %scope.kwant_id, host, "a follow-up turn already ended on this sign-in wall: not starting another");
             return None;
-        }
+        };
         let kwant = state.db.get_kwant(&scope.kwant_id).await.ok().flatten()?;
         let prompt = follow_up_prompt(host, &names);
         let job = state.turns.start_job([chat.clone()]);
@@ -216,6 +272,7 @@ pub async fn on_covered_wall(
             }
         };
         super::human_steps::spawn_turn(turn_scope, kwant, prompt.clone(), job);
+        slot.started();
         tracing::info!(kwant_id = %scope.kwant_id, host, tools = ?names, "a turn ended on a sign-in wall it has tools for: follow-up turn started");
         return Some(prompt);
     }
@@ -246,7 +303,7 @@ pub async fn browser_hint(state: &AppState, scope: &SelfScope, page: Option<&Val
     }
     // The last test only: a browser call doesn't wait on a server test (untested counts as working)
     let checked: Vec<(String, Health)> =
-        servers.iter().map(|s| (s.name.clone(), cached_health(&s.id, None).unwrap_or(Health::Works))).collect();
+        servers.iter().map(|s| (s.name.clone(), cached_health(s, None).unwrap_or(Health::Works))).collect();
     let (names, health) = pick(&checked);
     Some(browser_hint_text(&names, &host, health))
 }
@@ -257,13 +314,54 @@ mod tests {
 
     #[test]
     fn a_test_outcome_reads_as_one_health() {
-        assert_eq!(health_of(true, false, None), Health::Works);
-        assert_eq!(health_of(false, true, Some("HTTP 401")), Health::SignedOut);
+        use crate::mcp::client::UNAUTHORIZED_KEY_HINT;
+        assert_eq!(health_of(true, false, None, true), Health::Works);
+        assert_eq!(health_of(false, true, Some("HTTP 401"), false), Health::SignedOut);
         let key = format!("transport error: HTTP 401 Unauthorized ({UNAUTHORIZED_KEY_HINT})");
-        assert_eq!(health_of(false, false, Some(&key)), Health::KeyRejected);
-        assert_eq!(health_of(false, false, Some("transport error: HTTP 403 Forbidden")), Health::KeyRejected);
-        assert_eq!(health_of(false, false, Some("connection refused")), Health::NotConnecting);
-        assert_eq!(health_of(false, false, None), Health::NotConnecting);
+        assert_eq!(health_of(false, false, Some(&key), true), Health::KeyRejected);
+        assert_eq!(health_of(false, false, Some("transport error: HTTP 403 Forbidden"), true), Health::KeyRejected);
+        assert_eq!(health_of(false, false, Some("connection refused"), true), Health::NotConnecting);
+        assert_eq!(health_of(false, false, None, true), Health::NotConnecting);
+        assert_eq!(health_of(false, false, Some("transport error: HTTP 500 Internal Server Error"), true), Health::NotConnecting);
+    }
+
+    /// Rigel's F4: a 403 that isn't the server's HTTP answer, and a 403 with no secret saved,
+    /// never say "the secret saved for it was rejected".
+    #[test]
+    fn only_an_http_401_or_403_on_a_saved_secret_reads_as_a_rejected_secret() {
+        let npm = "MCP server exited before the handshake: npm error code E403\nnpm error 403 403 Forbidden - GET \
+                   https://registry.npmjs.org/@modelcontextprotocol%2fserver-github";
+        assert_eq!(health_of(false, false, Some(npm), true), Health::NotConnecting, "stdio startup E403, secret in env");
+        assert_eq!(health_of(false, false, Some(npm), false), Health::NotConnecting);
+        assert_eq!(health_of(false, false, Some("listening on port 4030 failed"), true), Health::NotConnecting);
+        assert_eq!(health_of(false, false, Some("transport error: HTTP 4031"), true), Health::NotConnecting);
+        let forbidden = "transport error: HTTP 403 Forbidden";
+        assert_eq!(health_of(false, false, Some(forbidden), false), Health::Refused(403), "no key header saved");
+        assert_eq!(
+            failing_reason("Architect", "docs", "github.com", Health::Refused(403)),
+            "Architect has docs tools for github.com, but docs refused the connection (HTTP 403). Press Test connection on docs in Tools to see why, then press Done."
+        );
+        let hint = browser_hint_text(&["docs".to_string()], "github.com", Health::Refused(403));
+        assert!(hint.contains("right now: the server refused the connection (HTTP 403). Tell"), "{hint}");
+        assert!(!hint.contains("secret"), "{hint}");
+
+        let mut server = crate::db::models::McpServer {
+            id: "s".into(),
+            name: "docs".into(),
+            transport: "http".into(),
+            command: None,
+            args: Vec::new(),
+            url: Some("https://docs.example/mcp".into()),
+            env: Default::default(),
+            headers: Default::default(),
+            enabled: true,
+            timeout_secs: 30,
+            created_at: None,
+        };
+        server.headers.insert("Accept-Language".into(), "en".into());
+        assert!(!has_key(&server), "a header that isn't a secret");
+        server.headers.insert("Authorization".into(), "Bearer x".into());
+        assert!(has_key(&server));
     }
 
     #[test]
@@ -298,7 +396,7 @@ mod tests {
         );
         assert!(browser_hint_text(&gh, "github.com", Health::SignedOut).contains("right now: their sign-in has run out. Tell"));
         // Tools has no "MCP servers" section, and calls the value a secret, not a key
-        for h in [Health::KeyRejected, Health::SignedOut, Health::NotConnecting] {
+        for h in [Health::KeyRejected, Health::Refused(403), Health::SignedOut, Health::NotConnecting] {
             for line in [failing_reason("Architect", "github", "github.com", h), browser_hint_text(&gh, "github.com", h)] {
                 assert!(!line.contains("MCP servers") && !line.contains(" key"), "{line}");
             }
@@ -307,6 +405,10 @@ mod tests {
         assert!(prompt.starts_with("[Your browser stopped at github.com's sign-in page]\nYou have the `github` tools for github.com"), "{prompt}");
         assert!(prompt.contains("request_human_step"), "{prompt}");
         assert!(!failing_reason("Architect", "github", "github.com", Health::KeyRejected).contains("sign in to github.com"));
+    }
+
+    fn may_follow_up(kwant: &str, chat: &str, site: &str) -> bool {
+        follow_up_slot(kwant, chat, site).map(FollowUpSlot::started).is_some()
     }
 
     /// B never loops: one follow-up per bot, chat and site, until the person writes there again.
@@ -319,6 +421,19 @@ mod tests {
         assert!(may_follow_up(bot, "other-chat-follow-up-test", "https://github.com/"), "another chat");
         forget_chat(bot, chat);
         assert!(may_follow_up(bot, chat, "https://github.com/"), "the person wrote: a new chain");
+    }
+
+    /// Rigel's F6: a follow-up that never started (the probe or the start was cancelled, or the
+    /// turn couldn't be set up) doesn't use up the wall's one follow-up; one being started holds it.
+    #[test]
+    fn a_follow_up_that_never_started_is_given_back() {
+        let (bot, chat, site) = ("bot-slot-test", "chat-slot-test", "https://github.com/");
+        let held = follow_up_slot(bot, chat, site).expect("free");
+        assert!(follow_up_slot(bot, chat, site).is_none(), "a second wall while the first starts its turn");
+        drop(held);
+        let slot = follow_up_slot(bot, chat, site).expect("given back when it never started");
+        slot.started();
+        assert!(follow_up_slot(bot, chat, site).is_none(), "it started: counted");
     }
 
     #[test]
