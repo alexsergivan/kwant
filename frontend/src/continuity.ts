@@ -146,7 +146,7 @@ export const NOTIFY_KINDS: Array<{ id: NotifyKind; label: string }> = [
   { id: 'delegation_stalled', label: 'A delegated task is taking long' },
   { id: 'skill_proposed', label: 'A bot proposed a skill to review' },
   { id: 'question_asked', label: 'A bot has a question for you' },
-  { id: 'human_step', label: 'A bot needs you in the browser' },
+  { id: 'human_step', label: 'A bot needs you in the browser or in Tools' },
   { id: 'fact_disputed', label: 'Two saved facts disagree' },
 ];
 
