@@ -334,12 +334,15 @@ async fn identity(conn: &mut Conn, version: &Value) -> Option<Identity> {
 }
 
 async fn run(browser_ws: String, ready: tokio::sync::oneshot::Sender<()>) {
+    let t0 = std::time::Instant::now();
     let Ok(ws) = super::browser::connect_cdp(&browser_ws).await else {
         tracing::debug!("identity: couldn't connect to the browser");
         return;
     };
+    eprintln!("identity-timing: connect_cdp done at {:?}", t0.elapsed());
     let mut conn = Conn { ws, next: 0, queued: Vec::new() };
     let Some(version) = conn.call("Browser.getVersion", json!({}), None, Duration::from_secs(5)).await else { return };
+    eprintln!("identity-timing: Browser.getVersion done at {:?}", t0.elapsed());
     if !is_headless(version["userAgent"].as_str().unwrap_or_default()) {
         // a Chrome with a window already says what it is: nothing to set. Held open, so this
         // browser isn't asked again on every connect.
@@ -353,15 +356,18 @@ async fn run(browser_ws: String, ready: tokio::sync::oneshot::Sender<()>) {
         while conn.recv().await.is_some() {}
         return;
     };
+    eprintln!("identity-timing: identity() (read_report etc.) done at {:?}", t0.elapsed());
     tracing::info!(user_agent = %identity.user_agent, "identity: every page gets the browser's own identity without the headless token");
     let attach = json!({"autoAttach": true, "waitForDebuggerOnStart": true, "flatten": true});
     let Some(attach_id) = conn.send("Target.setAutoAttach", attach.clone(), None).await else { return };
+    eprintln!("identity-timing: Target.setAutoAttach sent (id={attach_id}) at {:?}", t0.elapsed());
     let override_params = json!({"userAgent": identity.user_agent, "userAgentMetadata": identity.metadata});
     let mut ready = Some(ready);
     let mut attached_all = false;
     // overrides sent for the targets already open, not yet answered
     let mut pending: std::collections::HashSet<u64> = Default::default();
     while let Some(message) = conn.recv().await {
+        eprintln!("identity-timing: message at {:?}: {message}", t0.elapsed());
         if let Some(id) = message["id"].as_u64() {
             if id == attach_id {
                 attached_all = true;
@@ -369,6 +375,7 @@ async fn run(browser_ws: String, ready: tokio::sync::oneshot::Sender<()>) {
             pending.remove(&id);
             if attached_all && pending.is_empty() {
                 if let Some(ready) = ready.take() {
+                    eprintln!("identity-timing: ready.send() at {:?}", t0.elapsed());
                     let _ = ready.send(());
                 }
             }
@@ -394,6 +401,7 @@ async fn run(browser_ws: String, ready: tokio::sync::oneshot::Sender<()>) {
             let _ = conn.send("Runtime.runIfWaitingForDebugger", json!({}), Some(session)).await;
         }
     }
+    eprintln!("identity-timing: conn.recv() returned None (connection ended) at {:?}", t0.elapsed());
 }
 
 #[cfg(test)]
