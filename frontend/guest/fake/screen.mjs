@@ -70,7 +70,9 @@ export class ScreenBox {
     if (what === 'host/signin') {
       this.signins.push(body);
       if (method !== 'POST') return err(405, 'method');
-      const token = body.key ?? body.token;
+      // The box spends a one-time link only as {token} (src/pocket/guest.rs host_signin); a link sent as {key} is 401.
+      if (body.token === undefined && body.key !== undefined) return err(401, 'not_host', "That host link doesn't work any more.");
+      const token = body.token;
       if (this.scene === 'expired' || !token || token === 'used') return err(401, 'link_used_or_expired', 'This link was already used or is too old. Open a new one from the card.');
       return { status: 200, body: this.env(), cookie: true };
     }

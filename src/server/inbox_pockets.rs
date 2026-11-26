@@ -5,7 +5,8 @@
 //! Nothing shows while the `pocket_apps` switch is off.
 //!
 //! Item: `kind: "pocket"`, `id: "pocket:<code>"`, title `"<title>: <winner> win"` (pa7's
-//! "Nobody joined." for no players), `meta {players, ended_at}`, `winner {name, points}`,
+//! "Nobody joined." for no players, "<title> has ended" when nobody scored), `meta {players,
+//! ended_at}`, `winner {name, points}` (every team tied on the top score, null at 0 points),
 //! `source {kind: "pocket", code, kwant_id, message_id, channel_id, thread_id}`, and the results
 //! post's link and excerpt through [`inbox_done::apply`].
 
@@ -55,10 +56,35 @@ async fn posted(state: &AppState, space: &SpaceId, since: DateTime<Utc>) -> Resu
     Ok(out)
 }
 
-/// The winning team `{name, points}`, from the kit's results (teams[0], as pa7's results card).
+/// The winners `{name, points}`, from the kit's results ([`winner_of`]). A vote (the gather kit)
+/// lists its decided winner first, with final-round counts: a tie the host broke still shows
+/// equal counts, so it keeps the first team only.
 fn winner(s: &Snapshot) -> Value {
     let results = s.kit().map(|k| k.results(&KitCtx::new(&s.spec, &s.players, Utc::now()), &s.kit_state)).unwrap_or(Value::Null);
-    results["teams"].as_array().and_then(|t| t.first()).filter(|t| t["name"].is_string()).map(|t| json!({ "name": t["name"], "points": t["points"] })).unwrap_or(Value::Null)
+    winner_of(&results, s.row.kit != pocket::gather::ID)
+}
+
+/// quiz-tie-names-all: with `by_score` (kits whose results rank by points, best first, with no
+/// rank), every team sharing the top score, named the TV's way ("A", "A and B", "A, B and C"),
+/// with that score; null when nobody scored (a top score of 0 or less), so a 0-0 quiz crowns no
+/// one and the title says it ended. Without it (a decided vote), the first team, as before.
+pub fn winner_of(results: &Value, by_score: bool) -> Value {
+    let Some(teams) = results["teams"].as_array() else { return Value::Null };
+    let Some(top) = teams.first().filter(|t| t["name"].is_string()) else { return Value::Null };
+    if !by_score {
+        return json!({ "name": top["name"], "points": top["points"] });
+    }
+    let points = top["points"].as_f64().unwrap_or(0.0);
+    if points <= 0.0 {
+        return Value::Null;
+    }
+    let names: Vec<&str> = teams.iter().filter(|t| t["points"].as_f64() == Some(points)).filter_map(|t| t["name"].as_str()).collect();
+    let name = match names.as_slice() {
+        [] => return Value::Null,
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    json!({ "name": name, "points": top["points"] })
 }
 
 /// The item's title: who won, or pa7's words for nobody.
@@ -142,5 +168,60 @@ mod tests {
         assert_eq!(title("Pub quiz", 4, &json!({ "name": "Team 1", "points": 3 })), "Pub quiz: Team 1 win");
         assert_eq!(title("Pub quiz", 0, &Value::Null), "Pub quiz: Nobody joined.");
         assert_eq!(title("  ", 2, &Value::Null), "Pocket app has ended");
+    }
+
+    fn results(scores: &[(&str, i64)]) -> Value {
+        let teams: Vec<Value> = scores.iter().map(|(n, p)| json!({ "name": n, "players": 1, "points": p, "palette": null, "members": [] })).collect();
+        json!({ "teams": teams, "margin": null })
+    }
+
+    #[test]
+    fn a_clear_win_names_one_team() {
+        let w = winner_of(&results(&[("Team 1", 3), ("Team 2", 1)]), true);
+        assert_eq!(w, json!({ "name": "Team 1", "points": 3 }));
+        assert_eq!(title("Pub quiz", 2, &w), "Pub quiz: Team 1 win");
+    }
+
+    #[test]
+    fn a_two_way_tie_names_both_teams() {
+        let w = winner_of(&results(&[("Quizzy Rascals", 7), ("Brainy Bunch", 7), ("Late Comers", 2)]), true);
+        assert_eq!(w, json!({ "name": "Quizzy Rascals and Brainy Bunch", "points": 7 }));
+        assert_eq!(title("Friday Pub Quiz", 6, &w), "Friday Pub Quiz: Quizzy Rascals and Brainy Bunch win");
+    }
+
+    #[test]
+    fn a_three_way_tie_reads_like_the_tv() {
+        let w = winner_of(&results(&[("A", 4), ("B", 4), ("C", 4), ("D", 3)]), true);
+        assert_eq!(w, json!({ "name": "A, B and C", "points": 4 }));
+    }
+
+    #[test]
+    fn a_nil_nil_quiz_crowns_nobody_and_says_it_ended() {
+        let w = winner_of(&results(&[("Quizzy Rascals", 0), ("Brainy Bunch", 0)]), true);
+        assert!(w.is_null(), "no holo Winners sticker for 0 points: {w}");
+        assert_eq!(title("Friday Pub Quiz", 4, &w), "Friday Pub Quiz has ended");
+        assert!(winner_of(&results(&[("Solo", 0)]), true).is_null());
+    }
+
+    #[test]
+    fn solo_ties_name_the_players() {
+        let w = winner_of(&results(&[("Player 1", 5), ("Player 2", 5)]), true);
+        assert_eq!(title("Quiz", 2, &w), "Quiz: Player 1 and Player 2 win");
+    }
+
+    #[test]
+    fn a_vote_the_host_broke_names_only_the_pick() {
+        // gather lists the host's pick first; the tied options keep equal final-round counts
+        let w = winner_of(&results(&[("Pizza", 3), ("Tacos", 3), ("Sushi", 1)]), false);
+        assert_eq!(w, json!({ "name": "Pizza", "points": 3 }));
+        assert_eq!(title("Club dinner", 7, &w), "Club dinner: Pizza win");
+        // a decided winner missing from the last round is listed with 0 and still wins
+        assert_eq!(winner_of(&results(&[("Pizza", 0), ("Tacos", 2)]), false), json!({ "name": "Pizza", "points": 0 }));
+    }
+
+    #[test]
+    fn no_results_no_winner() {
+        assert!(winner_of(&Value::Null, true).is_null());
+        assert!(winner_of(&json!({ "teams": [] }), true).is_null());
     }
 }

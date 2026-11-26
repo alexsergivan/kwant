@@ -575,6 +575,38 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
   .kw-new-tag { transition: none; }
 }
 
+/* space-icons-2 (Mira): the holo sticker above, cut down to a 2 px foil ring. Only the picked icon button and the
+   New space / Space settings preview tile wear it (picked = earned); nothing covers the glyph, so its contrast
+   is unchanged. .kw-just: one 160 ms press + one 200 ms foil sweep after a change; static under reduced motion. */
+.kw-sticker.kw-foil-ring {
+  position: absolute;
+  inset: -1px;
+  z-index: 0;
+  height: auto;
+  max-width: none;
+  padding: 2px;
+  border: 0;
+  border-radius: 9px;
+  box-shadow: none;
+  transform: none;
+  pointer-events: none;
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask: linear-gradient(#000 0 0) content-box exclude, linear-gradient(#000 0 0);
+}
+.kw-tile-foiled { box-shadow: none !important; }
+.kw-tile-foiled > .kw-foil-ring { inset: 0; border-radius: 12px; }
+.kw-just { --kw-tilt: 0deg; animation: kw-sticker-press 160ms var(--kw-ease) 1 both; }
+.kw-just > .kw-foil-ring::before { animation: kw-foil-sweep 200ms var(--kw-ease) 1 both; }
+@keyframes kw-foil-sweep {
+  from { transform: translateX(-25%); }
+  to { transform: translateX(calc((50% - var(--mx)) / 4)); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .kw-just,
+  .kw-just > .kw-foil-ring::before { animation: none; }
+}
+
 /* ---------------------------------------------------------------------------------------------
    Avatar moods (AvatarMood / ModernAvatar). Opacity and transform only, 120-200ms or a slow loop;
    static under prefers-reduced-motion.
