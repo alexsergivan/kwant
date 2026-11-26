@@ -80,7 +80,9 @@ export const MessageTime: React.FC<{ at?: string | number | null; now?: number; 
       {time}
     </time>
   ) : (
-    <time className="shrink-0 whitespace-nowrap text-zinc-400" {...(kind === 'live' ? { 'data-message-time': 'live' } : { 'data-reply-time': '' })} dateTime={iso}>
+    <time className="shrink-0 whitespace-nowrap text-zinc-400" {...(kind === 'live' ? { 'data-message-time': 'live', title: `Started ${time}` } : { 'data-reply-time': '' })} dateTime={iso}>
+      {/* The live row's time is when the turn started, not an answer time: said on hover and to screen readers */}
+      {kind === 'live' && <span className="sr-only">Started </span>}
       <span aria-hidden="true" className="sm:hidden">· </span>
       {time}
     </time>

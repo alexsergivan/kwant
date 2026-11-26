@@ -88,13 +88,15 @@ test('a working bot shows when the turn started, in the place and style the repl
   const before = Date.now();
   const live = ui.chat(props([msg('p1', null)], { isStreaming: true, streamingSpeakerName: 'Support' }));
   const line = live.slice(live.indexOf('data-live-name-line=""'));
-  const t = line.match(/<time class="shrink-0 whitespace-nowrap text-zinc-400" data-message-time="live" dateTime="([^"]+)"><span aria-hidden="true" class="sm:hidden">· <\/span>([^<]+)<\/time>/);
-  assert.ok(t, 'live time');
+  const t = line.match(/<time class="shrink-0 whitespace-nowrap text-zinc-400" data-message-time="live" title="Started ([^"]+)" dateTime="([^"]+)"><span class="sr-only">Started <\/span><span aria-hidden="true" class="sm:hidden">· <\/span>([^<]+)<\/time>/);
+  assert.ok(t, 'live time, said as "Started 8:07 AM"');
+  assert.equal(t[1], t[3]);
+  t.splice(1, 1);
   assert.ok(Date.parse(t[1]) >= before - 1000 && Date.parse(t[1]) <= Date.now() + 1000, 'started now');
   assert.equal(t[2], ui.localClock(t[1]));
   // Same element classes and phone dot as the finished reply's time, so nothing moves when it lands.
   const reply = ui.time({ at: t[1] });
-  assert.equal(reply.replace(' data-reply-time=""', ''), t[0].replace(' data-message-time="live"', ''));
+  assert.equal(reply.replace(' data-reply-time=""', ''), t[0].replace(/ data-message-time="live" title="[^"]+"/, '').replace('<span class="sr-only">Started </span>', ''));
   const queued = ui.chat(props([msg('p1', null)], { isStreaming: true, queued: { position: 2, reason: 'busy' } }));
   assert.doesNotMatch(queued, /data-message-time="live"/);
 });
