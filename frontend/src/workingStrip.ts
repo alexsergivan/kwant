@@ -94,6 +94,14 @@ export function turnStart(live: LiveActivity | null | undefined, mountedAt: numb
   return start;
 }
 
+/** #1278: the live row's start time. `shownAt` is when the row started working; a step only moves it back when it
+ *  began at least 30 s earlier (the chat was opened mid-turn), so a few seconds of clock drift between the server
+ *  and this device never flips the minute while the person watches. */
+export function liveTurnStart(live: LiveActivity | null | undefined, shownAt: number): number {
+  const first = turnStart(live, shownAt);
+  return shownAt - first >= 30_000 ? first : shownAt;
+}
+
 /**
  * 0.8.1 F4: live chats whose running bot has no name yet but can be named now: [chat, name] pairs.
  * `live` maps a chat to the name its strip shows ('' when the bot list hadn't loaded), `kwantIds` maps

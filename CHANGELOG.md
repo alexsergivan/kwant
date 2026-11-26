@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- Every chat message shows its time next to the name, like bot replies already did: your own messages, messages from customers, other bots and coding agents, and a bot that's still working, which shows when it started (#1278)
+
 ## [Mac 0.9.54] - 2026-11-26
 
 kwant 0.9.54: your first bot opens #general, Get started names your real starter bots, one hello for a hello, the README names the real starter bots, 24 space icons with a holo pick and no dead "From this reply" label.

@@ -48,7 +48,7 @@ import { pagesOfReply, type ReplyPage } from '../browserPages';
 import { ReplyCheckLine } from './ReplyCheckLine';
 import { replyOutcome } from '../replyOutcome';
 import { effortWords, isCliRunLine } from '../reasoningEcho';
-import { FailoverNote, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine } from './ReplyMeta';
+import { FailoverNote, MessageTime, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine } from './ReplyMeta';
 import { assignSwitchNotes, liveSwitchNote, type SwitchNote } from '../failoverNotes';
 import { savedFailoverHandoff, savedFailoverNotice } from '../failover';
 import { SuggestionMeta, parseSuggestionMeta } from '../mcpSuggestions';
@@ -119,7 +119,7 @@ import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../ro
 import { SmartActionsSlot } from './results/SmartActions';
 import { WorkingStrip } from './WorkingStrip';
 import { ScrollRow } from './ScrollRow';
-import { liveBubble, waitingOn } from '../workingStrip';
+import { liveBubble, liveTurnStart, waitingOn } from '../workingStrip';
 import { COMPOSE_PREFILL_EVENT, withPrefill } from './results/SmartResult';
 import { FilesPreviewOnly } from './results/Files';
 import { ReactionButtons, ReplyButton, ReplyChip, ReplyQuote } from './MessageReactions';
@@ -1167,6 +1167,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Phone (0.6.13 spec A3/C2): the working strip is the one live line, so the stream drops what repeats it.
   // (`phone` is the A1 PHONE_QUERY flag above).
   const stripWaitsOn = isStreaming ? waitingOn({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser }) : null;
+  // #1278: when the live turn started, for the time on its name line. Taken once, when the row stops waiting in line,
+  // so it never ticks or moves; a step that started well before that (the chat was reopened mid-turn) moves it back.
+  const liveStartRef = useRef<number | null>(null);
+  if (!isStreaming || queued) liveStartRef.current = null;
+  else if (liveStartRef.current === null) liveStartRef.current = Date.now();
+  const liveStartedAt = liveStartRef.current === null ? null : liveTurnStart(liveActivity, liveStartRef.current);
   // What the live bubble holds before its first words: a pending approval reads as "waiting for your OK", not loading.
   const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing });
   // 36d: the scene is the one working status: getting started, a step, writing. Queued and waiting on the person stay plain.
@@ -2241,8 +2247,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {underReply ? (
             <span className="sr-only">Shared by {displayName}</span>
           ) : isUser ? (
-            <div className="flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap" data-sender={otherSender ? 'other' : undefined}>
+            // #1278: the time sits next to the name as on a bot reply; on your side the row mirrors, so the name stays by your avatar
+            <div className={`flex items-center gap-2 mb-1.5 text-[11px] text-zinc-400 font-medium max-w-full min-w-0 whitespace-nowrap ${onYourSide ? 'flex-row-reverse' : ''}`} data-sender={otherSender ? 'other' : undefined}>
               <span className={otherSender ? 'text-zinc-200 min-w-0 truncate' : 'text-zinc-200 shrink-0'}>{displayName}</span>
+              <MessageTime at={msg.created_at} kind="user" />
               {fromTelegram(parseMetaObject(msg.meta)) && <ViaTelegram />}
             </div>
           ) : (
@@ -3110,6 +3118,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR_PHONE} />
                 </span>
                 <span className={REPLY_NAME}>{liveName}</span>
+                {/* #1278: when this turn started, where the finished reply's time will sit; not while it waits in line */}
+                {!queued && <MessageTime at={liveStartedAt} kind="live" />}
                 {queued ? (
                   <span className="inline-flex items-center gap-1 text-zinc-400 text-[10px]">
                     <span className="w-1.5 h-1.5 rounded-full bg-zinc-500" aria-hidden="true" />
