@@ -1,5 +1,5 @@
 {
-  "note": "Limits started as the baseline x 1.5 (memory x 1.3), rounded up; the baseline is the highest median of the CI runs of the fresh-machine job on ubuntu-latest (Nov 12, 2026). Memory was tightened by hand on Nov 26 (perf-idle-memory, #1265): 132 MB, a few MB over the 127.9 MB that CI measured once Find a tool's registry copy stopped loading at startup, so the next jump fails CI. Measures in `blocking` fail the CI step (exit 1); the rest only WARN (browser_launch_s until Kit's #1266 fixes the 8 s Chrome stall). Rewrite with `perf_budget.py --update-baseline` on purpose.",
+  "note": "Limits started as the baseline x 1.5 (memory x 1.3), rounded up; the baseline is the highest median of the CI runs of the fresh-machine job on ubuntu-latest (Nov 12, 2026). Memory was tightened by hand on Nov 26 (perf-idle-memory, #1265): 132 MB, a few MB over the 127.9 MB that CI measured once Find a tool's registry copy stopped loading at startup, so the next jump fails CI. after_search_rss_mb (Find a tool synced a fake 75,000-entry registry, A2) is held to about 20 MB over idle: 150 MB. Measures in `blocking` fail the CI step (exit 1); the rest only WARN (browser_launch_s until Kit's #1266 fixes the 8 s Chrome stall). Rewrite with `perf_budget.py --update-baseline` on purpose.",
   "baseline": {
     "cold_start_s": 0.65,
     "first_reply_s": 0.08,
@@ -16,12 +16,14 @@
     "first_reply_s": 0.2,
     "idle_rss_mb": 132.0,
     "after_reply_rss_mb": 132.0,
-    "browser_launch_s": 2.4
+    "browser_launch_s": 2.4,
+    "after_search_rss_mb": 150.0
   },
   "blocking": [
     "cold_start_s",
     "first_reply_s",
     "idle_rss_mb",
-    "after_reply_rss_mb"
+    "after_reply_rss_mb",
+    "after_search_rss_mb"
   ]
 }

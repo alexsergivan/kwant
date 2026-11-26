@@ -211,7 +211,8 @@ jobs:
       # measure listed under "blocking" in perf_budget.json fails this step and so the fresh-machine job. A measure that
       # is not blocking (browser_launch_s, until #1266) shows WARN in the summary and does not fail.
       - name: Performance budget
-        timeout-minutes: 10
+        # 3 memory runs also sync Find a tool's copy of a fake 75,000-entry registry (after_search_rss_mb)
+        timeout-minutes: 20
         run: python3 scripts/perf_budget.py --kwnt target/debug/kwnt --browser "$(command -v google-chrome || command -v chromium)" --out "$RUNNER_TEMP/perf-results.json"
       - name: Performance budget results
         if: always()

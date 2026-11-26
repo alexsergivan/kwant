@@ -36,7 +36,11 @@ const table = (i: number) =>
 // The bot replies that carry a smart result: one table and one chart by default; ?results=10 spreads ten
 // (tables and charts first) evenly over the chat, like a long chat with charts in it (33j typing run).
 const RICH: Array<keyof typeof FIXTURES> = ['comparison', 'chartLine', 'chartBar', 'metrics', 'comparison', 'chartLine', 'findings', 'chartBar', 'comparison', 'timeline'];
-const richCount = Number(q.get('results') ?? 0);
+// chat-scroll-holds-place: ?mixed=1 is the scroll probe's chat (perf/scroll/probe.mjs): ten smart results, long
+// replies, an open question card, and (with ?paged=1) the server's 100-message pages so "load earlier" runs.
+const MIXED = q.get('mixed') === '1';
+const PAGED = q.get('paged') === '1';
+const richCount = Number(q.get('results') ?? (MIXED ? 10 : 0));
 const richAt = new Map<number, keyof typeof FIXTURES>(
   richCount > 0
     ? Array.from({ length: richCount }, (_, k) => [2 * Math.floor(((k + 0.5) * N) / (2 * richCount)) + 1, RICH[k % RICH.length]])
@@ -52,15 +56,21 @@ for (let i = 0; i < N; i++) {
   let results: unknown = null;
   const rich = richAt.get(i);
   if (rich) ({ reply: text, results } = FIXTURES[rich] as { reply: string; results: unknown });
+  else if (MIXED && i % 14 === 7) text = `${prose(i)}\n\n${table(i)}\n\n${code(i)}\n\n${prose(i + 1)}`;
   else text = [prose, code, list][Math.floor(i / 2) % 3](i);
-  messages.push({ id: `m${i}`, sender_role: 'kwant', sender_id: 'Ada', text, results, channel_id: CTX, created_at: at(i), tokens_used: 400 });
+  const meta = MIXED && i === N - 61 ? questionMeta(`q${i}`, 'answered') : undefined;
+  messages.push({ id: `m${i}`, sender_role: 'kwant', sender_id: 'Ada', text, results, channel_id: CTX, created_at: at(i), tokens_used: 400, ...(meta ? { meta } : {}) });
+}
+function questionMeta(id: string, status: 'open' | 'answered') {
+  return JSON.stringify({ kind: 'ask_user', question_id: id, question: 'Which month should the report cover?', choices: ['January', 'February', 'March'], status, answer: status === 'answered' ? 'March' : null, why_you: 'Only you know which period the client asked for.' });
 }
 
 // ---- the server ----
 const bot = (id: string, name: string, title: string) => ({ id, name, title, persona_prompt: '', avatar_sprite: 'mouse', driver_type: 'claude', preferred_model: '' });
 const routes: Record<string, unknown> = {
   '/api/kwants': [bot('k1', 'Ada', 'Tech lead'), bot('k2', 'Lin', 'Backend')],
-  '/api/channels': [{ id: CTX, name: 'general', kwant_ids: ['k1', 'k2'], created_at: '' }],
+  '/api/channels': [{ id: CTX, name: 'general', kwant_ids: ['k1', 'k2'], lead_kwant_id: 'k1', member_kwants: ['k2'], created_at: '' }],
+  '/api/away': { unseen: { total: 0, waiting: 0 }, waiting: [], failed: [], finished: [] },
   '/api/teams': [],
   '/api/engines': [{ id: 'claude', kind: 'cli', enabled: true, status: 'ready', ready: true }],
   '/api/automation-discovery': { setting: 'off', daily_cap: 3, blocked_by: [], last_scan_at: null, suggestions: [], stats: {} },
@@ -68,7 +78,15 @@ const routes: Record<string, unknown> = {
 };
 const json = (b: unknown) => new Response(JSON.stringify(b), { status: 200, headers: { 'Content-Type': 'application/json' } });
 window.fetch = async (url: RequestInfo | URL, init?: RequestInit) => {
-  const path = String(url instanceof Request ? url.url : url).replace(location.origin, '').split('?')[0];
+  const full = new URL(String(url instanceof Request ? url.url : url), location.origin);
+  const path = full.pathname;
+  // ?paged=1: the latest 100, and the 100 before `before=` (33k), like routes.rs messages_page.
+  if (PAGED && path === `/api/channels/${CTX}/messages`) {
+    const before = full.searchParams.get('before');
+    const end = before ? messages.findIndex((m) => (m as { id: string }).id === before) : messages.length;
+    await new Promise((r) => setTimeout(r, 120));
+    return json(messages.slice(Math.max(0, end - 100), Math.max(0, end)));
+  }
   return json(path in routes ? routes[path] : init?.method === 'PUT' || init?.method === 'POST' ? {} : []);
 };
 const streams: FakeEvents[] = [];
@@ -111,6 +129,9 @@ declare global {
       streamed: () => string;
       finish: () => void;
       tools: () => Promise<number>;
+      message: (kind?: 'reply' | 'question') => string;
+      approval: () => string;
+      withdraw: (id: string) => void;
     };
   }
 }
@@ -156,6 +177,20 @@ window.__harness = {
     }
     return turnSteps.length;
   },
+  // chat-scroll-holds-place: things that arrive while the person reads further up.
+  message: (kind = 'reply') => {
+    const i = messages.length + 1000;
+    const m = { id: `live${i}`, sender_role: 'kwant', sender_id: 'Ada', text: kind === 'question' ? 'One thing first.' : `${prose(i)}\n\n${code(i)}`, results: null, channel_id: CTX, created_at: at(N + i), tokens_used: 400, ...(kind === 'question' ? { meta: questionMeta(`q${i}`, 'open') } : {}) };
+    messages.push(m);
+    emit({ type: 'MessageAdded', data: { message: m } });
+    return m.id;
+  },
+  approval: () => {
+    const id = `ap${messages.length}${Math.round(performance.now())}`;
+    emit({ type: 'ApprovalRequired', kwant_id: 'k1', context_id: CTX, data: { id, tool_name: 'Bash', details: { kwant_id: 'k1', kwant_name: 'Ada', channel_id: CTX, context_id: CTX, command: 'npm run build && npm test', description: 'Build and test the app' } } });
+    return id;
+  },
+  withdraw: (id) => emit({ type: 'ApprovalWithdrawn', kwant_id: 'k1', context_id: CTX, data: { id } }),
   // Sends `count` tokens at `perSecond`, on a timer, the way the server's events arrive.
   stream: (count, perSecond) =>
     new Promise((done) => {
