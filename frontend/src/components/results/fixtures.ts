@@ -536,6 +536,65 @@ export const SANTA_FIXTURES = {
 /** What host/reset-pin answers for the shots and tests: a one-time code and its expiry (24 h). */
 export const SANTA_RESET_CODE = { code: 'K7QX', expires_at: '2026-12-08T21:41:00+01:00' };
 
+// santa-card-live: Mira's office Santa (ux-pass-santa, 6 people, Anna and Ben kept apart) as the box's own read
+// (GET /api/pockets/:code, santa.rs host_view), so the card can be tested and shot going 0 of 6 -> 6 of 6 -> drawn.
+// Names and creatures are made up; the gift day is far off so "drawn" never turns into Reveal day in a test.
+const OFFICE = [['o1', 'Finn', 'antenna'], ['o2', 'Anna', 'beret'], ['o3', 'Ben', 'goggles'], ['o4', 'Cleo', 'horns'], ['o5', 'Dev', 'ears'], ['o6', 'Esme', 'bulb']] as const;
+export function santaHostView(joined: number, phase: 'collecting' | 'drawn' | 'revealed' = 'collecting', over: Record<string, unknown> = {}) {
+  const after = phase !== 'collecting';
+  const people = OFFICE.slice(0, joined).map(([id, name, avatar]) => ({ id, name, avatar, looked: after && id !== 'o5', gift_ready: after && id === 'o1' }));
+  return {
+    phase,
+    gift_on: '2099-12-18',
+    budget: '£20',
+    host_name: 'Finn',
+    draw_at: null,
+    reveal: phase === 'revealed' ? 'shown' : 'scheduled',
+    reveal_at: '2099-12-18T19:00:00Z',
+    joined,
+    expected: 6,
+    people,
+    waiting_for: OFFICE.slice(joined).map(([, name]) => name),
+    keep_apart: [['Anna', 'Ben']],
+    late_allowed: [],
+    drawn_at: after ? '2099-12-01T18:00:00Z' : null,
+    revealed_at: phase === 'revealed' ? '2099-12-18T19:00:00Z' : null,
+    draw: { can_draw: phase === 'collecting' && joined >= 3, blocked: joined < 3 ? { code: 'too_few', message: 'A draw needs at least 3 people.' } : null, overdue: false },
+    needs_you: false,
+    counts: { joined, looked: after ? joined - 1 : 0, gifts_ready: after ? 1 : 0, questions_asked: 0, questions_answered: 0 },
+    ...over,
+  };
+}
+export const SANTA_LIVE_JOIN = {
+  mode: 'anywhere',
+  anywhere_url: 'https://finn-mac.tail4b2e.ts.net/p/of6sn7',
+  anywhere_kind: 'funnel',
+  wifi_url: 'http://192.168.1.20:7480/p/of6sn7',
+  wifi_note: null,
+  quick_tunnel: false,
+  tunnel: { state: 'off', url: null, note: null },
+};
+export const santaRead = (hv: Record<string, unknown>, pocket: Record<string, unknown> = {}) => ({
+  pocket: { code: 'of6sn7', kit: 'santa', title: 'Office Secret Santa', state: 'open', ended_at: null, expires_at: '2099-12-25T00:00:00Z', players: hv.joined, ...pocket },
+  summary: null,
+  removed: 0,
+  host_view: hv,
+  join: SANTA_LIVE_JOIN,
+});
+/** The chat's block for the office Santa, as santa_create hands it over: the raw host view, nobody in yet. */
+export const SANTA_LIVE_BLOCK = {
+  ...pocketBase,
+  id: 'b-santa-live',
+  provenance: { kind: 'kwant_data', ref: 'pocket:of6sn7' },
+  code: 'of6sn7',
+  kit: 'santa',
+  name: 'Office Secret Santa',
+  when: '£20 each · gifts on Fri, Dec 18 · reveal at 7 PM',
+  state: 'live',
+  budget: { calls: 2, usd: 0.01 },
+  santa: santaHostView(0),
+};
+
 // Pocket apps (pa10b/design.md): Riverside Runners, host Oleks, 22 members, euros. Names, places and creatures are
 // made up. One engine, three faces: RSVP, Sign-up and Vote, states 1-9 plus People, Nudges and the closed results.
 // `gather` is Lin's host view as the box sends it (pa10b/server-shape.md, src/pocket/gather.rs) plus the pocket's
@@ -1259,3 +1318,85 @@ export const WALL_HOST_VIEWS: Record<keyof typeof WALL_FIXTURES, Record<string, 
   shown: view(WALL_FIXTURES.shown, [], wallOf(212, best30)),
   shownByHost: view(WALL_FIXTURES.shownByHost, [], wallOf(212, best30)),
 };
+
+const QUEUE_CLOSE_TEXT = "Sorry, we've closed for today. Thanks for waiting, and see you next time!";
+// ---- pa11b: the queue ticket (Tine's Bakery, Sat Dec 5 2026; times on the box's clock, shown in UTC by the shots)
+const QUEUE_FUNNEL = 'https://tine-mac.tail5e2c.ts.net/p/bakery';
+const QUEUE_WIFI = 'http://192.168.1.31:7480/p/bakery';
+const qAt = (h: number, m: number, s = 0) => `2026-12-05T${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}Z`;
+const qTicket = (number: number, h: number, m: number, extra: Record<string, unknown> = {}) => ({
+  number,
+  name: null,
+  state: 'waiting',
+  taken_at: qAt(h, m),
+  called_at: null,
+  call_ends_at: null,
+  recall_until: null,
+  ...extra,
+});
+const queueBase = {
+  spec: { title: "Tine's Bakery", line: 'Pick up at the side counter', hours: { until: '13:00' }, call_minutes: 3, ask_name: false, max_waiting: 200, host_name: 'Tine' },
+  state: 'open',
+  pause_text: null,
+  close_text: null,
+  paused_at: null,
+  closed_at: null,
+  auto_closed: false,
+  closed_waiting: 0,
+  hours_until: '13:00',
+  now_serving: 23,
+  counter: 28,
+  next_number: 29,
+  tickets: [qTicket(24, 10, 17), qTicket(25, 10, 21), qTicket(26, 10, 24), qTicket(27, 10, 26), qTicket(28, 10, 29)],
+  summary: { served_today: 22, skipped_today: 1, left_today: 2, waiting: 5, avg_minutes: 3, calls_today: 24, longest_wait_minutes: 14, days: 1, served_total: 22, avg_total_minutes: 3 },
+  now: qAt(10, 31, 19),
+  join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: QUEUE_FUNNEL, wifi_url: QUEUE_WIFI },
+};
+const queueFixture = (reply: string, state: 'writing' | 'live' | 'ended', queue: Record<string, unknown>): Fixture =>
+  pocketFixture(reply, {
+    provenance: { kind: 'kwant_data', ref: 'pocket:bakery' },
+    code: 'bakery',
+    kit: 'queue',
+    name: "Tine's Bakery",
+    when: null,
+    state,
+    santa: null,
+    queue: { ...queueBase, ...queue },
+  });
+const qEmpty = { now_serving: null, counter: 0, next_number: 1, tickets: [], summary: { ...queueBase.summary, served_today: 0, skipped_today: 0, left_today: 0, waiting: 0, avg_minutes: null, calls_today: 0, longest_wait_minutes: null, served_total: 0, avg_total_minutes: null }, now: qAt(7, 2) };
+const qCalled = {
+  tickets: [qTicket(24, 10, 17, { state: 'called', called_at: qAt(10, 31), call_ends_at: qAt(10, 34) }), ...queueBase.tickets.slice(1)],
+  summary: { ...queueBase.summary, waiting: 4, longest_wait_minutes: 10 },
+};
+export const QUEUE_FIXTURES = {
+  setup: queueFixture("Here's the queue for the bakery. Check it, then open it; the counter sign prints from the card.", 'writing', { state: null, now: qAt(6, 48), now_serving: null, tickets: [], summary: undefined }),
+  empty: queueFixture("Your queue is open. Print the counter sign and put it by the till.", 'live', qEmpty),
+  waiting: queueFixture('Five people are waiting. #24 is next.', 'live', {}),
+  called: queueFixture('#24 is called. Their phone buzzes and shows the counter.', 'live', qCalled),
+  skipped: queueFixture("#24 didn't come, so it was skipped. You can bring it back for 10 minutes.", 'live', {
+    tickets: [qTicket(24, 10, 17, { state: 'skipped', called_at: qAt(10, 31), recall_until: qAt(10, 44) }), ...queueBase.tickets.slice(1)],
+    summary: { ...queueBase.summary, waiting: 4, skipped_today: 2, longest_wait_minutes: 13 },
+    now: qAt(10, 34, 30),
+  }),
+  paused: queueFixture('The queue is paused. Five people keep their place.', 'live', { state: 'paused', pause_text: 'Back in 10 minutes', paused_at: qAt(10, 40), now: qAt(10, 41) }),
+  close: queueFixture('Five people are waiting. #24 is next.', 'live', {}),
+  closed: queueFixture('The queue closed at 1 PM, as set. Here is the day.', 'live', {
+    state: 'closed',
+    closed_at: qAt(13, 0),
+    auto_closed: true,
+    closed_waiting: 2,
+    close_text: QUEUE_CLOSE_TEXT,
+    now_serving: null,
+    tickets: [],
+    summary: { ...queueBase.summary, served_today: 61, skipped_today: 4, left_today: 5, waiting: 0, avg_minutes: 3, longest_wait_minutes: null },
+    now: qAt(13, 2),
+  }),
+  ended: queueFixture('The queue has ended. The counts stay here.', 'ended', {
+    state: 'ended',
+    ended_at: '2026-12-19T13:05:00Z',
+    now_serving: null,
+    tickets: [],
+    summary: { ...queueBase.summary, waiting: 0, days: 3, served_total: 174, avg_total_minutes: 4 },
+    now: '2026-12-19T13:05:00Z',
+  }),
+} satisfies Record<string, Fixture>;

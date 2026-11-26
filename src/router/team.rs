@@ -1020,10 +1020,14 @@ const GENERIC_WORDS: &[&str] = &[
 ];
 
 /// Words that greet, thank or agree: a message of only these (and everyday words) names no one's work.
+/// The last row is who a hello or goodbye is for ("hi team!", "hey y'all", "bye folks"): words
+/// for the group or for leaving, which name no one's work on their own. "y'all" is "y" + "all"
+/// to [`tokens`] and one word to `delivery`'s tokens, so all three spellings are here.
 pub(crate) const SMALL_TALK: &[&str] = &[
     "hi", "hello", "hey", "hiya", "yo", "morning", "evening", "afternoon", "night", "thanks", "thank", "thx", "ok",
     "okay", "yes", "yeah", "yep", "no", "nope", "sure", "great", "cool", "nice", "perfect", "ahead", "go", "do",
     "it", "please", "good", "fine", "agreed", "continue", "proceed", "there", "all", "you", "everyone",
+    "team", "folks", "guys", "everybody", "y", "yall", "y'all", "bye", "goodbye",
 ];
 
 /// A greeting, a thank-you or a go-ahead ("Hi", "ok, go ahead", "thanks!"): nothing in it for
@@ -1638,6 +1642,32 @@ mod tests {
         assert_eq!((p.kwant.id.as_str(), p.fit), ("kwant-3", ROUTE_AT), "{p:?}");
         assert!(is_small_talk("Hi") && is_small_talk("thanks, ok!") && !is_small_talk("hi, deploy the app"));
         assert!(!is_small_talk(""));
+    }
+
+    /// 0.9.54 greeting-one-reply (audit F6/B2): "hi team!" missed small talk because "team" was in
+    /// no list, so a hello to a team was routed and planned like work. Words that greet a group
+    /// or say goodbye are small talk; with real work after them the message is not.
+    #[test]
+    fn a_greeting_to_the_whole_team_is_small_talk() {
+        for msg in [
+            "hi team!",
+            "Hello folks",
+            "morning all",
+            "hey guys",
+            "thanks team!",
+            "hi everybody",
+            "hey y'all",
+            "hey yall",
+            "Hi y\u{2019}all!",
+            "bye team",
+            "goodbye everyone",
+            "ok bye!",
+        ] {
+            assert!(is_small_talk(msg), "{msg}");
+        }
+        for msg in ["hi team, deploy the app", "team, fix the login", "hey guys, the build is red", "bye, ship the release"] {
+            assert!(!is_small_talk(msg), "{msg}");
+        }
     }
 
     /// Oleks 2026-10-29: "@Frontend why you did not answer to QA" named two bots, so it went to

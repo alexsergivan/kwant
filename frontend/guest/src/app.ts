@@ -175,6 +175,27 @@ export class GuestApp {
       this.draw();
     }
     this.resend(v);
+    this.askColours();
+  }
+
+  private colourAsk = 0;
+  /**
+   * A quiz state named a team whose colour isn't known (a team made after this phone read `info`, or a seat restored
+   * without the join screen): read the public `info` once for the colours, then the last state again with them. At most every 10 s.
+   */
+  private askColours(): void {
+    if (!this.api.missing || this.gone || this.env.now() - this.colourAsk < 10_000) return;
+    this.colourAsk = this.env.now();
+    void (async () => {
+      const i = await this.api.info();
+      if (!i.ok || this.gone) return;
+      // Not state?since=: with nothing new the box answers 204. The state already read is read again with the colours.
+      const v = this.api.retake();
+      if (!v || this.gone) return;
+      // A patch keeps the rows it drew; the colours are in the rows, so draw them again.
+      this.key = '';
+      this.show(v);
+    })();
   }
 
   /** The box is answering again but this question has no answer from this phone: send the pending one again. */
@@ -857,50 +878,57 @@ export class GuestApp {
 
   private numberAnswer(q: Question, sent: Answer | undefined): Node[] {
     const n = q.number ?? {};
-    if (this.numDraft === null || this.key !== this.keyOf(this.view!)) this.numDraft = n.start ?? 0;
-    let val = sent && 'number' in sent ? sent.number : this.numDraft!;
+    // With no start from the engine the field opens empty: one stray tap must not lock in a guessed 0.
+    if (this.numDraft === null || this.key !== this.keyOf(this.view!)) this.numDraft = n.start ?? null;
+    let val: number | null = sent && 'number' in sent ? sent.number : this.numDraft;
     const input = h('input', {
       class: 'input num tab',
       type: 'text',
       inputmode: 'numeric',
+      enterkeyhint: 'send',
       pattern: '-?[0-9]*',
+      placeholder: 'Your number',
       'aria-labelledby': 'qtext',
       'data-answer': '',
       disabled: !!sent,
     }) as HTMLInputElement;
-    input.value = String(val);
-    const send = h('button', { type: 'submit', class: 'gbtn', 'data-answer': '', 'data-send': '', disabled: !!sent }, sent ? this.sendLabel(q.id) : `Send ${fmt(val)}`);
+    input.value = val == null ? '' : String(val);
+    const send = h('button', { type: 'submit', class: 'gbtn', 'data-answer': '', 'data-send': '', disabled: !!sent || val == null }) as HTMLButtonElement;
+    const label = () => {
+      send.textContent = val == null ? 'Send answer' : `Send ${fmt(val)}`;
+      send.disabled = val == null || this.secsLeft(q) <= 0;
+    };
+    if (sent) send.textContent = this.sendLabel(q.id);
+    else label();
     const set = (x: number) => {
       if (n.min != null) x = Math.max(n.min, x);
       if (n.max != null) x = Math.min(n.max, x);
       val = x;
       this.numDraft = x;
       input.value = String(x);
-      send.textContent = `Send ${fmt(x)}`;
+      label();
     };
     input.addEventListener('input', () => {
-      const x = parseInt(input.value.replace(/[^0-9-]/g, ''), 10);
-      if (!Number.isNaN(x)) {
-        val = x;
-        this.numDraft = x;
-        send.textContent = `Send ${fmt(x)}`;
-      }
+      const raw = input.value.trim();
+      val = /^-?[0-9]+$/.test(raw) ? parseInt(raw, 10) : null;
+      this.numDraft = val;
+      label();
     });
     const minus = h('button', { type: 'button', class: 'gbtn ghost step', 'aria-label': 'Minus 1', 'data-answer': '', disabled: !!sent }, '−');
     const plus = h('button', { type: 'button', class: 'gbtn ghost step', 'aria-label': 'Plus 1', 'data-answer': '', disabled: !!sent }, '+');
-    minus.addEventListener('click', () => set(val - 1));
-    plus.addEventListener('click', () => set(val + 1));
+    minus.addEventListener('click', () => set(val == null ? -1 : val - 1));
+    plus.addEventListener('click', () => set(val == null ? 1 : val + 1));
     const form = h(
       'form',
       { class: 'stack' },
       h('div', { class: 'numrow' }, minus, input, plus),
-      h('p', { class: 'small center' }, q.hint || 'Closest answer wins. Exact gets a 50 point bonus.'),
+      h('p', { class: 'small center' }, q.hint || 'Send the number. Your first answer counts.'),
       send,
       h('p', { class: 'small center', 'data-note': '', role: 'status' }, sent ? this.failNote(q.id) : ''),
     );
     form.addEventListener('submit', (e) => {
       e.preventDefault();
-      if (this.sent.has(q.id) || this.secsLeft(q) <= 0) return;
+      if (val == null || this.sent.has(q.id) || this.secsLeft(q) <= 0) return;
       const a = { number: val };
       this.sent.set(q.id, a);
       form.querySelectorAll<HTMLButtonElement | HTMLInputElement>('[data-answer]').forEach((b) => (b.disabled = true));
@@ -1027,6 +1055,14 @@ export class GuestApp {
         h('p', { class: 'soft said' }, 'You wrote ', h('b', null, `"${r.yours ?? ''}"`), `. ${r.why || 'Close enough, so it counts.'}`),
         h('div', { class: 'pts' }, sign(r.points)),
       );
+    } else if (r.outcome === 'judging') {
+      // Pending is waiting, not earned: neutral panel and no icon (the guest kit's `info` glyph draws a padlock, which reads as Locked in).
+      panel = h(
+        'div',
+        { class: 'panel big-result' },
+        h('div', { class: 'word mid' }, 'Close one'),
+        h('p', { class: 'soft said' }, 'You wrote ', h('b', null, `"${r.yours ?? ''}"`), '. Quizmaster is checking whether it counts.'),
+      );
     } else if (r.outcome === 'overturned') {
       panel = h(
         'div',
@@ -1082,7 +1118,8 @@ export class GuestApp {
   private between(v: GuestView): HTMLElement {
     const b = v.between!;
     const mine = b.board.find((r) => r.me);
-    const line = !mine || !mine.move ? (mine ? 'Your team: same place as last round' : '') : `Your team: ${mine.move > 0 ? 'up' : 'down'} ${Math.abs(mine.move)} place${Math.abs(mine.move) === 1 ? '' : 's'} this round`;
+    // Only a move the box sent is told: with none (the quiz engine sends no moves yet) there is no line.
+    const line = !mine || mine.move == null ? '' : !mine.move ? 'Your team: same place as last round' : `Your team: ${mine.move > 0 ? 'up' : 'down'} ${Math.abs(mine.move)} place${Math.abs(mine.move) === 1 ? '' : 's'} this round`;
     const lb = h('div', { class: 'lb', role: 'list' });
     add(lb, b.board.slice(0, 5).map((r) => {
       const el = this.row(r);
@@ -1093,7 +1130,7 @@ export class GuestApp {
     return h(
       'div',
       { class: 'body' },
-      h('div', { class: 'qmeta' }, h('span', null, `After round ${b.after_round} of ${b.rounds}`), h('span', { 'data-next': '' }, b.next_in_secs != null ? '' : 'Next round soon')),
+      h('div', { class: 'qmeta' }, h('span', null, `After round ${b.after_round} of ${b.rounds}`), h('span', { 'data-next': '' }, b.next_in_secs != null ? '' : b.rounds && b.after_round >= b.rounds ? 'Final scores next' : 'Next round soon')),
       b.line ? h('div', { class: 'say' }, quizmaster(48, 'finished'), h('div', { class: 'b lg' }, b.line)) : null,
       lb,
       line ? h('p', { class: 'small center' }, line) : null,

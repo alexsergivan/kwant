@@ -1,0 +1,848 @@
+{
+  "about": "Written by tests/quiz_guest_fakes_test.rs from QuizGame::view (guest) and QuizGame::lobby. Do not edit by hand: KWNT_WRITE_GUEST_FAKES=1 cargo test --test quiz_guest_fakes_test",
+  "code": "quiz",
+  "info": {
+    "host": null,
+    "new_teams": true,
+    "noun": "quiz",
+    "rounds": 2,
+    "starts_at": "2026-11-27T20:00:00+00:00",
+    "team_max": 4,
+    "teams": [
+      {
+        "color": 0,
+        "count": 2,
+        "full": false,
+        "id": "tb31f6f46",
+        "max": 4,
+        "name": "Quizzly Bears"
+      },
+      {
+        "color": 1,
+        "count": 1,
+        "full": false,
+        "id": "t67541a58",
+        "max": 4,
+        "name": "Fact Hunters"
+      }
+    ]
+  },
+  "players": [
+    {
+      "avatar": "visor",
+      "id": "mia",
+      "name": "Mia",
+      "team": "Quizzly Bears"
+    },
+    {
+      "avatar": "antenna",
+      "id": "sam",
+      "name": "Sam",
+      "team": "Quizzly Bears"
+    },
+    {
+      "avatar": "bulb",
+      "id": "ana",
+      "name": "Ana",
+      "team": "Fact Hunters"
+    }
+  ],
+  "title": "Friday Pub Quiz",
+  "views": {
+    "answered_choice": {
+      "view": {
+        "answered": {
+          "count": 1,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": true,
+          "my_answer": "Oasis",
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "score": 0,
+          "team": "Quizzly Bears"
+        },
+        "phase": "question",
+        "question": {
+          "kind": "choice",
+          "number": 1,
+          "of": 3,
+          "options": [
+            "Blur",
+            "Oasis",
+            "Pulp",
+            "Suede"
+          ],
+          "points": 2,
+          "q": 0,
+          "text": "Which band released \"Definitely Maybe\" in 1994?",
+          "time_limit_s": 20
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "teams": true,
+        "time": {
+          "deadline": "2027-01-15T08:00:30.000Z",
+          "paused": false,
+          "remaining_ms": 15000
+        },
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "answered_text": {
+      "view": {
+        "answered": {
+          "count": 3,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": true,
+          "my_answer": "Canbera",
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "score": 2,
+          "team": "Quizzly Bears"
+        },
+        "phase": "question",
+        "question": {
+          "kind": "text",
+          "number": 2,
+          "of": 3,
+          "points": 2,
+          "q": 1,
+          "text": "What is the capital city of Australia?",
+          "time_limit_s": 30
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "teams": true,
+        "time": {
+          "deadline": "2027-01-15T08:01:00.000Z",
+          "paused": false,
+          "remaining_ms": 23000
+        },
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "final": {
+      "view": {
+        "answered": {
+          "count": 2,
+          "of": 3
+        },
+        "kit": "quiz",
+        "leaderboard": [
+          {
+            "me": true,
+            "name": "Mia",
+            "rank": 1,
+            "score": 7,
+            "team": "Quizzly Bears",
+            "tied": false
+          },
+          {
+            "name": "Sam",
+            "rank": 2,
+            "score": 2,
+            "team": "Quizzly Bears",
+            "tied": false
+          },
+          {
+            "name": "Ana",
+            "rank": 3,
+            "score": 0,
+            "team": "Fact Hunters",
+            "tied": false
+          }
+        ],
+        "line": "That's the lot! Give it up for our winners.",
+        "me": {
+          "answered": true,
+          "my_answer": "206",
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "result": {
+            "points": 3,
+            "verdict": "correct"
+          },
+          "score": 7,
+          "team": "Quizzly Bears"
+        },
+        "phase": "final",
+        "question": {
+          "kind": "number",
+          "number": 3,
+          "of": 3,
+          "points": 3,
+          "q": 2,
+          "text": "How many bones are in an adult human body?",
+          "time_limit_s": 30
+        },
+        "reveal": {
+          "answer": "206",
+          "line": "Let's see who knew that one.",
+          "q": 2,
+          "source_quote": "The adult human skeleton consists of 206 bones",
+          "source_url": "https://en.wikipedia.org/wiki/Human_skeleton"
+        },
+        "round": {
+          "number": 2,
+          "of": 2,
+          "title": "Numbers"
+        },
+        "team_board": [
+          {
+            "members": 2,
+            "rank": 1,
+            "score": 9,
+            "team": "Quizzly Bears",
+            "tied": false
+          },
+          {
+            "members": 1,
+            "rank": 2,
+            "score": 0,
+            "team": "Fact Hunters",
+            "tied": false
+          }
+        ],
+        "teams": true,
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "leaderboard": {
+      "view": {
+        "answered": {
+          "count": 3,
+          "of": 3
+        },
+        "kit": "quiz",
+        "leaderboard": [
+          {
+            "me": true,
+            "name": "Mia",
+            "rank": 1,
+            "score": 4,
+            "team": "Quizzly Bears",
+            "tied": false
+          },
+          {
+            "name": "Sam",
+            "rank": 2,
+            "score": 2,
+            "team": "Quizzly Bears",
+            "tied": false
+          },
+          {
+            "name": "Ana",
+            "rank": 3,
+            "score": 0,
+            "team": "Fact Hunters",
+            "tied": false
+          }
+        ],
+        "me": {
+          "answered": true,
+          "my_answer": "Canbera",
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "result": {
+            "points": 2,
+            "verdict": "correct"
+          },
+          "score": 4,
+          "team": "Quizzly Bears"
+        },
+        "phase": "leaderboard",
+        "question": {
+          "kind": "text",
+          "number": 2,
+          "of": 3,
+          "points": 2,
+          "q": 1,
+          "text": "What is the capital city of Australia?",
+          "time_limit_s": 30
+        },
+        "reveal": {
+          "answer": "Canberra",
+          "line": "Let's see who knew that one.",
+          "q": 1,
+          "source_quote": "Canberra is the capital city of Australia",
+          "source_url": "https://en.wikipedia.org/wiki/Canberra"
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "team_board": [
+          {
+            "members": 2,
+            "rank": 1,
+            "score": 6,
+            "team": "Quizzly Bears",
+            "tied": false
+          },
+          {
+            "members": 1,
+            "rank": 2,
+            "score": 0,
+            "team": "Fact Hunters",
+            "tied": false
+          }
+        ],
+        "teams": true,
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "lobby": {
+      "view": {
+        "kit": "quiz",
+        "line": "Evening, quizzers! Phones out, names in.",
+        "lobby": [
+          {
+            "name": "Mia",
+            "team": "Quizzly Bears"
+          },
+          {
+            "name": "Sam",
+            "team": "Quizzly Bears"
+          },
+          {
+            "name": "Ana",
+            "team": "Fact Hunters"
+          }
+        ],
+        "me": {
+          "answered": false,
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "score": 0,
+          "team": "Quizzly Bears"
+        },
+        "phase": "lobby",
+        "teams": true,
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "locked": {
+      "view": {
+        "answered": {
+          "count": 2,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": true,
+          "my_answer": "Oasis",
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "score": 0,
+          "team": "Quizzly Bears"
+        },
+        "phase": "locked",
+        "question": {
+          "kind": "choice",
+          "number": 1,
+          "of": 3,
+          "options": [
+            "Blur",
+            "Oasis",
+            "Pulp",
+            "Suede"
+          ],
+          "points": 2,
+          "q": 0,
+          "text": "Which band released \"Definitely Maybe\" in 1994?",
+          "time_limit_s": 20
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "teams": true,
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "question_choice": {
+      "view": {
+        "answered": {
+          "count": 0,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": false,
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "score": 0,
+          "team": "Quizzly Bears"
+        },
+        "phase": "question",
+        "question": {
+          "kind": "choice",
+          "number": 1,
+          "of": 3,
+          "options": [
+            "Blur",
+            "Oasis",
+            "Pulp",
+            "Suede"
+          ],
+          "points": 2,
+          "q": 0,
+          "text": "Which band released \"Definitely Maybe\" in 1994?",
+          "time_limit_s": 20
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "teams": true,
+        "time": {
+          "deadline": "2027-01-15T08:00:30.000Z",
+          "paused": false,
+          "remaining_ms": 16000
+        },
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "question_number": {
+      "view": {
+        "answered": {
+          "count": 0,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": false,
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "score": 4,
+          "team": "Quizzly Bears"
+        },
+        "phase": "question",
+        "question": {
+          "kind": "number",
+          "number": 3,
+          "of": 3,
+          "points": 3,
+          "q": 2,
+          "text": "How many bones are in an adult human body?",
+          "time_limit_s": 30
+        },
+        "round": {
+          "number": 2,
+          "of": 2,
+          "title": "Numbers"
+        },
+        "teams": true,
+        "time": {
+          "deadline": "2027-01-15T08:01:20.000Z",
+          "paused": false,
+          "remaining_ms": 28000
+        },
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "question_text": {
+      "view": {
+        "answered": {
+          "count": 0,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": false,
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "score": 2,
+          "team": "Quizzly Bears"
+        },
+        "phase": "question",
+        "question": {
+          "kind": "text",
+          "number": 2,
+          "of": 3,
+          "points": 2,
+          "q": 1,
+          "text": "What is the capital city of Australia?",
+          "time_limit_s": 30
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "teams": true,
+        "time": {
+          "deadline": "2027-01-15T08:01:00.000Z",
+          "paused": false,
+          "remaining_ms": 27000
+        },
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "reveal_judged": {
+      "view": {
+        "answered": {
+          "count": 3,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": true,
+          "my_answer": "Canbera",
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "result": {
+            "points": 2,
+            "verdict": "correct"
+          },
+          "score": 4,
+          "team": "Quizzly Bears"
+        },
+        "phase": "reveal",
+        "question": {
+          "kind": "text",
+          "number": 2,
+          "of": 3,
+          "points": 2,
+          "q": 1,
+          "text": "What is the capital city of Australia?",
+          "time_limit_s": 30
+        },
+        "reveal": {
+          "answer": "Canberra",
+          "line": "Let's see who knew that one.",
+          "q": 1,
+          "source_quote": "Canberra is the capital city of Australia",
+          "source_url": "https://en.wikipedia.org/wiki/Canberra"
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "teams": true,
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "reveal_judging": {
+      "view": {
+        "answered": {
+          "count": 3,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": true,
+          "my_answer": "Canbera",
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "result": {
+            "points": 0,
+            "verdict": "waiting_for_judge"
+          },
+          "score": 2,
+          "team": "Quizzly Bears"
+        },
+        "phase": "reveal",
+        "question": {
+          "kind": "text",
+          "number": 2,
+          "of": 3,
+          "points": 2,
+          "q": 1,
+          "text": "What is the capital city of Australia?",
+          "time_limit_s": 30
+        },
+        "reveal": {
+          "answer": "Canberra",
+          "line": "Let's see who knew that one.",
+          "q": 1,
+          "source_quote": "Canberra is the capital city of Australia",
+          "source_url": "https://en.wikipedia.org/wiki/Canberra"
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "teams": true,
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "reveal_no_answer": {
+      "view": {
+        "answered": {
+          "count": 2,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": false,
+          "name": "Sam",
+          "of": 3,
+          "rank": 2,
+          "removed": false,
+          "result": {
+            "points": 0,
+            "verdict": "no_answer"
+          },
+          "score": 0,
+          "team": "Quizzly Bears"
+        },
+        "phase": "reveal",
+        "question": {
+          "kind": "choice",
+          "number": 1,
+          "of": 3,
+          "options": [
+            "Blur",
+            "Oasis",
+            "Pulp",
+            "Suede"
+          ],
+          "points": 2,
+          "q": 0,
+          "text": "Which band released \"Definitely Maybe\" in 1994?",
+          "time_limit_s": 20
+        },
+        "reveal": {
+          "answer": "Oasis",
+          "line": "Let's see who knew that one.",
+          "position": 1,
+          "q": 0,
+          "source_quote": "the debut studio album by English rock band Oasis",
+          "source_url": "https://en.wikipedia.org/wiki/Definitely_Maybe"
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "teams": true,
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "sam"
+    },
+    "reveal_number": {
+      "view": {
+        "answered": {
+          "count": 2,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": true,
+          "my_answer": "206",
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "result": {
+            "points": 3,
+            "verdict": "correct"
+          },
+          "score": 7,
+          "team": "Quizzly Bears"
+        },
+        "phase": "reveal",
+        "question": {
+          "kind": "number",
+          "number": 3,
+          "of": 3,
+          "points": 3,
+          "q": 2,
+          "text": "How many bones are in an adult human body?",
+          "time_limit_s": 30
+        },
+        "reveal": {
+          "answer": "206",
+          "line": "Let's see who knew that one.",
+          "q": 2,
+          "source_quote": "The adult human skeleton consists of 206 bones",
+          "source_url": "https://en.wikipedia.org/wiki/Human_skeleton"
+        },
+        "round": {
+          "number": 2,
+          "of": 2,
+          "title": "Numbers"
+        },
+        "teams": true,
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "reveal_right": {
+      "view": {
+        "answered": {
+          "count": 2,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": true,
+          "my_answer": "Oasis",
+          "name": "Mia",
+          "of": 3,
+          "rank": 1,
+          "removed": false,
+          "result": {
+            "points": 2,
+            "verdict": "correct"
+          },
+          "score": 2,
+          "team": "Quizzly Bears"
+        },
+        "phase": "reveal",
+        "question": {
+          "kind": "choice",
+          "number": 1,
+          "of": 3,
+          "options": [
+            "Blur",
+            "Oasis",
+            "Pulp",
+            "Suede"
+          ],
+          "points": 2,
+          "q": 0,
+          "text": "Which band released \"Definitely Maybe\" in 1994?",
+          "time_limit_s": 20
+        },
+        "reveal": {
+          "answer": "Oasis",
+          "line": "Let's see who knew that one.",
+          "position": 1,
+          "q": 0,
+          "source_quote": "the debut studio album by English rock band Oasis",
+          "source_url": "https://en.wikipedia.org/wiki/Definitely_Maybe"
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "teams": true,
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "mia"
+    },
+    "reveal_wrong": {
+      "view": {
+        "answered": {
+          "count": 2,
+          "of": 3
+        },
+        "kit": "quiz",
+        "me": {
+          "answered": true,
+          "my_answer": "Blur",
+          "name": "Ana",
+          "of": 3,
+          "rank": 2,
+          "removed": false,
+          "result": {
+            "points": 0,
+            "verdict": "wrong"
+          },
+          "score": 0,
+          "team": "Fact Hunters"
+        },
+        "phase": "reveal",
+        "question": {
+          "kind": "choice",
+          "number": 1,
+          "of": 3,
+          "options": [
+            "Blur",
+            "Oasis",
+            "Pulp",
+            "Suede"
+          ],
+          "points": 2,
+          "q": 0,
+          "text": "Which band released \"Definitely Maybe\" in 1994?",
+          "time_limit_s": 20
+        },
+        "reveal": {
+          "answer": "Oasis",
+          "line": "Let's see who knew that one.",
+          "position": 1,
+          "q": 0,
+          "source_quote": "the debut studio album by English rock band Oasis",
+          "source_url": "https://en.wikipedia.org/wiki/Definitely_Maybe"
+        },
+        "round": {
+          "number": 1,
+          "of": 2,
+          "title": "General knowledge"
+        },
+        "teams": true,
+        "title": "Friday Pub Quiz",
+        "viewer": "guest"
+      },
+      "viewer": "ana"
+    }
+  }
+}

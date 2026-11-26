@@ -48,8 +48,13 @@ export interface SpacePatch {
 
 export const DEFAULT_SPACE_ID = 'spc_default';
 
-/** The icons offered when creating a space. */
-export const SPACE_ICONS = ['💼', '🌿', '📚', '🎮', '🏠', '🚀', '🎨', '🧪'];
+/** The icons offered when creating a space: 3 rows of 8 (work and money, make and learn, life). A new space
+ * takes the first one no other space uses. */
+export const SPACE_ICONS = [
+  '💼', '💻', '📈', '💰', '🛒', '✉️', '💬', '📦',
+  '🚀', '🧪', '🎨', '✏️', '📷', '🎵', '📚', '🎓',
+  '🏠', '🌿', '🎮', '❤️', '✈️', '☕', '🐾', '⭐',
+];
 
 /** Space colours, in the order a new space takes the first unused one. */
 export const SPACE_COLORS = ['#f59e0b', '#10b981', '#0ea5e9', '#8b5cf6', '#f43f5e', '#14b8a6', '#eab308', '#ec4899'];

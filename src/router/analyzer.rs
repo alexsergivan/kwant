@@ -763,10 +763,14 @@ mod tests {
         // A message with thanks and an ask is still an ask
         let mixed = "thanks! the export is slow";
         assert_eq!(plan(Some(&stub), &input(mixed), keyword_plan(mixed, &[]), WAIT).await.1, Why::Analyzer);
+        // So is a hello to the team with an ask after it
+        for mixed in ["hi team, the export is slow", "thanks team! the export is slow"] {
+            assert!(!needs_no_plan(mixed), "{mixed}");
+        }
 
         // Greetings, thanks and acknowledgements alone ask no model
         let never = Stub::new(vec![]);
-        for msg in ["thanks!", "lgtm", "ok, see you tomorrow", "Love it!", "Hi everyone!", "Thanks, looks great!", "thanks, ok!"] {
+        for msg in ["thanks!", "lgtm", "ok, see you tomorrow", "Love it!", "Hi everyone!", "Thanks, looks great!", "thanks, ok!", "hi team!", "hey guys", "thanks team!", "bye folks!"] {
             assert!(needs_no_plan(msg), "{msg}");
             let (p, why) = plan(Some(&never), &input(msg), keyword_plan(msg, &[]), WAIT).await;
             assert_eq!(why, Why::SmallTalk, "{msg}");
