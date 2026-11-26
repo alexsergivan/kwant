@@ -286,6 +286,27 @@ export function createLife(env: LifeEnv) {
       for (const e of entries.values()) if (e.kwantId === kwantId && e.visible) play(e, [['perk', true, HOP]], true, NOTICE_BLINK);
       arm();
     },
+    /**
+     * A streamed reply landed (Ada's "one bot on screen while it works"): its row avatar comes back with one hop,
+     * 1 cell up 120 ms then down 120 ms, as a counted moment. Reply rows have no idle life, so an unregistered
+     * avatar joins the clock just for the hop and leaves after it. `delay`: wait out a routed reply's 200 ms hand-off.
+     */
+    land(el: LifeEl, delay = 0) {
+      if (env.reduced() || paused) return;
+      let e = entries.get(el);
+      if (!e) {
+        const t: Entry = { el, zone: 'header', mood: 'finished', quirk: 'none', busy: false, counted: false, lastEnd: -Infinity, visible: true, nextBlink: Infinity, nextQuirk: Infinity, lastBulb: -Infinity };
+        entries.set(el, t);
+        e = t;
+        const end = env.now() + delay + 2 * HOP;
+        play(t, [[null, true, HOP], [null, false, HOP]], true, delay);
+        // After play's own end step (same time, queued later): the one-off entry leaves the clock.
+        push(end, t, () => {
+          if (!t.busy && entries.get(el) === t) entries.delete(el);
+        });
+      } else play(e, [[null, true, HOP], [null, false, HOP]], true, delay);
+      arm();
+    },
     /** Hello: a bot that just joined the space. Plays now on its live avatars, or on the next one to mount (5 s). */
     hello(kwantId: string) {
       if (env.reduced()) return;
@@ -384,6 +405,10 @@ export function registerLife(el: HTMLElement, o: LifeOptions): () => void {
   };
 }
 export const lifeMood = (el: HTMLElement, mood: string) => app?.setMood(el, mood);
+/** A streamed reply landed: its row avatar hops once (no life of its own needed). Nothing under reduced motion. */
+export const landAvatar = (el: HTMLElement, delay = 0) => {
+  if (!reducedMotion()) appLife().land(el, delay);
+};
 /** You sent this bot a message (ChatView): every live avatar of it perks up. */
 export const perkBot = (kwantId: string) => app?.perk(kwantId);
 /** A bot joined the space during this session. */

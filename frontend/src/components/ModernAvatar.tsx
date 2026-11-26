@@ -9,7 +9,7 @@ import { moodLabel, restingUntilOf, type Mood } from '../kwantMood';
 import { STATUS_DOT, STATUS_PRIORITY, statusText, type BotStatus } from '../botStatus';
 import { avatarStyleFor, botLooksRev, subscribeBotLooks } from '../botLooks';
 import { MOOD_FACE, cellFill, eyeCells, faceMood, mouthCells, twitchFor, type Cell, type Eyes, type Mouth } from '../avatarFaces';
-import { lifeMood, registerLife, type LifeQuirk, type LifeZone } from '../avatarLife';
+import { landAvatar, lifeMood, registerLife, type LifeQuirk, type LifeZone } from '../avatarLife';
 
 interface ModernAvatarProps {
   /** The bot's avatar style, or a title or name hint; a known bot's saved style wins over a hint. */
@@ -43,6 +43,11 @@ interface ModernAvatarProps {
    * reduced motion; no React render per blink.
    */
   life?: LifeZone;
+  /**
+   * The reply this avatar heads just landed (a stream handing over): hop once on the shared clock after `land` ms,
+   * only when the face is "finished" (a failed or stopped reply stays still). Fires once per mount.
+   */
+  land?: number;
 }
 
 const noopUnsubscribe = () => undefined;
@@ -727,6 +732,7 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   moodText: moodTextOverride,
   face = 'mood',
   life,
+  land,
 }) => {
   const turnWorking = useKwantWorking(kwantId);
   const working = moodOverride ? moodOverride === 'working' : turnWorking;
@@ -759,6 +765,12 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
     // The mood follows through lifeMood below; re-registering on it would restart the clock for this avatar.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lifeOn, life, kwantId, quirk]);
+  const landedOnce = useRef(false);
+  useEffect(() => {
+    if (land === undefined || landedOnce.current || faced !== 'finished' || !rootRef.current) return;
+    landedOnce.current = true;
+    landAvatar(rootRef.current, land);
+  }, [land, faced]);
   // Before paint, so a mood change blinks through (lids for 100 ms) instead of flashing the new face first.
   useLayoutEffect(() => {
     if (lifeOn && rootRef.current) lifeMood(rootRef.current, faced);

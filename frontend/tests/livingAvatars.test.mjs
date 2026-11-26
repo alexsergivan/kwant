@@ -371,10 +371,79 @@ test('one bot on screen while it works: the scene hides the row avatar behind a 
   assert.match(liveRow, /\{sceneShown \? \(\s+<span className="sm:hidden shrink-0 w-5 h-5" aria-hidden="true" data-live-avatar-slot="" \/>\s+\) : \(\s+<span className="sm:hidden shrink-0 inline-flex">\s+<ModernAvatar role=\{liveName\} name=\{liveName\} size=\{REPLY_AVATAR_PHONE\} \/>/);
   // Queued / waiting on the person: no scene, so the avatar stays (sceneShown is false there).
   assert.match(chat, /const sceneShown = bubble === 'starting' \|\| \(bubble === 'text' && /);
-  // The landed reply (a stream handing over to its saved copy) hops once, both on desktop and phone.
-  assert.equal((chat.match(/!isStreaming && newestReplies\.has\(msg\.id\) && freshTrack\.current\.landed\.has\(msg\.id\) \? 'kw-avatar-land' : ''/g) ?? []).length, 2);
-  assert.match(css, /\.kw-avatar-land \.kw-avatar-body \{ animation: kw-avatar-land 240ms steps\(1, end\) 1; \}/);
-  assert.match(css, /prefers-reduced-motion: reduce\) \{\s+\.kw-avatar-land \.kw-avatar-body \{ animation: none; \}/);
+  // The landed reply (a stream handing over to its saved copy) hops once on the shared clock, desktop and phone,
+  // only after the live row is gone, after a routed reply's 200 ms hand-off, and never again (the set is spent).
+  assert.match(chat, /const landHop = !isStreaming && newestReplies\.has\(msg\.id\) && freshTrack\.current\.landed\.has\(msg\.id\) \? \(routed \? 200 : 0\) : undefined;/);
+  assert.equal((chat.match(/land=\{landHop\}/g) ?? []).length, 2);
+  assert.match(chat, /if \(!isStreaming && freshTrack\.current\.landed\.size\) freshTrack\.current\.landed\.clear\(\);/);
+  // Only a "finished" face hops (failed and stopped stay still), once per mount, through the clock.
+  const avatar = readFileSync(new URL('../src/components/ModernAvatar.tsx', import.meta.url), 'utf8');
+  assert.match(avatar, /if \(land === undefined \|\| landedOnce\.current \|\| faced !== 'finished' \|\| !rootRef\.current\) return;\s+landedOnce\.current = true;\s+landAvatar\(rootRef\.current, land\);/);
+  // No CSS-only hop left beside the clock's data-hop (which reduced motion already turns off).
+  assert.doesNotMatch(css, /kw-avatar-land/);
+});
+
+test('live swap: the landed avatar hops once (1 cell up 120 ms, down 120 ms) as a counted moment, then leaves the clock', () => {
+  const f = fakeEnv({ seed: 3 });
+  const life = s.createLife(f.env);
+  const row = el();
+  // Three full avatars mid-moment: the landing still starts at once and counts as a fourth.
+  const full = Array.from({ length: 3 }, (_, i) => el());
+  full.forEach((e, i) => life.register(e, { zone: 'full', kwantId: `f${i}` }));
+  full.forEach((_, i) => life.perk(`f${i}`));
+  life.land(row);
+  assert.ok('data-hop' in row.attrs, 'up at once');
+  assert.equal(row.attrs['data-life'], undefined, 'no frame: the finished face stays');
+  assert.equal(life.stats().active, 4, 'counted');
+  assert.equal(life.stats().registered, 4, 'joins the clock for the hop');
+  f.advance(s.HOP);
+  assert.equal(row.attrs['data-hop'], undefined, 'down after 120 ms');
+  f.advance(s.HOP);
+  assert.equal(life.stats().registered, 3, 'left the clock: no idle life on a reply row');
+  const flips = row.log.length;
+  f.advance(30000);
+  assert.equal(row.log.length, flips, 'still afterwards');
+  assert.ok(f.timerCount() <= 1);
+});
+
+test('the scene’s bot (header zone, working face) only blinks: 4–8 s, no glance or twitch, and counts toward the cap', () => {
+  const f = fakeEnv({ seed: 9 });
+  const life = s.createLife(f.env);
+  const scene = el();
+  life.register(scene, { zone: 'header', mood: 'working', quirk: 'twitch' });
+  const frames = new Set();
+  let maxActive = 0;
+  f.advance(120000, () => {
+    if (scene.attrs['data-life']) frames.add(scene.attrs['data-life']);
+    maxActive = Math.max(maxActive, life.stats().active);
+  });
+  assert.deepEqual([...frames], ['closed']);
+  assert.equal(maxActive, 1, 'its blink takes a slot');
+  assert.deepEqual(s.ZONES.header.blink, [4000, 8000]);
+  assert.equal(s.ZONES.header.double, 0.15);
+});
+
+test('live swap: a routed reply hops after the 200 ms hand-off; hidden window and reduced motion: no hop', () => {
+  const f = fakeEnv();
+  const life = s.createLife(f.env);
+  const row = el();
+  life.land(row, 200);
+  f.advance(199);
+  assert.equal(row.attrs['data-hop'], undefined, 'not on top of the hand-off');
+  f.advance(1);
+  assert.ok('data-hop' in row.attrs);
+  f.advance(1000);
+  const hidden = el();
+  life.setHidden(true);
+  life.land(hidden);
+  assert.equal(hidden.log.length, 0);
+  assert.equal(f.timerCount(), 0);
+  const r = fakeEnv({ reduced: true });
+  const still = s.createLife(r.env);
+  const b = el();
+  still.land(b);
+  r.advance(1000);
+  assert.equal(b.log.length, 0, 'reduced motion: the face changes, nothing moves');
 });
 
 // ---- The rail moment ----

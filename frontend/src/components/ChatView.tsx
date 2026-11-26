@@ -2082,7 +2082,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
   // `landed`: bot replies that are a stream handing over to its saved copy (Ada's "one bot on screen while it works":
   // the row avatar comes back with one hop, the bot stepping away from the laptop). The saved copy can mount while the
-  // live row is still up, so the hop class waits for `!isStreaming`: it plays as the live row leaves, not beside it.
+  // live row is still up, so the hop waits for `!isStreaming`: it plays as the live row leaves, not beside it.
   const freshTrack = useRef<{ key: string | undefined; seen: Set<string> | null; fresh: Set<string>; landed: Set<string>; streamEnded: number; wasStreaming: boolean }>({
     key: undefined,
     seen: null,
@@ -2119,6 +2119,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const trialCards = useMemo(() => trialCardsAfter(messages, endedTrials), [messages, endedTrials]);
   // Living avatars: only each bot's newest reply row shows its mood face; older rows keep the plain face (reading stays calm).
   const newestReplies = useMemo(() => newestReplyIds(messages), [messages]);
+
+  // The landed set is spent once the live row is gone and the rows have drawn: a later re-render, scroll-back or
+  // remount never hops again (ModernAvatar's own effects run before this one).
+  useEffect(() => {
+    if (!isStreaming && freshTrack.current.landed.size) freshTrack.current.landed.clear();
+  });
 
   // `prev`: the message shown just above, so a kwant line under another sits close to it (0.9.5 F5)
   const renderMessage = (msg: ChatMessage, prev?: ChatMessage) => {
@@ -2323,6 +2329,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const done = isUser ? null : doneOf(msg, doneItems, { asks: asksOk || (msg.id === questionId && !answered.has(msg.id)) });
     // Any auto-routed channel, not only #general: the server attaches `routing` wherever it picked the bot.
     const routed = isUser ? null : parseRoutingMeta(msg.meta);
+    // A stream's saved copy, once the live row is gone: its avatar hops (after a routed reply's 200 ms hand-off).
+    const landHop = !isStreaming && newestReplies.has(msg.id) && freshTrack.current.landed.has(msg.id) ? (routed ? 200 : 0) : undefined;
     // Older channel replies still hold a raw [DECISIONS] block: hidden here, its lines shown as chips
     const shownDecisions = isUser ? null : messageDecisions(msg.text, msg.meta);
     const decisions = shownDecisions?.decisions ?? [];
@@ -2380,7 +2388,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 kwantId={replyKwantId}
                 modelBadge={false}
                 face={newestReplies.has(msg.id) ? 'mood' : 'plain'}
-                className={!isStreaming && newestReplies.has(msg.id) && freshTrack.current.landed.has(msg.id) ? 'kw-avatar-land' : ''}
+                land={landHop}
               />
             ) : null}
           </span>
@@ -2401,7 +2409,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               name={displayName}
               at={msg.created_at}
               sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
-              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} face={newestReplies.has(msg.id) ? 'mood' : 'plain'} className={!isStreaming && newestReplies.has(msg.id) && freshTrack.current.landed.has(msg.id) ? 'kw-avatar-land' : ''} /></span>}
+              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} face={newestReplies.has(msg.id) ? 'mood' : 'plain'} land={landHop} /></span>}
               ranOn={ranOn}
               account={account}
               effort={effortWords(msg.reasoning_content)}
