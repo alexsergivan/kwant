@@ -46,6 +46,10 @@ export interface AwayItem {
   message_id?: string | null;
   retry?: { type: 'continue' } | { type: 'approval'; approval_id: string } | null;
   human_step_id?: string | null;
+  /** 0.9.55 (#1262), stopped items on a step: `"tools"` when it's fixed in Tools › MCP servers, with the server (name, id). */
+  fix_in?: string | null;
+  tools_server?: string | null;
+  tools_server_id?: string | null;
   /** 33m, stopped items in the Inbox only: `title` is the person's request the job was working on,
    * and `summary` the reason it stopped. Absent when the title is the reason (no request found). */
   title_is_request?: boolean;
@@ -139,7 +143,7 @@ export function windowLabel(since: string, now: number = Date.now()): string {
 export type Tone = 'amber' | 'emerald' | 'rose' | 'sky' | 'zinc';
 
 /** Short label and colour for an item's kind and status. */
-export function itemLabel(item: Pick<AwayItem, 'kind' | 'status' | 'cause'>): { label: string; tone: Tone } {
+export function itemLabel(item: Pick<AwayItem, 'kind' | 'status' | 'cause'> & Partial<Pick<AwayItem, 'fix_in'>>): { label: string; tone: Tone } {
   switch (item.kind) {
     case 'question':
       return { label: 'Question', tone: 'amber' };
@@ -150,6 +154,8 @@ export function itemLabel(item: Pick<AwayItem, 'kind' | 'status' | 'cause'>): { 
       return { label: 'Watch', tone: 'amber' };
     case 'stopped':
       // 0.9.5: a bot's work stopped and waits for the person; the title says why and what resumes it.
+      // 0.9.55 (#1262): a sign-in wall the bot has failing tools for is fixed in Tools › MCP servers, not the browser.
+      if (item.fix_in === 'tools') return { label: 'Needs you in Tools', tone: 'amber' };
       return { label: 'Stopped', tone: 'amber' };
     case 'connection':
       // 34h: the state, not the action (the button says what to do): Composio with no active account, else a sign-in.

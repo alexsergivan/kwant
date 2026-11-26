@@ -8,7 +8,7 @@ import { retryTargets, type RetryTarget } from './interruptions';
 import { runAgainId } from './routineRunAgain';
 
 /** What resolves an item. Servers with Lin's 22i part send it as `action`; older ones get it inferred. */
-export type AskAction = 'retry' | 'continue' | 'ask_again' | 'answer' | 'decide' | 'browser' | 'run_again';
+export type AskAction = 'retry' | 'continue' | 'ask_again' | 'answer' | 'decide' | 'browser' | 'tools' | 'run_again';
 
 const ACTIONS: ReadonlySet<string> = new Set(['retry', 'continue', 'ask_again', 'answer', 'decide', 'browser']);
 
@@ -26,8 +26,10 @@ export const onStrip = (item: Pick<AwayItem, 'kind'>): boolean => item.kind !== 
  * browser step it waits on, or Retry (resend the person's message).
  */
 export function askAction(
-  item: Pick<AwayItem, 'kind' | 'retry' | 'human_step_id'> & { action?: unknown; task_id?: string | null; status?: string; routine_id?: unknown },
+  item: Pick<AwayItem, 'kind' | 'retry' | 'human_step_id'> & { action?: unknown; task_id?: string | null; status?: string; routine_id?: unknown; fix_in?: unknown },
 ): AskAction | null {
+  // 0.9.55 (#1262): a step whose fix is in Tools › MCP servers (the bot's tools for the site can't connect) opens Tools, never the browser
+  if (item.kind === 'stopped' && item.human_step_id && item.fix_in === 'tools') return 'tools';
   // routine-run-again: a failed routine run that names its routine starts it again, whatever the server's `action`.
   if (typeof item.status === 'string' && runAgainId({ kind: item.kind, status: item.status, routine_id: item.routine_id })) return 'run_again';
   // A failed hand-off or run retries only through its board task (#700, Ada): no task_id, no Retry,
@@ -63,6 +65,7 @@ export const ACTION_LABEL: Record<AskAction, string> = {
   answer: 'Go to the question',
   decide: 'Go to the approval',
   browser: 'Open the browser step',
+  tools: 'Open Tools',
   run_again: 'Run again',
 };
 
@@ -89,6 +92,8 @@ export function askKind(item: Pick<AwayItem, 'kind' | 'status'>, action: AskActi
       return 'Approval';
     case 'browser':
       return 'Browser step';
+    case 'tools':
+      return 'Tools step';
   }
   return failed(item) ? 'Failed' : 'Stuck';
 }
@@ -116,6 +121,8 @@ export function askHint(item: Pick<AwayItem, 'kind' | 'status'>, action: AskActi
       return 'Allow or Deny it on the card in the chat.';
     case 'browser':
       return `Do it in ${bot}’s browser, then press Done there.`;
+    case 'tools':
+      return 'Fix it in Tools, then press Done on its card in the chat.';
   }
   return `There’s no button for this one. Write to ${bot}, or clear it once it’s handled.`;
 }
@@ -138,6 +145,8 @@ export function actionName(action: AskAction, bot: string): string {
       return `Go to ${bot}’s approval`;
     case 'browser':
       return `Open ${bot}’s browser step`;
+    case 'tools':
+      return `Open Tools to fix ${bot}’s tools`;
     case 'run_again':
       return `Run ${bot}’s routine again`;
   }
@@ -296,7 +305,7 @@ export const canClear = (item: Pick<AwayItem, 'dismissable'>): boolean => (typeo
  * A dismiss refused with 409 because the ask has its own answer, which tells the bot (#700): the button
  * the strip switches to instead. Anything else is an error.
  */
-export function switchFor(code: string | null | undefined): AskAction | null {
+export function switchFor(code: string | null | undefined, item?: { fix_in?: unknown } | null): AskAction | null {
   switch (code) {
     case 'use_question_answer':
       return 'answer';
@@ -304,7 +313,8 @@ export function switchFor(code: string | null | undefined): AskAction | null {
     case 'use_watch_decide':
       return 'decide';
     case 'use_step_decline':
-      return 'browser';
+      // 0.9.55: a Tools step's card is answered after fixing Tools, not in the browser
+      return item?.fix_in === 'tools' ? 'tools' : 'browser';
   }
   return null;
 }

@@ -20,6 +20,30 @@ export function clock(iso: string): string {
   return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
+const DAY_MS = 86_400_000;
+
+/**
+ * A time as the phone reads it, against `now`: "8:00 PM" today, "Fri 8:00 PM" within the coming week,
+ * "Fri, Dec 4, 8:00 PM" further out (or in the past), all in the phone's own time zone. `today` says which.
+ */
+export function when(iso: string, now: number): { text: string; today: boolean } {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return { text: '', today: true };
+  const t = clock(iso);
+  const n = new Date(now);
+  if (d.toDateString() === n.toDateString()) return { text: t, today: true };
+  const soon = d.getTime() > now && d.getTime() - now < 6 * DAY_MS;
+  const date = d.toLocaleDateString('en-US', soon ? { weekday: 'short' } : { weekday: 'short', month: 'short', day: 'numeric' });
+  return { text: soon ? `${date} ${t}` : `${date}, ${t}`, today: false };
+}
+
+/** The refusal before the doors open: "Doors open Fri 7:30 PM." from pa1's `opens_at`; today's line without it. */
+export function doorsLine(opensAt: unknown, now: number, n: string): string {
+  const w = typeof opensAt === 'string' ? when(opensAt, now) : null;
+  if (!w?.text) return `This ${n} isn't open yet. Try again in a minute.`;
+  return w.today ? `Doors open at ${w.text}.` : `Doors open ${w.text}.`;
+}
+
 const noun = (v: GuestView): string => v.noun || 'quiz';
 
 /** The privacy line, from the kit's retention in `state`. Shown before anyone types. */
@@ -349,7 +373,7 @@ export class GuestApp {
     if (!v || scr === 'removed' || scr === 'full' || scr === 'ended' || scr === 'loading') return '';
     if (v.me && scr !== 'lobby' && scr !== 'join') return `${fmt(v.me.score)} pts`;
     if (!v.starts_at) return '';
-    const t = clock(v.starts_at);
+    const t = when(v.starts_at, this.env.now()).text;
     return v.me ? `Starts ${t}` : t;
   }
 
@@ -563,7 +587,7 @@ export class GuestApp {
     else if (r.status === 404) void this.onGone(404, 'not_found');
     else if (err === 'team_full') this.setError('That team just filled up. Pick another one.', '', 'team');
     else if (err === 'name_taken') this.setError('Someone here already has that name. Add a letter, or tap "That\'s me" if it\'s you on a new phone.', name, 'name');
-    else if (err === 'not_open_yet') this.setError(`This ${noun(v)} isn't open yet. Try again in a minute.`);
+    else if (err === 'not_open_yet') this.setError(doorsLine(r.body?.opens_at, this.env.now(), noun(v)));
     else if (err === 'name_too_long') this.setError('Names are 1-20 letters.', '', 'name');
     else if (err === 'name_first_only') this.setError(r.message || 'First name or nickname only, please: no surname, email or phone number.', '', 'name');
     else if (err === 'name_empty') this.setError('Type your name first.', '', 'name');

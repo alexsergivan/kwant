@@ -217,7 +217,8 @@ status (pending|installing|installed|dismissed), server_id, last_error`. Changes
 
 The person searches the official [MCP Registry](https://registry.modelcontextprotocol.io) and adds
 an entry in one step. kwnt keeps its own copy of the registry (latest versions only, in memory):
-the first sync pages through the whole registry after start (`/v0.1/servers?version=latest`,
+the first sync starts with the first search after start, not at startup, so a kwnt where nobody
+opens Find a tool holds none of it, and pages through the whole registry (`/v0.1/servers?version=latest`,
 100 a page, 150 ms apart), then every 6 hours only what changed (`updated_since`, from 10 minutes
 before the last sync started). A failed sync keeps the old copy and tries again after 2 minutes,
 doubling up to an hour. Until the first sync has finished, a search goes to the registry's own

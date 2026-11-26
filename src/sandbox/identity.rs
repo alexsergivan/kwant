@@ -359,8 +359,14 @@ async fn run(browser_ws: String, ready: tokio::sync::oneshot::Sender<()>) {
     let override_params = json!({"userAgent": identity.user_agent, "userAgentMetadata": identity.metadata});
     let mut ready = Some(ready);
     let mut attached_all = false;
-    // overrides sent for the targets already open, not yet answered
-    let mut pending: std::collections::HashSet<u64> = Default::default();
+    // overrides sent for the targets already open, not yet answered, by the id they were sent
+    // with and the session they were sent to.
+    let mut pending: HashMap<u64, String> = Default::default();
+    let send_ready = |ready: &mut Option<tokio::sync::oneshot::Sender<()>>| {
+        if let Some(ready) = ready.take() {
+            let _ = ready.send(());
+        }
+    };
     while let Some(message) = conn.recv().await {
         if let Some(id) = message["id"].as_u64() {
             if id == attach_id {
@@ -368,8 +374,21 @@ async fn run(browser_ws: String, ready: tokio::sync::oneshot::Sender<()>) {
             }
             pending.remove(&id);
             if attached_all && pending.is_empty() {
-                if let Some(ready) = ready.take() {
-                    let _ = ready.send(());
+                send_ready(&mut ready);
+            }
+            continue;
+        }
+        if message["method"] == "Target.detachedFromTarget" {
+            // A session can detach before its own override gets a reply: closing
+            // `read_report`'s throwaway page races autoAttach, which can still discover and
+            // attach to a target that is already tearing down. Chrome then drops that override's
+            // reply on the floor (it would have to reach a renderer that is already gone) without
+            // ever erroring it. No reply is coming once the session itself has detached, so stop
+            // waiting for it instead of sitting out the keeper's full 8 s give-up.
+            if let Some(session) = message["params"]["sessionId"].as_str() {
+                pending.retain(|_, s| s != session);
+                if attached_all && pending.is_empty() {
+                    send_ready(&mut ready);
                 }
             }
             continue;
@@ -383,7 +402,7 @@ async fn run(browser_ws: String, ready: tokio::sync::oneshot::Sender<()>) {
         if takes_identity(kind) {
             if let Some(id) = conn.send("Network.setUserAgentOverride", override_params.clone(), Some(session)).await {
                 if !attached_all {
-                    pending.insert(id);
+                    pending.insert(id, session.to_string());
                 }
             }
         }

@@ -105,6 +105,13 @@ pub fn record_mcp_check(server_id: &str, outcome: &Value) {
     mcp_checks().lock().unwrap_or_else(|e| e.into_inner()).insert(server_id.to_string(), check);
 }
 
+/// An MCP server's last test, as the Tools screen shows it (sign-in-wall-uses-tools B/C):
+/// `(ok, auth_required, error, when)`, or `None` when it hasn't been tested since kwnt started.
+pub fn last_mcp_check(server_id: &str) -> Option<(bool, bool, Option<String>, DateTime<Utc>)> {
+    let checks = mcp_checks().lock().unwrap_or_else(|e| e.into_inner());
+    checks.get(server_id).map(|c| (c.ok, c.auth_required, c.error.clone(), c.at))
+}
+
 fn cut(text: &str, max: usize) -> String {
     match text.char_indices().nth(max) {
         Some((i, _)) => format!("{}…", &text[..i]),

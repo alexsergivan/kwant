@@ -33,6 +33,7 @@ import { knownChecked, listsCriteria } from '../doneCheck';
 import { CheckMarker, DoneCheck } from './DoneCheck';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
+import { type HumanStep, toolsFixOf } from '../humanSteps';
 import { ApprovalDecision, AwayItem, awayApi, failureNotice, resolveFromList, awaySummary, itemLabel, stoppedAction, windowLabel } from '../away';
 import { InboxGroup, InboxItem, ReviewItem, isBeingChecked, isReview, pendingHeld, reviewWord } from '../api/inbox';
 import {
@@ -233,6 +234,10 @@ interface RowProps {
   place?: string | null;
   /** 0.9.5: a connection row's button opens Settings › Connections; 34h: on that connection's row. */
   onOpenConnections?: (connectionId?: string) => void;
+  /** 0.9.55 (#1262): a Tools step's "Open Tools": Tools › MCP servers on that server's row. */
+  onOpenTools?: (serverId: string | null, serverName: string | null) => void;
+  /** Open steps by id, for a Tools step whose item doesn't carry the marker itself. */
+  steps?: Record<string, HumanStep>;
 }
 
 /** pa4c: a finished quiz's Done meta, "24 players". The end time sits on the row's top line, like every Done row. */
@@ -311,7 +316,11 @@ const PocketRow: React.FC<{ item: InboxItem; selected: boolean; focusable: boole
 
 const QueueRow: React.FC<RowProps> = (props) => (props.item.kind === 'pocket' ? <PocketRow item={props.item} selected={props.selected} focusable={props.focusable} onPick={props.onPick} /> : <AnyRow {...props} />);
 
-const AnyRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, onRunAgain, doneSummary, place, onOpenConnections }) => {
+const AnyRow: React.FC<RowProps> = ({ item: raw, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, onRunAgain, doneSummary, place, onOpenConnections, onOpenTools, steps }) => {
+  // 0.9.55 (#1262): a step fixed in Tools › MCP servers says so, from the item or else from the step's own record
+  const stepId = raw.kind === 'stopped' ? (raw as AwayItem).human_step_id : null;
+  const toolsFix = stepId ? toolsFixOf(raw as AwayItem) ?? toolsFixOf(steps?.[stepId]) : null;
+  const item: InboxItem = toolsFix && (raw as AwayItem).fix_in !== 'tools' ? ({ ...raw, fix_in: 'tools', tools_server: toolsFix.server, tools_server_id: toolsFix.serverId } as InboxItem) : raw;
   const stopped = isReview(item) ? null : stoppedAction(item as AwayItem);
   const runId = isReview(item) || !onRunAgain ? null : runAgainId(item as AwayItem);
   const review = isReview(item) ? item : null;
@@ -461,6 +470,15 @@ const AnyRow: React.FC<RowProps> = ({ item, selected, focusable, wide, busy, onP
       {item.kind === 'approval' && (
         <div className="px-3 pb-1 sm:pl-[54px] [&>div]:my-0 [&>div]:mb-2">
           <ModernApprovalCard approval={approvalFromAway(item as AwayItem)} disabled={disabled} stackWhy onResolve={(_, d, opts) => onResolve(item, d as ApprovalDecision, opts?.withoutBackup, opts?.reason)} />
+        </div>
+      )}
+
+      {toolsFix && onOpenTools && (
+        <div className="px-3 pb-3 pl-[54px]">
+          <button type="button" onClick={() => onOpenTools(toolsFix.serverId, toolsFix.server)} className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-open-tools={item.id}>
+            <Plug size={12} aria-hidden="true" />
+            Open Tools
+          </button>
         </div>
       )}
 
@@ -787,6 +805,10 @@ export interface InboxNewProps {
   onBack?: () => void;
   /** 0.9.5: a connection row's button opens Settings › Connections; 34h: on that connection's row. */
   onOpenConnections?: (connectionId?: string) => void;
+  /** 0.9.55 (#1262): a Tools step row's "Open Tools". */
+  onOpenTools?: (serverId: string | null, serverName: string | null) => void;
+  /** Open human steps by id, so a Tools step row knows it is one. */
+  steps?: Record<string, HumanStep>;
   /** The back crumb: return to the page the item was opened from. */
   onCrumb?: (c: Exclude<Crumb, null>) => void;
   top?: React.ReactNode;
@@ -828,6 +850,8 @@ export const InboxNew: React.FC<InboxNewProps> = ({
   onApprovalResolved,
   onBack,
   onOpenConnections,
+  onOpenTools,
+  steps,
   onCrumb,
   top,
   now = Date.now(),
@@ -1075,6 +1099,8 @@ export const InboxNew: React.FC<InboxNewProps> = ({
                   doneSummary={sections.runFor[i.id]?.summary || null}
                   place={i.link?.channel_id ? (placeName?.(i.link.channel_id) ?? null) : null}
                   onOpenConnections={onOpenConnections}
+                  onOpenTools={onOpenTools}
+                  steps={steps}
                 />
               );
               return (
