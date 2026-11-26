@@ -186,7 +186,7 @@ test('strip, one ask in each state A1–A8: eyebrow, kind, the whole line, hint,
     const buttons = [...s.querySelectorAll('[data-strip-buttons] button')];
     assert.ok(buttons[0].hasAttribute('data-strip-dismiss'), 'Done, clear it always shows, left of the action');
     assert.equal(buttons[0].textContent, 'Done, clear it');
-    assert.equal(buttons[0].getAttribute('aria-label'), 'Done, clear it from Needs attention');
+    assert.equal(buttons[0].getAttribute('aria-label'), 'Done, clear it from Needs you');
     if (label) {
       assert.equal(buttons[1].getAttribute('data-strip-action'), action);
       assert.equal(buttons[1].textContent, label);
