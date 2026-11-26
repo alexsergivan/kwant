@@ -26,6 +26,8 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import { playSfx } from '../audio/chiptune';
+import { keepCentred } from '../scrollInScroller';
+import { useAfterRender } from '../focusAfterRender';
 import {
   kwantUsage,
   McpServer,
@@ -77,6 +79,30 @@ interface McpServersModalProps {
   initialQuery?: string;
   /** Opened from Apps & accounts' Find a tool: straight on this tool's form. */
   startWith?: OpenAddTool | null;
+  /** 0.9.55 (#1262): opened from a Tools step's "Open Tools": on this server's row (lit, its Edit focused). */
+  focusServer?: McpServerFocus | null;
+  /** The row has been shown; the owner forgets it so nothing replays it. */
+  onFocusShown?: () => void;
+}
+
+/** A server to open the list on: by id, else by name (a step may only know the name). `seq` repeats an open. */
+export interface McpServerFocus {
+  id: string | null;
+  name: string | null;
+  seq: number;
+}
+
+/** How long an opened row stays lit: the same 1.2 s as Connections' rows (34h). */
+export const SERVER_ROW_FLASH_MS = 1200;
+
+/** The server a focus points at: the id when it's in the list, else the one name match (any case). */
+export function focusedServerId(servers: ReadonlyArray<{ id: string; name: string }>, focus: Pick<McpServerFocus, 'id' | 'name'> | null | undefined): string | null {
+  if (!focus) return null;
+  if (focus.id && servers.some((s) => s.id === focus.id)) return focus.id;
+  const name = focus.name?.trim().toLowerCase();
+  if (!name) return null;
+  const hits = servers.filter((s) => s.name.trim().toLowerCase() === name);
+  return hits.length === 1 ? hits[0].id : null;
 }
 
 const inputCls =
@@ -367,7 +393,7 @@ export const AddToolPicker: React.FC<{
   </div>
 );
 
-export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose, kwants = [], onOpenConnections, startAdding = false, findApi, initialQuery, startWith }) => {
+export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClose, kwants = [], onOpenConnections, startAdding = false, findApi, initialQuery, startWith, focusServer, onFocusShown }) => {
   const [servers, setServers] = useState<McpServer[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [statuses, setStatuses] = useState<Record<string, StoredStatus>>({});
@@ -394,6 +420,16 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   /** Mac app: stops watching the server for a sign-in finished in the browser. */
   const signInWatch = useRef<(() => void) | null>(null);
   const macApp = inDesktopApp();
+  // 0.9.55: the row a Tools step opened on, lit for SERVER_ROW_FLASH_MS
+  const [litServer, setLitServer] = useState<string | null>(null);
+  /** The list was loaded since this open (a row is looked for only in it, not in the last open's). */
+  const [listFresh, setListFresh] = useState(false);
+  const shownSeq = useRef<number | null>(null);
+  const litTimer = useRef<number | undefined>(undefined);
+  // After the render that lights the row, never on a timer (focusAfterRender.ts)
+  const afterRender = useAfterRender();
+  const stopCentring = useRef<() => void>(() => {});
+  useEffect(() => () => { window.clearTimeout(litTimer.current); stopCentring.current(); }, []);
 
   const refresh = useCallback(async (): Promise<McpServer[] | null> => {
     try {
@@ -452,7 +488,8 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   }, [refresh, runTest]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    // Closed: the next open waits for its own list, so a Tools row is never looked for in this one's (Rigel F2)
+    if (!isOpen) return setListFresh(false);
     setEditing(null);
     setPicking(startAdding);
     setConfirmDelete(null);
@@ -461,8 +498,31 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
     setOauthErrors({});
     setStatuses(loadStatuses());
     // Also catches a sign-in finished elsewhere, like the same-tab fallback when popups are blocked.
-    refresh().then(() => checkNewSignIns());
+    setListFresh(false);
+    refresh().then(() => { setListFresh(true); checkNewSignIns(); });
   }, [isOpen, startAdding, refresh, checkNewSignIns]);
+
+  // 0.9.55 (#1262): "Open Tools" on a step lands on that server's row: scrolled to the middle, lit, and its
+  // Edit (where a new key goes) focused. Shown once per open; under reduced motion the scroll jumps.
+  useEffect(() => {
+    if (!isOpen || !focusServer || !servers || !listFresh || editing !== null || picking || shownSeq.current === focusServer.seq) return;
+    const id = focusedServerId(servers, focusServer);
+    shownSeq.current = focusServer.seq;
+    onFocusShown?.();
+    if (!id) return;
+    afterRender(() => {
+      const row = document.querySelector<HTMLElement>(`[data-server-card="${CSS.escape(id)}"]`);
+      if (!row) return;
+      const still = typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+      stopCentring.current();
+      stopCentring.current = keepCentred(row, SERVER_ROW_FLASH_MS, still ? 'auto' : 'smooth');
+      row.querySelector<HTMLElement>('[data-server-edit]')?.focus({ preventScroll: true });
+    });
+    setLitServer(id);
+    window.clearTimeout(litTimer.current);
+    litTimer.current = window.setTimeout(() => setLitServer(null), SERVER_ROW_FLASH_MS);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- onFocusShown is a fresh closure each render
+  }, [isOpen, focusServer, servers, listFresh, editing, picking]);
 
   // Connect Home Assistant saved, tested or removed a server: show it as it is now.
   useEffect(() => {
@@ -815,7 +875,8 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
       <li
         key={server.id}
         data-server-card={server.id}
-        className={`p-3.5 rounded-xl border bg-zinc-950/50 transition-colors ${server.enabled ? 'border-zinc-800' : 'border-zinc-800/60 opacity-75'}`}
+        data-server-lit={litServer === server.id ? '' : undefined}
+        className={`p-3.5 rounded-xl border transition-colors motion-reduce:transition-none ${litServer === server.id ? 'bg-sky-500/10' : 'bg-zinc-950/50'} ${server.enabled ? 'border-zinc-800' : 'border-zinc-800/60 opacity-75'}`}
       >
         <div className="flex items-start gap-3">
           <div className="w-9 h-9 flex-shrink-0 rounded-lg bg-zinc-900 border border-zinc-800 flex items-center justify-center text-sky-300">
@@ -970,6 +1031,7 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
                 <button
                   type="button"
                   onClick={() => openForm(server)}
+                  data-server-edit=""
                   aria-label={`Edit ${server.name}`}
                   className="p-1.5 rounded-md text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-colors"
                 >

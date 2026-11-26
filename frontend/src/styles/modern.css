@@ -2,6 +2,12 @@
 @tailwind components;
 @tailwind utilities;
 
+/* reply-bubble-bot-tint: a bot reply in its avatar's colour (vars set inline from bubbleTint.ts). */
+.kw-bubble-tint {
+  background-color: var(--kw-bubble-bg);
+  border-color: var(--kw-bubble-line);
+}
+
 /* Design tokens (UI refresh, 0.6.9). Surfaces get lighter as they rise; hairlines are white at low
    alpha so they work on every surface. Tailwind names for these: bg-surface-*, border-hairline,
    text-ok / warn / bad / info / muted, bg-accent-gradient, shadow-card / raised / glow. */
@@ -139,7 +145,8 @@
    engine has scroll anchoring: a row drawn above the screen grows from the estimate, and without anchoring (WebKit:
    the Mac app, Safari) the rows on screen would jump by the difference while scrolling up. */
 @supports (overflow-anchor: auto) {
-  .kw-row-lazy:not(:hover):not(:focus-within):not(.kw-flash):not(.kw-flash-quote) {
+  /* chat-scroll-holds-place: not in WebKit even with anchoring (`kw-no-lazy`, see lazyRowsHold). */
+  :not(.kw-no-lazy) > .kw-row-lazy:not(:hover):not(:focus-within):not(.kw-flash):not(.kw-flash-quote) {
     content-visibility: auto;
     contain-intrinsic-size: auto 160px;
   }
