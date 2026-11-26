@@ -41,20 +41,20 @@ export const useLayaStatus = (): LayaStatus | null => {
 };
 
 export const layaPill = (status: LayaStatus | null) => {
-  const ready = 'Laya is online · picks the best bot for each message';
+  const ready = 'On · picks the best bot for each message';
   switch (status?.state) {
     case 'online':
     case 'external':
       return { dot: 'bg-teal-300', label: ready };
     case 'installing':
-      return { dot: 'bg-amber-400 animate-pulse', label: 'Laya is installing · picking by keywords meanwhile' };
+      return { dot: 'bg-amber-400 animate-pulse', label: 'Installing · picks by matching words meanwhile' };
     case 'starting':
-      return { dot: 'bg-amber-400 animate-pulse', label: 'Laya is loading its model · picking by keywords meanwhile' };
+      return { dot: 'bg-amber-400 animate-pulse', label: 'Getting ready · picks by matching words meanwhile' };
     case 'failed':
     case 'offline':
-      return { dot: 'bg-rose-500', label: 'Laya is offline · picking by keywords' };
+      return { dot: 'bg-rose-500', label: 'Off · picks by matching words' };
     default:
-      return { dot: 'bg-zinc-500 animate-pulse', label: 'Checking Laya…' };
+      return { dot: 'bg-zinc-500 animate-pulse', label: 'Checking…' };
   }
 };
 
@@ -67,7 +67,7 @@ export const LayaStatusRow: React.FC = () => {
     <div className="flex items-start gap-3 bg-zinc-950/60 p-3 rounded-xl border border-zinc-800">
       <Cpu size={15} className="mt-0.5 text-sky-400 shrink-0" aria-hidden="true" />
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-medium text-zinc-200">Laya, the router</p>
+        <p className="text-xs font-medium text-zinc-200">Picking who answers</p>
         <p className="mt-0.5 flex items-center gap-1.5 text-[11px] text-zinc-400" role="status">
           <span className={`w-2 h-2 rounded-full shrink-0 ${pill.dot}`} aria-hidden="true" />
           <span>{pill.label}</span>

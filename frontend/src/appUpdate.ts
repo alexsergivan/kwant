@@ -168,7 +168,7 @@ export function bannerView(m: UpdateModel, dismissed: string | null): BannerView
     return {
       kind: 'error',
       version: m.target,
-      error: 'The app didn’t come back after the update. Open kwant bots again from Applications.',
+      error: 'The app didn’t come back after the update. Open kwant again from Applications.',
       url: m.status.available?.url ?? `https://github.com/alexsergivan/kwant/releases/tag/mac-v${m.target}`,
       notes: m.status.available?.notes ?? '',
     };
@@ -228,7 +228,7 @@ export function versionLine(m: UpdateModel): VersionLine {
     return {
       kind: 'install-error',
       version: m.target,
-      error: 'The app didn’t come back after the update. Open kwant bots again from Applications.',
+      error: 'The app didn’t come back after the update. Open kwant again from Applications.',
       url: a?.url ?? `https://github.com/alexsergivan/kwant/releases/tag/mac-v${m.target}`,
       notes: a?.notes ?? '',
       date: a?.date ?? null,
@@ -273,7 +273,7 @@ async function errorText(res: Response): Promise<string | null> {
 
 function refusal(res: Response, fallback: string, canInstall: boolean): Promise<string> | string {
   if (res.status === 401 || res.status === 403) {
-    return canInstall ? 'Only you can update the app, from the Mac it runs on.' : 'Only the person who runs this kwant bots can check for updates.';
+    return canInstall ? 'Only you can update the app, from the Mac it runs on.' : 'Only the person who runs this kwant can check for updates.';
   }
   return errorText(res).then((e) => e ?? fallback);
 }

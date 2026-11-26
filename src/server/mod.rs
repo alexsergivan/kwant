@@ -25,6 +25,7 @@ pub mod budget;
 pub mod spend_stop;
 pub mod bot_budget;
 pub mod scheduler;
+pub mod scheduler_heartbeat;
 pub mod turns;
 pub mod lost_turns;
 pub mod delegation;
@@ -154,6 +155,8 @@ pub struct AppState {
     pub approval_wait_ms: Arc<std::sync::atomic::AtomicU64>,
     /// Wakes the scheduler early when routines change.
     pub scheduler_wake: Arc<tokio::sync::Notify>,
+    /// When the scheduler's loop last started and finished a pass (`/api/health` → `scheduler`).
+    pub scheduler_heartbeat: Arc<scheduler_heartbeat::Heartbeat>,
     /// `ask_user` calls waiting for the user's answer.
     pub questions: Arc<questions::QuestionHub>,
     /// `request_human_step` calls waiting for the person to sign in or solve a CAPTCHA.
@@ -238,6 +241,7 @@ impl AppState {
                 crate::mcp::APPROVAL_TIMEOUT_SECS * 1000,
             )),
             scheduler_wake: Default::default(),
+            scheduler_heartbeat: Default::default(),
             questions: Default::default(),
             human_steps: Default::default(),
             job_pages: Default::default(),
