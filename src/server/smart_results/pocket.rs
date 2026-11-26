@@ -551,6 +551,45 @@ mod tests {
         assert_eq!(named(vec![foreign]), None);
     }
 
+    /// quiz-open-card-without-id (Rigel's quiz-open-without-id F1): "open it" with no id acts on
+    /// the bot's only quiz and answers with its card, so the reply gets that card too.
+    #[test]
+    fn a_call_without_an_id_names_the_draft_its_card_answered_with() {
+        let card = "Pocket app · Quiz [qd_0123456789ab] \"Friday\" · Live\ncard: {}";
+        let id = Some("qd_0123456789ab".to_string());
+        for tool in ["pocket_open", "pocket_update", "pocket_dry_run", "pocket_close"] {
+            for args in [serde_json::json!({}), serde_json::json!({"id": null}), serde_json::json!({"id": "  "})] {
+                assert_eq!(named(vec![call(tool, args.clone(), "ok", card)]), id, "{tool} {args}");
+                assert_eq!(named(vec![call(tool, args.clone(), "allowed", card)]), id, "{tool} {args}");
+            }
+            // No answer, or one that isn't a card (the pick list, "no quiz to open"): no draft
+            let bare = serde_json::json!({"server": SELF_SERVER_NAME, "tool": tool, "arguments": {}, "status": "ok"});
+            assert_eq!(named(vec![bare]), None, "{tool}");
+            assert_eq!(named(vec![call(tool, serde_json::json!({}), "allowed", "")]), None, "{tool}");
+            let picks = "You have 2 quizzes you could open, so nothing changed. Call pocket_open again with `id`, one of:\n  qd_0123456789ab · Friday · Ready · updated just now\n";
+            assert_eq!(named(vec![call(tool, serde_json::json!({}), "error", picks)]), None, "{tool}");
+            assert_eq!(named(vec![call(tool, serde_json::json!({}), "error", "You have no quiz draft to open.")]), None, "{tool}");
+            // A failure whose card names another draft than the id given still doesn't count
+            assert_eq!(named(vec![call(tool, serde_json::json!({"id": "qd_other000001"}), "error", card)]), None, "{tool}");
+            // Denied, another server's tool, or a card with a bad id: none
+            assert_eq!(named(vec![call(tool, serde_json::json!({}), "denied", card)]), None, "{tool}");
+            let mut foreign = call(tool, serde_json::json!({}), "ok", card);
+            foreign["server"] = serde_json::json!("someones_mcp");
+            assert_eq!(named(vec![foreign]), None, "{tool}");
+            assert_eq!(named(vec![call(tool, serde_json::json!({}), "ok", "Pocket app · Quiz [qd/../x] · Live")]), None, "{tool}");
+        }
+        // A draft still being written answers with its own card as an error, and counts as before
+        let writing = "Pocket app · Quiz [qd_0123456789ab] \"Friday\" · Writing\ncard: {}";
+        assert_eq!(named(vec![call("pocket_dry_run", serde_json::json!({}), "error", writing)]), id);
+        // The last call that answered wins: an open without an id after an update of another draft
+        let update = call("pocket_update", serde_json::json!({"id": "qd_aaaaaaaaaaaa"}), "ok", "");
+        assert_eq!(named(vec![update.clone(), call("pocket_open", serde_json::json!({}), "ok", card)]), id);
+        assert_eq!(named(vec![update, call("pocket_open", serde_json::json!({}), "error", "You have no quiz draft to open.")]), Some("qd_aaaaaaaaaaaa".into()));
+        // The Claude CLI create that ran with no answer kept is still the draft made this turn
+        let made = serde_json::json!({"server": SELF_SERVER_NAME, "tool": "pocket_create", "arguments": {"spec": {"version": 1}}, "status": "allowed"});
+        assert_eq!(named(vec![made]), Some("<made this turn>".into()));
+    }
+
     /// What `schedule::ended_block` stores in the results message's `meta.block`.
     fn ended_meta(code: &str, kit: &str) -> serde_json::Value {
         serde_json::json!({
