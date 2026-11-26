@@ -284,6 +284,20 @@ class FakeMcpRegistry(unittest.TestCase):
                         "a page fits kwnt's 2 MB answer limit")
 
 
+class DirectoryLogLines(unittest.TestCase):
+    def test_only_the_directory_lines_without_colours(self):
+        log = ("\x1b[2m2026-11-26T15:00:00Z\x1b[0m \x1b[32m INFO\x1b[0m kwnt::mcp::directory: MCP directory synced listed=75000\n"
+               "some other line\n"
+               " INFO kwnt::mcp::directory: MCP directory memory (before the sync -> after it -> after giving freed memory back)"
+               " key_text_mb=5.61 in_use_mb=20.1 -> 60.3 -> 28.4\n")
+        lines = pb.directory_lines(log)
+        self.assertEqual(len(lines), 2)
+        self.assertTrue(lines[0].startswith("2026-11-26T15:00:00Z  INFO"), lines[0])
+        self.assertIn("key_text_mb=5.61", lines[1])
+        self.assertNotIn("\x1b", "".join(lines))
+        self.assertEqual(pb.directory_lines(""), [])
+
+
 class BarePathHasWhatChromesLauncherNeeds(unittest.TestCase):
     def test_readlink_and_touch_are_on_the_bare_path(self):
         # /usr/bin/google-chrome is a shell script: on the CI runner it died with "readlink: command not found" and

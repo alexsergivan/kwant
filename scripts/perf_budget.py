@@ -178,6 +178,14 @@ class FakeRegistry:
         self.server.shutdown()
 
 
+def directory_lines(log_text):
+    """kwnt's "MCP directory" log lines (sync, memory), without terminal colours: the allocator's numbers for the
+    after-search memory go into perf-results.json next to the RSS readings."""
+    import re
+    plain = re.sub(r"\x1b\[[0-9;]*m", "", log_text)
+    return [line.strip() for line in plain.splitlines() if "MCP directory" in line][-6:]
+
+
 def sync_directory(port, seconds=240):
     """Find a tool's first search, then the same search until it answers from kwnt's synced copy. Returns when it does."""
     path = "/api/mcp/registry/search?q=stripe"
@@ -496,6 +504,8 @@ def one_run(kwnt, browser, idle_seconds, take_memory, log, browser_wait=60, regi
     env = {"HOME": str(home), "PATH": str(binp), "KWNT_DATA_DIR": str(data), "KWNT_HOST": "127.0.0.1", "KWNT_PORT": str(port)}
     if registry_url:
         env["KWNT_MCP_REGISTRY_URL"] = registry_url
+        # Only the MCP directory's own lines: its memory line says where the after-search memory is
+        env["RUST_LOG"] = "error,kwnt::mcp::directory=info"
     if browser:
         env["KWNT_COMPUTER_MODE"] = "local"
         env["KWNT_CHROME_PATH"] = browser
@@ -539,6 +549,7 @@ def one_run(kwnt, browser, idle_seconds, take_memory, log, browser_wait=60, regi
                 time.sleep(idle_seconds)
                 out["after_search_rss_mb"] = rss_mb(proc.pid)
                 out["after_search_rss_split"] = rss_split_of(proc.pid)
+                out["directory_log"] = directory_lines((root / "kwnt.log").read_text(errors="replace"))
 
         if browser:
             try:
@@ -632,6 +643,7 @@ def main():
         "browser": found_browser, "browser_skip": skipped.get("browser_launch_s"), "chrome_diagnosis": diagnosis, "measures": rows, "samples": {k: [r.get(k) for r in runs] for k in MEASURES},
         "memory_split": {k: [r.get(f"{k}_rss_split") for r in runs[:args.memory_runs]] for k in ("idle", "after_reply", "after_search")},
         "directory_sync_s": [r.get("directory_sync_s") for r in runs[:args.memory_runs]],
+        "directory_log": [r.get("directory_log") for r in runs[:args.memory_runs]],
     }
     Path(args.out).write_text(json.dumps(results, indent=2) + "\n")
     print(f"\nwrote {args.out}")
