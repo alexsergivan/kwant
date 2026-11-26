@@ -1,0 +1,54 @@
+{
+  "_about": "UI speed and size budget (perf-regressions part D; autonomy/ui-perf-budget/impl.md). Checked by perf/ui_budget.mjs in CI job ui-perf, blocking. Frame limits: median of the 3 CI runners' medians on main + 15%. Byte limits: the CI build of main + 5% (gzip level 9), and the guest page's first load never over 80 KB gz (pocket-apps). A metric with no limit fails; a metric too noisy to block is listed under dropped with its numbers.",
+  "harness": {
+    "args": [
+      "--n",
+      "300",
+      "--tokens",
+      "2000",
+      "--rate",
+      "50"
+    ],
+    "runs": 3
+  },
+  "frame": {
+    "commitsPerSecond": {
+      "max": 57.6,
+      "main": 50.1
+    },
+    "p95FrameMs": {
+      "max": 19.5,
+      "main": 17
+    }
+  },
+  "bytes": {
+    "appInitialGz": {
+      "max": 1269123,
+      "main": 1208689
+    },
+    "appAllGz": {
+      "max": 1334309,
+      "main": 1270771
+    },
+    "guestInitialGz": {
+      "max": 52197,
+      "main": 49712
+    },
+    "guestAllGz": {
+      "max": 160531,
+      "main": 152887
+    }
+  },
+  "dropped": {
+    "framesOver50": "too noisy to block: 9 CI runs on main 6eb1d148 gave 1,1,1 / 1,1,1 / 2,1,1 (per-run spread 100%, over the 15% rule); a +15% limit of 1.15 would fail about 1 PR run in 25 on a runner hiccup alone"
+  },
+  "calibration": {
+    "commit": "main 6eb1d148 (PR merge of 3b511e88)",
+    "ciRun": 45834240617,
+    "jobs": [
+      139964193066,
+      139964192965,
+      139964193053
+    ]
+  }
+}
