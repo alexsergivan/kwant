@@ -158,16 +158,18 @@ async fn personal_turn_names_its_account_and_ignores_this_machines_provider() {
     assert!(text.contains("haiku=none model=none bedrock_url=none"), "{text}");
     // ...and a project .claude/settings.json in its folder can't turn Bedrock back on
     assert!(text.contains("over=1"), "{text}");
-    // The status line says which account, and never shows the CLI's path
-    assert!(
-        notes.iter().any(|n| n.starts_with("Running on Claude Code CLI · Personal · haiku")),
-        "{notes:?}"
-    );
+    // No "Running on …" status line (36h): the account is in the reply's ran_on, and the live
+    // stream never shows the CLI's path
+    assert!(!notes.iter().any(|n| n.starts_with("Running on")), "{notes:?}");
     assert!(!notes.iter().any(|n| n.contains("This machine") || n.contains("binary")), "{notes:?}");
     // The saved reasoning line names the account, not the CLI's path
     let saved = state.db.list_messages(&kid, 10).await.unwrap();
     let reply = saved.iter().rev().find(|m| m.sender_role == "kwant").unwrap();
     let reasoning = reply.reasoning_content.as_deref().unwrap_or("");
     assert!(reasoning.contains("Personal"), "{reasoning}");
+    // ...and the reply's ran_on (Details' "Ran on …") names it
+    let meta: serde_json::Value = reply.meta.as_deref().map(|s| serde_json::from_str(s).unwrap()).unwrap_or_default();
+    assert_eq!(meta["ran_on"]["account"], "Personal", "{meta}");
+    assert_eq!(meta["ran_on"]["model"], "haiku", "{meta}");
     assert!(!reasoning.contains(&bin.display().to_string()) && !reasoning.contains("/claude"), "{reasoning}");
 }

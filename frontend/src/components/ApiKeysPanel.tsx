@@ -101,7 +101,7 @@ export const ApiKeysPanel: React.FC<{ onSaved?: () => void; defaultOpen?: boolea
         <span className="flex-1">
           <span className="block text-xs font-medium text-zinc-200">API keys and Ollama</span>
           <span className="block text-[11px] text-zinc-500">
-            Optional, shared by every space. {count ? `${count} saved. ` : ''}Not needed when bots use a signed-in CLI.
+            Optional, shared by every space. {count ? `${count} saved. ` : ''}Not needed when you’re signed in to Claude, Codex or another AI on this computer.
           </span>
         </span>
         {open ? <ChevronDown size={15} className="text-zinc-500" aria-hidden="true" /> : <ChevronRight size={15} className="text-zinc-500" aria-hidden="true" />}

@@ -97,7 +97,7 @@ export const FolderBrowserModal: React.FC<FolderBrowserModalProps> = ({
             </div>
             <div>
               <h3 className="text-sm font-semibold text-zinc-100">Select Folder</h3>
-              <p className="text-[11px] text-zinc-400">Choose a local directory for your team workspace</p>
+              <p className="text-[11px] text-zinc-400">Choose a folder on this computer for your team</p>
             </div>
           </div>
           <button

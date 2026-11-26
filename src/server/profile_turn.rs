@@ -161,7 +161,7 @@ pub fn profile_engine(p: &LlmProfile) -> Option<EngineId> {
     }
 }
 
-/// The account a turn on `engine` runs on, for its "Running on" notice: the profile's name,
+/// The account a turn on `engine` runs on, for Details' "Ran on …" and the server log: the profile's name,
 /// else "This machine" for a CLI's own login. API keys from Settings and Ollama have none.
 pub fn account_name(profile: Option<&LlmProfile>, engine: EngineId) -> Option<String> {
     match profile {

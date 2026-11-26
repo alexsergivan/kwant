@@ -1,4 +1,4 @@
-// Installing kwant bots on a phone: the service worker's cache rules, the manifest and icons,
+// Installing kwant on a phone: the service worker's cache rules, the manifest and icons,
 // the install hint and the offline message.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -165,10 +165,10 @@ test('the build fills in the version and the shell list', { skip: !existsSync(bu
   assert.equal(await sw.fetch(sw.request('/api/spaces')), undefined);
 });
 
-test('the manifest makes kwant bots installable, and every icon it names exists', () => {
+test('the manifest makes kwant installable, and every icon it names exists', () => {
   const m = JSON.parse(readFileSync(`${root}/public/manifest.webmanifest`, 'utf8'));
-  assert.equal(m.name, 'kwant bots');
-  assert.equal(m.short_name, 'kwant bots');
+  assert.equal(m.name, 'kwant');
+  assert.equal(m.short_name, 'kwant');
   assert.equal(m.start_url, '/');
   assert.equal(m.scope, '/');
   assert.equal(m.display, 'standalone');
@@ -311,7 +311,7 @@ test('the service worker registers only in a build over HTTPS or localhost', () 
 
 test('the offline screen says offline, or that the server cannot be reached, never a raw fetch error', () => {
   assert.match(pwa.offlineMessage(new TypeError('Failed to fetch'), false), /You're offline/);
-  assert.match(pwa.offlineMessage(new TypeError('Failed to fetch'), true), /Can't reach the kwant bots server/);
-  assert.match(pwa.offlineMessage(new TypeError('Load failed'), true), /Can't reach the kwant bots server/);
+  assert.match(pwa.offlineMessage(new TypeError('Failed to fetch'), true), /Can't reach the kwant server/);
+  assert.match(pwa.offlineMessage(new TypeError('Load failed'), true), /Can't reach the kwant server/);
   assert.equal(pwa.offlineMessage(new Error('Server returned 502'), true), 'Server returned 502');
 });

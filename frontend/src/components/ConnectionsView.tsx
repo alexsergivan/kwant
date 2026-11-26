@@ -561,7 +561,7 @@ export const addChoices = (links: ManageLinks, onComposio?: () => void): AddChoi
   const out: AddChoice[] = [];
   const tool = links.onAddTool ?? links.onOpenTools;
   if (tool) out.push({ key: 'mcp', label: 'Tool server (MCP)', hint: 'A command on this computer or a server URL', run: tool });
-  if (links.onOpenAccounts) out.push({ key: 'account', label: 'Engine account', hint: 'Claude, Codex, Copilot and other engines', run: links.onOpenAccounts });
+  if (links.onOpenAccounts) out.push({ key: 'account', label: 'AI account', hint: 'Claude, Codex, Copilot and others', run: links.onOpenAccounts });
   if (onComposio) out.push({ key: 'composio', label: 'App via Composio', hint: 'Gmail, Notion, Slack and hundreds more', run: onComposio });
   return out;
 };

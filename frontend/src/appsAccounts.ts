@@ -134,7 +134,7 @@ async function json<T>(f: Fetch, url: string, init?: RequestInit): Promise<T> {
   try {
     res = await f(url, init);
   } catch {
-    throw new GiveError('Couldn’t reach kwant bots. Check your connection and try again.');
+    throw new GiveError('Couldn’t reach kwant. Check your connection and try again.');
   }
   const body = await res.json().catch(() => null);
   if (!res.ok) {

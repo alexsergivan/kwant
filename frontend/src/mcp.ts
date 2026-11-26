@@ -724,22 +724,22 @@ export const mcpSupportFor = (preferredModel: string, keys: EngineKeys): { suppo
   }
   if (model.includes('claude')) {
     return keys.anthropic
-      ? { supported: false, note: 'With an Anthropic API key set, Claude runs through the Anthropic API, which can’t use MCP tools yet. Remove the key to use the Claude Code CLI instead.' }
+      ? { supported: false, note: 'With an Anthropic API key set, Claude runs through the Anthropic API, which can’t use tools yet. Remove the key to use Claude Code on this computer instead.' }
       : { supported: true, note: null };
   }
   if (model.includes('grok')) {
     return keys.xai
       ? { supported: true, note: null }
-      : { supported: false, note: 'The Grok CLI can’t use MCP tools yet. Add an xAI API key in Settings to use them with Grok.' };
+      : { supported: false, note: 'Grok on this computer can’t use tools yet. Add an xAI API key in Settings to use them with Grok.' };
   }
   if (model.includes('codex') || model.includes('gpt') || model.includes('openai')) {
     return keys.openai
       ? { supported: true, note: null }
-      : { supported: false, note: 'The Codex CLI can’t use MCP tools yet. Add an OpenAI API key in Settings to use them with this engine.' };
+      : { supported: false, note: 'Codex on this computer can’t use tools yet. Add an OpenAI API key in Settings to use them with Codex.' };
   }
   return {
     supported: true,
-    note: 'Laya picks the engine for each message. Tools work with Claude Code, Ollama and API keys, but not through the Codex or Grok CLIs.',
+    note: 'kwant picks the AI for each message. Tools work with Claude Code, Ollama and API keys, but not with Codex or Grok signed in on this computer.',
   };
 };
 

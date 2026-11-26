@@ -122,7 +122,7 @@ export const WhatsNewSheetView: React.FC<SheetProps> = ({ entry, changelog, phon
             )}
           </p>
           <h2 ref={titleRef} id={titleId} tabIndex={-1} className={`m-0 font-semibold tracking-[-.005em] text-zinc-50 outline-none ${phone ? 'text-[17px] leading-6' : 'text-lg leading-[26px]'}`}>
-            What’s new in kwant bots {entry.version}
+            What’s new in kwant {entry.version}
           </h2>
         </div>
       </div>
@@ -230,7 +230,7 @@ export const WhatsNewSheetView: React.FC<SheetProps> = ({ entry, changelog, phon
         </button>
         )}
         <h2 ref={titleRef} id={titleId} tabIndex={-1} className={`m-0 font-semibold text-zinc-50 outline-none ${phone ? 'text-[17px] leading-6' : 'text-lg leading-[26px]'}`}>
-          {notesOnly ? `What’s new in kwant bots ${entry.version}` : `All changes in ${entry.version}`}
+          {notesOnly ? `What’s new in kwant ${entry.version}` : `All changes in ${entry.version}`}
         </h2>
       </div>
       {close}
