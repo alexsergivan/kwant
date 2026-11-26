@@ -204,7 +204,7 @@ cd kwant
 make run          # builds the web app (frontend/dist), then runs `cargo run -- serve`
 ```
 
-Open **http://127.0.0.1:8799**. A new person's `#general` opens with the **Get started** card: choose your AI, sign in, pick a team ([guide](https://kwant.si/docs/quickstart#get-started)). A fresh install starts with three bots in `#general`: Architect, TechLead and DevOps. Make more with **New bot**, from a ready-made persona or blank.
+Open **http://127.0.0.1:8799**. A new person's `#general` opens with the **Get started** card: choose your AI, sign in, pick a team ([guide](https://kwant.si/docs/quickstart#get-started)). A fresh install starts with the **@helpers** team in `#general`: Assistant leads, with Researcher and Writer. Make more with **New bot**, from a ready-made persona or blank.
 
 The binary embeds `frontend/dist`, so on a fresh clone `cargo build`, `cargo test` and `cargo run -- serve` fail to compile until you've run `make run` or `make frontend` once.
 

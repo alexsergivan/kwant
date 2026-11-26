@@ -190,6 +190,38 @@ async fn nobody_joined_reads_as_pa7_says() {
     assert!(items[0]["winner"].is_null());
 }
 
+/// quiz-tie-names-all: a tie names every team on the top score, as the TV does.
+#[tokio::test]
+async fn a_tie_names_every_winning_team() {
+    let t = setup().await;
+    let k = bot(&t, "Quizmaster").await;
+    let code = make(&t, "Pub quiz", &k).await;
+    play(&t, &code, "Mia", 2).await;
+    play(&t, &code, "Ola", 2).await;
+    play(&t, &code, "Sam", 1).await;
+    finish(&t, &code, Utc::now()).await;
+    let items = pockets(&inbox(&t).await);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["title"], json!("Pub quiz: Team 1 and Team 2 win"));
+    assert_eq!(items[0]["winner"], json!({ "name": "Team 1 and Team 2", "points": 2 }));
+}
+
+/// quiz-tie-names-all: nobody scored, so no winner (no holo sticker) and the title says it ended.
+#[tokio::test]
+async fn nobody_scored_crowns_nobody() {
+    let t = setup().await;
+    let k = bot(&t, "Quizmaster").await;
+    let code = make(&t, "Pub quiz", &k).await;
+    play(&t, &code, "Mia", 0).await;
+    play(&t, &code, "Ola", 0).await;
+    finish(&t, &code, Utc::now()).await;
+    let items = pockets(&inbox(&t).await);
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["title"], json!("Pub quiz has ended"));
+    assert_eq!(items[0]["meta"]["players"], json!(2));
+    assert!(items[0]["winner"].is_null(), "{}", items[0]);
+}
+
 #[tokio::test]
 async fn a_deleted_pocket_is_gone_and_unposted_ones_never_show() {
     let t = setup().await;
