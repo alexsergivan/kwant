@@ -8,7 +8,7 @@ use super::mcp_suggest::{create_and_test, refuse_agent_tokens, InstallFailed, In
 use super::spaces::{ensure_active, Scope};
 use super::AppState;
 use crate::db::models::McpServer;
-use crate::mcp::directory::{DirEntry, Source};
+use crate::mcp::directory::{Row, Source};
 use crate::mcp::registry::{valid_registry_name, MAX_QUERY_CHARS};
 use crate::mcp::SECRET_MASK;
 use axum::{
@@ -59,32 +59,30 @@ fn command_line(command: &str, args: &[String]) -> String {
 
 /// Whether a server from this entry already exists in the space: one installed from it through
 /// a suggestion, or one with the same address (remote) or the same command line (stdio).
-fn already_added(e: &DirEntry, servers: &[McpServer], suggested: &[String]) -> bool {
-    if suggested.iter().any(|n| n == &e.entry.name) {
+fn already_added(e: &Row, servers: &[McpServer], suggested: &[String]) -> bool {
+    if suggested.iter().any(|n| n == &e.registry_name) {
         return true;
     }
-    let Ok(plan) = &e.entry.plan else { return false };
-    servers.iter().any(|s| match (&plan.url, &s.url) {
-        (Some(a), Some(b)) if plan.transport == "http" => same_address(a) == same_address(b),
-        _ => plan.transport == "stdio" && s.transport == "stdio" && plan.command == s.command && plan.args == s.args,
+    servers.iter().any(|s| match (&e.url, &s.url) {
+        (Some(a), Some(b)) if e.transport == "http" => same_address(a) == same_address(b),
+        _ => e.transport == "stdio" && s.transport == "stdio" && e.command == s.command && e.args == s.args,
     })
 }
 
 /// One row as Find a tool reads it (`DirectoryEntry` in frontend/src/connections.ts).
-fn entry_json(e: &DirEntry, added: bool) -> Value {
-    let Ok(plan) = &e.entry.plan else { return Value::Null };
-    let remote = plan.transport == "http";
+fn entry_json(e: &Row, added: bool) -> Value {
+    let remote = e.is_remote();
     json!({
-        "registry_name": e.entry.name,
-        "version": e.entry.version,
+        "registry_name": e.registry_name,
+        "version": e.version,
         "title": e.title,
-        "description": e.entry.description,
-        "publisher": e.publisher,
+        "description": e.description,
+        "publisher": e.publisher(),
         "kind": if remote { "remote" } else { "stdio" },
-        "url": if remote { plan.url.as_deref().map(shown_url) } else { None },
+        "url": if remote { e.url.as_deref().map(shown_url) } else { None },
         "transport": if remote { Some("http") } else { None },
-        "command": if remote { None } else { plan.command.as_deref().map(|c| command_line(c, &plan.args)) },
-        "inputs": plan.inputs.iter().map(|i| json!({
+        "command": if remote { None } else { e.command.as_deref().map(|c| command_line(c, &e.args)) },
+        "inputs": e.inputs.iter().map(|i| json!({
             "name": i.name,
             "description": i.description,
             "required": i.required,

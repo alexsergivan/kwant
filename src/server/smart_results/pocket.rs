@@ -53,7 +53,11 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
         .flatten();
     let named = match called {
         Called::Quiz(named) => named,
-        Called::Santa(code) => return santa_candidate(&mut *conn, &code, input, extra, tz.as_deref()).await,
+        Called::Santa(Named::Id(code)) => return santa_candidate(&mut *conn, &code, input, extra, tz.as_deref()).await,
+        Called::Santa(Named::MadeThisTurn) => {
+            let code = santa_made_this_turn(&mut *conn, input, extra).await?;
+            return santa_candidate(&mut *conn, &code, input, extra, tz.as_deref()).await;
+        }
     };
     let row = match named {
         Named::Id(id) => sqlx::query_as::<_, QuizDraftRow>("SELECT * FROM quiz_drafts WHERE id = ?").bind(id.as_str()).fetch_optional(&mut *conn).await.ok()??,
@@ -70,36 +74,58 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
 enum Called {
     /// A Quizmaster draft.
     Quiz(Named),
-    /// The code of a Secret Santa `santa_create` made.
-    Santa(String),
+    /// The Secret Santa `santa_create` made: its code ([`Named::Id`]), or the one this bot made
+    /// this turn when the call's answer wasn't kept ([`Named::MadeThisTurn`]).
+    Santa(Named),
 }
 
 fn last_named(input: &NewMessage) -> Option<Called> {
     match (draft_named_at(input), santa_named_at(input)) {
-        (Some((qi, _)), Some((si, code))) if si > qi => Some(Called::Santa(code)),
+        (Some((qi, _)), Some((si, santa))) if si > qi => Some(Called::Santa(santa)),
         (Some((_, named)), _) => Some(Called::Quiz(named)),
-        (None, Some((_, code))) => Some(Called::Santa(code)),
+        (None, Some((_, santa))) => Some(Called::Santa(santa)),
         (None, None) => None,
     }
 }
 
-/// The code the turn's last `santa_create` call that made a Secret Santa answered with (its text
-/// starts `Pocket app · Secret Santa [<code>]`), and that call's place in the turn. A failed call,
-/// a call that only asked for the rules, or another server's tool of the same name names nothing.
-/// Shape-checked only; whose pocket it is gets checked against the stored row.
-fn santa_named_at(input: &NewMessage) -> Option<(usize, String)> {
+/// The Secret Santa the turn's last `santa_create` call that made one names, and that call's place
+/// in the turn: the code its answer starts with (`Pocket app · Secret Santa [<code>]`), or, for a
+/// call the Claude CLI engine let through ("allowed") with a spec and no answer kept,
+/// [`Named::MadeThisTurn`] (santa-create-claude-engine-card, as #1230 did for the quiz). A failed
+/// or denied call, a call that only asked for the rules (no spec, or a null one), or another
+/// server's tool of the same name names nothing. Shape-checked only; whose pocket it is gets
+/// checked against the stored row.
+fn santa_named_at(input: &NewMessage) -> Option<(usize, Named)> {
     let calls = input.tool_calls.as_ref()?.as_array()?;
     calls.iter().enumerate().rev().find_map(|(i, c)| {
         if c.get("server").and_then(Value::as_str) != Some(SELF_SERVER_NAME) || c.get("tool").and_then(Value::as_str) != Some(santa_tool::TOOL) {
             return None;
         }
-        if c.get("status").and_then(Value::as_str) != Some("ok") {
+        let status = c.get("status").and_then(Value::as_str);
+        if !matches!(status, Some("ok" | "allowed")) {
             return None;
         }
-        let rest = c.get("result").and_then(Value::as_str)?.trim_start().strip_prefix(santa_tool::CARD_TEXT_HEAD)?;
+        let Some(result) = c.get("result").and_then(Value::as_str) else {
+            // A create with a spec that ran, with no answer kept: the Santa it made
+            let spec = c.get("arguments").and_then(|a| a.get("spec")).filter(|s| !s.is_null());
+            return (status == Some("allowed") && spec.is_some()).then_some((i, Named::MadeThisTurn));
+        };
+        let rest = result.trim_start().strip_prefix(santa_tool::CARD_TEXT_HEAD)?;
         let code = &rest[..rest.find(']')?];
-        valid_code(code).then(|| (i, code.to_string()))
+        valid_code(code).then(|| (i, Named::Id(code.to_string())))
     })
+}
+
+/// The code of the Secret Santa the reply's bot made since the turn began: its newest pocket of
+/// kit `santa` created no earlier than the chat's newest message from anyone but this bot (the
+/// same anchor as [`made_this_turn`]). `None` without such a message or pocket. Whose pocket it
+/// is still goes through [`belongs`] in [`santa_candidate`].
+async fn santa_made_this_turn(conn: &mut SqliteConnection, input: &NewMessage, extra: &MessageExtra) -> Option<String> {
+    let (kwant, asked) = turn_began(&mut *conn, input, extra).await?;
+    let sql = format!("SELECT {} FROM pocket_apps WHERE kit = ? AND owner_kwant_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1", crate::db::pocket::POCKET_COLS);
+    let row = sqlx::query_as::<_, PocketRow>(&sql).bind(crate::pocket::santa::ID).bind(&kwant).fetch_optional(&mut *conn).await.ok()??;
+    // Message times keep whole seconds; pockets keep fractions
+    (row.created_at.timestamp_millis() >= asked.timestamp() * 1000).then_some(row.code)
 }
 
 /// A Secret Santa's card: the stored pocket (kit `santa`, open or ended, owned by the reply's
@@ -174,10 +200,11 @@ fn santa_block(code: &str, c: santa_tool::Card) -> Pocket {
     }
 }
 
-/// Which draft a turn's Quizmaster calls name.
+/// Which draft a turn's Quizmaster calls name (or, in [`Called::Santa`], which Secret Santa).
 #[derive(Debug, PartialEq)]
 enum Named {
-    /// `arguments.id`, or, when a call has none, the id its card's text starts with.
+    /// `arguments.id`, or, when a call has none, the id its card's text starts with (a Santa's
+    /// code).
     Id(String),
     /// A `pocket_create` that ran with a spec but whose answer wasn't recorded: the Claude CLI
     /// engine records kwnt_tools calls as "allowed" with no `result` (quiz-card-and-results). The
@@ -233,6 +260,20 @@ fn draft_named_at(input: &NewMessage) -> Option<(usize, Named)> {
 /// message from anyone but this bot (the ask the turn answers). `None` without such a message or
 /// draft. Whose draft it is still goes through [`belongs`].
 async fn made_this_turn(conn: &mut SqliteConnection, input: &NewMessage, extra: &MessageExtra) -> Option<QuizDraftRow> {
+    let (kwant, asked) = turn_began(&mut *conn, input, extra).await?;
+    // Message times keep whole seconds; drafts keep milliseconds
+    let since = asked.timestamp() * 1000;
+    sqlx::query_as::<_, QuizDraftRow>("SELECT * FROM quiz_drafts WHERE kwant_id = ? AND created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
+        .bind(kwant)
+        .bind(since)
+        .fetch_optional(&mut *conn)
+        .await
+        .ok()?
+}
+
+/// The reply's bot and when its turn began: the time of the chat's newest message from anyone
+/// but this bot (the ask the turn answers). `None` without such a message.
+async fn turn_began(conn: &mut SqliteConnection, input: &NewMessage, extra: &MessageExtra) -> Option<(String, DateTime<Utc>)> {
     let (chat, by_channel) = match (&input.direct_kwant_id, &input.channel_id) {
         (Some(k), _) => (k.as_str(), false),
         (None, Some(c)) => (c.as_str(), true),
@@ -258,14 +299,7 @@ async fn made_this_turn(conn: &mut SqliteConnection, input: &NewMessage, extra: 
             .await
             .ok()??,
     };
-    // Message times keep whole seconds; drafts keep milliseconds
-    let since = asked.timestamp() * 1000;
-    sqlx::query_as::<_, QuizDraftRow>("SELECT * FROM quiz_drafts WHERE kwant_id = ? AND created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
-        .bind(kwant)
-        .bind(since)
-        .fetch_optional(&mut *conn)
-        .await
-        .ok()?
+    Some((kwant, asked))
 }
 
 /// The draft id a card's text starts with (`Card::text()`: `Pocket app · Quiz [<id>] …`).
@@ -717,6 +751,64 @@ mod tests {
         // The Claude CLI create that ran with no answer kept is still the draft made this turn
         let made = serde_json::json!({"server": SELF_SERVER_NAME, "tool": "pocket_create", "arguments": {"spec": {"version": 1}}, "status": "allowed"});
         assert_eq!(named(vec![made]), Some("<made this turn>".into()));
+    }
+
+    fn reply_with(calls: Vec<serde_json::Value>) -> NewMessage {
+        NewMessage {
+            channel_id: None,
+            direct_kwant_id: Some("k1".into()),
+            sender_role: "kwant".into(),
+            sender_id: "Quizmaster".into(),
+            text: "Done.".into(),
+            reasoning_content: None,
+            tool_calls: Some(serde_json::Value::Array(calls)),
+            tokens_used: 0,
+        }
+    }
+
+    /// santa-create-claude-engine-card: the Claude CLI engine records `santa_create` as "allowed"
+    /// with no answer, so a call that made a Santa names the one this bot made this turn.
+    #[test]
+    fn a_claude_engine_santa_create_names_the_santa_made_this_turn() {
+        let santa = |calls| santa_named_at(&reply_with(calls)).map(|(_, n)| n);
+        let allowed = |args: serde_json::Value| serde_json::json!({"server": SELF_SERVER_NAME, "tool": santa_tool::TOOL, "arguments": args, "status": "allowed"});
+        assert_eq!(santa(vec![allowed(serde_json::json!({"spec": {"title": "Team Secret Santa"}}))]), Some(Named::MadeThisTurn));
+        // A spec sent as text still made one
+        assert_eq!(santa(vec![allowed(serde_json::json!({"spec": "{\"title\": \"x\"}"}))]), Some(Named::MadeThisTurn));
+        // The rules (no spec, or a null one), no arguments at all: nothing made
+        assert_eq!(santa(vec![allowed(serde_json::json!({}))]), None);
+        assert_eq!(santa(vec![allowed(serde_json::json!({"spec": null}))]), None);
+        assert_eq!(santa(vec![serde_json::json!({"server": SELF_SERVER_NAME, "tool": santa_tool::TOOL, "status": "allowed"})]), None);
+        // Denied, an error, or "ok" with no answer kept ran nothing this card can name
+        for status in ["denied", "error", "ok"] {
+            let mut c = allowed(serde_json::json!({"spec": {}}));
+            c["status"] = serde_json::json!(status);
+            assert_eq!(santa(vec![c]), None, "{status}");
+        }
+        // Another server's tool of the same name
+        let mut foreign = allowed(serde_json::json!({"spec": {}}));
+        foreign["server"] = serde_json::json!("someones_mcp");
+        assert_eq!(santa(vec![foreign]), None);
+        // An answer that was kept is read as before, "ok" or "allowed"; one that isn't a made Santa names nothing
+        let made = "Pocket app · Secret Santa [PQ7XK2] \"Team Secret Santa\" · collecting";
+        assert_eq!(santa(vec![call(santa_tool::TOOL, serde_json::json!({"spec": {}}), "ok", made)]), Some(Named::Id("PQ7XK2".into())));
+        assert_eq!(santa(vec![call(santa_tool::TOOL, serde_json::json!({"spec": {}}), "allowed", made)]), Some(Named::Id("PQ7XK2".into())));
+        assert_eq!(santa(vec![call(santa_tool::TOOL, serde_json::json!({"spec": {}}), "allowed", "Nothing was made: gift_on is missing.")]), None);
+        assert_eq!(santa(vec![call(santa_tool::TOOL, serde_json::json!({}), "allowed", "")]), None);
+    }
+
+    /// The turn's last card call wins, with Claude engine calls as with any other.
+    #[test]
+    fn quiz_then_santa_shows_the_santa_and_the_reverse_the_quiz() {
+        let allowed = |tool: &str| serde_json::json!({"server": SELF_SERVER_NAME, "tool": tool, "arguments": {"spec": {"version": 1}}, "status": "allowed"});
+        let quiz = allowed("pocket_create");
+        let santa = allowed(santa_tool::TOOL);
+        assert_eq!(last_named(&reply_with(vec![quiz.clone(), santa.clone()])), Some(Called::Santa(Named::MadeThisTurn)));
+        assert_eq!(last_named(&reply_with(vec![santa.clone(), quiz.clone()])), Some(Called::Quiz(Named::MadeThisTurn)));
+        // A rules-only Santa call after the quiz names no Santa, so the quiz stays
+        let rules = serde_json::json!({"server": SELF_SERVER_NAME, "tool": santa_tool::TOOL, "arguments": {}, "status": "allowed"});
+        assert_eq!(last_named(&reply_with(vec![quiz, rules])), Some(Called::Quiz(Named::MadeThisTurn)));
+        assert_eq!(last_named(&reply_with(vec![santa])), Some(Called::Santa(Named::MadeThisTurn)));
     }
 
     /// What `schedule::ended_block` stores in the results message's `meta.block`.
