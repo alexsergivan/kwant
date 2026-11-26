@@ -282,14 +282,19 @@ fn card_meta(s: &HumanStep) -> Value {
         "status": s.status,
         "target": s.target.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok()),
     });
-    // sign-in-wall-uses-tools: the "fix it in Tools" step says so, and which server; every other
-    // step leaves these out
-    if let (Some(fix_in), Some(obj)) = (&s.fix_in, meta.as_object_mut()) {
+    add_tools_fix(&mut meta, s);
+    meta
+}
+
+/// sign-in-wall-uses-tools frontend contract: the "fix it in Tools" step says so, and which
+/// server (`fix_in`, `tools_server`, `tools_server_id`), in its card meta and its Needs-you item.
+/// Every other step leaves the three keys out.
+pub fn add_tools_fix(json: &mut Value, s: &HumanStep) {
+    if let (Some(fix_in), Some(obj)) = (&s.fix_in, json.as_object_mut()) {
         obj.insert("fix_in".into(), json!(fix_in));
         obj.insert("tools_server".into(), json!(s.tools_server));
         obj.insert("tools_server_id".into(), json!(s.tools_server_id));
     }
-    meta
 }
 
 /// How long the person has to solve a CAPTCHA: `captcha_timeout_minutes` (1 to 60, default 10).

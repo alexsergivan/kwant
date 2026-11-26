@@ -222,6 +222,9 @@ async fn a_turn_that_ends_on_a_sign_in_form_asks_the_person_once_to_sign_in() {
     assert_eq!(items[0]["human_step_id"], step.id.as_str());
     assert_eq!(items[0]["summary"], step.reason.as_str());
     assert_eq!(items[0]["link"]["direct_kwant_id"], bot.as_str());
+    for key in ["fix_in", "tools_server", "tools_server_id"] {
+        assert!(items[0].get(key).is_none(), "a sign-in's Needs-you item has no {key}: {}", items[0]);
+    }
 
     // The person signs in and presses Done: a new turn picks the task up, ends on the same form
     // again (still logged out), and is not asked about it a second time within 12 h
@@ -332,7 +335,10 @@ async fn a_sign_in_wall_on_a_site_whose_tools_fail_asks_to_fix_the_tools_not_to_
     // The frontend contract: the step and its card say "fix it in Tools", and which server
     let meta: Value = serde_json::from_str(card.meta.as_deref().unwrap()).unwrap();
     let (_, listed) = call(&env.app, "GET", "/api/human-steps?status=open", None).await;
-    for json in [&meta, &serde_json::to_value(step).unwrap(), &listed[0]] {
+    let (_, away) = call(&env.app, "GET", "/api/away", None).await;
+    let needs_you = away["waiting"].as_array().unwrap().iter().find(|i| i["human_step_id"] == step.id.as_str()).cloned().unwrap_or_default();
+    assert_eq!(needs_you["kind"], "stopped", "{away}");
+    for json in [&meta, &serde_json::to_value(step).unwrap(), &listed[0], &needs_you] {
         assert_eq!(json["fix_in"], "tools", "{json}");
         assert_eq!(json["tools_server"], "github", "{json}");
         assert_eq!(json["tools_server_id"], server.as_str(), "{json}");
