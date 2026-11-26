@@ -233,9 +233,13 @@ test('winners: tied teams both stand on the tall block; the order stays 2-1-3 (u
   assert.equal(t.$$('.kw-sticker-holo').length, 1);
 });
 
-test('winners: a 0-0 final has no holo sticker and reads Final scores; a real win keeps it (ux-pass-0952 e)', async () => {
+test('winners: a 0-0 final has no holo sticker, no stars and reads Final scores; a real win keeps them (ux-pass-0952 e, D1)', async () => {
   const t = await open('winners');
   assert.equal(t.$$('.kw-sticker-holo').length, 1);
+  assert.equal(t.$$('.tvstar').length, 5);
+  const b = scenes.winners.team_board;
+  t.push({ ...scenes.winners, team_board: [{ ...b[0], rank: 1, tied: true }, { ...b[1], score: b[0].score, rank: 1, tied: true }, ...b.slice(2)] });
+  assert.equal(t.$$('.tvstar').length, 5);
   const zero = scenes.winners.team_board.slice(0, 2).map((r) => ({ ...r, score: 0, rank: 1, tied: true }));
   t.push({ ...scenes.winners, team_board: zero });
   assert.equal(t.screen(), 'winners');
@@ -243,6 +247,9 @@ test('winners: a 0-0 final has no holo sticker and reads Final scores; a real wi
   assert.equal(t.$('.bigsticker'), null);
   assert.equal(t.$('.winner').textContent, 'Final scores');
   assert.ok(!t.text().includes('Winners'));
+  assert.equal(t.$('.tvstars'), null);
+  assert.equal(t.$$('.tvstar').length, 0);
+  assert.equal(t.$$('.twinkle').length, 0);
   assert.deepEqual(t.$$('.podium .pod').map((p) => p.className), ['pod p1', 'pod p1']);
 });
 

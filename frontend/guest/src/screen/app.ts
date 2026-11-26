@@ -452,7 +452,8 @@ export class ScreenApp {
     const sticker = h('span', { class: 'kw-sticker kw-sticker-holo tvsticker' }, svg('0 0 9 9', TROPHY, 'pi'), h('span', null, 'Winners'));
     return [
       this.top([h('b', null, v.title), ' · final scores'], v.players ? plural(v.players, 'player', 'players') : null),
-      h('div', { class: `tvstars${this.still() ? '' : ' twinkle'}`, 'aria-hidden': 'true' }, stars),
+      // Stars celebrate too, so they follow the sticker: none without a winner (design-check D1).
+      names.length ? h('div', { class: `tvstars${this.still() ? '' : ' twinkle'}`, 'aria-hidden': 'true' }, stars) : null,
       h('div', { class: 'tvwin' }, names.length ? h('span', { class: 'bigsticker' }, sticker) : null, h('h1', { class: 'winner' }, head)),
       h(
         'ol',
