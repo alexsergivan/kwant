@@ -104,4 +104,34 @@ test('the page title and Home Screen name say "kwant" (plain words, row 45)', ()
   assert.doesNotMatch(html, /kwant bots/);
 });
 
+// Plain words (0.9.52 36h-b-2): Mira's plain-words/word-list.md row "engine" says "AI" outside Dev mode and Details.
+// The New bot form's More options line and account fold, and the steps list's info button, were the last ones.
+const enginesIn = (rel) => {
+  const file = join(src, rel);
+  const sf = ts.createSourceFile(file, readFileSync(file, 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const out = [];
+  const visit = (node) => {
+    let s = null;
+    if (ts.isJsxText(node) || ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) s = node.text;
+    else if (ts.isTemplateHead(node) || ts.isTemplateMiddle(node) || ts.isTemplateTail(node)) s = node.text;
+    const at = s !== null && ts.isTemplateLiteralToken(node) ? node.parent.parent ?? node : node;
+    if (s !== null && /\bengines?\b/i.test(s) && looksVisible(s, at)) out.push(s.trim());
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return out;
+};
+
+test('the New bot form, the steps list and Apps & accounts say "AI", not "engine" (plain words, 36h-b-2)', () => {
+  const modal = readFileSync(join(src, 'components/NewAgentModal.tsx'), 'utf8');
+  for (const s of ['title, avatar, AI and more', 'persona, avatar, AI and more', 'From another AI (cleared on save)', 'Switch to this AI’s next account when this one runs out of usage or is signed out']) {
+    assert.ok(modal.includes(s), s);
+  }
+  assert.match(readFileSync(join(src, 'components/ActivityList.tsx'), 'utf8'), /aria-label="About this AI’s steps"/);
+  assert.deepEqual(enginesIn('components/NewAgentModal.tsx'), []);
+  assert.deepEqual(enginesIn('components/ActivityList.tsx'), []);
+  // Apps & accounts heading. Only the heading here: the rest of EnginesPanel's "engine" words are #1196's.
+  assert.match(readFileSync(join(src, 'components/EnginesPanel.tsx'), 'utf8'), /id="engines-title"[^>]*>AIs &amp; accounts</);
+});
+
 if (process.argv.includes('--list')) console.log(findBareWording().join('\n'));

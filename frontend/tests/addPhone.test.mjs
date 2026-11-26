@@ -136,5 +136,5 @@ test('hidden on the Mac in local/no-token mode and on servers without device log
   assert.equal(m.signedInDevicesVisible(true, false), false, 'older server');
   assert.equal(m.signedInDevicesVisible(true, true), true);
   const settings = readFileSync(new URL('../src/components/SettingsModal.tsx', import.meta.url), 'utf8');
-  assert.match(settings, /\{signedInDevicesVisible\(authRequired, deviceLogin\) && <SignedInDevices \/>\}/);
+  assert.match(settings, /\{signedInDevicesVisible\(authRequired, deviceLogin\) && \(\s*<div data-setting-row>\s*<SignedInDevices \/>\s*<\/div>\s*\)\}/);
 });

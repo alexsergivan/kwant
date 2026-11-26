@@ -8,7 +8,7 @@ import { Sidebar, Kwant, Channel, Team, memberIdsOf, realAskCount } from './comp
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import type { MessageTarget } from './components/DoneDetail';
-import { AppsSection, InboxTab, SettingsScope, SpaceView, viewSegment } from './nav';
+import { AppSettingsPage, AppsSection, InboxTab, SettingsScope, SpaceView, appSettingsPageForRow, viewSegment } from './nav';
 import { PHONE_QUERY } from './layout';
 import { useSettingsCover } from './settingsFocus';
 import { WhatsNewHost } from './components/WhatsNewSheet';
@@ -402,6 +402,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     initialView?.kind === 'settings' ? (initialView.scope === 'space' ? initialView.tab : 'general') : null,
   );
   const [settingsScope, setSettingsScope] = useState<SettingsScope>(() => (initialView?.kind === 'settings' ? initialView.scope : 'space'));
+  // 36e: the open Settings › All spaces page (General, Bots on their own, Usage, Notifications); it shows in the address.
+  const [appSettingsPage, setAppSettingsPage] = useState<AppSettingsPage>(() =>
+    initialView?.kind === 'settings' && initialView.scope === 'app' ? initialView.page ?? 'general' : 'general',
+  );
   // Bumped when Space settings closes, so open bot forms read account status again.
   const [settingsClosedCount, setSettingsClosedCount] = useState(0);
   // Set when Accounts opens from a "Sign in with Claude" hint, to focus that button.
@@ -430,7 +434,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     focusDevSettings();
   };
   // Settings › All spaces: what applies to every space and to the app.
-  const openAppSettings = () => {
+  const openAppSettings = (page: AppSettingsPage = 'general') => {
+    setAppSettingsPage(page);
     setSettingsScope('app');
     setSpaceSettingsTab((t) => t ?? 'general');
     playSfx('click');
@@ -439,12 +444,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Settings › All spaces › Usage, at the daily spending stop's fields.
   const openUsageSettings = () => {
     setSettingsFocusRow('spend-stop');
-    openAppSettings();
+    openAppSettings(appSettingsPageForRow('spend-stop'));
   };
   // Isolation notices: App settings at the Computer card, "Run Claude inside the VM" focused.
   const openComputerSettings = () => {
     setSettingsFocusRow('claude-isolation');
-    openAppSettings();
+    openAppSettings(appSettingsPageForRow('claude-isolation'));
   };
   // 34h: a "Sign in again" from a chat line or the Inbox opens Advanced on that connection's row.
   const [connectionFocus, setConnectionFocus] = useState<{ id: string; seq: number } | null>(null);
@@ -4892,7 +4897,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Back and Forward). The board stays the view while its setting loads; the pane shows a chat if it's off.
   const currentView: SpaceView | null = spaceSettingsTab
     ? settingsScope === 'app'
-      ? { kind: 'settings', scope: 'app' }
+      ? { kind: 'settings', scope: 'app', page: appSettingsPage }
       : { kind: 'settings', scope: 'space', tab: spaceSettingsTab }
     : page === 'inbox'
       ? { kind: 'inbox', tab: inboxTab }
@@ -4914,7 +4919,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setPage('chat');
       return;
     }
-    if (v.kind === 'settings') return v.scope === 'app' ? openAppSettings() : openSpaceSettings(v.tab, v.section);
+    if (v.kind === 'settings') return v.scope === 'app' ? openAppSettings(v.page) : openSpaceSettings(v.tab, v.section);
     showPage(v.kind, v.kind === 'inbox' ? v.tab : 'new');
   };
   useEffect(() => {
@@ -4934,7 +4939,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       }}
       onOpenSettings={() => {
         setSettingsFocusRow('idea-jar');
-        openAppSettings();
+        openAppSettings(appSettingsPageForRow('idea-jar'));
       }}
     />
   );
@@ -5203,12 +5208,14 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onOpenTools={() => setIsMcpOpen(true)}
           scope={settingsScope}
           onScope={setSettingsScope}
+          appPage={appSettingsPage}
+          onAppPage={setAppSettingsPage}
           onOpenArchived={onOpenArchived}
           connections={connectionsPage}
           appsSection={appsSection}
           toolNoteOpen={!!toolNoteFocus}
           connectApp={connectApp}
-          appSettings={
+          appSettings={(page) => (
             <Suspense
               fallback={
                 <p className="flex items-center gap-2 text-xs text-zinc-400">
@@ -5224,9 +5231,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
                 onOpenApiKeys={() => openSpaceSettings('apps', 'accounts')}
                 focusRow={settingsFocusRow}
                 onOpenBotBudget={raiseBudget}
+                page={page}
               />
             </Suspense>
-          }
+          )}
           routineFocus={routineFocus}
           onOpenRunResult={openRunResult}
           onOpenRunCard={openRunCard}

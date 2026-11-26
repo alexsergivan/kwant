@@ -240,7 +240,7 @@ export const DailyUsageView: React.FC<{
 }> = ({ rows, models, range = 7, onRange, engines, error, onReload, now }) => {
   const head = (
     <div className="flex flex-wrap items-center gap-2">
-      <h3 className="flex-1 text-[11px] font-semibold text-zinc-200">AI use</h3>
+      <h4 className="flex-1 text-[11px] font-semibold text-zinc-200">AI use</h4>
       <RangeSwitch range={range} onRange={onRange} />
     </div>
   );

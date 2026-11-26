@@ -85,7 +85,7 @@ test('a new bot opens with only Name, "What should it do?" and Create; More opti
   const labels = [...v.host.querySelectorAll('form label')].filter((l) => !l.closest('[hidden]')).map((l) => l.textContent.trim());
   assert.deepEqual(labels, ['Name', 'What should it do?']);
   const controls = v.visibleControls().map((el) => el.id || el.getAttribute('aria-label') || el.textContent.trim());
-  assert.deepEqual(controls, ['agent-name', 'Change avatar', 'agent-job', 'More options· persona, avatar, engine and more', 'Cancel', 'Create bot']);
+  assert.deepEqual(controls, ['agent-name', 'Change avatar', 'agent-job', 'More options· persona, avatar, AI and more', 'Cancel', 'Create bot']);
   assert.equal(v.toggle().getAttribute('aria-expanded'), 'false');
   assert.equal(v.more().hidden, true);
   // The rest is there, just closed: persona, title, avatar, personality, Good for / Not for.
