@@ -8,8 +8,21 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.54] - 2026-11-26
+
+kwant 0.9.54: your first bot opens #general, Get started names your real starter bots, one hello for a hello, the README names the real starter bots, 24 space icons with a holo pick and no dead "From this reply" label.
+
+### Added
+- The space icon picker in New space and Space settings has 24 pixel icons instead of 8 (shop, code, mail, music, coffee, pets and more), the icon you pick gets a holographic edge, and arrow keys move between icons (#1225)
+
+### Changed
+- A space's first bot opens #general, as the Get started checklist says, instead of the bot's own chat; later bots still open their own chat, and on a phone a fresh main space opens #general while Get started is there (#1217)
+
 ### Fixed
-- A bot's browser sometimes took 9 s instead of 1.5 s to open: the identity keeper could wait out its full 8 s give-up when a stray reply from its own throwaway client-hints page never arrived; it now notices that page detaching and moves on right away (#1266)
+- Get started in your main space names the starter bots you actually have (Assistant, Researcher and Writer on a fresh install) instead of Architect, TechLead and DevOps (#1223)
+- Saying hi to a team ("hi team!", "hey folks", "bye y'all") counts as small talk, so you get one short hello instead of a reply from every bot (#1222)
+- The README says a fresh install starts with the @helpers team in #general (Assistant, Researcher and Writer), not Architect, TechLead and DevOps; a test keeps it in line with the real starter bots (#1218)
+- Charts and tables made from a bot's reply no longer show a "From this reply" label that looked like a button but did nothing; when the numbers come from task checks or an attachment, a quiet line still says so (#1261)
 
 ## [Mac 0.9.53] - 2026-11-26
 
