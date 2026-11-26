@@ -134,7 +134,7 @@ fn pocket_core() -> Option<&'static Arc<dyn PocketCore>> {
 }
 
 pub fn tools() -> Vec<Value> {
-    let id = json!({"type": "string", "description": "The quiz's id from its card (qd_…)"});
+    let id = json!({"type": "string", "description": "The quiz's id from its card (qd_…). Leave it out to use your only quiz; if you have several, you get a list to pick from."});
     let spec = json!({"type": "object", "description": "The whole pocket.json (kit \"quiz\", version 1), written from the template pocket_create gives you"});
     vec![
         json!({
@@ -149,23 +149,22 @@ pub fn tools() -> Vec<Value> {
             "description": "Hand in a fixed or changed quiz: the whole spec again. It is checked like pocket_create (unchanged sources aren't fetched again) \
                 and returns the card. To move the event only (also once it's open), send `when` instead of `spec`.",
             "inputSchema": {"type": "object", "properties": {"id": id, "spec": spec,
-                "when": {"type": ["string", "null"], "description": "The new start time, RFC 3339 with its offset (2026-11-27T21:00:00+00:00), or null for no time"}},
-                "required": ["id"]},
+                "when": {"type": ["string", "null"], "description": "The new start time, RFC 3339 with its offset (2026-11-27T21:00:00+00:00), or null for no time"}}},
         }),
         json!({
             "name": "pocket_dry_run",
             "description": "Run the quiz again with pretend players (default 30, at most 60) and return the card.",
-            "inputSchema": {"type": "object", "properties": {"id": id, "players": {"type": "integer", "minimum": 2, "maximum": 60}}, "required": ["id"]},
+            "inputSchema": {"type": "object", "properties": {"id": id, "players": {"type": "integer", "minimum": 2, "maximum": 60}}},
         }),
         json!({
             "name": "pocket_open",
-            "description": "Open a Ready quiz so guests can join (only when the person wants it shared).",
-            "inputSchema": {"type": "object", "properties": {"id": id}, "required": ["id"]},
+            "description": "Open a Ready quiz so guests can join (only when the person wants it shared). Without `id` it opens your only quiz.",
+            "inputSchema": {"type": "object", "properties": {"id": id}},
         }),
         json!({
             "name": "pocket_close",
-            "description": "Close an open quiz.",
-            "inputSchema": {"type": "object", "properties": {"id": id}, "required": ["id"]},
+            "description": "Close an open quiz. Without `id` it closes your only open quiz.",
+            "inputSchema": {"type": "object", "properties": {"id": id}},
         }),
     ]
 }
@@ -198,8 +197,83 @@ fn spec_arg(args: &Value) -> Result<Option<String>, String> {
     Ok(Some(text))
 }
 
-fn id_arg(args: &Value) -> Result<&str, String> {
-    args.get("id").and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty() && s.len() <= 64).ok_or_else(|| "`id` is required".to_string())
+/// The `id` argument. `Ok(None)` when it is left out (absent, null or blank): the bot's only quiz
+/// is used ([`pick_draft`]). Anything else that isn't a usable id fails as it always has.
+fn id_arg(args: &Value) -> Result<Option<&str>, String> {
+    match args.get("id") {
+        None | Some(Value::Null) => Ok(None),
+        Some(Value::String(s)) if s.trim().is_empty() => Ok(None),
+        Some(Value::String(s)) if s.trim().len() <= 64 => Ok(Some(s.trim())),
+        Some(_) => Err("`id` is required".to_string()),
+    }
+}
+
+/// Most quizzes a pick list shows.
+const PICK_LIST_MAX: usize = 10;
+
+/// The states a tool without `id` picks from: close acts on an open quiz only, the others on any
+/// quiz that isn't closed yet (each tool still refuses a state it can't act on, as with an `id`).
+fn pick_states(tool: &str) -> &'static [&'static str] {
+    match tool {
+        "pocket_close" => &["open"],
+        _ => &["writing", "checking", "dry_run_stopped", "ready", "open"],
+    }
+}
+
+fn verb(tool: &str) -> &'static str {
+    match tool {
+        "pocket_update" => "update",
+        "pocket_dry_run" => "dry-run",
+        "pocket_open" => "open",
+        _ => "close",
+    }
+}
+
+/// "just now", "5 min ago", "3 h ago", "2 days ago".
+fn ago(updated_at: i64, now: i64) -> String {
+    let min = (now - updated_at).max(0) / 60_000;
+    match min {
+        0 => "just now".into(),
+        1..=59 => format!("{min} min ago"),
+        60..=2879 => format!("{} h ago", min / 60),
+        _ => format!("{} days ago", min / 1440),
+    }
+}
+
+/// quiz-open-without-id: a call with no `id` uses this bot's one quiz in this space that the tool
+/// can act on. On a Custom API or API model the next turn carries the card's text, not its qd_ id,
+/// so "open it" there comes with no id. Several: a list to pick from, and nothing changes. Never
+/// another bot's quiz or another space's.
+async fn pick_draft(state: &AppState, space: &str, scope: &SelfScope, tool: &str) -> Result<QuizDraftRow, ToolResult> {
+    let mut rows = match state.db.quiz_drafts_of_kwant(space, &scope.kwant_id, pick_states(tool), PICK_LIST_MAX as i64 + 1).await {
+        Ok(r) => r,
+        Err(e) => {
+            tracing::warn!(error = %e, "quiz draft list failed");
+            return Err(fail("Couldn't read your quizzes."));
+        }
+    };
+    match rows.len() {
+        0 if tool == "pocket_close" => Err(fail("You have no open quiz to close.")),
+        0 => Err(fail(format!("You have no quiz draft to {}. Make one with pocket_create first.", verb(tool)))),
+        1 => Ok(rows.remove(0)),
+        n => Err(fail(pick_list(tool, &rows, n, now_ms()))),
+    }
+}
+
+/// The several quizzes a call without `id` could mean, one line each, newest first.
+fn pick_list(tool: &str, rows: &[QuizDraftRow], n: usize, now: i64) -> String {
+    let count = if n > PICK_LIST_MAX { format!("more than {PICK_LIST_MAX}") } else { n.to_string() };
+    let mut out = format!("You have {count} quizzes you could {}, so nothing changed. Call {tool} again with `id`, one of:\n", verb(tool));
+    for r in rows.iter().take(PICK_LIST_MAX) {
+        let title = if r.title.trim().is_empty() { "untitled" } else { r.title.trim() };
+        let st: &str = match State::parse(&r.state) {
+            Some(s) => s.chip(),
+            None => &r.state,
+        };
+        out.push_str(&format!("  {} · {title} · {st} · updated {}\n", r.id, ago(r.updated_at, now)));
+    }
+    out.push_str("Call again with `id`.");
+    out
 }
 
 pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value) -> ToolResult {
@@ -217,15 +291,25 @@ pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value)
                 Ok(id) => id,
                 Err(e) => return fail(e),
             };
-            let row = match state.db.quiz_draft_get(&space, id).await {
-                Ok(Some(r)) if r.kwant_id == scope.kwant_id => r,
-                Ok(Some(_)) => return fail("That quiz belongs to another bot."),
-                Ok(None) => return fail(format!("There's no quiz {id:?} in your space.")),
-                Err(e) => {
-                    tracing::warn!(error = %e, "quiz draft read failed");
-                    return fail("Couldn't read the quiz.");
-                }
+            let found = match id {
+                Some(id) => match state.db.quiz_draft_get(&space, id).await {
+                    Ok(Some(r)) => r,
+                    Ok(None) => return fail(format!("There's no quiz {id:?} in your space.")),
+                    Err(e) => {
+                        tracing::warn!(error = %e, "quiz draft read failed");
+                        return fail("Couldn't read the quiz.");
+                    }
+                },
+                None => match pick_draft(state, &space, scope, name).await {
+                    Ok(r) => r,
+                    Err(e) => return e,
+                },
             };
+            // The same owner check for a given id and a picked one
+            if found.kwant_id != scope.kwant_id {
+                return fail("That quiz belongs to another bot.");
+            }
+            let row = found;
             match name {
                 "pocket_update" => update(state, row, args).await,
                 "pocket_dry_run" => dry_run(state, row, args).await,
@@ -679,6 +763,56 @@ mod tests {
             "turns_completed": 12, "created_at": null
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn a_left_out_id_is_none_and_a_bad_one_fails_as_before() {
+        assert_eq!(id_arg(&json!({})), Ok(None));
+        assert_eq!(id_arg(&json!({"id": null})), Ok(None));
+        assert_eq!(id_arg(&json!({"id": "  "})), Ok(None));
+        assert_eq!(id_arg(&json!({"id": " qd_1 "})), Ok(Some("qd_1")));
+        assert_eq!(id_arg(&json!({"id": 7})), Err("`id` is required".to_string()));
+        assert_eq!(id_arg(&json!({"id": "x".repeat(65)})), Err("`id` is required".to_string()));
+    }
+
+    #[test]
+    fn the_pick_list_names_each_quiz_newest_first() {
+        let now = 10 * 86_400_000;
+        let row = |id: &str, title: &str, state: &str, ago_ms: i64| QuizDraftRow {
+            id: id.into(),
+            space_id: "s".into(),
+            kwant_id: "k".into(),
+            title: title.into(),
+            spec: "{}".into(),
+            state: state.into(),
+            problems: "[]".into(),
+            sources: "[]".into(),
+            dry_run: None,
+            budget: "{}".into(),
+            pocket_code: None,
+            created_at: 0,
+            updated_at: now - ago_ms,
+            own_keys: "[]".into(),
+        };
+        let rows = [row("qd_a", "Friday Pub Quiz", "ready", 5 * 60_000), row("qd_b", " ", "dry_run_stopped", 3 * 3_600_000)];
+        assert_eq!(
+            pick_list("pocket_open", &rows, 2, now),
+            "You have 2 quizzes you could open, so nothing changed. Call pocket_open again with `id`, one of:\n  \
+             qd_a · Friday Pub Quiz · Ready · updated 5 min ago\n  qd_b · untitled · Dry run stopped · updated 3 h ago\nCall again with `id`."
+        );
+        let many: Vec<QuizDraftRow> = (0..=PICK_LIST_MAX).map(|i| row(&format!("qd_{i}"), "Q", "open", 3 * 86_400_000)).collect();
+        let text = pick_list("pocket_close", &many, many.len(), now);
+        assert!(text.starts_with("You have more than 10 quizzes you could close"), "{text}");
+        assert_eq!(text.matches("updated 3 days ago").count(), PICK_LIST_MAX, "{text}");
+        assert_eq!((ago(now, now), ago(now - 59_999, now), ago(now + 5, now)), ("just now".into(), "just now".into(), "just now".into()));
+    }
+
+    #[test]
+    fn close_picks_only_an_open_quiz() {
+        assert_eq!(pick_states("pocket_close"), ["open"]);
+        for t in ["pocket_open", "pocket_update", "pocket_dry_run"] {
+            assert!(!pick_states(t).contains(&"closed") && pick_states(t).contains(&"ready"), "{t}");
+        }
     }
 
     #[test]

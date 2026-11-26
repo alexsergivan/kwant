@@ -88,6 +88,10 @@ pub struct Player {
     pub team: Option<String>,
     pub connected: bool,
     pub removed: bool,
+    /// The creature the guest picked when joining (pocket's player row). Games saved before it was
+    /// kept have none, so it reads as absent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub avatar: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -342,8 +346,21 @@ impl QuizGame {
         if count >= self.max_players() {
             return Err(ActionError::Full(format!("the quiz is full ({} players)", self.max_players())));
         }
-        self.players.push(Player { id: id.to_string(), name, team: None, connected: true, removed: false });
+        self.players.push(Player { id: id.to_string(), name, team: None, connected: true, removed: false, avatar: None });
         Ok(ActionOutcome::Applied)
+    }
+
+    /// Keeps the creature a player picked, so the big screen draws them as it. Blank clears it.
+    /// False when there is no such player.
+    pub fn set_avatar(&mut self, id: &str, avatar: &str) -> bool {
+        let avatar = avatar.trim();
+        match self.player_mut(id) {
+            Some(p) => {
+                p.avatar = (!avatar.is_empty()).then(|| avatar.to_string());
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn set_connected(&mut self, id: &str, connected: bool) -> bool {

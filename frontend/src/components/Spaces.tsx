@@ -19,13 +19,13 @@ import { SAVE_FIRST, acceptRiskText } from '../passwordStore';
 import { MoveToBitwardenFirst, usePasswordStore } from './PasswordStorePanel';
 import { devApi, devStore } from '../devMode';
 import { DevBadge } from './DevModeSwitch';
-import { glyphPx, pixelIconFor } from '../spaceIcons';
+import { glyphPx, iconKey, iconTitle, pixelIconFor } from '../spaceIcons';
 
 const badge = (n: number) => (n > 99 ? '99+' : String(n));
 
 /** 36j: a space icon as a 9x9 pixel glyph. Main tone is the space colour lifted 35% toward white; the detail is
  * the creatures' eye ink (--kw-wa-screen), so a space tile and a bot face read as one sprite sheet. */
-export const SpaceGlyph: React.FC<{ rows: readonly string[]; px: number; colour: string }> = ({ rows, px, colour }) => {
+export const SpaceGlyph: React.FC<{ rows: readonly string[]; px: number; colour: string; className?: string }> = ({ rows, px, colour, className }) => {
   const main = `color-mix(in srgb, ${colour} 65%, white)`;
   const cells: React.ReactNode[] = [];
   rows.forEach((row, y) => {
@@ -35,31 +35,42 @@ export const SpaceGlyph: React.FC<{ rows: readonly string[]; px: number; colour:
     }
   });
   return (
-    <svg viewBox="0 0 9 9" width={px} height={px} shapeRendering="crispEdges" aria-hidden="true" focusable="false" data-space-glyph>
+    <svg viewBox="0 0 9 9" width={px} height={px} shapeRendering="crispEdges" aria-hidden="true" focusable="false" data-space-glyph className={className}>
       {cells}
     </svg>
   );
 };
 
-/** A space's icon on its colour (a pixel glyph for the 8 picker icons, else the emoji); `dev` adds the Dev mode
- * `</>` badge bottom-right. */
-export const SpaceTile: React.FC<{ space: Pick<Space, 'id' | 'icon' | 'color'>; size?: number; className?: string; dev?: boolean; devBehind?: string }> = ({
-  space,
-  size = 40,
-  className = '',
-  dev = false,
-  devBehind,
-}) => {
+/** The kit's holo sticker (the Verified foil) cut down to a 2 px ring. Only on the picked icon and the form's
+ * preview tile: picked = earned. The rail, header, switcher and Space ready card never wear it. */
+export const FoilRing: React.FC = () => <span aria-hidden="true" className="kw-sticker kw-sticker-holo kw-foil-ring" />;
+
+/** A space's icon on its colour (a pixel glyph for the 24 picker icons, else the emoji); `dev` adds the Dev mode
+ * `</>` badge bottom-right. `foil` (New space and Space settings only) adds the holo ring while the form is open;
+ * `just` plays the one press + foil sweep after a change. */
+export const SpaceTile: React.FC<{
+  space: Pick<Space, 'id' | 'icon' | 'color'>;
+  size?: number;
+  className?: string;
+  dev?: boolean;
+  devBehind?: string;
+  foil?: boolean;
+  just?: boolean;
+  onJustEnd?: (e: React.AnimationEvent) => void;
+}> = ({ space, size = 40, className = '', dev = false, devBehind, foil = false, just = false, onJustEnd }) => {
   const c = spaceColor(space);
   const emoji = spaceIcon(space);
   const g = pixelIconFor(emoji);
   const tile = (
     <span
       aria-hidden="true"
-      className={`inline-flex items-center justify-center shrink-0 rounded-xl ${dev ? '' : className}`}
+      data-space-tile-foil={foil ? '' : undefined}
+      onAnimationEnd={foil ? onJustEnd : undefined}
+      className={`inline-flex items-center justify-center shrink-0 rounded-xl ${foil ? `relative isolate kw-tile-foiled${just ? ' kw-just' : ''}` : ''} ${dev ? '' : className}`}
       style={{ width: size, height: size, background: `${c}33`, boxShadow: `inset 0 0 0 1px ${c}66`, ...(g ? {} : { fontSize: size * 0.5 }) }}
     >
-      {g ? <SpaceGlyph rows={g.rows} px={glyphPx(size)} colour={c} /> : emoji}
+      {foil && <FoilRing />}
+      {g ? <SpaceGlyph rows={g.rows} px={glyphPx(size)} colour={c} className={foil ? 'relative z-[1]' : undefined} /> : foil ? <span className="relative z-[1]">{emoji}</span> : emoji}
     </span>
   );
   if (!dev) return tile;
@@ -71,10 +82,130 @@ export const SpaceTile: React.FC<{ space: Pick<Space, 'id' | 'icon' | 'color'>; 
   );
 };
 
-/** An icon picker button's face: the glyph at 18 px in the colour picked in the same form, so it previews the tile. */
-export const PickerGlyph: React.FC<{ icon: string; colour: string }> = ({ icon, colour }) => {
+/** An icon picker button's face: the glyph in the colour picked in the same form, so it previews the tile.
+ * 18 px in a 36 px button; `className` grows it to 27 px in the phone's ~50 px buttons. */
+export const PickerGlyph: React.FC<{ icon: string; colour: string; className?: string }> = ({ icon, colour, className }) => {
   const g = pixelIconFor(icon);
-  return g ? <SpaceGlyph rows={g.rows} px={18} colour={colour} /> : <>{icon}</>;
+  return g ? <SpaceGlyph rows={g.rows} px={18} colour={colour} className={className} /> : <>{icon}</>;
+};
+
+const prefersReducedMotion = () => typeof window !== 'undefined' && !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+
+/** space-icons-2: "just picked" for the picker and its preview tile. When the icon or colour changes (never on
+ * first mount) it names the picked icon for one 160 ms press + 200 ms foil sweep, cleared on the sweep's
+ * animationend (or a 400 ms backstop). A change while it is on doesn't restart it, so arrow-key repeat stays
+ * calm; under reduced motion it never turns on. */
+export function useJustPicked(icon: string, colour: string) {
+  const [just, setJust] = useState<string | null>(null);
+  const first = useRef(true);
+  const on = useRef(false);
+  const timer = useRef<ReturnType<typeof setTimeout>>();
+  const end = () => {
+    on.current = false;
+    clearTimeout(timer.current);
+    setJust(null);
+  };
+  useEffect(() => {
+    if (first.current) {
+      first.current = false;
+      return;
+    }
+    if (on.current || prefersReducedMotion()) return;
+    on.current = true;
+    setJust(icon);
+    timer.current = setTimeout(end, 400);
+  }, [icon, colour]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const onJustEnd = (e: React.AnimationEvent) => {
+    if (e.animationName === 'kw-foil-sweep') end();
+  };
+  return { just, onJustEnd };
+}
+
+/** space-icons-2: the 24-icon picker of New space and Space settings, one radio group. Tab enters it once (the
+ * picked button, else the first) and leaves once; arrows move the pick (up/down by the grid's live column count,
+ * 8 on desktop, 6 on a phone), Home/End go to the ends. The picked button wears the foil ring. */
+export const SpaceIconPicker: React.FC<{
+  id: string;
+  value: string;
+  colour: string;
+  onChange: (icon: string) => void;
+  just: string | null;
+  onJustEnd: (e: React.AnimationEvent) => void;
+  /** Grid columns per breakpoint, e.g. `grid-cols-6 sm:grid-cols-8 sm:w-max`. */
+  gridClass: string;
+  /** Button size per breakpoint (36 px desktop, square ≥44 px phone). */
+  buttonClass: string;
+  /** Grows the glyph to 27 px where the buttons are phone-sized. */
+  glyphClass: string;
+  disabled?: boolean;
+}> = ({ id, value, colour, onChange, just, onJustEnd, gridClass, buttonClass, glyphClass, disabled = false }) => {
+  const gridRef = useRef<HTMLDivElement>(null);
+  const picked = SPACE_ICONS.findIndex((i) => iconKey(i) === iconKey(value));
+  const pickedName = picked >= 0 ? pixelIconFor(SPACE_ICONS[picked])?.name : undefined;
+  const move = (n: number) => {
+    const next = (n + SPACE_ICONS.length) % SPACE_ICONS.length;
+    onChange(SPACE_ICONS[next]);
+    gridRef.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
+  };
+  const onKeyDown = (e: React.KeyboardEvent) => {
+    // ⌘←/⌘→ (Back/Forward on a Mac), Ctrl and Alt combos belong to the browser and OS.
+    if (e.ctrlKey || e.metaKey || e.altKey) return;
+    const from = Math.max(0, picked);
+    const grid = gridRef.current;
+    const cols = (grid && getComputedStyle(grid).gridTemplateColumns.split(' ').filter(Boolean).length) || 8;
+    const to: Record<string, number> = {
+      ArrowRight: from + 1,
+      ArrowLeft: from - 1,
+      ArrowDown: from + cols,
+      ArrowUp: from - cols,
+      Home: 0,
+      End: SPACE_ICONS.length - 1,
+    };
+    if (!(e.key in to)) return;
+    e.preventDefault();
+    move(to[e.key]);
+  };
+  return (
+    <fieldset>
+      <legend id={`${id}-legend`} className="text-xs font-medium text-zinc-300 mb-1.5">
+        Icon{pickedName && <span className="text-zinc-400 font-normal"> · {iconTitle(pickedName)}</span>}
+      </legend>
+      <div
+        ref={gridRef}
+        role="radiogroup"
+        aria-labelledby={`${id}-legend`}
+        data-space-icon-picker
+        onKeyDown={onKeyDown}
+        className={`grid gap-2 ${gridClass} ${disabled ? 'opacity-60 pointer-events-none' : ''}`}
+      >
+        {SPACE_ICONS.map((i, n) => {
+          const on = n === picked;
+          const name = pixelIconFor(i)?.name ?? i;
+          return (
+            <button
+              key={i}
+              type="button"
+              role="radio"
+              aria-checked={on}
+              aria-label={`Icon: ${name}`}
+              title={iconTitle(name)}
+              tabIndex={on || (picked < 0 && n === 0) ? 0 : -1}
+              onClick={() => onChange(i)}
+              onAnimationEnd={on ? onJustEnd : undefined}
+              className={`relative isolate rounded-lg flex items-center justify-center border transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-900 ${buttonClass} ${
+                on ? `border-transparent${just === i ? ' kw-just' : ''}` : 'border-zinc-800 bg-zinc-950/40 hover:border-zinc-600 hover:bg-zinc-900'
+              }`}
+              style={on ? { background: `${colour}33` } : undefined}
+            >
+              {on && <FoilRing />}
+              <PickerGlyph icon={i} colour={colour} className={`relative z-[1] ${glyphClass}`} />
+            </button>
+          );
+        })}
+      </div>
+    </fieldset>
+  );
 };
 
 /** The rail shows the badge on every Dev space, but the spaces list has no dev_mode field: ask each once. */
@@ -339,11 +470,13 @@ export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCrea
   };
 
   const preview = { id: 'preview', icon, color };
+  const { just, onJustEnd } = useJustPicked(icon, color);
+  const picked = SPACE_ICONS.some((i) => iconKey(i) === iconKey(icon));
   return (
     <Dialog title="New space" subtitle="Its own bots, teams, accounts and chats. Nothing is shared with your other spaces." labelId="new-space-title" onClose={onClose} unsaved={!!name.trim()}>
       <form onSubmit={submit} className="space-y-4" noValidate>
         <div className="flex items-center gap-3">
-          <SpaceTile space={preview} size={48} />
+          <SpaceTile space={preview} size={48} foil={picked} just={!!just} onJustEnd={onJustEnd} />
           <div className="flex-1 min-w-0">
             <label htmlFor="space-name" className="block text-xs font-medium text-zinc-300 mb-1">Name</label>
             <input
@@ -364,25 +497,18 @@ export const NewSpaceModal: React.FC<NewSpaceProps> = ({ spaces, onClose, onCrea
         </div>
         <p id="space-name-error" className="-mt-2 text-[11px] text-rose-300 min-h-[1em]">{touched ? nameErr : ''}</p>
 
-        <fieldset>
-          <legend className="text-xs font-medium text-zinc-300 mb-1.5">Icon</legend>
-          <div className="flex flex-wrap gap-1.5">
-            {SPACE_ICONS.map((i) => (
-              <button
-                key={i}
-                type="button"
-                aria-pressed={icon === i}
-                aria-label={`Icon: ${pixelIconFor(i)?.name ?? i}`}
-                onClick={() => setIcon(i)}
-                className={`w-11 h-11 sm:w-9 sm:h-9 rounded-lg text-lg flex items-center justify-center border transition-colors ${
-                  icon === i ? 'border-sky-400 bg-sky-500/10' : 'border-zinc-800 hover:border-zinc-600'
-                }`}
-              >
-                <PickerGlyph icon={i} colour={color} />
-              </button>
-            ))}
-          </div>
-        </fieldset>
+        <SpaceIconPicker
+          id="new-space-icon"
+          value={icon}
+          colour={color}
+          onChange={setIcon}
+          just={just}
+          onJustEnd={onJustEnd}
+          gridClass="grid-cols-6 sm:grid-cols-8 sm:w-max"
+          buttonClass="aspect-square min-h-11 sm:h-9 sm:w-9 sm:min-h-0"
+          glyphClass="max-sm:w-[27px] max-sm:h-[27px]"
+          disabled={saving}
+        />
 
         <fieldset>
           <legend className="text-xs font-medium text-zinc-300 mb-1.5">Colour</legend>

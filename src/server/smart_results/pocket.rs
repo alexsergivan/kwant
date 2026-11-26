@@ -9,6 +9,9 @@
 //! that bot's, and a channel is in the draft's space. Anything else (another space's or another
 //! bot's draft, no such draft, a call that failed, another server's tool of the same name, Pocket
 //! apps switched off) gives no block.
+//!
+//! The message kwnt posts when a pocket ends gets the results card from the block it carries in
+//! its `meta` ([`from_meta`]).
 
 use chrono::{DateTime, Utc};
 use serde_json::Value;
@@ -37,7 +40,7 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
     }
     // The turn's last call that names a card wins: a Secret Santa made after a quiz call shows
     // the Santa, and a quiz call after `santa_create` shows the quiz.
-    let named = last_named(input)?;
+    let called = last_named(input)?;
     let on = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?").bind(qt::SETTING).fetch_optional(&mut *conn).await.ok()?;
     if on.as_deref() != Some("on") {
         return None;
@@ -48,11 +51,14 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
         .await
         .ok()
         .flatten();
-    let id = match named {
-        Named::Quiz(id) => id,
-        Named::Santa(code) => return santa_candidate(&mut *conn, &code, input, extra, tz.as_deref()).await,
+    let named = match called {
+        Called::Quiz(named) => named,
+        Called::Santa(code) => return santa_candidate(&mut *conn, &code, input, extra, tz.as_deref()).await,
     };
-    let row = sqlx::query_as::<_, QuizDraftRow>("SELECT * FROM quiz_drafts WHERE id = ?").bind(id.as_str()).fetch_optional(&mut *conn).await.ok()??;
+    let row = match named {
+        Named::Id(id) => sqlx::query_as::<_, QuizDraftRow>("SELECT * FROM quiz_drafts WHERE id = ?").bind(id.as_str()).fetch_optional(&mut *conn).await.ok()??,
+        Named::MadeThisTurn => made_this_turn(&mut *conn, input, extra).await?,
+    };
     if !belongs(&mut *conn, &row.kwant_id, &row.space_id, input, extra).await {
         return None;
     }
@@ -61,18 +67,18 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
 
 /// What the turn's last card-naming call named.
 #[derive(Debug, PartialEq)]
-enum Named {
-    /// A Quizmaster draft id.
-    Quiz(String),
+enum Called {
+    /// A Quizmaster draft.
+    Quiz(Named),
     /// The code of a Secret Santa `santa_create` made.
     Santa(String),
 }
 
-fn last_named(input: &NewMessage) -> Option<Named> {
+fn last_named(input: &NewMessage) -> Option<Called> {
     match (draft_named_at(input), santa_named_at(input)) {
-        (Some((qi, _)), Some((si, code))) if si > qi => Some(Named::Santa(code)),
-        (Some((_, id)), _) => Some(Named::Quiz(id)),
-        (None, Some((_, code))) => Some(Named::Santa(code)),
+        (Some((qi, _)), Some((si, code))) if si > qi => Some(Called::Santa(code)),
+        (Some((_, named)), _) => Some(Called::Quiz(named)),
+        (None, Some((_, code))) => Some(Called::Santa(code)),
         (None, None) => None,
     }
 }
@@ -168,37 +174,95 @@ fn santa_block(code: &str, c: santa_tool::Card) -> Pocket {
     }
 }
 
-/// The draft id the turn's last Quizmaster call that answered with a card named: `arguments.id`,
-/// or for `pocket_create` (which has none) the id its card text starts with. A call that worked is
-/// "ok"; a draft still being written comes back as an "error" whose answer is that draft's own card
-/// (so the bot fixes it), and counts too. Any other failure doesn't. Shape-checked only; whose draft
-/// it is gets checked against the stored row.
+/// Which draft a turn's Quizmaster calls name.
+#[derive(Debug, PartialEq)]
+enum Named {
+    /// `arguments.id`, or the id a `pocket_create` card's text starts with.
+    Id(String),
+    /// A `pocket_create` that ran with a spec but whose answer wasn't recorded: the Claude CLI
+    /// engine records kwnt_tools calls as "allowed" with no `result` (quiz-card-and-results). The
+    /// draft it made is this bot's newest one created since the turn began ([`made_this_turn`]).
+    MadeThisTurn,
+}
+
+/// The draft the turn's last Quizmaster call that answered with a card named: `arguments.id`, or
+/// for `pocket_create` (which has none) the id its card text starts with. A call that worked is
+/// "ok", or "allowed" on the Claude CLI engine, which records the call when it is let through and
+/// never its answer; a draft still being written comes back as an "error" whose answer is that
+/// draft's own card (so the bot fixes it), and counts too. Any other failure doesn't. Shape-checked
+/// only; whose draft it is gets checked against the stored row.
 #[cfg(test)]
-fn draft_named(input: &NewMessage) -> Option<String> {
-    draft_named_at(input).map(|(_, id)| id)
+fn draft_named(input: &NewMessage) -> Option<Named> {
+    draft_named_at(input).map(|(_, named)| named)
 }
 
 /// [`draft_named`], with that call's place in the turn.
-fn draft_named_at(input: &NewMessage) -> Option<(usize, String)> {
+fn draft_named_at(input: &NewMessage) -> Option<(usize, Named)> {
     let calls = input.tool_calls.as_ref()?.as_array()?;
     calls.iter().enumerate().rev().find_map(|(i, c)| {
         if c.get("server").and_then(Value::as_str) != Some(SELF_SERVER_NAME) {
             return None;
         }
         let tool = c.get("tool").and_then(Value::as_str).filter(|t| qt::TOOLS.contains(t))?;
-        let card_id = c.get("result").and_then(Value::as_str).and_then(card_text_id);
+        let status = c.get("status").and_then(Value::as_str)?;
+        let result = c.get("result").and_then(Value::as_str);
+        let card_id = result.and_then(card_text_id);
         let id = match c.get("arguments").and_then(|a| a.get("id")).and_then(Value::as_str) {
             Some(id) => id.trim().to_string(),
+            // A create with a spec that ran, with no answer kept: the draft it made
+            None if tool == "pocket_create" && status == "allowed" && result.is_none() => {
+                let spec = c.get("arguments").and_then(|a| a.get("spec")).filter(|s| !s.is_null());
+                return spec.map(|_| (i, Named::MadeThisTurn));
+            }
             None if tool == "pocket_create" => card_id.clone()?,
             None => return None,
         };
-        let answered = match c.get("status").and_then(Value::as_str)? {
-            "ok" => true,
+        let answered = match status {
+            "ok" | "allowed" => true,
             "error" => card_id.as_deref() == Some(id.as_str()),
             _ => false,
         };
-        (answered && valid_id(&id)).then_some((i, id))
+        (answered && valid_id(&id)).then_some((i, Named::Id(id)))
     })
+}
+
+/// The reply's bot's newest draft created since the turn began: no earlier than the chat's newest
+/// message from anyone but this bot (the ask the turn answers). `None` without such a message or
+/// draft. Whose draft it is still goes through [`belongs`].
+async fn made_this_turn(conn: &mut SqliteConnection, input: &NewMessage, extra: &MessageExtra) -> Option<QuizDraftRow> {
+    let (chat, by_channel) = match (&input.direct_kwant_id, &input.channel_id) {
+        (Some(k), _) => (k.as_str(), false),
+        (None, Some(c)) => (c.as_str(), true),
+        (None, None) => return None,
+    };
+    let column = if by_channel { "channel_id" } else { "direct_kwant_id" };
+    let asked: DateTime<Utc> = sqlx::query_scalar::<_, Option<DateTime<Utc>>>(&format!(
+        "SELECT created_at FROM messages WHERE {column} = ? AND NOT (sender_role = 'kwant' AND sender_id = ?) ORDER BY created_at DESC, rowid DESC LIMIT 1"
+    ))
+    .bind(chat)
+    .bind(&input.sender_id)
+    .fetch_optional(&mut *conn)
+    .await
+    .ok()???;
+    // The bot: a direct chat's own, else the one the card names, else the sender by name in the channel's space
+    let kwant = match (&input.direct_kwant_id, extra.meta.as_ref().and_then(|m| m.get("kwant_id")).and_then(Value::as_str)) {
+        (Some(k), _) => k.clone(),
+        (None, Some(k)) => k.to_string(),
+        (None, None) => sqlx::query_scalar::<_, String>("SELECT k.id FROM kwants k JOIN channels c ON c.space_id = k.space_id WHERE c.id = ? AND k.name = ? LIMIT 1")
+            .bind(chat)
+            .bind(&input.sender_id)
+            .fetch_optional(&mut *conn)
+            .await
+            .ok()??,
+    };
+    // Message times keep whole seconds; drafts keep milliseconds
+    let since = asked.timestamp() * 1000;
+    sqlx::query_as::<_, QuizDraftRow>("SELECT * FROM quiz_drafts WHERE kwant_id = ? AND created_at >= ? ORDER BY created_at DESC, rowid DESC LIMIT 1")
+        .bind(kwant)
+        .bind(since)
+        .fetch_optional(&mut *conn)
+        .await
+        .ok()?
 }
 
 /// The draft id a card's text starts with (`Card::text()`: `Pocket app · Quiz [<id>] …`).
@@ -237,6 +301,74 @@ async fn belongs(conn: &mut SqliteConnection, kwant_id: &str, space_id: &str, in
         }
         (None, None) => false,
     }
+}
+
+/// Kits whose ended pocket the chat draws as the quiz results card. The other kits carry parts of
+/// their own (`santa`, `wall`, `gather`, `desk`) that this block doesn't, and the chat refuses one
+/// without them. `test` exists only in debug builds.
+const RESULT_KITS: &[&str] = &[crate::kits::quiz::KIT_ID, "test"];
+
+/// The most player names a results card's team shows (the chat's `validTeam` and
+/// [`super::validate`] refuse more).
+const MAX_CARD_MEMBERS: usize = 12;
+
+/// The results card of a message kwnt posted when a pocket ended (`meta.kind` "pocket",
+/// `reason` "results", `src/pocket/schedule.rs` `post_results`), read from the `meta.block` it
+/// built from the pocket's own data (quiz-card-and-results, Mira's ux-pass-0952 fix #2). `None`
+/// for any other pocket message (a reminder, which has no block), another kit, a block whose code
+/// isn't the message's, or one that doesn't fit. Guest-typed texts (team and player names) are
+/// cleaned and bounded the way [`fit`] does; the block then still has to pass [`super::validate`].
+pub fn from_meta(extra: &MessageExtra) -> Option<Block> {
+    let meta = extra.meta.as_ref()?;
+    if meta.get("reason").and_then(Value::as_str) != Some("results") {
+        return None;
+    }
+    let code = meta.get("code").and_then(Value::as_str).filter(|c| valid_code(c))?;
+    let raw = meta.get("block").filter(|b| b.is_object())?;
+    let mut p: Pocket = serde_json::from_value(raw.clone()).ok()?;
+    let reference = format!("pocket:{code}");
+    if p.state != "ended" || p.code != code || p.provenance.reference.as_deref() != Some(reference.as_str()) || !RESULT_KITS.contains(&p.kit.as_str()) {
+        return None;
+    }
+    // One block per message, so its id is the set's own
+    p.id = "b0".into();
+    p.provenance = Provenance::kwant_data(reference);
+    p.name = fit(p.name.trim(), 80);
+    let clean = |v: &mut Value, max: usize| {
+        if let Some(t) = v.as_str() {
+            *v = Value::String(fit(t.trim(), max));
+        }
+    };
+    if let Some(w) = p.ended.as_mut().and_then(|e| e.get_mut("winner")).and_then(|w| w.get_mut("name")) {
+        clean(w, 40);
+    }
+    // Results posted before the card learned its times kept raw timestamps; the card prints these as they
+    // are, so they read as the card's words do, in UTC (the message doesn't keep the person's zone)
+    if let Some(e) = p.ended.as_mut().and_then(Value::as_object_mut) {
+        let raw = |k: &str| e.get(k).and_then(Value::as_str).and_then(|t| DateTime::parse_from_rfc3339(t.trim()).ok()).map(|t| t.naive_utc());
+        let (at, deletes) = (raw("at"), raw("deletes_on"));
+        if let Some(t) = at {
+            e.insert("at".into(), Value::String(format!("{} UTC", crate::pocket::schedule::clock(t))));
+        }
+        if let Some(t) = deletes {
+            e.insert("deletes_on".into(), Value::String(t.format("%a, %b %-d (UTC)").to_string()));
+        }
+    }
+    if let Some(teams) = p.results.as_mut().and_then(|r| r.get_mut("teams")).and_then(Value::as_array_mut) {
+        for team in teams.iter_mut() {
+            if let Some(n) = team.get_mut("name") {
+                clean(n, 40);
+            }
+            // The kit lists every player of a team; the card names at most 12 (`players` keeps the
+            // real count), and a name that cleans to nothing is left out rather than refusing the card
+            if let Some(members) = team.get_mut("members").and_then(Value::as_array_mut) {
+                members.iter_mut().for_each(|m| clean(m, 24));
+                members.retain(|m| m.as_str().is_none_or(|t| !t.trim().is_empty()));
+                members.truncate(MAX_CARD_MEMBERS);
+            }
+        }
+    }
+    Some(Block::Pocket(Box::new(p)))
 }
 
 /// The card as the chat draws it. Every text is kwant's own, cleaned and bounded the way
@@ -486,7 +618,10 @@ mod tests {
             tool_calls: Some(serde_json::Value::Array(calls)),
             tokens_used: 0,
         };
-        draft_named(&input)
+        draft_named(&input).map(|n| match n {
+            Named::Id(id) => id,
+            Named::MadeThisTurn => "<made this turn>".into(),
+        })
     }
 
     fn call(tool: &str, args: serde_json::Value, status: &str, result: &str) -> serde_json::Value {
@@ -516,6 +651,202 @@ mod tests {
         assert_eq!(named(vec![call("pocket_create", serde_json::json!({}), "ok", "Template: ...")]), None);
         assert_eq!(named(vec![call("pocket_update", serde_json::json!({"id": "qd/../x"}), "ok", "")]), None);
         assert_eq!(named(vec![]), None);
+    }
+
+    /// quiz-card-and-results: the Claude CLI engine records kwnt_tools calls as "allowed", never
+    /// with their answer.
+    #[test]
+    fn a_claude_engine_call_names_its_draft_without_an_answer() {
+        let allowed = |tool: &str, args: serde_json::Value| serde_json::json!({"server": SELF_SERVER_NAME, "tool": tool, "arguments": args, "status": "allowed"});
+        let made = Some("<made this turn>".to_string());
+        assert_eq!(named(vec![allowed("pocket_create", serde_json::json!({"spec": {"version": 1}}))]), made);
+        assert_eq!(named(vec![allowed("pocket_dry_run", serde_json::json!({"id": "qd_0123456789ab"}))]), Some("qd_0123456789ab".into()));
+        // The last call wins: a create then a dry run names the dry run's draft
+        let both = vec![allowed("pocket_create", serde_json::json!({"spec": {}})), allowed("pocket_dry_run", serde_json::json!({"id": "qd_0123456789ab"}))];
+        assert_eq!(named(both), Some("qd_0123456789ab".into()));
+        // The template request (no spec, or a null one) made nothing; a bad id is still refused
+        assert_eq!(named(vec![allowed("pocket_create", serde_json::json!({}))]), None);
+        assert_eq!(named(vec![allowed("pocket_create", serde_json::json!({"spec": null}))]), None);
+        assert_eq!(named(vec![allowed("pocket_update", serde_json::json!({"id": "qd/../x"}))]), None);
+        // An "allowed" create that did keep its answer reads the id from it, as "ok" does
+        let card = "Pocket app · Quiz [qd_0123456789ab] \"Friday\" · Ready\ncard: {}";
+        assert_eq!(named(vec![call("pocket_create", serde_json::json!({"spec": {}}), "allowed", card)]), Some("qd_0123456789ab".into()));
+        // Another server's tool of the same name doesn't count
+        let mut foreign = allowed("pocket_create", serde_json::json!({"spec": {}}));
+        foreign["server"] = serde_json::json!("someones_mcp");
+        assert_eq!(named(vec![foreign]), None);
+    }
+
+    /// What `schedule::ended_block` stores in the results message's `meta.block`.
+    fn ended_meta(code: &str, kit: &str) -> serde_json::Value {
+        serde_json::json!({
+            "kind": "pocket", "reason": "results", "code": code, "kwant_id": "k1",
+            "block": {
+                "id": format!("pocket-{code}-ended"), "type": "pocket", "title": null,
+                "source": {"kind": "slot"}, "provenance": {"kind": "kwant_data", "ref": format!("pocket:{code}")},
+                "code": code, "kit": kit, "name": "Friday Pub Quiz", "when": null, "state": "ended",
+                "progress": null, "rounds": [], "checks": null, "dry_run": null, "eta": null, "opens_line": null,
+                "live": null, "join": null,
+                "ended": {"at": "9:41 PM", "winner": {"name": "Quizzly Bears", "points": 31}, "stats": null, "deletes_on": "Fri, Dec 25"},
+                "budget": null,
+                "results": {
+                    "teams": [
+                        {"name": "Quizzly Bears", "players": 4, "points": 31, "palette": "yellow", "members": ["Mia", "Tom"]},
+                        {"name": "Les Quizérables", "players": 3, "points": 27.5, "palette": "teal", "members": []}
+                    ],
+                    "missed": [{"label": "R2 Q4", "question": "Capital of Australia?", "answer": "Canberra", "pct_right": 22}],
+                    "margin": 3, "near_misses": 2, "near_misses_accepted": 1
+                }
+            }
+        })
+    }
+
+    fn results_of(meta: serde_json::Value) -> Option<Block> {
+        from_meta(&MessageExtra { meta: Some(meta), ..Default::default() })
+    }
+
+    /// quiz-card-and-results (Mira's ux-pass-0952 fix #2): the results message gets the card.
+    #[test]
+    fn a_results_message_gets_the_ended_card_from_its_meta() {
+        let Some(Block::Pocket(p)) = results_of(ended_meta("PQ7XK2", "quiz")) else { panic!("no card") };
+        assert_eq!((p.id.as_str(), p.state.as_str(), p.code.as_str(), p.kit.as_str()), ("b0", "ended", "PQ7XK2", "quiz"));
+        assert_eq!(p.provenance, Provenance::kwant_data("pocket:PQ7XK2".into()));
+        assert_eq!(p.results.as_ref().unwrap()["teams"][1]["name"], "Les Quizérables");
+        assert_eq!(check(*p), Ok(()));
+        // A reminder (no block), another reason, another kit, a block for another code, a card not
+        // ended, a ref to another pocket, a bad code: no card
+        let mut reminder = ended_meta("PQ7XK2", "quiz");
+        (reminder["reason"], reminder["block"]) = (serde_json::json!("reminder"), serde_json::Value::Null);
+        assert!(results_of(reminder).is_none());
+        let mut other_reason = ended_meta("PQ7XK2", "quiz");
+        other_reason["reason"] = serde_json::json!("deleted");
+        assert!(results_of(other_reason).is_none());
+        for kit in ["santa", "wall", "gather", "desk", "Quiz"] {
+            assert!(results_of(ended_meta("PQ7XK2", kit)).is_none(), "{kit}");
+        }
+        let mut other_code = ended_meta("PQ7XK2", "quiz");
+        other_code["code"] = serde_json::json!("ZZ9ZZ9");
+        assert!(results_of(other_code).is_none());
+        let mut live = ended_meta("PQ7XK2", "quiz");
+        live["block"]["state"] = serde_json::json!("live");
+        assert!(results_of(live).is_none());
+        let mut other_ref = ended_meta("PQ7XK2", "quiz");
+        other_ref["block"]["provenance"]["ref"] = serde_json::json!("pocket:ZZ9ZZ9");
+        assert!(results_of(other_ref).is_none());
+        assert!(results_of(ended_meta("P Q", "quiz")).is_none());
+        let mut junk = ended_meta("PQ7XK2", "quiz");
+        junk["block"] = serde_json::json!("not a block");
+        assert!(results_of(junk).is_none());
+        assert!(results_of(serde_json::json!(null)).is_none());
+    }
+
+    /// A results message stored before the card learned its times still reads in words.
+    #[test]
+    fn raw_end_times_from_older_results_read_as_words() {
+        let mut meta = ended_meta("PQ7XK2", "quiz");
+        meta["block"]["ended"]["at"] = serde_json::json!("2026-11-27T21:12:40.123456789Z");
+        meta["block"]["ended"]["deletes_on"] = serde_json::json!("2026-12-04T21:12:40+00:00");
+        let Some(Block::Pocket(p)) = results_of(meta) else { panic!("no card") };
+        let e = p.ended.as_ref().unwrap();
+        assert_eq!((e["at"].as_str(), e["deletes_on"].as_str()), (Some("9:12 PM UTC"), Some("Fri, Dec 4 (UTC)")));
+        assert_eq!(check(*p), Ok(()));
+        // Words are kept as they are
+        let Some(Block::Pocket(p)) = results_of(ended_meta("PQ7XK2", "quiz")) else { panic!("no card") };
+        assert_eq!((p.ended.as_ref().unwrap()["at"].as_str(), p.ended.as_ref().unwrap()["deletes_on"].as_str()), (Some("9:41 PM"), Some("Fri, Dec 25")));
+    }
+
+    /// Guest-typed team and player names are cleaned and bounded, so the card still passes.
+    #[test]
+    fn guest_names_on_the_results_card_are_cleaned_and_bounded() {
+        let mut meta = ended_meta("PQ7XK2", "quiz");
+        meta["block"]["results"]["teams"][0]["name"] = serde_json::json!(format!("<img src=x>{}", "🎉".repeat(40)));
+        meta["block"]["results"]["teams"][0]["members"] = serde_json::json!(["<b>Mia</b>", "x".repeat(60)]);
+        meta["block"]["ended"]["winner"]["name"] = serde_json::json!("<script>".repeat(10));
+        meta["block"]["name"] = serde_json::json!("y".repeat(200));
+        let Some(Block::Pocket(p)) = results_of(meta) else { panic!("no card") };
+        let r = p.results.as_ref().unwrap();
+        let name = r["teams"][0]["name"].as_str().unwrap();
+        assert!(!name.contains('<') && utf16_len(name) <= 40, "{name}");
+        assert!(r["teams"][0]["members"].as_array().unwrap().iter().all(|m| !m.as_str().unwrap().contains('<') && utf16_len(m.as_str().unwrap()) <= 24));
+        assert!(!p.ended.as_ref().unwrap()["winner"]["name"].as_str().unwrap().contains('<'));
+        assert!(utf16_len(&p.name) <= 80);
+        assert_eq!(check(*p), Ok(()));
+    }
+
+    /// Rigel's QA F1: a team of 13+ players (a class quiz, a big pub team) still gets its card. The
+    /// card names the first 12 and keeps the real count; a name that cleans to nothing is left out.
+    #[test]
+    fn a_big_team_still_gets_its_results_card() {
+        let mut meta = ended_meta("PQ7XK2", "quiz");
+        let mut names: Vec<String> = (1..=13).map(|i| format!("Kid {i}")).collect();
+        names.insert(1, " \u{7} ".into());
+        meta["block"]["results"]["teams"][0]["members"] = serde_json::json!(names);
+        meta["block"]["results"]["teams"][0]["players"] = serde_json::json!(13);
+        let Some(Block::Pocket(p)) = results_of(meta) else { panic!("no card") };
+        let team = &p.results.as_ref().unwrap()["teams"][0];
+        let members: Vec<&str> = team["members"].as_array().unwrap().iter().map(|m| m.as_str().unwrap()).collect();
+        assert_eq!(members, (1..=12).map(|i| format!("Kid {i}")).collect::<Vec<_>>());
+        assert_eq!(team["players"], serde_json::json!(13));
+        assert_eq!(check(*p), Ok(()));
+    }
+
+    /// The server checks an ended card's `ended` and `results` the way the chat's `validPocket` does.
+    #[test]
+    fn each_results_rule_refuses_its_block() {
+        let ended = || match results_of(ended_meta("PQ7XK2", "quiz")) {
+            Some(Block::Pocket(p)) => *p,
+            _ => panic!("no card"),
+        };
+        assert_eq!(check(ended()), Ok(()));
+        let mut no_winner = ended();
+        no_winner.ended.as_mut().unwrap()["winner"] = serde_json::Value::Null;
+        assert_eq!(check(no_winner), Ok(()), "a winner can be null");
+        let set = |path: &[&str], v: serde_json::Value| -> Change {
+            let path: Vec<String> = path.iter().map(|s| s.to_string()).collect();
+            Box::new(move |p: &mut Pocket| {
+                let (root, rest) = path.split_first().unwrap();
+                let mut at = if root == "ended" { p.ended.as_mut().unwrap() } else { p.results.as_mut().unwrap() };
+                for k in rest {
+                    at = match k.parse::<usize>() {
+                        Ok(i) => &mut at[i],
+                        Err(_) => &mut at[k.as_str()],
+                    };
+                }
+                *at = v.clone();
+            })
+        };
+        let bad: Vec<(&str, Change)> = vec![
+            ("results before the end", Box::new(|p: &mut Pocket| (p.state, p.ended) = ("writing".into(), None))),
+            ("ended before the end", Box::new(|p: &mut Pocket| (p.state, p.results) = ("writing".into(), None))),
+            ("ended not an object", Box::new(|p: &mut Pocket| p.ended = Some(serde_json::json!("done")))),
+            ("results not an object", Box::new(|p: &mut Pocket| p.results = Some(serde_json::json!([])))),
+            ("a long winner", set(&["ended", "winner", "name"], serde_json::json!("x".repeat(41)))),
+            ("HTML in the winner", set(&["ended", "winner", "name"], serde_json::json!("<b>A</b>"))),
+            ("winner points not a number", set(&["ended", "winner", "points"], serde_json::json!("31"))),
+            ("a long ended time", set(&["ended", "at"], serde_json::json!("x".repeat(41)))),
+            ("long stats", set(&["ended", "stats"], serde_json::json!("x".repeat(201)))),
+            ("no teams", set(&["results", "teams"], serde_json::json!([]))),
+            ("13 teams", set(&["results", "teams"], serde_json::json!(vec![serde_json::json!({"name": "A", "players": 1, "points": 1, "palette": null, "members": []}); 13]))),
+            ("a blank team", set(&["results", "teams", "0", "name"], serde_json::json!(" "))),
+            ("a long team", set(&["results", "teams", "0", "name"], serde_json::json!("x".repeat(41)))),
+            ("negative players", set(&["results", "teams", "0", "players"], serde_json::json!(-1))),
+            ("points out of range", set(&["results", "teams", "0", "points"], serde_json::json!(1e8))),
+            ("an unknown palette", set(&["results", "teams", "0", "palette"], serde_json::json!("url(x)"))),
+            ("13 members", set(&["results", "teams", "0", "members"], serde_json::json!(vec!["A"; 13]))),
+            ("a long member", set(&["results", "teams", "0", "members", "0"], serde_json::json!("x".repeat(25)))),
+            ("4 missed", set(&["results", "missed"], serde_json::json!(vec![serde_json::json!({"label": "Q", "question": "Q?", "answer": "A", "pct_right": 1}); 4]))),
+            ("a long missed label", set(&["results", "missed", "0", "label"], serde_json::json!("x".repeat(13)))),
+            ("a long missed question", set(&["results", "missed", "0", "question"], serde_json::json!("x".repeat(201)))),
+            ("a long missed answer", set(&["results", "missed", "0", "answer"], serde_json::json!("x".repeat(81)))),
+            ("over 100 percent", set(&["results", "missed", "0", "pct_right"], serde_json::json!(101))),
+            ("a fractional margin", set(&["results", "margin"], serde_json::json!(1.5))),
+            ("more accepted than near", set(&["results", "near_misses_accepted"], serde_json::json!(3))),
+        ];
+        for (what, change) in bad {
+            let mut p = ended();
+            change(&mut p);
+            assert!(check(p).is_err(), "{what} passed");
+        }
     }
 
     fn draft_with(spec: serde_json::Value) -> QuizDraftRow {

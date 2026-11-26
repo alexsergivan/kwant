@@ -519,8 +519,21 @@ fn check_pocket(p: &super::Pocket) -> Result<(), String> {
             check_text(t, max, what)?;
         }
     }
-    if !p.rounds.is_empty() || p.live.is_some() || p.ended.is_some() || p.budget.is_some() || p.results.is_some() {
+    if !p.rounds.is_empty() || p.live.is_some() || p.budget.is_some() {
         return Err("a pocket part kwant doesn't fill".into());
+    }
+    // quiz-card-and-results: an ended pocket's results message carries how it ended and the
+    // scores, in the shape the chat's results card takes (`validEnded`, `validResults`)
+    if p.ended.is_some() || p.results.is_some() {
+        if p.state != "ended" {
+            return Err("pocket results before the end".into());
+        }
+        if let Some(e) = &p.ended {
+            check_pocket_ended(e)?;
+        }
+        if let Some(r) = &p.results {
+            check_pocket_results(r)?;
+        }
     }
     // pa11: the only join kwant fills says "no quick link" on a ready or live card
     if let Some(j) = &p.join {
@@ -689,6 +702,98 @@ fn check_santa(p: &super::Pocket, s: &serde_json::Value) -> Result<(), String> {
         }
         if mode == "anywhere" && (anywhere.is_none() || kind.is_none()) {
             return Err("a santa join from anywhere without its address".into());
+        }
+    }
+    Ok(())
+}
+
+/// The palettes a team's colour may name (the client's `PALETTES` in `ModernAvatar.tsx`).
+const POCKET_PALETTES: [&str; 23] = [
+    "yellow", "green", "pink", "cyan", "violet", "orange", "blue", "coral", "teal", "red", "gold", "lilac", "mint", "sky", "magenta", "slate", "amber",
+    "ocean", "berry", "lime", "peach", "steel", "blossom",
+];
+
+/// `null` or absent, else a text within `max` (the client's `optText`).
+fn opt_pocket_text(v: Option<&serde_json::Value>, max: usize, what: &str) -> Result<(), String> {
+    match v {
+        None | Some(serde_json::Value::Null) => Ok(()),
+        Some(serde_json::Value::String(t)) => check_text(t, max, what),
+        Some(_) => Err(format!("a {what} that isn't text")),
+    }
+}
+
+/// A whole number from 0 to 100,000 (the client's `isCount` in `Pocket.tsx`).
+fn pocket_count(v: &serde_json::Value) -> Option<u64> {
+    v.as_u64().filter(|n| *n <= 100_000)
+}
+
+/// Points: a finite number within ten million either way.
+fn pocket_points(v: &serde_json::Value) -> bool {
+    v.as_f64().is_some_and(|n| n.is_finite() && n.abs() <= 10_000_000.0)
+}
+
+/// `{name, points}` (the client's `validScore`).
+fn check_pocket_score(v: &serde_json::Value) -> Result<(), String> {
+    check_text(v.get("name").and_then(|n| n.as_str()).ok_or("a pocket score without a name")?, 40, "pocket team name")?;
+    if !v.get("points").is_some_and(pocket_points) {
+        return Err("pocket points".into());
+    }
+    Ok(())
+}
+
+/// How a pocket ended (the client's `validEnded`).
+fn check_pocket_ended(e: &serde_json::Value) -> Result<(), String> {
+    check_text(e.get("at").and_then(|a| a.as_str()).ok_or("a pocket end without a time")?, 40, "pocket end time")?;
+    match e.get("winner") {
+        None | Some(serde_json::Value::Null) => {}
+        Some(w) => check_pocket_score(w)?,
+    }
+    opt_pocket_text(e.get("stats"), 200, "pocket stats")?;
+    opt_pocket_text(e.get("deletes_on"), 40, "pocket deletion date")
+}
+
+/// The scores (the client's `validResults`, `validTeam`, `validMiss`): 1 to 12 teams, up to 3
+/// missed questions, and counts that agree.
+fn check_pocket_results(r: &serde_json::Value) -> Result<(), String> {
+    let teams = r.get("teams").and_then(|t| t.as_array()).filter(|t| (1..=12).contains(&t.len())).ok_or("pocket results teams")?;
+    for t in teams {
+        check_text(t.get("name").and_then(|n| n.as_str()).ok_or("a pocket team without a name")?, 40, "pocket team name")?;
+        if t.get("players").and_then(pocket_count).is_none() || !t.get("points").is_some_and(pocket_points) {
+            return Err("a pocket team's counts".into());
+        }
+        match t.get("palette") {
+            None | Some(serde_json::Value::Null) => {}
+            Some(c) if c.as_str().is_some_and(|c| POCKET_PALETTES.contains(&c)) => {}
+            Some(_) => return Err("a pocket team colour".into()),
+        }
+        let members = match t.get("members") {
+            None | Some(serde_json::Value::Null) => &[][..],
+            Some(m) => m.as_array().filter(|m| m.len() <= 12).ok_or("a pocket team's members")?.as_slice(),
+        };
+        for m in members {
+            check_text(m.as_str().ok_or("a pocket player name that isn't text")?, 24, "pocket player name")?;
+        }
+    }
+    let missed = match r.get("missed") {
+        None | Some(serde_json::Value::Null) => &[][..],
+        Some(m) => m.as_array().filter(|m| m.len() <= 3).ok_or("pocket missed questions")?.as_slice(),
+    };
+    for m in missed {
+        check_text(m.get("label").and_then(|l| l.as_str()).ok_or("a missed question without a label")?, 12, "missed question label")?;
+        check_text(m.get("question").and_then(|q| q.as_str()).ok_or("a missed question without its words")?, 200, "missed question")?;
+        opt_pocket_text(m.get("answer"), 80, "missed answer")?;
+        if !m.get("pct_right").and_then(|p| p.as_f64()).is_some_and(|p| (0.0..=100.0).contains(&p)) {
+            return Err("a missed question's share".into());
+        }
+    }
+    let count = |k: &str| match r.get(k) {
+        None | Some(serde_json::Value::Null) => Ok(None),
+        Some(v) => pocket_count(v).map(Some).ok_or(format!("pocket {k}")),
+    };
+    let (_, near, accepted) = (count("margin")?, count("near_misses")?, count("near_misses_accepted")?);
+    if let (Some(n), Some(a)) = (near, accepted) {
+        if a > n {
+            return Err("more near misses accepted than there were".into());
         }
     }
     Ok(())
