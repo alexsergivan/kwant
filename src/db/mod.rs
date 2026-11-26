@@ -1413,3 +1413,89 @@ pub(crate) async fn team_channel_id<'e, E: sqlx::SqliteExecutor<'e>>(
         _ => None,
     })
 }
+
+/// README.md tells a new reader which bots a fresh install starts with. These tests read it and check
+/// that sentence against the real seed, so the README can't drift back to the pre-0.9.8 starters.
+#[cfg(test)]
+mod readme_starter_facts {
+    use super::{starter_template, LEGACY_STARTERS};
+
+    /// README.md without its "## New in" section: those are release notes about past versions,
+    /// which the release writes, so a later change of starter team must not rewrite them.
+    fn readme_outside_new_in() -> String {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("README.md");
+        let readme = std::fs::read_to_string(&path).expect("README.md is readable");
+        let mut kept = String::new();
+        let mut in_new_in = false;
+        for line in readme.lines() {
+            if line.starts_with("## ") {
+                in_new_in = line.starts_with("## New in");
+            }
+            if !in_new_in {
+                kept.push_str(line);
+                kept.push('\n');
+            }
+        }
+        kept
+    }
+
+    /// The sentences that say what a fresh install starts with.
+    fn fresh_install_sentences(text: &str) -> Vec<String> {
+        text.split(". ")
+            .filter(|s| s.to_lowercase().contains("fresh install starts with"))
+            .map(|s| s.trim().to_string())
+            .collect()
+    }
+
+    /// `name` appears in `text` as a whole word ("Writer" doesn't count inside "Writers").
+    fn names(text: &str, name: &str) -> bool {
+        let is_word = |c: Option<char>| c.is_some_and(|c| c.is_alphanumeric() || c == '_');
+        text.match_indices(name).any(|(i, _)| {
+            !is_word(text[..i].chars().next_back()) && !is_word(text[i + name.len()..].chars().next())
+        })
+    }
+
+    fn check(text: &str) -> Result<(), String> {
+        let sentences = fresh_install_sentences(text);
+        if sentences.is_empty() {
+            return Err("README.md has no sentence saying what a fresh install starts with".into());
+        }
+        let starter = starter_template();
+        for sentence in &sentences {
+            let handle = format!("@{}", starter.handle);
+            if !names(sentence, &handle) {
+                return Err(format!("{sentence:?} doesn't name the starter team {handle}"));
+            }
+            for bot in &starter.bots {
+                if !names(sentence, &bot.name) {
+                    return Err(format!("{sentence:?} doesn't name the starter bot {}", bot.name));
+                }
+            }
+            for (legacy, ..) in LEGACY_STARTERS {
+                if names(sentence, legacy) {
+                    return Err(format!("{sentence:?} names {legacy}, a pre-0.9.8 starter a fresh install no longer gets"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn readme_names_the_real_starter_team() {
+        if let Err(e) = check(&readme_outside_new_in()) {
+            panic!("{e}");
+        }
+    }
+
+    #[test]
+    fn check_catches_the_old_sentence_and_a_missing_bot() {
+        let old = "Open it. A fresh install starts with three bots in `#general`: Architect, TechLead and DevOps. Make more.";
+        assert!(check(old).is_err());
+        let partial = "A fresh install starts with the **@helpers** team: Assistant and Writers. Make more.";
+        assert!(check(partial).unwrap_err().contains("Researcher"));
+        assert!(check("No such sentence here.").is_err());
+        let bots: Vec<&str> = starter_template().bots.iter().map(|b| b.name.as_str()).collect();
+        let good = format!("A fresh install starts with @{}: {}. Make more.", starter_template().handle, bots.join(", "));
+        assert_eq!(check(&good), Ok(()));
+    }
+}
