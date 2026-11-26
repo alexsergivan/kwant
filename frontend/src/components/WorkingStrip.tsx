@@ -15,6 +15,7 @@ interface WorkingStripProps {
   queued?: boolean;
   awaitingAnswer?: boolean;
   awaitingBrowser?: boolean;
+  awaitingTools?: boolean;
   writing?: boolean;
   onStop?: () => void;
   /**
@@ -42,7 +43,7 @@ interface WorkingStripProps {
  * On desktop (0.8.0) it is the same kind of quiet line at desktop size. Both sit inside the composer
  * section (ChatView renders them there; on a phone too since 0.8.1 F4), lined up with the box below.
  */
-export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title, live, queued, awaitingAnswer, awaitingBrowser, writing, onStop, onAnswer, onWatch, phone: forcePhone, audit }) => {
+export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title, live, queued, awaitingAnswer, awaitingBrowser, awaitingTools, writing, onStop, onAnswer, onWatch, phone: forcePhone, audit }) => {
   const mountedAt = useRef(Date.now());
   const [now, setNow] = useState(() => Date.now());
   const phoneLayout = usePhoneLayout();
@@ -56,7 +57,7 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
   }, [active]);
   if (!active) return null;
 
-  const state = { live, queued, awaitingAnswer, awaitingBrowser, writing };
+  const state = { live, queued, awaitingAnswer, awaitingBrowser, awaitingTools, writing };
   const sentence = stripSentence(name, state, audit?.line);
   const elapsed = formatElapsed(now - turnStart(live, mountedAt.current));
   const on = waitingOn(state);

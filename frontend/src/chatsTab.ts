@@ -42,7 +42,7 @@ export const approvalLine = (tool?: string | null): string => {
  * each. The line names the thing that blocks the bot hardest (an approval over a question over a browser
  * step), but the row's time is the bot's oldest open ask. A browser step alone has no time and goes last.
  */
-export function needsYouRows(waiting: AwayItem[], openSteps: Record<string, number>, kwantIds: Set<string>): NeedsYouRow[] {
+export function needsYouRows(waiting: AwayItem[], openSteps: Record<string, number>, kwantIds: Set<string>, toolsSteps: Record<string, number> = {}): NeedsYouRow[] {
   const rank = (r: NeedsYouRow) => (r.item?.kind === 'approval' ? 0 : r.item ? 1 : 2);
   const rows = new Map<string, NeedsYouRow>();
   const put = (r: NeedsYouRow) => {
@@ -58,7 +58,8 @@ export function needsYouRows(waiting: AwayItem[], openSteps: Record<string, numb
     // 0.9.5: work that stopped and waits on the person, in its own words ("Ben needs you to sign in to …")
     else if (item.kind === 'stopped') put({ kwant_id: item.kwant_id, line: item.title || 'Stopped: needs you to carry on', item });
   }
-  for (const [id, n] of Object.entries(openSteps)) if (n > 0) put({ kwant_id: id, line: 'Needs you in the browser' });
+  // 0.9.55: a bot whose open steps are all Tools fixes needs you in Tools, not the browser (Rigel N3)
+  for (const [id, n] of Object.entries(openSteps)) if (n > 0) put({ kwant_id: id, line: (toolsSteps[id] ?? 0) >= n ? 'Needs you in Tools' : 'Needs you in the browser' });
   const last = Number.POSITIVE_INFINITY;
   return [...rows.values()].sort((a, b) => (a.at ?? last) - (b.at ?? last));
 }

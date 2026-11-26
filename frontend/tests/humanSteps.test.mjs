@@ -77,7 +77,7 @@ test('closed and stale cards', () => {
   // 22m: a file sent while the bot waited closes the card, and it never reads "done"
   const left = ui.render(props({ live: rec({ status: 'left_for_message' }) }));
   assert.doesNotMatch(left, /<button/);
-  assert.match(left, /Closed: Pixel is reading the file you sent\./);
+  assert.match(left, /Closed: Pixel picks it up from your message\./);
   assert.doesNotMatch(left, /Done|carrying on|waiting for you/);
   assert.equal(h.parseHumanStepMeta(meta({ status: 'left_for_message' })).status, 'left_for_message');
   assert.match(ui.render(props({ waiting: false })), /stopped waiting/);
@@ -299,7 +299,7 @@ test('a closed card always says what is next: timed_out tells you to say so; an 
   // left_for_message (22m) has its own line, not the neutral one, and no buttons either
   for (const waiting of [false, true]) {
     const html = ui.render(props({ meta: h.parseHumanStepMeta(meta({ step_kind: 'sign_in' })), live: rec({ status: 'left_for_message' }), waiting }));
-    assert.match(html, /Closed: Pixel is reading the file you sent\./, `waiting=${waiting}`);
+    assert.match(html, /Closed: Pixel picks it up from your message\./, `waiting=${waiting}`);
     assert.doesNotMatch(html, /This step is closed|Press Done|<button/, `waiting=${waiting}`);
   }
   // The open card after the turn ended keeps its pick-it-up-later line and its buttons
