@@ -187,7 +187,7 @@ export const kitOf = (json: unknown): string => str(obj(obj(json)?.pocket)?.kit)
 export type Screen = 'join' | 'rejoin' | 'late' | 'waiting' | 'unwrap' | 'match' | 'reveal' | 'ended';
 
 /**
- * Which screen a view draws. `rejoin`: the guest tapped "I've joined before". `joinLate`: "The host added me".
+ * Which screen a view draws. `rejoin`: the guest tapped "Open my page", or this device held a seat here before. `joinLate`: "The host added me".
  * `unwrapped`: this device has opened the gift box before.
  */
 export function screenOf(v: SantaView, o: { rejoin?: boolean; joinLate?: boolean; unwrapped?: boolean } = {}): Screen {
