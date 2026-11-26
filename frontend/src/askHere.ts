@@ -122,7 +122,7 @@ export function askHint(item: Pick<AwayItem, 'kind' | 'status'>, action: AskActi
     case 'browser':
       return `Do it in ${bot}’s browser, then press Done there.`;
     case 'tools':
-      return `Fix ${bot}’s tools in Tools, then press Done on the card in the chat.`;
+      return 'Fix it in Tools, then press Done on its card in the chat.';
   }
   return `There’s no button for this one. Write to ${bot}, or clear it once it’s handled.`;
 }

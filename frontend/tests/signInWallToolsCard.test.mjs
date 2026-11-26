@@ -75,9 +75,13 @@ test('card: a Tools step says "needs you in Tools", offers Open Tools on that se
   assert.ok(open, 'Open Tools is there');
   assert.equal(open.textContent.trim(), 'Open Tools');
   assert.doesNotMatch(t, /Open browser/);
-  assert.match(t, /Done/);
+  // Mira D1-D3: the heading names whose tools broke, Done says what it claims, no footer repeating the reason
+  assert.equal(d.querySelector('h3').textContent, 'Architect’s tools need a fix');
+  assert.doesNotMatch(t, /Your help is needed/);
+  const done = [...d.querySelectorAll('button')].find((b) => /Done/.test(b.textContent));
+  assert.equal(done.textContent.trim(), 'Done, it’s fixed');
   assert.match(t, /Skip/);
-  assert.match(t, /Open Tools and fix it there, then press Done\./);
+  assert.doesNotMatch(t, /Open Tools and fix it there/);
   assert.equal(calls.length, 0);
 });
 
@@ -100,7 +104,25 @@ test('guard: a plain auto sign-in step reads exactly as before', () => {
     for (const source of ['bot', 'auto']) {
       const tt = text(card(signMeta({ step_kind, source })).d);
       assert.doesNotMatch(tt, /Tools/, `${step_kind}/${source}`);
+      assert.doesNotMatch(tt, /need a fix|it’s fixed/, `${step_kind}/${source}`);
     }
+  }
+  // its heading, Done and footer are the sign-in ones
+  assert.equal(d.querySelector('h3').textContent, 'Sign in needed');
+  assert.ok([...d.querySelectorAll('button')].some((b) => b.textContent.trim() === 'Done, I’m signed in'));
+  assert.match(t, /Open the browser and do it there, then press Done\./);
+});
+
+test('D5: a card closed by a typed reply says so, without "file"; a Tools one has no browser words', () => {
+  for (const raw of [toolsMeta(), signMeta()]) {
+    const live = { id: raw.human_step_id, kind: raw.step_kind, status: 'left_for_message', source: 'auto', fix_in: raw.fix_in };
+    const { d } = card(raw, { live, waiting: false });
+    const t = text(d);
+    assert.match(t, /Closed: Architect picks it up from your message\./);
+    assert.doesNotMatch(t, /file you sent|reading the file/);
+    assert.equal(d.querySelectorAll('button').length, 0);
+    assert.ok(d.querySelector('svg.lucide-message-square'), 'the message icon, not the paperclip');
+    if (raw.fix_in) assert.doesNotMatch(t, /browser/);
   }
 });
 
@@ -133,7 +155,7 @@ test('strip words: a Tools step is "Tools step" with Open Tools; a browser step 
   assert.equal(a, 'tools');
   assert.equal(ask.askKind(tools, a), 'Tools step');
   assert.equal(ask.ACTION_LABEL.tools, 'Open Tools');
-  assert.equal(ask.askHint(tools, a, 'Architect'), 'Fix Architect’s tools in Tools, then press Done on the card in the chat.');
+  assert.equal(ask.askHint(tools, a, 'Architect'), 'Fix it in Tools, then press Done on its card in the chat.');
   assert.equal(ask.actionName(a, 'Architect'), 'Open Tools to fix Architect’s tools');
   assert.equal(ask.switchFor('use_step_decline', tools), 'tools');
   // guard

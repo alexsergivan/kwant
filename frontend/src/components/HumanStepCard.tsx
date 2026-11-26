@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Clock, Globe, Hand, Loader2, MinusCircle, MonitorPlay, Paperclip, Plug, Puzzle } from 'lucide-react';
+import { CheckCircle2, Clock, Globe, Hand, Loader2, MessageSquare, MinusCircle, MonitorPlay, Plug, Puzzle } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { HumanStep, HumanStepMeta, domainOf, humanStepView, stepText } from '../humanSteps';
+import { HumanStep, HumanStepMeta, domainOf, humanStepView, stepText, toolsHeading } from '../humanSteps';
 
 export interface HumanStepCardProps {
   meta: HumanStepMeta;
@@ -74,9 +74,10 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
         <MinusCircle size={13} className="shrink-0" aria-hidden="true" /> Skipped. {kwantName} continues without it.
       </span>
     ) : status === 'left_for_message' ? (
-      // 22m: closed because the person sent a file, not because the step was done
+      // 22m: closed because the person wrote or sent a file, not because the step was done.
+      // 0.9.55 (Mira D5): typed text closes kwnt's own sign-in cards too, so it doesn't say "file".
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
-        <Paperclip size={13} className="shrink-0" aria-hidden="true" /> Closed: {kwantName} is reading the file you sent.
+        <MessageSquare size={13} className="shrink-0" aria-hidden="true" /> Closed: {kwantName} picks it up from your message.
       </span>
     ) : status === 'cancelled' ? (
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
@@ -124,7 +125,7 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
           </p>
           {/* Closed: the step's name, quieter, so it reads (and is announced) as done, not as an ask (22v). */}
           <h3 id={headingId} className={`text-sm font-semibold ${open ? 'text-zinc-100' : 'text-zinc-300'}`}>
-            {open ? text.heading : text.closedHeading}
+            {open ? (tools ? toolsHeading(kwantName) : text.heading) : text.closedHeading}
           </h3>
           {view.reason && <p className="text-sm text-zinc-300 whitespace-pre-wrap break-words leading-snug">{view.reason}</p>}
           {domain && (
@@ -196,7 +197,6 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
           {open && captcha && waiting && (
             <p className="basis-full text-zinc-400">Solve the puzzle and {kwantName} continues by itself. Nothing you do there is passed to {kwantName}.</p>
           )}
-          {open && tools && <p className="basis-full text-zinc-400">Open Tools and fix it there, then press Done.</p>}
           {open && !captcha && !tools && <p className="basis-full text-zinc-400">Open the browser and do it there, then press Done. What you type into fields there isn’t passed to {kwantName}.</p>}
           {error && (
             <span role="alert" className="basis-full text-rose-300">

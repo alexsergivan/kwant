@@ -220,7 +220,10 @@ export const KIND_TEXT: Record<HumanStepKind, { heading: string; closedHeading: 
 };
 
 /** 0.9.55: a step fixed in Tools › MCP servers (the bot's tools for the site can't connect). */
-export const TOOLS_TEXT = { heading: 'Your help is needed', closedHeading: 'Tools step', done: 'Done' } as const;
+export const TOOLS_TEXT = { heading: 'Your help is needed', closedHeading: 'Tools step', done: 'Done, it’s fixed' } as const;
+
+/** An open Tools step's heading names whose tools are broken (Mira D1); the generic heading said nothing about what's wrong. */
+export const toolsHeading = (kwantName: string) => `${kwantName}’s tools need a fix`;
 
 /** The card's words for a step: the Tools words for a Tools step, else its kind's. */
 export const stepText = (meta: Pick<HumanStepMeta, 'step_kind' | 'tools'>) => (meta.tools ? TOOLS_TEXT : KIND_TEXT[meta.step_kind]);
