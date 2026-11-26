@@ -41,7 +41,7 @@ export const Callout: React.FC<{ tone?: 'warn'; children: React.ReactNode }> = (
 // Buttons: 44 px on phone, 36 px on desktop, 15 px type on phone (design.md §1 "Phone 390").
 export const BTN = 'min-h-[44px] sm:min-h-[36px] whitespace-nowrap text-[15px] sm:text-meta';
 // Half-width secondary buttons on phone (two columns): 14 px and tighter padding so labels stay on one line.
-export const HALF = 'min-h-[44px] sm:min-h-[36px] whitespace-nowrap text-[14px] px-2.5 sm:px-3 sm:text-meta';
+export const HALF = '[&>svg]:shrink-0 min-h-[44px] sm:min-h-[36px] whitespace-nowrap text-[14px] px-2.5 sm:px-3 sm:text-meta';
 export const PRIMARY = `kw-btn-primary kw-hover-deepen ${BTN}`;
 export const GHOST = `kw-btn-ghost ${BTN}`;
 export const STOP = `inline-flex items-center justify-center gap-1.5 rounded-xl px-3 font-medium text-bad hover:bg-rose-300/10 kw-focus ${BTN}`;
@@ -91,11 +91,17 @@ export const LinkField: React.FC<{ url: string }> = ({ url }) => (
   </div>
 );
 
-export const NoLinkYet: React.FC<{ mode: PocketJoinMode }> = ({ mode }) => (
-  <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-no-link>
+/** The box's own Wi-Fi note: bound to 127.0.0.1, no phone can reach it on Wi-Fi (src/pocket/address.rs `wifi`). */
+export const THIS_COMPUTER_ONLY = 'this_computer_only';
+export const ONLY_THIS_COMPUTER_LINE = "Phones can't reach this box on Wi-Fi: it only answers this computer. Pick From anywhere to make a link for phones.";
+
+export const NoLinkYet: React.FC<{ mode: PocketJoinMode; note?: string | null }> = ({ mode, note }) => (
+  <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-no-link={mode === 'wifi' && note === THIS_COMPUTER_ONLY ? 'this-computer-only' : ''}>
     {mode === 'anywhere'
       ? "The from-anywhere link isn't set up on this box yet. Same Wi-Fi works now."
-      : "Your box hasn't said its Wi-Fi address yet. It shows here as soon as it does."}
+      : note === THIS_COMPUTER_ONLY
+        ? ONLY_THIS_COMPUTER_LINE
+        : "Your box hasn't said its Wi-Fi address yet. It shows here as soon as it does."}
   </p>
 );
 

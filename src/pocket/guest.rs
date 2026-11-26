@@ -286,12 +286,30 @@ async fn boot_state(state: &AppState, s: &Snapshot, code: &str, headers: &Header
     }
 }
 
+/// The boot of the page for a code with no pocket behind it (deleted, expired, never made or
+/// malformed). Nothing else: the code is unknown, so the page names no kit, host or title.
+pub fn gone_boot() -> Value {
+    json!({ "gone": true })
+}
+
+/// The 404 page for a code with no pocket (santa-gone-page): the guest bundle with the gone boot,
+/// so the guest sees a proper "This page has ended" screen; a build without the bundle keeps the
+/// bare placeholder. `index` is the bundle's page (tests pass their own).
+pub fn gone_response(index: Option<Cow<'static, [u8]>>) -> Response {
+    match index {
+        Some(index) => html_response(StatusCode::NOT_FOUND, fill_boot(&String::from_utf8_lossy(&index), &gone_boot())),
+        None => html_response(StatusCode::NOT_FOUND, placeholder("Not found", "There's no pocket app here.")),
+    }
+}
+
 /// `GET /p/<code>`: pa5's page with the boot filled in, or a placeholder when this build has no
-/// page. 404 for a malformed or unknown code.
+/// page. 404 for a malformed or unknown code, with the page's gone screen.
 async fn page(State(state): State<AppState>, Path(code): Path<String>, headers: HeaderMap) -> Response {
     let s = match pocket(&state, &code).await {
         Ok(s) => s,
-        Err(_) => return html_response(StatusCode::NOT_FOUND, placeholder("Not found", "There's no pocket app here.")),
+        Err(e) if e.status == StatusCode::NOT_FOUND => return gone_response(page_asset(PAGE_INDEX)),
+        // The box couldn't read its own database: the pocket may well be there, so never say it was deleted
+        Err(e) => return html_response(e.status, placeholder("Try again", "Something went wrong on the host's computer. Reload in a moment.")),
     };
     if let Some(index) = page_asset(PAGE_INDEX) {
         let boot = boot_state(&state, &s, &code, &headers).await;
@@ -810,6 +828,24 @@ mod tests {
             assert_eq!(res.status(), StatusCode::NOT_FOUND, "{name:?}");
             assert!(res.headers().get(header::CACHE_CONTROL).is_none(), "{name:?}: the gate adds no-store");
         }
+    }
+
+    /// santa-gone-page: the gone page is the bundle with exactly `{"gone":true}`, 404 and no-cache;
+    /// with no bundle, the bare placeholder (no script, no style).
+    #[tokio::test]
+    async fn a_gone_code_gets_the_page_with_only_the_gone_boot() {
+        let page: &'static [u8] = br#"<html><body><div id="app"></div><script type="application/json" id="pocket-boot">null</script><script src="/p/_a/g-1.js"></script></body></html>"#;
+        let res = gone_response(Some(Cow::Borrowed(page)));
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert_eq!(res.headers()[header::CONTENT_TYPE], "text/html; charset=utf-8");
+        assert_eq!(res.headers()[header::CACHE_CONTROL], "no-cache");
+        let html = String::from_utf8(to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+        assert!(html.contains(r#"id="pocket-boot">{"gone":true}</script>"#), "{html}");
+        assert!(html.ends_with(r#"<script src="/p/_a/g-1.js"></script></body></html>"#));
+        let res = gone_response(None);
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        let html = String::from_utf8(to_bytes(res.into_body(), usize::MAX).await.unwrap().to_vec()).unwrap();
+        assert!(html.contains("Not found") && !html.contains("<script") && !html.contains("style="), "{html}");
     }
 
     #[test]

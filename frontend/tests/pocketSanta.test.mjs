@@ -75,6 +75,8 @@ const withSanta = (name, over) => {
 };
 const card = (name, block = raw(name)) => mount(h(m.MarkdownRenderer, { content: F[name].reply, results: { version: 1, blocks: [block] }, messageId: `m-${name}` }));
 const button = (v, text) => [...v.host.querySelectorAll('button, a')].find((b) => b.textContent.trim() === text);
+// The card reads the pocket on show and after some actions (santa-card-live); these look at the last write.
+const lastWrite = (calls) => calls.filter((c) => c[0] !== 'GET').pop();
 const holos = (v) => v.host.querySelectorAll('.kw-sticker-holo, [data-tone="holo"]').length;
 const ok = (b) => assert.ok(m.validPocket(b), 'should validate');
 const bad = (b, why) => assert.equal(m.validPocket(b), null, why);
@@ -309,7 +311,7 @@ test('Draw now, Show the reveal now and Skip ask first and call the box’s name
   assert.match(c.host.querySelector('[data-confirm="draw"]').textContent, /Only 7 of 9 are in/);
   assert.equal(document.activeElement, button(c, 'Draw names'), 'focus goes to the answer');
   await click(button(c, 'Draw names'));
-  assert.deepEqual(calls.pop(), ['POST', '/api/pockets/sn4tq9/action', JSON.stringify({ name: 'draw_now' })]);
+  assert.deepEqual(lastWrite(calls), ['POST', '/api/pockets/sn4tq9/action', JSON.stringify({ name: 'draw_now' })]);
   assert.match(c.host.textContent, /Drawn\. Everyone can open their own match now\./);
 
   const r = await card('revealDay');
@@ -318,7 +320,7 @@ test('Draw now, Show the reveal now and Skip ask first and call the box’s name
   assert.equal(r.host.querySelector('[data-confirm]'), null, 'Escape keeps it');
   await click(button(r, 'Show the reveal now'));
   await click(button(r, 'Show it now'));
-  assert.deepEqual(calls.pop(), ['POST', '/api/pockets/sn4tq9/action', JSON.stringify({ name: 'reveal_now' })]);
+  assert.deepEqual(lastWrite(calls), ['POST', '/api/pockets/sn4tq9/action', JSON.stringify({ name: 'reveal_now' })]);
 
   g.fetch = async () => new Response(JSON.stringify({ error: 'already_revealed', message: 'The reveal already happened.' }), { status: 409 });
   const s = await card('revealDay');
@@ -334,13 +336,13 @@ test('Stop and Delete it all ask first and use the pocket routes', async () => {
   const d = await card('drawn');
   await click(button(d, 'Stop'));
   await click(button(d, 'Stop it'));
-  assert.deepEqual(calls.pop(), ['POST', '/api/pockets/sn4tq9/end']);
+  assert.deepEqual(lastWrite(calls), ['POST', '/api/pockets/sn4tq9/end']);
   assert.equal(d.host.querySelector('[data-join]'), null, 'the link is gone once stopped');
   const e = await card('ended');
   await click(button(e, 'Delete it all now'));
   assert.match(e.host.textContent, /This can't be undone\./);
   await click(button(e, 'Delete it all'));
-  assert.deepEqual(calls.pop(), ['DELETE', '/api/pockets/sn4tq9']);
+  assert.deepEqual(lastWrite(calls), ['DELETE', '/api/pockets/sn4tq9']);
 });
 
 test('People and PINs: inside the card, names and status only, Remove before the draw only', async () => {
@@ -376,7 +378,7 @@ test('People and PINs: inside the card, names and status only, Remove before the
   await click(button(c, 'Remove'));
   assert.match(cp.querySelector('[data-confirm="remove"]').textContent, /Nothing is drawn yet, so nobody's match changes\./);
   await click(button(c, 'Remove Sam'));
-  assert.deepEqual(calls.pop(), ['POST', '/api/pockets/sn4tq9/remove', JSON.stringify({ player_id: 'p3' })]);
+  assert.deepEqual(lastWrite(calls), ['POST', '/api/pockets/sn4tq9/remove', JSON.stringify({ player_id: 'p3' })]);
   assert.match(cp.textContent, /People and PINs · 6/);
   assert.equal(cp.querySelector('[data-person="Sam"]'), null);
 });
@@ -394,7 +396,7 @@ test('Reset PIN: asks first, then shows only the one-time code (mono 28px) and i
   assert.match(ask.textContent, /Mia's match, wish list and questions stay as they are\. You won't see any of them\./);
   assert.doesNotMatch(ask.textContent, /\b(Her|her|His|his|She|she|He|he)\b/, 'no guessed pronouns');
   await click(button(v, 'Reset and show the code'));
-  assert.deepEqual(calls.pop(), ['/api/pockets/sn4tq9/reset-pin', JSON.stringify({ player_id: 'p2' })]);
+  assert.deepEqual(lastWrite(calls), ['/api/pockets/sn4tq9/reset-pin', JSON.stringify({ player_id: 'p2' })]);
   const box = panel.querySelector('[data-reset-code]');
   assert.match(box.textContent, /Mia's one-time code/);
   const code = box.querySelector('[data-code]');
@@ -435,4 +437,42 @@ test('Santa avatar: a picker style, green with the knit hat; guests get the crea
   assert.equal(Object.keys(m.GUEST_CREATURES).length, 8);
   assert.equal(m.guestCreature('horns').accessory, 'horns');
   assert.equal(m.guestCreature('nope').accessory, m.guestCreature('antenna').accessory, 'unknown falls back to antenna');
+});
+
+// santa-create-from-chat: the block the server attaches to the reply of a turn that called santa_create
+// (smart_results/pocket.rs santa_block + santa_tool::card), field for field as serde writes it: every quiz part
+// null or empty, the card in `santa`, the join inside it. The chat draws it as is.
+const serverSanta = (santa, state = 'live') => ({
+  id: 'b0', type: 'pocket', title: null, source: { kind: 'slot' }, provenance: { kind: 'kwant_data', ref: 'pocket:AB12CD' },
+  code: 'AB12CD', kit: 'santa', name: 'Team Secret Santa', when: '£20 each · gifts on Fri, Dec 18 · reveal at 7 PM', state,
+  paused: false, progress: null, rounds: [], checks: null, dry_run: null, eta: null, opens_line: null, live: null, join: null,
+  ended: null, budget: null, results: null, draft: null, yours: null,
+  santa: {
+    phase: 'collecting', joined: 0, expected: 6, waiting_for: ['Anna', 'Ben', 'Chloe', 'Dev', 'Erin', 'Femi'], people: [],
+    looked: null, gifts_ready: null, asks_asked: null, asks_answered: null, keep_apart: [['Anna', 'Ben']],
+    draw_rule: 'when all 6 are in', drawn_at: null, reveal: 'scheduled', reveal_at: '7 PM', revealed_at: null,
+    deletes_on: 'Fri, Jan 15', ended_on: null, can_draw: false, blocked: 'Waiting for at least 3 people.',
+    join: { mode: 'wifi', anywhere_kind: null, anywhere_url: null, wifi_url: 'http://192.168.1.20:7480/p/AB12CD' },
+    ...santa,
+  },
+});
+
+test('santa_create: the block the server sends after "make us a Secret Santa" is one the chat draws', () => {
+  const b = m.validPocket(serverSanta({}));
+  assert.ok(b, 'collecting card passes');
+  assert.equal(b.kit, 'santa');
+  assert.equal(m.findMatchLike(serverSanta({})), null);
+  const people = ['Anna', 'Ben', 'Chloe', 'Dev', 'Erin', 'Femi'].map((name, i) => ({ id: `p${i + 1}`, name, avatar: null, looked: false, gift_ready: false }));
+  const drawn = serverSanta({ phase: 'drawn', joined: 6, waiting_for: [], people, looked: 0, gifts_ready: 0, asks_asked: 0, asks_answered: 0, draw_rule: null, drawn_at: 'Thu, Dec 3 at 6 PM', can_draw: false, blocked: null });
+  assert.ok(m.validPocket(drawn), 'drawn card passes');
+  // No join at all (no address set up yet) still draws
+  assert.ok(m.validPocket(serverSanta({ join: null })));
+  // An ended Santa is ended on both sides, with no join
+  assert.ok(m.validPocket(serverSanta({ phase: 'ended', join: null, ended_on: 'Dec 19' }, 'ended')));
+  // The rules the server mirrors: state follows the phase, no top-level join, no quick tunnel, no match anywhere
+  assert.equal(m.validPocket(serverSanta({}, 'ended')), null);
+  assert.equal(m.validPocket({ ...serverSanta({}), join: { mode: 'anywhere', wifi_url: null, anywhere_url: null, quick_tunnel: false } }), null);
+  assert.equal(m.validPocket(serverSanta({ join: { mode: 'anywhere', anywhere_kind: 'https', anywhere_url: 'https://x.trycloudflare.com/p/AB12CD', wifi_url: null } })), null);
+  assert.equal(m.validPocket(serverSanta({ people: [{ ...people[0], gives_to: 'Ben' }], joined: 1 })), null);
+  assert.equal(m.validPocket({ ...serverSanta({}), kit: 'quiz' }), null);
 });

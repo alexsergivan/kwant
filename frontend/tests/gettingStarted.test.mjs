@@ -375,11 +375,36 @@ test('0.9.5: outside the main space step 3 never offers the main space\'s starte
   const keep = r.host.querySelector('[data-keep-starter]');
   assert.equal(keep.textContent, 'Keep the bots you haveBakeryLead and Baker, already in Bakery.Use ›');
   r.done();
-  // The main space keeps today's tile.
-  const r2 = mountStep3('main-keep', { mainSpace: true });
+  // The main space keeps its tile title, and names the bots actually there.
+  const helpers = [{ id: 'a', name: 'Assistant' }, { id: 'r', name: 'Researcher' }, { id: 'w', name: 'Writer' }];
+  const r2 = mountStep3('main-keep', { mainSpace: true, bots: helpers });
   await settle();
-  assert.match(r2.host.querySelector('[data-keep-starter]').textContent, /^Keep the starter botsArchitect, TechLead and DevOps, in #general\./);
+  assert.match(r2.host.querySelector('[data-keep-starter]').textContent, /^Keep the starter botsAssistant, Researcher and Writer, in #general\./);
   r2.done();
+});
+
+test('0.9.54: the main space keep line names the starter bots actually there', () => {
+  assert.equal(m.keepStarterBotsLine(['Assistant', 'Researcher', 'Writer']), 'Assistant, Researcher and Writer, in #general.');
+  assert.equal(m.keepStarterBotsLine(['Assistant']), 'Assistant, in #general.');
+  assert.equal(m.keepStarterBotsLine(['Assistant', 'Researcher']), 'Assistant and Researcher, in #general.');
+  assert.equal(m.keepStarterBotsLine(['A', 'B', 'C', 'D', 'E']), 'A, B and 3 more, in #general.');
+  assert.equal(m.keepStarterBotsLine([]), 'The bots in #general.');
+});
+
+test('0.9.54: no frontend source promises the pre-0.9.8 starter bots', async () => {
+  const fs = await import('node:fs');
+  const path = await import('node:path');
+  const src = new URL('../src/', import.meta.url).pathname;
+  const hits = [];
+  const walk = (d) => {
+    for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+      const f = path.join(d, e.name);
+      if (e.isDirectory()) { if (!/^(tests?|fixtures|__tests__)$/.test(e.name)) walk(f); }
+      else if (/\.(tsx?|css|json|md)$/.test(e.name) && fs.readFileSync(f, 'utf8').includes('Architect, TechLead and DevOps')) hits.push(path.relative(src, f));
+    }
+  };
+  walk(src);
+  assert.deepEqual(hits, []);
 });
 
 // ------------------------------------------------------------------ step 3: Bring your bots (0.7.7)

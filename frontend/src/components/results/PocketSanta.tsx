@@ -5,7 +5,7 @@
 // what the box answers (host/reset-pin gives a code and its expiry, nothing else). Holo once, only when earned:
 // "All ready" when every Santa ticked their gift, on Reveal day and Ended. Everything that goes wrong is plain.
 
-import React, { useEffect, useId, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useId, useRef, useState } from 'react';
 import {
   ChevronDown,
   AlertTriangle,
@@ -118,6 +118,8 @@ export function validSantaJoin(v: unknown): SantaInfo['join'] | undefined {
  * type, a count above the people, or anything match-like rejects the whole block (the reply shows as markdown).
  */
 export function validSanta(v: unknown): SantaInfo | undefined {
+  // The box's own host view (GET /api/pockets/:code, santa.rs host_view) is read through santaFromHost.
+  if (isServerSanta(v)) return santaFromHost(v);
   if (!isObj(v) || !SANTA_PHASES.includes(v.phase as SantaPhase) || !isCount(v.joined)) return undefined;
   if (findMatchLike(v)) return undefined;
   const phase = v.phase as SantaPhase;
@@ -174,6 +176,125 @@ export function validSanta(v: unknown): SantaInfo | undefined {
     blocked: phase === 'collecting' ? texts.blocked ?? null : null,
     join,
   };
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The live pocket (santa-card-live): the box's host view turned into what the card shows
+
+/** While the tab is visible, the card reads the pocket again this often. */
+export const SANTA_POLL_MS = 30_000;
+
+/** The box's host view, not the card's block: its own phase names, nested counts and draw state. */
+export const isServerSanta = (v: unknown): v is Record<string, unknown> =>
+  isObj(v) && (v.phase === 'revealed' || isObj(v.counts) || isObj(v.draw));
+
+const asDate = (v: unknown): Date | null => {
+  if (typeof v !== 'string' || !v) return null;
+  // A plain day ("2026-12-18") is that day in the person's own time, not UTC midnight.
+  const day = /^(\d{4})-(\d{2})-(\d{2})$/.exec(v);
+  const d = day ? new Date(+day[1], +day[2] - 1, +day[3]) : new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+};
+const fmt = (d: Date, o: Intl.DateTimeFormatOptions) => new Intl.DateTimeFormat('en', o).format(d);
+const DAY: Intl.DateTimeFormatOptions = { weekday: 'short', month: 'short', day: 'numeric' };
+const TIME: Intl.DateTimeFormatOptions = { hour: 'numeric', minute: '2-digit' };
+/** "Sun, Dec 6 at 6:00 PM" */
+const atText = (v: unknown) => {
+  const d = asDate(v);
+  return d ? `${fmt(d, DAY)} at ${fmt(d, TIME)}` : null;
+};
+
+/** A read's join, kept only when it's an address that stays: a quick tunnel is dropped, Same Wi-Fi stays. */
+function joinFromRead(v: unknown): SantaInfo['join'] | undefined {
+  if (!isObj(v)) return undefined;
+  const stays = v.anywhere_kind === 'https' || v.anywhere_kind === 'funnel';
+  const wifi = typeof v.wifi_url === 'string' ? v.wifi_url : null;
+  return validSantaJoin({
+    mode: stays && v.anywhere_url ? 'anywhere' : wifi ? 'wifi' : 'none',
+    anywhere_url: stays ? v.anywhere_url ?? null : null,
+    anywhere_kind: stays ? v.anywhere_kind : null,
+    wifi_url: wifi,
+  });
+}
+
+export interface SantaReadCtx {
+  /** The read's `pocket` (state, ended_at, expires_at). */
+  pocket?: unknown;
+  /** The read's `join`. */
+  join?: unknown;
+  /** What the card shows now: the draw rule, who is "you", a lock and the join stay when the box doesn't say. */
+  prev?: SantaInfo | null;
+  now?: number;
+}
+
+/**
+ * The box's host view (santa.rs host_view: phase collecting | drawn | revealed, `counts`, `draw`, ISO dates) as the
+ * card's SantaInfo. An ended pocket is Ended; a revealed one, or a drawn one on the gift day, is Reveal day. Anything
+ * that doesn't validate (or anything match-like) gives undefined, and the card keeps what it shows.
+ */
+export function santaFromHost(hv: unknown, ctx: SantaReadCtx = {}): SantaInfo | undefined {
+  if (!isObj(hv)) return undefined;
+  const prev = ctx.prev ?? null;
+  // Already the card's own shape (a block).
+  if (!isServerSanta(hv)) return validSanta(hv);
+  if (findMatchLike(hv)) return undefined;
+  const pocket = isObj(ctx.pocket) ? ctx.pocket : null;
+  const counts = isObj(hv.counts) ? hv.counts : {};
+  const draw = isObj(hv.draw) ? hv.draw : {};
+  const now = ctx.now ?? Date.now();
+  const gift = asDate(hv.gift_on);
+  const ended = !!pocket && (pocket.state === 'ended' || (typeof pocket.ended_at === 'string' && pocket.ended_at !== ''));
+  const phase: unknown = ended
+    ? 'ended'
+    : hv.phase === 'revealed'
+      ? 'reveal_day'
+      : hv.phase === 'drawn' && gift && now >= gift.getTime()
+        ? 'reveal_day'
+        : hv.phase;
+  const before = phase === 'collecting';
+  const was = new Map((prev?.people ?? []).map((p) => [p.id, p]));
+  const people = Array.isArray(hv.people)
+    ? hv.people.map((p) => {
+        if (!isObj(p)) return p;
+        const old = typeof p.id === 'string' ? was.get(p.id) : undefined;
+        return {
+          id: p.id,
+          name: p.name,
+          avatar: p.avatar === '' ? null : p.avatar,
+          looked: before ? null : p.looked,
+          gift_ready: before ? null : p.gift_ready,
+          you: typeof p.you === 'boolean' ? p.you : old?.you ?? false,
+          locked: typeof p.locked === 'boolean' ? p.locked : old?.locked ?? false,
+        };
+      })
+    : hv.people;
+  const blocked = isObj(draw.blocked) && typeof draw.blocked.message === 'string' ? draw.blocked.message.slice(0, 300) : null;
+  const expires = asDate(pocket?.expires_at);
+  const endedAt = asDate(pocket?.ended_at);
+  const reveal = asDate(hv.reveal_at);
+  const join = ctx.join === undefined || ctx.join === null ? prev?.join ?? null : joinFromRead(ctx.join) ?? prev?.join ?? null;
+  return validSanta({
+    phase,
+    joined: hv.joined ?? counts.joined,
+    expected: hv.expected ?? null,
+    waiting_for: hv.waiting_for ?? [],
+    people,
+    looked: before ? null : counts.looked ?? null,
+    gifts_ready: before ? null : counts.gifts_ready ?? null,
+    asks_asked: before ? null : counts.questions_asked ?? null,
+    asks_answered: before ? null : counts.questions_answered ?? null,
+    keep_apart: hv.keep_apart ?? [],
+    draw_rule: prev?.draw_rule ?? null,
+    drawn_at: atText(hv.drawn_at) ?? prev?.drawn_at ?? null,
+    reveal: hv.reveal ?? null,
+    reveal_at: reveal ? fmt(reveal, TIME) : prev?.reveal_at ?? null,
+    revealed_at: atText(hv.revealed_at) ?? prev?.revealed_at ?? null,
+    deletes_on: expires ? fmt(expires, DAY) : prev?.deletes_on ?? null,
+    ended_on: endedAt ? fmt(endedAt, { month: 'short', day: 'numeric' }) : prev?.ended_on ?? null,
+    can_draw: draw.can_draw === true,
+    blocked,
+    join,
+  });
 }
 
 /** The one holo: every Santa ticked "I've got the gift", shown on Reveal day and Ended. */
@@ -549,7 +670,14 @@ const PersonConfirm: React.FC<{ p: SantaPerson; kind: 'reset' | 'remove'; busy: 
   );
 };
 
-export const PeoplePanel: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s }) => {
+export const PeoplePanel: React.FC<{
+  block: PocketBlock;
+  s: SantaInfo;
+  /** A host action's read (the box answers Remove with it), so the card updates at once. */
+  onRead?: (r: unknown) => void;
+  /** A reset worked: the person isn't locked any more. */
+  onReset?: (id: string) => void;
+}> = ({ block, s, onRead, onReset }) => {
   const [step, setStep] = useState<PeopleStep>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -578,6 +706,7 @@ export const PeoplePanel: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ bl
     try {
       const code = await pocketApi.resetPin(block.code, p.id);
       setStep({ id: p.id, kind: 'code', code });
+      onReset?.(p.id);
     } catch (e) {
       setError(`Couldn't reset it: ${e instanceof PocketApiError ? e.message : 'something went wrong.'} Try again.`);
     } finally {
@@ -588,8 +717,9 @@ export const PeoplePanel: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ bl
     setBusy(true);
     setError(null);
     try {
-      await pocketApi.removePlayer(block.code, p.id);
-      setRemoved((r) => [...r, p.id]);
+      const r = await pocketApi.removePlayer(block.code, p.id);
+      setRemoved((x) => [...x, p.id]);
+      onRead?.(r);
       setNote(`${p.name} is removed. Nothing was drawn, so nobody's match changes.`);
       setStep(null);
     } catch (e) {
@@ -778,7 +908,8 @@ const SantaBody: React.FC<{ block: PocketBlock; s: SantaInfo; ask: (t: string) =
               </p>
             </Callout>
           )}
-          {!closed && <SantaJoinBox block={block} s={s} />}
+          {/* A live read can bring the address that stays after the card first drew: the box then opens on it. */}
+          {!closed && <SantaJoinBox key={s.join?.mode ?? 'none'} block={block} s={s} />}
         </>
       );
     }
@@ -837,6 +968,8 @@ const SantaBody: React.FC<{ block: PocketBlock; s: SantaInfo; ask: (t: string) =
           <Row icon={<PartyPopper size={15} />}>
             {s.reveal === 'scheduled'
               ? `At ${s.reveal_at ?? 'the reveal time'} everyone's page shows who was whose Santa. Until then it stays a secret.`
+              : s.reveal === 'shown'
+              ? `Revealed${s.revealed_at ? ` ${s.revealed_at}` : ''}: everyone's page shows who was whose Santa.`
               : 'No reveal: who was whose Santa stays a secret.'}
           </Row>
           {asks && <Row icon={<MessageSquare size={15} />}>{asks}</Row>}
@@ -919,7 +1052,7 @@ const SantaConfirm: React.FC<{ block: PocketBlock; s: SantaInfo; kind: SantaConf
 };
 
 const DONE_TEXT: Record<SantaConfirmKind, string> = {
-  draw: 'Drawn. Everyone can open their own match now. Ask Santa for a fresh card to see who has looked.',
+  draw: 'Drawn. Everyone can open their own match now. This card shows who has looked.',
   reveal: "Shown. Everyone's page now says who was whose Santa.",
   skip: 'Skipped. Who was whose Santa stays a secret.',
   stop: 'Stopped. The link is closed.',
@@ -991,7 +1124,7 @@ const SantaActions: React.FC<{
               Copy invite
             </button>
           )}
-          {pageLink(host ? `Join as ${host}` : 'Join on your phone', false, true)}
+          {pageLink(host ? `Join as ${host}` : 'Join yourself', false, true)}
           {peopleBtn}
           {s.can_draw ? (
             <button type="button" onClick={() => onConfirm('draw')} className={`kw-btn-ghost ${HALF} col-span-1 sm:ml-auto`} data-action="draw">
@@ -1082,42 +1215,110 @@ const SantaActions: React.FC<{
 
 type Done = { kind: 'ok' | 'error'; text: string; closes: boolean } | null;
 
+/** The line a card shows once its pocket is gone (deleted elsewhere, or its keep time ended). */
+export const SANTA_GONE_TEXT = 'This Secret Santa is gone: it was deleted or its keep time ended. Nothing of it is left on this Mac.';
+
 export const SantaCard: React.FC<{ block: PocketBlock; ask: (t: string) => void }> = ({ block, ask }) => {
-  const s = block.santa!;
+  // The block is what the chat saw; the card then reads the pocket itself (santa-card-live).
+  const [s, setS] = useState<SantaInfo>(block.santa!);
+  const sRef = useRef(s);
+  sRef.current = s;
+  const [gone, setGone] = useState(false);
   const [people, setPeople] = useState(false);
   const [confirm, setConfirm] = useState<SantaConfirmKind | null>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<Done>(null);
   const opener = useRef<HTMLDivElement | null>(null);
   const focusAfter = useFocusAfterRender();
-  const act = async (kind: SantaConfirmKind) => {
-    setBusy(true);
+  const code = block.code;
+
+  /** Swap in a read's host view; false when it carried none the card can show. */
+  const apply = useCallback((r: unknown) => {
+    if (!isObj(r) || r.host_view === undefined || r.host_view === null) return false;
+    const next = santaFromHost(r.host_view, { pocket: r.pocket, join: r.join, prev: sRef.current });
+    if (!next) return false;
+    sRef.current = next;
+    setS(next);
+    return true;
+  }, []);
+
+  // Each action bumps this when it starts and when it ends, so a read that started before or during it can't paint
+  // over the newer view. One read at a time; a failed read keeps what the card shows and the next tick tries again.
+  const actSeq = useRef(0);
+  const reading = useRef(false);
+  const goneRef = useRef(false);
+  const refresh = useCallback(async () => {
+    if (reading.current || goneRef.current) return;
+    reading.current = true;
+    const seq = actSeq.current;
     try {
-      if (kind === 'draw') await pocketApi.hostAction(block.code, 'draw_now');
-      else if (kind === 'reveal') await pocketApi.hostAction(block.code, 'reveal_now');
-      else if (kind === 'skip') await pocketApi.hostAction(block.code, 'skip_reveal');
-      else if (kind === 'delete') await pocketApi.remove(block.code);
-      else await pocketApi.end(block.code);
+      const r = await pocketApi.read(code);
+      if (seq === actSeq.current) apply(r);
+    } catch (e) {
+      // Only the box's own "no pocket here" means gone. Other 404s (Pocket apps switched off in Settings, a proxy
+      // page) keep the last view quietly and keep reading, like a network error.
+      if (e instanceof PocketApiError && e.status === 404 && e.code === 'not_found') {
+        goneRef.current = true;
+        setGone(true);
+      }
+    } finally {
+      reading.current = false;
+    }
+  }, [code, apply]);
+
+  // Read on show, then every 30 s while the tab is visible; coming back to the tab reads at once.
+  useEffect(() => {
+    const visible = () => typeof document === 'undefined' || document.visibilityState === 'visible';
+    if (visible()) void refresh();
+    const t = window.setInterval(() => visible() && void refresh(), SANTA_POLL_MS);
+    const onShow = () => visible() && void refresh();
+    document.addEventListener('visibilitychange', onShow);
+    return () => {
+      window.clearInterval(t);
+      document.removeEventListener('visibilitychange', onShow);
+    };
+  }, [refresh]);
+
+  const act = async (kind: SantaConfirmKind) => {
+    actSeq.current += 1;
+    setBusy(true);
+    let shown = false;
+    try {
+      if (kind === 'draw') shown = apply(await pocketApi.hostAction(code, 'draw_now'));
+      else if (kind === 'reveal') shown = apply(await pocketApi.hostAction(code, 'reveal_now'));
+      else if (kind === 'skip') shown = apply(await pocketApi.hostAction(code, 'skip_reveal'));
+      else if (kind === 'delete') {
+        await pocketApi.remove(code);
+        goneRef.current = true;
+        shown = true;
+      } else await pocketApi.end(code);
       setDone({ kind: 'ok', text: DONE_TEXT[kind], closes: kind === 'stop' || kind === 'end' || kind === 'delete' });
       setConfirm(null);
     } catch (e) {
       setDone({ kind: 'error', text: `Couldn't do that: ${e instanceof PocketApiError ? e.message : 'something went wrong.'} Try again.`, closes: false });
     } finally {
+      actSeq.current += 1;
       setBusy(false);
+      // Stop and End answer with the pocket only, and a failure may mean the box moved on: read it after the bump.
+      if (!shown) void refresh();
     }
   };
+  const onReset = useCallback((id: string) => setS((prev) => ({ ...prev, people: prev.people.map((p) => (p.id === id ? { ...p, locked: false } : p)) })), []);
   const close = () => {
     const k = confirm;
     setConfirm(null);
     focusAfter(() => opener.current?.querySelector<HTMLButtonElement>(`[data-action="${k}"]`));
   };
-  const closed = done?.kind === 'ok' && done.closes;
+  const closed = gone || (done?.kind === 'ok' && done.closes);
   const showsPeople = people && s.phase !== 'ended' && !closed;
+  // Gone: the chip says Ended and one plain line says why; nothing else is left to show or do.
+  const shown: SantaInfo = gone ? { ...s, phase: 'ended' } : s;
   return (
     <section
       className="pocket-card relative flex max-w-[680px] flex-col gap-4 overflow-hidden rounded-2xl border border-sky-800 bg-surface-raised p-4 shadow-card sm:p-[18px]"
       data-pocket={block.state}
-      data-santa={s.phase}
+      data-santa={shown.phase}
+      data-gone={gone || undefined}
       aria-label={`${block.name}, pocket app`}
     >
       <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-sky-500/[0.07] to-transparent" aria-hidden="true" />
@@ -1131,17 +1332,23 @@ export const SantaCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
           {block.when && <p className="text-[15px] text-zinc-300 sm:text-[13px]">{block.when}</p>}
           {/* Phone: the chip sits under the "when" line, so the title doesn't squeeze. */}
           <span className="mt-1.5 block sm:hidden">
-            <SantaChip s={s} />
+            <SantaChip s={shown} />
           </span>
         </div>
         <span className="hidden shrink-0 sm:block">
-          <SantaChip s={s} />
+          <SantaChip s={shown} />
         </span>
       </header>
       <div className="relative flex flex-col gap-4">
-        <SantaBody block={block} s={s} ask={ask} closed={closed} />
-        {showsPeople && <PeoplePanel block={block} s={s} />}
-        {done ? (
+        {!gone && <SantaBody block={block} s={s} ask={ask} closed={closed} />}
+        {showsPeople && <PeoplePanel block={block} s={s} onRead={apply} onReset={onReset} />}
+        {gone ? (
+          <p role="status" className="flex items-start gap-2 text-[15px] text-zinc-300 sm:text-[13px]" data-done="gone">
+            <Info size={15} className={ICON} aria-hidden="true" />
+            {SANTA_GONE_TEXT}
+          </p>
+        ) : null}
+        {done && !gone ? (
           <p role="status" className={`flex items-start gap-2 text-[15px] sm:text-[13px] ${done.kind === 'ok' ? 'text-ok' : 'text-bad'}`} data-done={done.kind}>
             {done.kind === 'ok' ? <Check size={15} className={ICON} aria-hidden="true" /> : <AlertTriangle size={15} className={ICON} aria-hidden="true" />}
             {done.text}
@@ -1149,7 +1356,7 @@ export const SantaCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
         ) : null}
         {confirm ? (
           <SantaConfirm block={block} s={s} kind={confirm} busy={busy} onYes={() => act(confirm)} onNo={close} />
-        ) : done?.kind === 'ok' ? null : (
+        ) : closed ? null : (
           <div ref={opener}>
             <SantaActions block={block} s={s} people={showsPeople} onPeople={() => setPeople(!people)} ask={ask} onConfirm={setConfirm} />
           </div>

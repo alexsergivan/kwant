@@ -536,6 +536,65 @@ export const SANTA_FIXTURES = {
 /** What host/reset-pin answers for the shots and tests: a one-time code and its expiry (24 h). */
 export const SANTA_RESET_CODE = { code: 'K7QX', expires_at: '2026-12-08T21:41:00+01:00' };
 
+// santa-card-live: Mira's office Santa (ux-pass-santa, 6 people, Anna and Ben kept apart) as the box's own read
+// (GET /api/pockets/:code, santa.rs host_view), so the card can be tested and shot going 0 of 6 -> 6 of 6 -> drawn.
+// Names and creatures are made up; the gift day is far off so "drawn" never turns into Reveal day in a test.
+const OFFICE = [['o1', 'Finn', 'antenna'], ['o2', 'Anna', 'beret'], ['o3', 'Ben', 'goggles'], ['o4', 'Cleo', 'horns'], ['o5', 'Dev', 'ears'], ['o6', 'Esme', 'bulb']] as const;
+export function santaHostView(joined: number, phase: 'collecting' | 'drawn' | 'revealed' = 'collecting', over: Record<string, unknown> = {}) {
+  const after = phase !== 'collecting';
+  const people = OFFICE.slice(0, joined).map(([id, name, avatar]) => ({ id, name, avatar, looked: after && id !== 'o5', gift_ready: after && id === 'o1' }));
+  return {
+    phase,
+    gift_on: '2099-12-18',
+    budget: '£20',
+    host_name: 'Finn',
+    draw_at: null,
+    reveal: phase === 'revealed' ? 'shown' : 'scheduled',
+    reveal_at: '2099-12-18T19:00:00Z',
+    joined,
+    expected: 6,
+    people,
+    waiting_for: OFFICE.slice(joined).map(([, name]) => name),
+    keep_apart: [['Anna', 'Ben']],
+    late_allowed: [],
+    drawn_at: after ? '2099-12-01T18:00:00Z' : null,
+    revealed_at: phase === 'revealed' ? '2099-12-18T19:00:00Z' : null,
+    draw: { can_draw: phase === 'collecting' && joined >= 3, blocked: joined < 3 ? { code: 'too_few', message: 'A draw needs at least 3 people.' } : null, overdue: false },
+    needs_you: false,
+    counts: { joined, looked: after ? joined - 1 : 0, gifts_ready: after ? 1 : 0, questions_asked: 0, questions_answered: 0 },
+    ...over,
+  };
+}
+export const SANTA_LIVE_JOIN = {
+  mode: 'anywhere',
+  anywhere_url: 'https://finn-mac.tail4b2e.ts.net/p/of6sn7',
+  anywhere_kind: 'funnel',
+  wifi_url: 'http://192.168.1.20:7480/p/of6sn7',
+  wifi_note: null,
+  quick_tunnel: false,
+  tunnel: { state: 'off', url: null, note: null },
+};
+export const santaRead = (hv: Record<string, unknown>, pocket: Record<string, unknown> = {}) => ({
+  pocket: { code: 'of6sn7', kit: 'santa', title: 'Office Secret Santa', state: 'open', ended_at: null, expires_at: '2099-12-25T00:00:00Z', players: hv.joined, ...pocket },
+  summary: null,
+  removed: 0,
+  host_view: hv,
+  join: SANTA_LIVE_JOIN,
+});
+/** The chat's block for the office Santa, as santa_create hands it over: the raw host view, nobody in yet. */
+export const SANTA_LIVE_BLOCK = {
+  ...pocketBase,
+  id: 'b-santa-live',
+  provenance: { kind: 'kwant_data', ref: 'pocket:of6sn7' },
+  code: 'of6sn7',
+  kit: 'santa',
+  name: 'Office Secret Santa',
+  when: '£20 each · gifts on Fri, Dec 18 · reveal at 7 PM',
+  state: 'live',
+  budget: { calls: 2, usd: 0.01 },
+  santa: santaHostView(0),
+};
+
 // Pocket apps (pa10b/design.md): Riverside Runners, host Oleks, 22 members, euros. Names, places and creatures are
 // made up. One engine, three faces: RSVP, Sign-up and Vote, states 1-9 plus People, Nudges and the closed results.
 // `gather` is Lin's host view as the box sends it (pa10b/server-shape.md, src/pocket/gather.rs) plus the pocket's
