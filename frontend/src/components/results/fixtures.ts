@@ -482,6 +482,20 @@ export const SANTA_FIXTURES = {
     ...collecting,
     join: { mode: 'wifi', anywhere_kind: null, anywhere_url: null, wifi_url: SANTA_WIFI },
   }),
+  // A default Mac box: it answers only 127.0.0.1, and Santa never takes a quick link (santa-join-on-local-box).
+  localBox: santaFixture('Your Secret Santa is set up. Phones need an address that stays before anyone can join; the card has the steps.', 'live', {
+    ...collecting,
+    joined: 0,
+    waiting_for: [],
+    people: [],
+    can_draw: false,
+    join: { mode: 'none', anywhere_kind: null, anywhere_url: null, wifi_url: null, wifi_note: 'this_computer_only' },
+  }),
+  // The same box with Funnel on: From anywhere works, Same Wi-Fi still can't.
+  localBoxFunnel: santaFixture("Your Secret Santa is open. Send the invite to the family chat; I'll draw names when everyone's in.", 'live', {
+    ...collecting,
+    join: { mode: 'anywhere', anywhere_kind: 'funnel', anywhere_url: SANTA_FUNNEL, wifi_url: null, wifi_note: 'this_computer_only' },
+  }),
   drawn: santaFixture("Names are drawn. Everyone sees only their own match; here's how it's going.", 'live', {
     phase: 'drawn',
     people: drawnPeople,
