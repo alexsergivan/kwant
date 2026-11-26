@@ -139,7 +139,8 @@
    engine has scroll anchoring: a row drawn above the screen grows from the estimate, and without anchoring (WebKit:
    the Mac app, Safari) the rows on screen would jump by the difference while scrolling up. */
 @supports (overflow-anchor: auto) {
-  .kw-row-lazy:not(:hover):not(:focus-within):not(.kw-flash):not(.kw-flash-quote) {
+  /* chat-scroll-holds-place: not in WebKit even with anchoring (`kw-no-lazy`, see lazyRowsHold). */
+  :not(.kw-no-lazy) > .kw-row-lazy:not(:hover):not(:focus-within):not(.kw-flash):not(.kw-flash-quote) {
     content-visibility: auto;
     contain-intrinsic-size: auto 160px;
   }
