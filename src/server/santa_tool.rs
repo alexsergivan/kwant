@@ -17,7 +17,7 @@
 //! only to the owner's own replies).
 
 use super::continuity::SelfScope;
-use super::quizmaster_tools::{self as qt, PocketOrigin};
+use super::quizmaster_tools::PocketOrigin;
 use super::AppState;
 use crate::pocket::kits::{self, spec_date, KitCtx, Player, Viewer};
 use crate::pocket::schedule::{self, Zone};
@@ -38,6 +38,11 @@ const MAX_SPEC_BYTES: usize = 16 * 1024;
 
 pub fn handles(name: &str) -> bool {
     name == TOOL
+}
+
+/// Whether Secret Santa is on (pocket-switch-santa-alone): the switch is `on` or names `santa`.
+pub async fn enabled(state: &AppState) -> bool {
+    crate::pocket::enabled_for(&state.db, santa::ID).await
 }
 
 pub fn tool() -> Value {
@@ -107,7 +112,7 @@ fn spec_arg(args: &Value) -> Result<Option<Value>, String> {
 }
 
 pub async fn call(state: &AppState, scope: &SelfScope, args: &Value) -> ToolResult {
-    if !qt::enabled(state).await {
+    if !enabled(state).await {
         return fail("Pocket apps are off on this kwant.");
     }
     let spec = match spec_arg(args) {

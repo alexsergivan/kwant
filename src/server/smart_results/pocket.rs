@@ -41,8 +41,14 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
     // The turn's last call that names a card wins: a Secret Santa made after a quiz call shows
     // the Santa, and a quiz call after `santa_create` shows the quiz.
     let called = last_named(input)?;
+    // pocket-switch-santa-alone: the card's own kit must be on (`on`, or a list naming it)
     let on = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?").bind(qt::SETTING).fetch_optional(&mut *conn).await.ok()?;
-    if on.as_deref() != Some("on") {
+    let switch = crate::pocket::Switch::parse(on.as_deref().unwrap_or(""));
+    let kit = match &called {
+        Called::Quiz(_) => crate::kits::quiz::KIT_ID,
+        Called::Santa(_) => crate::pocket::santa::ID,
+    };
+    if !switch.allows(kit) {
         return None;
     }
     let tz = sqlx::query_scalar::<_, String>("SELECT value FROM settings WHERE key = ?")
