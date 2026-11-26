@@ -131,6 +131,8 @@ export interface SidebarProps {
   botStatus?: Record<string, BotStatus>;
   /** Open browser steps per bot ("Needs you" pill). */
   needsYou?: Record<string, number>;
+  /** 0.9.55 (#1262): of those, the steps fixed in Tools › MCP servers; a bot with only these says "in Tools". */
+  needsYouTools?: Record<string, number>;
   /** Phone Chats tab: bots waiting on you, one row each, first in the list. */
   needsYouRows?: NeedsYouRow[];
   /** W1: chats whose browser is active, by owner (team, channel, or bot for its direct chat). */
@@ -376,6 +378,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   doneKwants = {},
   botStatus = {},
   needsYou = {},
+  needsYouTools = {},
   browsingOwners = {},
   browsingBots = {},
   onWatchBrowser,
@@ -636,7 +639,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const actionRoom = !phone && hasRowActions ? ' group-hover/fleet:pr-9 group-focus-within/fleet:pr-9' : '';
     // An open browser step: the status line says so in words while it is open (the name line only has the hand)
     const needs = needsYou[k.id] ?? 0;
-    const needsTip = `${k.name} needs you in the browser`;
+    // 0.9.55: every open step is a Tools fix (its tools can't connect): the words say Tools, not the browser
+    const inTools = needs > 0 && (needsYouTools[k.id] ?? 0) >= needs;
+    const needsWhere = inTools ? 'Needs you in Tools' : 'Needs you in the browser';
+    const needsTip = `${k.name} ${inTools ? 'needs you in Tools' : 'needs you in the browser'}`;
     // 0.9.5: a bot paused at its monthly budget says so where its status goes; at 80% a small amber meter
     const budget = budgetsByBot[k.id];
     const budgetPaused = budget?.state === 'paused';
@@ -645,8 +651,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ? asked.line
       : attLine
         ? attLine
-      : needs > 0 && !busyKwants[k.id]?.startsWith('Needs you in the browser')
-        ? 'Needs you in the browser'
+      : needs > 0 && !busyKwants[k.id]?.startsWith(needsWhere)
+        ? needsWhere
         : budgetPaused && !busyKwants[k.id]
           ? PAUSED_ROW_LINE
           : busyKwants[k.id];
@@ -669,7 +675,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             : att.rank === 2
               ? 'Failed'
               : needs > 0
-                ? 'Browser step'
+                ? inTools
+                  ? 'Tools step'
+                  : 'Browser step'
                 : undefined;
     const tipHead = fullLine ? [k.name, tipKind, rowItem ? localClock(rowItem.timestamp) : null].filter(Boolean).join(' · ') : undefined;
     const tipId = fullLine ? `pin-tip-${k.id}` : undefined;

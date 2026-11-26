@@ -19,6 +19,23 @@ export function onlyAskOpen(s: AskOnlyState): boolean {
   return !!s.streaming && !!s.awaitingAnswer && !s.awaitingBrowser && !s.approvalOpen && !s.queued && !s.writing;
 }
 
+/**
+ * What a chat's running turns wait on, for ChatView's flags. `answer`: every running turn waits on the person.
+ * `step`: one waits on a step, browser or Tools, so it's never the question layout. `tools`: every step it
+ * waits on is fixed in Tools, so the words say Tools (0.9.55, Rigel F1 on #1264).
+ */
+export function stepWaitFlags(
+  turns: { turn_id: string; state: string }[],
+  awaiting: Set<string>,
+  browser: Set<string>,
+  tools: Set<string>,
+): { answer: boolean; step: boolean; tools: boolean } {
+  const running = turns.filter((t) => t.state === 'running');
+  const answer = running.length > 0 && running.every((t) => awaiting.has(t.turn_id));
+  const step = answer && running.some((t) => browser.has(t.turn_id) || tools.has(t.turn_id));
+  return { answer, step, tools: step && !running.some((t) => browser.has(t.turn_id)) };
+}
+
 /** One line for each thing the chat waits on the person for. Later lines (waiting checks) add a kind. */
 export interface WaitingLine {
   kind: 'answer';
