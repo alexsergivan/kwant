@@ -25,5 +25,23 @@
     "idle_rss_mb",
     "after_reply_rss_mb",
     "after_search_rss_mb"
-  ]
+  ],
+  "release": {
+    "note": "PROVISIONAL (perf-release-budget, 0.9.56): the debug limits as a ceiling until 3 CI runs of the perf-release job set them (median + 15%, rounded up; perf_budget.py --set-release-limits). Judged by the perf-release job (cargo build --release), not by fresh-machine.",
+    "limits": {
+      "cold_start_s": 1.0,
+      "first_reply_s": 0.2,
+      "idle_rss_mb": 132.0,
+      "after_reply_rss_mb": 132.0,
+      "after_search_rss_mb": 150.0,
+      "browser_launch_s": 2.4
+    },
+    "blocking": [
+      "after_reply_rss_mb",
+      "after_search_rss_mb",
+      "cold_start_s",
+      "first_reply_s",
+      "idle_rss_mb"
+    ]
+  }
 }

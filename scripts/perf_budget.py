@@ -32,8 +32,19 @@ Usage:
   python3 scripts/perf_budget.py --kwnt ... --limits /tmp/tiny.json   # try other limits, e.g. to see a FAIL
   python3 scripts/perf_budget.py --judge perf-results.json            # judge a saved results file again (no kwnt run),
                                                                       # e.g. a doctored one, to prove a FAIL exits 1
+  python3 scripts/perf_budget.py --profile release --kwnt target/release/kwnt   # the release build, against the
+                                                                      # "release" limits in perf_budget.json
+  python3 scripts/perf_budget.py --set-release-limits a.json b.json c.json      # release limits from 3 CI runs
+  git diff --name-only BASE HEAD | python3 scripts/perf_budget.py --needs-release-run   # prints true or false
 
-Limits: baseline x 1.5 for times, x 1.3 for memory, rounded up (see compute_limits). Linux only (reads /proc).
+Profiles (perf-release-budget, 0.9.56): CI measures two builds. `debug` (the fresh-machine job's target/debug/kwnt) is
+judged against the top-level "limits" and "blocking" of perf_budget.json; `release` (the perf-release job's
+`cargo build --release`, what people run) against the "release" object's own "limits" and "blocking". A release run
+whose limits file has no "release" limits stops with exit 2 instead of passing unjudged. --judge uses the profile the
+saved file was measured with unless --profile says otherwise.
+
+Limits: debug, baseline x 1.5 for times, x 1.3 for memory, rounded up (see compute_limits); release, the median of 3
+CI runs' medians + 15%, rounded up to 0.01 s / 1 MB (see release_limits). Linux only (reads /proc).
 Needs no packages: standard library only.
 """
 import argparse
@@ -221,6 +232,52 @@ def compute_limits(baseline):
     return {k: round_up(v * MEASURES[k][2], MEASURES[k][3]) for k, v in baseline.items() if k in MEASURES and v is not None}
 
 
+PROFILES = ("debug", "release")
+DEFAULT_RELEASE_BLOCKING = {"cold_start_s", "first_reply_s", "idle_rss_mb", "after_reply_rss_mb", "after_search_rss_mb"}
+RELEASE_HEADROOM = 1.15                      # release limits: the median of 3 CI runs + 15% (Ada's brief, Nov 26)
+RELEASE_DECIMALS = {"s": 2, "MB": 0}         # rounded up to 0.01 s and to whole MB
+# A pull request runs the perf-release job only when it touches one of these (a release build adds ~10+ minutes).
+# Pushes to main always run it. Prefixes end in "/" (a folder) or match the start of the path.
+RELEASE_RUN_PATHS = ("src/", "Cargo.toml", "Cargo.lock", "build.rs", "scripts/perf_budget.", ".github/workflows/ci.yml")
+
+
+def section_of(limits_file_data, profile):
+    """The part of perf_budget.json a profile is judged against: the top level for debug, the "release" object for
+    release. A release section without limits raises ValueError: a release run must never pass unjudged."""
+    if profile not in PROFILES:
+        raise ValueError(f"unknown profile {profile!r} (one of {', '.join(PROFILES)})")
+    if profile == "debug":
+        return limits_file_data
+    section = limits_file_data.get(profile)
+    if not isinstance(section, dict) or not section.get("limits"):
+        raise ValueError(f'the limits file has no "{profile}" limits')
+    return section
+
+
+def release_limits(run_medians):
+    """Release limits from several CI runs: for each measure, the median of the runs' medians x RELEASE_HEADROOM,
+    rounded up (times to 0.01 s, memory to 1 MB). A measure no run has is left out. Returns (baseline, limits)."""
+    baseline, limits = {}, {}
+    for key, (_, unit, _, _) in MEASURES.items():
+        med = median([m.get(key) for m in run_medians])
+        if med is None:
+            continue
+        baseline[key] = round(med, 3)
+        limits[key] = round_up(med * RELEASE_HEADROOM, RELEASE_DECIMALS[unit])
+    return baseline, limits
+
+
+def medians_of_results(results):
+    """The per-measure medians of one saved perf-results.json (its raw samples, so a re-judge never trusts old rows)."""
+    samples = results.get("samples", {})
+    return {k: median(samples.get(k) or []) for k in MEASURES}
+
+
+def needs_release_run(paths):
+    """True when one of the changed paths can change the release build's numbers (RELEASE_RUN_PATHS)."""
+    return any(p.strip().startswith(RELEASE_RUN_PATHS) for p in paths if p.strip())
+
+
 def blocking_of(limits_file_data):
     """The measures whose FAIL blocks CI: perf_budget.json's "blocking" list. A file without the key blocks on every
     measure (the old behaviour), so an older limits file is never silently weaker. Unknown ids are ignored."""
@@ -263,9 +320,10 @@ def table(rows):
     return "\n".join(lines)
 
 
-def summary_markdown(rows):
+def summary_markdown(rows, profile="debug"):
     """The same table as Markdown, for the GitHub job summary ($GITHUB_STEP_SUMMARY); SKIP rows carry their reason."""
-    out = ["### Performance budget", "", "| measure | median | limit | result |", "|---|---|---|---|"]
+    title = "### Performance budget" + ("" if profile == "debug" else f" ({profile} build)")
+    out = [title, "", "| measure | median | limit | result |", "|---|---|---|---|"]
     for r in rows:
         what, unit = MEASURES[r["id"]][0], MEASURES[r["id"]][1]
         med = "-" if r["median"] is None else f"{r['median']:.2f} {unit}"
@@ -589,13 +647,31 @@ def main():
     ap.add_argument("--limits", default=str(LIMITS_FILE), help="the limits file (default scripts/perf_budget.json)")
     ap.add_argument("--out", default="perf-results.json", help="where the results are written")
     ap.add_argument("--no-registry", action="store_true", help="skip after_search_rss_mb (no fake MCP Registry)")
-    ap.add_argument("--update-baseline", action="store_true", help="rewrite the limits file from this run (on purpose, not in CI)")
+    ap.add_argument("--update-baseline", action="store_true", help="rewrite the limits file from this run (on purpose, not in CI; debug only)")
+    ap.add_argument("--profile", choices=PROFILES, help="which build this is, so which limits apply (default debug; --judge: the saved file's)")
+    ap.add_argument("--set-release-limits", nargs="+", metavar="RESULTS_JSON", help="write the \"release\" limits from saved CI runs (median + 15%%)")
+    ap.add_argument("--needs-release-run", action="store_true", help="read changed paths on stdin, print true when the perf-release job should run")
     args = ap.parse_args()
+    if args.needs_release_run:
+        print("true" if needs_release_run(sys.stdin.read().splitlines()) else "false")
+        return 0
     limits_path = Path(args.limits)
     limits_data = json.loads(limits_path.read_text()) if limits_path.is_file() else {}
-    limits, blocking = limits_data.get("limits", {}), blocking_of(limits_data)
+    if args.set_release_limits:
+        return set_release_limits(limits_path, limits_data, [Path(f) for f in args.set_release_limits])
     if args.judge:
-        return judge_saved(Path(args.judge), limits, blocking)
+        saved = json.loads(Path(args.judge).read_text())
+        profile = args.profile or saved.get("profile") or "debug"
+        return judge_saved(Path(args.judge), saved, profile, limits_data)
+    profile = args.profile or "debug"
+    if args.update_baseline and profile != "debug":
+        ap.error("--update-baseline rewrites the debug limits only; use --set-release-limits for release")
+    try:
+        section = section_of(limits_data, profile)
+    except ValueError as e:
+        print(f"performance budget: {e} ({limits_path})", flush=True)
+        return 2
+    limits, blocking = section.get("limits", {}), blocking_of(section)
     if not args.kwnt:
         ap.error("--kwnt is required (or --judge a saved results file)")
 
@@ -635,11 +711,11 @@ def main():
         registry.close()
     medians = {k: median([r.get(k) for r in runs]) for k in MEASURES}
     rows = judge(medians, limits, skipped, blocking)
-    print("\n" + table(rows))
+    print(f"\n{profile} build\n" + table(rows))
 
     results = {
         "when": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
-        "kwnt": str(kwnt), "runs": args.runs, "memory_runs": args.memory_runs, "idle_seconds": args.idle_seconds,
+        "profile": profile, "kwnt": str(kwnt), "runs": args.runs, "memory_runs": args.memory_runs, "idle_seconds": args.idle_seconds,
         "browser": found_browser, "browser_skip": skipped.get("browser_launch_s"), "chrome_diagnosis": diagnosis, "measures": rows, "samples": {k: [r.get(k) for r in runs] for k in MEASURES},
         "memory_split": {k: [r.get(f"{k}_rss_split") for r in runs[:args.memory_runs]] for k in ("idle", "after_reply", "after_search")},
         "directory_sync_s": [r.get("directory_sync_s") for r in runs[:args.memory_runs]],
@@ -650,7 +726,7 @@ def main():
     summary = os.environ.get("GITHUB_STEP_SUMMARY")
     if summary:
         with open(summary, "a") as f:
-            f.write(summary_markdown(rows))
+            f.write(summary_markdown(rows, profile))
             if diagnosis:
                 f.write("\n<details><summary>Why Chrome did not start</summary>\n\n```\n" + diagnosis + "\n```\n</details>\n")
 
@@ -676,15 +752,39 @@ def report_exit(rows):
     return code
 
 
-def judge_saved(path, limits, blocking):
-    """--judge: the medians of a saved results file's samples, judged against today's limits. Runs nothing."""
-    saved = json.loads(path.read_text())
-    samples = saved.get("samples", {})
-    medians = {k: median(samples.get(k) or []) for k in MEASURES}
+def judge_saved(path, saved, profile, limits_data):
+    """--judge: the medians of a saved results file's samples, judged against today's limits for `profile`. Runs nothing."""
+    try:
+        section = section_of(limits_data, profile)
+    except ValueError as e:
+        print(f"performance budget: {e}", flush=True)
+        return 2
+    medians = medians_of_results(saved)
     skipped = {"browser_launch_s": saved["browser_skip"]} if saved.get("browser_skip") else {}
-    rows = judge(medians, limits, skipped, blocking)
-    print(f"judging {path} (no kwnt run)\n" + table(rows))
+    rows = judge(medians, section.get("limits", {}), skipped, blocking_of(section))
+    print(f"judging {path} as the {profile} build (no kwnt run)\n" + table(rows))
     return report_exit(rows)
+
+
+def set_release_limits(limits_path, limits_data, result_files):
+    """--set-release-limits: the "release" limits from saved CI runs of the release build. Keeps the section's note
+    and blocking list; every other part of the file is left as it is."""
+    saved = [json.loads(f.read_text()) for f in result_files]
+    wrong = [str(f) for f, r in zip(result_files, saved) if r.get("profile") != "release"]
+    if wrong:
+        print(f"not release-build results (profile != release): {', '.join(wrong)}", flush=True)
+        return 2
+    baseline, limits = release_limits([medians_of_results(r) for r in saved])
+    section = dict(limits_data.get("release") or {})
+    section.setdefault("blocking", sorted(DEFAULT_RELEASE_BLOCKING))
+    section["baseline"] = baseline
+    section["baseline_from"] = {"files": [f.name for f in result_files], "when": [r.get("when") for r in saved],
+                                "rule": f"median of the runs' medians x {RELEASE_HEADROOM}, rounded up"}
+    section["limits"] = limits
+    limits_data["release"] = section
+    limits_path.write_text(json.dumps(limits_data, indent=2) + "\n")
+    print(f"rewrote the release limits in {limits_path}: {json.dumps(limits)}")
+    return 0
 
 
 if __name__ == "__main__":
