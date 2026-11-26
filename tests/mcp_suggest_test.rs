@@ -576,6 +576,33 @@ async fn directory_searches_live_until_the_copy_is_synced_then_keeps_it_current(
     assert_eq!(v["entries"].as_array().unwrap().len(), 4);
 }
 
+/// perf-idle-memory: holding the registry copy from startup cost ~35 MB of idle memory (CI perf
+/// budget, Nov 13). Startup only arms the sync; the first search starts it, once.
+#[tokio::test]
+async fn directory_sync_waits_for_the_first_search() {
+    let e = setup().await;
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    e.state.mcp_directory.arm(e.state.mcp_registry.clone(), shutdown.clone());
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(e.reg.hits.load(Ordering::SeqCst), 0, "arming asks the registry nothing");
+    assert!(e.state.mcp_directory.copy().is_none(), "no copy is held before anyone searches");
+
+    // The first search answers from the registry's own search and starts the sync
+    let v = dir_search(&e, "echo").await;
+    assert_eq!(v["source"], "live");
+    assert_eq!(v["entries"][0]["registry_name"], "io.github.kwnt-test/echo");
+    let started = std::time::Instant::now();
+    while e.state.mcp_directory.copy().is_none() {
+        assert!(started.elapsed() < std::time::Duration::from_secs(15), "the first search never started the sync");
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    assert_eq!(e.state.mcp_directory.copy().unwrap().entries.len(), 4);
+    assert_eq!(dir_search(&e, "echo").await["source"], "copy");
+    // One sync loop only: a later search doesn't start another
+    assert!(!e.state.mcp_directory.start_sync());
+    shutdown.cancel();
+}
+
 #[tokio::test]
 async fn directory_without_copy_or_registry_says_unavailable() {
     let mut e = setup().await;
