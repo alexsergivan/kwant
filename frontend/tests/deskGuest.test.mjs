@@ -2,7 +2,7 @@
 // (pa13/impl.md), the copy for notes and refusals, the outbox (client_id swap, network retry, 429 keeps the text,
 // 410 gives G12) and the chat flows against the fake desk box (guest/fake/desk.mjs). The browser half (G1-G12 in
 // Chrome under pa1's CSP, shots) is guest/e2e/csp.mjs.
-import './pinLocale.mjs'; // en-US default, whatever the machine's locale
+import { withLocale } from './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -256,6 +256,18 @@ test('G6: 429 slow_down keeps the text in the composer and turns send off until 
   assert.ok(t.$('[data-send]').disabled);
   await submit(t.$('[data-composer]'));
   assert.equal(t.says().length, 1, 'no second try while slowed down');
+  assert.match(t.$('[data-slow]').textContent, /Your message is still here, ready to send\./, 'the text is in the composer, so the line says so');
+  t.app.stop();
+});
+
+test('m8: slow-down after a reload: the composer is empty, so the line only says when writing opens again', async () => {
+  const t = await open('desk-slow-reload');
+  assert.equal(t.$('#d-say').value, '');
+  const line = t.$('[data-slow]')?.textContent ?? '';
+  assert.match(line, /^That's a lot of messages for one hour\. You can write again at \d{1,2}:\d{2}( [AP]M)?\.$/);
+  assert.doesNotMatch(line, /still here|ready to send/);
+  assert.match(t.$('#say-hint').textContent, /^You can write again at /);
+  assert.ok(t.$('[data-send]').disabled);
   t.app.stop();
 });
 
@@ -504,6 +516,84 @@ test('K10 taken: the refusal keeps the sheet open, drops that time and says why'
   // Rigel F1: focus lands on the notice inside the sheet, so Esc still works without a Tab first.
   assert.equal(t.$('[data-taken]').getAttribute('tabindex'), '-1');
   assert.ok(t.$('[data-sheet]').contains(document.activeElement), 'focus is inside the sheet after K10');
+});
+
+test('m1: a live view that takes the picked time clears the pick and says K10, like the 409; the note stays', async () => {
+  const t = await open('desk-book-taken');
+  t.$('[data-pick-open]').click();
+  await flush();
+  t.$('[role=radio][data-slot="d1-11"]').click();
+  await flush();
+  await type(t.$('#pk-note'), 'Short trim please');
+  t.$('[role=radio][data-slot="d1-11"]').focus();
+  assert.match(t.$('[data-ask]').textContent, /^Ask for /);
+  // Another guest takes 11 AM; the next poll brings it.
+  t.box.set((v) => (v.slots.find((s) => s.id === 'd1-11').open = false));
+  await t.advance(30_000);
+  assert.ok(t.$('[data-sheet]'), 'the sheet stays open');
+  assert.equal(t.$('[data-taken][role=alert]')?.textContent, 'Someone just took 11 AM. Pick another time.');
+  assert.equal(t.$('[data-slot="d1-11"]'), null);
+  assert.equal(t.$('[role=radio][aria-checked=true]'), null, 'nothing picked');
+  assert.equal(t.$('[data-ask]').textContent, 'Pick a time first');
+  assert.ok(t.$('[data-ask]').disabled);
+  assert.equal(t.$('#pk-note').value, 'Short trim please', 'the note is kept');
+  assert.ok(t.$('[data-sheet]').contains(document.activeElement), 'focus stays in the sheet (on the notice)');
+  assert.equal(t.says().length, 0, 'nothing was sent');
+  // A later view that leaves other times alone keeps the notice and asks nothing again.
+  t.box.set((v) => (v.slots.find((s) => s.id === 'd2-10').open = false));
+  await t.advance(30_000);
+  assert.ok(t.$('[data-taken]'));
+  t.app.stop();
+});
+
+test('m1: a live view that drops a different time leaves the pick alone; our own request is not "taken"', async () => {
+  const t = await open('desk-book-taken');
+  t.$('[data-pick-open]').click();
+  await flush();
+  t.$('[role=radio][data-slot="d1-11"]').click();
+  await flush();
+  t.box.set((v) => (v.slots.find((s) => s.id === 'd1-15').open = false));
+  await t.advance(30_000);
+  assert.equal(t.$('[role=radio][aria-checked=true]')?.getAttribute('data-slot'), 'd1-11');
+  assert.equal(t.$('[data-taken]'), null);
+  t.app.stop();
+});
+
+test('m7: an en-GB phone sees "Thu 3 Dec" and 24-hour times on the desk; en-US is unchanged', () => {
+  const s = sl('a', '2026-12-03T10:00');
+  withLocale('en-GB', () => {
+    assert.equal(b.whenLabel(s), 'Thu 3 Dec, 10:00');
+    assert.equal(b.chipLabel(sl('p', '2026-12-03T14:30')), 'Thu 14:30');
+    assert.equal(b.groupDays([s], NOW)[0].long, 'Thu 3 Dec');
+    assert.equal(m.dayLabel('2026-11-23T08:00:00', Date.parse('2026-11-24T12:00:00')), 'Mon 23 Nov');
+  });
+  assert.equal(b.whenLabel(s), 'Thu Dec 3, 10 AM');
+  assert.equal(b.groupDays([s], NOW)[0].long, 'Thu Dec 3');
+  withLocale('de-DE', () => assert.equal(b.whenLabel(s), 'Do. 3. Dez., 10:00'));
+});
+
+test('m7: the picker, strip and chat times follow the phone (en-GB)', async () => {
+  const t = await open('desk-book-requested');
+  await withLocale('en-GB', () => {
+    t.app.paint(true);
+  });
+  const strip = t.$('[data-strip=requested]').textContent;
+  assert.match(strip, /\d{1,2} [A-Z][a-z]{2}, \d{2}:\d{2}/, `strip in en-GB order: ${strip}`);
+  assert.doesNotMatch(t.text(), /\b(AM|PM)\b/, 'no 12-hour times on an en-GB phone');
+  t.app.stop();
+  const p = await open('desk-book-taken');
+  withLocale('en-GB', () => p.$('[data-pick-open]').click());
+  const line = p.$('[data-dayline]').textContent;
+  assert.match(line, /^[A-Z][a-z]{2} \d{1,2} [A-Z][a-z]{2} · /, `day line in en-GB order: ${line}`);
+  assert.match(p.$('[role=radio][data-slot]').textContent, /^\d{1,2}:00$/, "24-hour, no AM/PM");
+  p.app.stop();
+});
+
+test('m7: nothing under the desk guest page pins en-US', () => {
+  for (const f of ['app', 'view', 'copy', 'outbox', 'look', 'desk', 'picker', 'slots', 'strip']) {
+    const src = readFileSync(new URL(`../guest/src/desk/${f}.ts`, import.meta.url), 'utf8');
+    assert.doesNotMatch(src, /['"]en-US['"]/, f);
+  }
 });
 
 test('K11 closed with a booking: the booked strip stays and nothing else can be asked', async () => {
