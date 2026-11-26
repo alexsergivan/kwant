@@ -87,11 +87,11 @@ test('auto, resting: last reply\'s mark at 60% with the ✦ corner; never ran: L
   assert.equal(rest.mark, 'claude');
   assert.equal(rest.resting, true);
   assert.equal(rest.auto, true);
-  assert.equal(rest.label, 'Laya picks the model. Last reply: Claude · Sonnet');
+  assert.equal(rest.label, 'kwant picks the AI. Last reply: Claude · Sonnet');
   const never = m.modelBadgeFor({ preferred_model: 'auto', last_ran_on: null }, null, ENGINES);
   assert.equal(never.mark, 'laya');
   assert.equal(never.resting, false);
-  assert.equal(never.label, 'Laya picks the model');
+  assert.equal(never.label, 'kwant picks the AI');
   // An older server without last_ran_on reads as never ran.
   assert.equal(m.modelBadgeFor({ preferred_model: '' }, null, ENGINES).mark, 'laya');
 });
@@ -100,7 +100,7 @@ test('auto, working: Laya\'s pick for this reply at full opacity', () => {
   const b = m.modelBadgeFor({ preferred_model: 'auto', last_ran_on: run('claude', 'sonnet', 'Sonnet', 'laya') }, run('claude', 'haiku', 'Haiku', 'laya'), ENGINES);
   assert.equal(b.mark, 'claude');
   assert.equal(b.resting, false);
-  assert.equal(b.label, 'Laya picked Claude · Haiku for this reply');
+  assert.equal(b.label, 'kwant picked Claude · Haiku for this reply');
   assert.notEqual(b.key, m.modelBadgeFor({ preferred_model: 'auto', last_ran_on: run('claude', 'sonnet', 'Sonnet', 'laya') }, null, ENGINES).key);
 });
 
@@ -174,7 +174,7 @@ test('a live change: Claude, then Laya picks Grok, then failover to Codex; resti
   assert.equal(badge().getAttribute('data-model-badge'), 'claude');
   assert.ok(badge().hasAttribute('data-badge-resting'));
   assert.ok(host.querySelector('[data-badge-spark]'), 'the ✦ corner while resting');
-  assert.equal(badge().getAttribute('aria-label'), 'Laya picks the model. Last reply: Claude · Sonnet');
+  assert.equal(badge().getAttribute('aria-label'), 'kwant picks the AI. Last reply: Claude · Sonnet');
   assert.equal(badge().getAttribute('aria-live'), null, 'not announced on its own');
 
   flushSync(() => {
@@ -185,7 +185,7 @@ test('a live change: Claude, then Laya picks Grok, then failover to Codex; resti
   assert.equal(badge().getAttribute('data-model-badge'), 'grok');
   assert.equal(badge().hasAttribute('data-badge-resting'), false);
   assert.equal(host.querySelector('[data-badge-spark]'), null);
-  assert.equal(badge().getAttribute('title'), 'Laya picked Grok · grok-4.6 for this reply');
+  assert.equal(badge().getAttribute('title'), 'kwant picked Grok · grok-4.6 for this reply');
   // Mid-switch: both marks, the old fading out and the new fading in.
   assert.deepEqual(marks(), ['claude', 'grok']);
   assert.ok(host.querySelector('.kw-mb-out [data-mark="claude"]'));
@@ -204,7 +204,7 @@ test('a live change: Claude, then Laya picks Grok, then failover to Codex; resti
   await drain();
   assert.equal(badge().getAttribute('data-model-badge'), 'codex', 'rests on the engine it ended on');
   assert.ok(badge().hasAttribute('data-badge-resting'));
-  assert.equal(badge().getAttribute('title'), 'Laya picks the model. Last reply: Codex · GPT-6.1 Sol');
+  assert.equal(badge().getAttribute('title'), 'kwant picks the AI. Last reply: Codex · GPT-6.1 Sol');
 
   // The bot list is read again: its last_ran_on takes over.
   flushSync(() => {

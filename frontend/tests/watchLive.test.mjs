@@ -20,6 +20,7 @@ const m = await loadBundled(`
   import { renderToStaticMarkup } from 'react-dom/server.browser';
   import { Sidebar } from './src/components/Sidebar';
   import { WorkingStrip } from './src/components/WorkingStrip';
+  import { WorkingAvatar } from './src/components/WorkingAvatar';
   import { BrowserSwitcherMenu, BrowserSwitcherRow, GlobeSlot, LiveMissPage, WatchGlobe } from './src/components/WatchLive';
   export * from './src/watchLive';
   export { parseSpacePath, spacePath } from './src/spaces';
@@ -34,6 +35,7 @@ const m = await loadBundled(`
   });
   export const sidebar = (p) => r(Sidebar, sidebarProps(p));
   export const strip = (p) => r(WorkingStrip, p);
+  export const scene = (p) => r(WorkingAvatar, p);
   export const globe = (p) => r(WatchGlobe, p);
   export const row = (p) => r(BrowserSwitcherRow, p);
   export const mount = (C, p) => {
@@ -199,17 +201,18 @@ test('sidebar: clicking the globe opens the owner, not the row', () => {
 
 // ---------------------------------------------------------------- W1: Watch on the working strip
 
-test('working strip: Watch (Eye 13 px) while browsing, labelled for the bot; gone without it', () => {
-  const html = m.strip({ active: true, name: 'Rook', title: 'coder', onWatch() {}, phone: false });
-  assert.match(html, /data-watch-button=""/);
+test('36d: Watch (Eye 13 px) sits in the working scene\'s line 2 while browsing, labelled for the bot; the strip has none while working', () => {
+  const html = m.scene({ name: 'Rook', onWatch() {} });
+  assert.match(html, /data-scene-meta="">[\s\S]*data-watch-button=""/);
   assert.match(html, /aria-label="Watch the page Rook is on"/);
   assert.match(html, /textbtn/);
   assert.match(html, /width="13"/);
-  assert.doesNotMatch(m.strip({ active: true, name: 'Rook', title: 'coder', phone: false }), /data-watch-button/);
+  assert.doesNotMatch(m.scene({ name: 'Rook' }), /data-watch-button/);
+  assert.equal(m.strip({ active: true, name: 'Rook', title: 'coder', onWatch() {}, phone: false }), '', 'no strip while the bot works');
   // Phone: muted and as small as the line (28 px), tapping like 44 px through kws-hit.
-  const phone = m.strip({ active: true, name: 'Rook', title: 'coder', onWatch() {}, phone: true });
+  const phone = m.scene({ name: 'Rook', onWatch() {}, phone: true });
   const watch = /<button[^>]*data-watch-button=""[^>]*>/.exec(phone)[0];
-  for (const c of ['data-compact', 'kws-hit', ' -mr-2 ', 'h-7', 'text-xs', 'text-zinc-400']) assert.ok(watch.includes(c), c);
+  for (const c of ['data-compact', 'kws-hit', 'h-7', 'text-xs', 'text-zinc-400']) assert.ok(watch.includes(c), c);
   assert.doesNotMatch(watch, /text-\[#b8adff\]|min-h-11/);
   assert.match(phone, /width="12"/);
 });
@@ -492,13 +495,6 @@ test('N3: with no name the button says "Open the chat", never "Open @"', () => {
   }
 });
 
-test('N4: on a phone with Watch showing, the time hides below 400 px so the host fits', () => {
-  const timer = (html) => html.match(/<span class="([^"]*)"[^>]*data-working-elapsed=""/)[1];
-  const withWatch = timer(m.strip({ active: true, name: 'Rook', title: 'coder', onWatch() {}, phone: true }));
-  assert.match(withWatch, /\bhidden\b/);
-  assert.match(withWatch, /min-\[400px\]:inline/);
-  const noWatch = timer(m.strip({ active: true, name: 'Rook', title: 'coder', phone: true }));
-  assert.doesNotMatch(noWatch, /\bhidden\b/, 'without Watch the time stays');
-  const desk = timer(m.strip({ active: true, name: 'Rook', title: 'coder', onWatch() {}, phone: false }));
-  assert.doesNotMatch(desk, /\bhidden\b/, 'desk unchanged');
+test('N4 (36d): Watch lives in the scene now; the strip never shows a clock or Watch while the bot works', () => {
+  for (const phone of [true, false]) assert.equal(m.strip({ active: true, name: 'Rook', title: 'coder', onWatch() {}, phone }), '');
 });

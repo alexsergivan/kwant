@@ -168,7 +168,7 @@ test('a kwant pinned to Claude links to the sign-in when Claude is signed out', 
 
 test('"No engine can run" links to the sign-in when Claude is the fix', () => {
   const html = picker('auto', [signedOut]);
-  assert.match(html, /No engine can run right now/);
+  assert.match(html, /No AI can run right now/);
   assert.match(html, /Claude Code is installed but signed out\./);
   assert.match(html, /Sign in with Claude/);
 });

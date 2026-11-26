@@ -63,6 +63,9 @@ export const WorkingStrip: React.FC<WorkingStripProps> = ({ active, name, title,
   const waiting = !!queued || !!awaitingAnswer || on !== null;
   // Desktop shows Answer only for a question: approvals already have the "Approval waiting" pill there.
   const answer = on && onAnswer && (phone || on === 'question') ? on : null;
+  // 36d (working-scene/design.md §3): the scene in the stream is the one working status, so the strip is only the
+  // "needs you" line: it shows while the bot waits on the person and Answer ↑ would show. Never while it works.
+  if (!answer) return null;
   if (phone) {
     return (
       <div className="kws-strip kws-strip-phone mx-auto mb-2 max-w-4xl pl-[21px] pr-[9px]" data-working-strip="" data-waiting-on={on ?? undefined}>
