@@ -6,6 +6,7 @@ pub mod cli_config;
 pub mod cli_hooks;
 pub mod client;
 pub mod composio;
+pub mod covers;
 pub mod declined;
 pub mod echo_server;
 pub mod fetch_risk;

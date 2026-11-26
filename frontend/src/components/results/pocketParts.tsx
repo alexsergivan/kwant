@@ -93,7 +93,12 @@ export const LinkField: React.FC<{ url: string }> = ({ url }) => (
 
 /** The box's own Wi-Fi note: bound to 127.0.0.1, no phone can reach it on Wi-Fi (src/pocket/address.rs `wifi`). */
 export const THIS_COMPUTER_ONLY = 'this_computer_only';
-export const ONLY_THIS_COMPUTER_LINE = "Phones can't reach this box on Wi-Fi: it only answers this computer. Pick From anywhere to make a link for phones.";
+/** The plain fact, said the same way on every kit's card. */
+export const THIS_COMPUTER_WIFI_LINE = "Phones can't reach this box on Wi-Fi: it only answers this computer.";
+/** Quiz: a quick link is fine for one evening. */
+export const ONLY_THIS_COMPUTER_LINE = `${THIS_COMPUTER_WIFI_LINE} Pick From anywhere to make a link for phones.`;
+/** Santa: it runs for weeks, so never a quick link (src/pocket/kits.rs stable_address_only). */
+export const SANTA_STAYS_LINE = 'Santa runs for weeks, so phones need an address that stays: your own https address or Tailscale Funnel.';
 
 export const NoLinkYet: React.FC<{ mode: PocketJoinMode; note?: string | null }> = ({ mode, note }) => (
   <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-no-link={mode === 'wifi' && note === THIS_COMPUTER_ONLY ? 'this-computer-only' : ''}>

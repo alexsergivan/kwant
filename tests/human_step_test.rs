@@ -415,3 +415,128 @@ async fn a_file_wakes_only_the_wait_in_its_own_thread() {
     wait_reply(&env, &thread.id, "answer t2").await;
     assert!(invocations_with("REPLYTAG:t2").iter().any(|p| p.contains("[Attached files]") && p.contains(&format!("id {file}"))));
 }
+
+/// sign-in-wall-uses-tools D: the person types in a bot's chat while sign-in cards kwnt raised by
+/// itself are up there and no turn waits on them ("you have github mcp access!"). Those close as
+/// `left_for_message`, so the "needs you" strip clears. A step the bot asked for, a CAPTCHA, a
+/// step in another chat of the bot, and another bot's step stay open. (A step a turn still waits
+/// on stays open on typed text: `a_file_sent_in_the_chat_returns_the_turn_waiting_on_its_step`.
+/// A plain `other` step: `typed_text_leaves_a_plain_other_step_kwnt_raised_open`.) A bot may hold
+/// at most MAX_OPEN_PER_KWANT (5) open steps, so Arch holds exactly five here.
+#[tokio::test]
+async fn typed_text_closes_the_sign_in_cards_kwnt_raised_that_nobody_waits_on() {
+    use kwnt::db::human_steps::HumanStepPlace;
+    let env = setup().await;
+    let thread = env.state.db.create_thread(&env.a, "Elsewhere", "chat", None, "user").await.unwrap();
+    let dm = |kwant: &str, turn: &str| HumanStepPlace {
+        kwant_id: kwant.into(),
+        direct_kwant_id: Some(kwant.into()),
+        turn_id: Some(turn.into()),
+        ..Default::default()
+    };
+    let make = |place: HumanStepPlace, kind: &'static str, source: &'static str| {
+        let db = env.state.db.clone();
+        async move { db.create_human_step_with_card(&place, kind, "Sign in to github.com", None, None, source, |_| None).await.unwrap().0.id }
+    };
+    let sign_in = make(dm(&env.a, "ended-1"), "sign_in", "auto").await;
+    // The tools step carries its marker (fix_in "tools"), as ask_to_fix_tools raises it
+    let tools_place = HumanStepPlace {
+        tools: Some(kwnt::db::human_steps::ToolsFix { server_id: "mcp-gh".into(), server: "github".into() }),
+        ..dm(&env.a, "ended-2")
+    };
+    let tools = make(tools_place, "other", "auto").await;
+    let captcha = make(dm(&env.a, "ended-3"), "captcha", "auto").await;
+    let asked = make(dm(&env.a, "ended-4"), "sign_in", "bot").await;
+    let in_thread = make(HumanStepPlace { thread_id: Some(thread.id.clone()), ..dm(&env.a, "ended-5") }, "sign_in", "auto").await;
+    let other_bot = make(dm(&env.b, "ended-6"), "sign_in", "auto").await;
+
+    send_direct(&env, &env.a, "you have github mcp access! REPLYTAG:d1", json!({})).await;
+    for (id, status) in [
+        (&sign_in, "left_for_message"),
+        (&tools, "left_for_message"),
+        (&captcha, "open"),
+        (&asked, "open"),
+        (&in_thread, "open"),
+        (&other_bot, "open"),
+    ] {
+        assert_eq!(step(&env, id).await["step"]["status"], status, "{id} should be {status}");
+    }
+}
+
+/// sign-in-wall-uses-tools D: a plain `other` step kwnt raised without the tools marker isn't a
+/// sign-in step, so typed text leaves it open while the sign-in card beside it closes. (Its own
+/// test so the one above stays within MAX_OPEN_PER_KWANT open steps for Arch.)
+#[tokio::test]
+async fn typed_text_leaves_a_plain_other_step_kwnt_raised_open() {
+    use kwnt::db::human_steps::HumanStepPlace;
+    let env = setup().await;
+    let make = |turn: &'static str, kind: &'static str| {
+        let db = env.state.db.clone();
+        let place = HumanStepPlace {
+            kwant_id: env.a.clone(),
+            direct_kwant_id: Some(env.a.clone()),
+            turn_id: Some(turn.into()),
+            ..Default::default()
+        };
+        async move { db.create_human_step_with_card(&place, kind, "Sign in to github.com", None, None, "auto", |_| None).await.unwrap().0.id }
+    };
+    let sign_in = make("ended-po-1", "sign_in").await;
+    let plain_other = make("ended-po-2", "other").await;
+
+    send_direct(&env, &env.a, "you have github mcp access! REPLYTAG:d2", json!({})).await;
+    assert_eq!(step(&env, &sign_in).await["step"]["status"], "left_for_message");
+    assert_eq!(step(&env, &plain_other).await["step"]["status"], "open");
+}
+
+/// A tools step (sign-in-wall-uses-tools B): kwnt raised it for a turn that already ended, so no
+/// turn waits on it, in Arch's direct chat.
+async fn tools_step(env: &Env, turn: &str, reason: &str) -> String {
+    use kwnt::db::human_steps::{HumanStepPlace, ToolsFix};
+    let place = HumanStepPlace {
+        kwant_id: env.a.clone(),
+        direct_kwant_id: Some(env.a.clone()),
+        turn_id: Some(turn.into()),
+        tools: Some(ToolsFix { server_id: "mcp-gh".into(), server: "github".into() }),
+        ..Default::default()
+    };
+    let (s, created, _) = env.state.db.create_human_step_with_card(&place, "other", reason, None, None, "auto", |_| None).await.unwrap();
+    assert!(created);
+    assert_eq!(s.fix_in.as_deref(), Some("tools"));
+    s.id
+}
+
+/// Rigel's F5: Done on a tools step starts exactly one new turn, told the tools were fixed.
+#[tokio::test]
+async fn done_on_a_tools_step_starts_one_turn_that_uses_the_tools() {
+    let env = setup().await;
+    let id = tools_step(&env, "tools-done-turn", "TOOLS_DONE_STEP the secret saved for github was rejected").await;
+    let (code, v) = call(&env.app, "POST", &format!("/api/human-steps/{id}/done"), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["resumed"], "new_turn");
+    wait_for("the resumed turn", || async { !invocations_with("Step: TOOLS_DONE_STEP").is_empty() }).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let turns = invocations_with("Step: TOOLS_DONE_STEP");
+    assert_eq!(turns.len(), 1, "exactly one turn");
+    assert!(turns[0].contains("[The person fixed your tools in Tools]\nStep: TOOLS_DONE_STEP"), "{}", turns[0]);
+    assert!(turns[0].contains("using those tools rather than the browser"), "{}", turns[0]);
+    assert_eq!(step(&env, &id).await["step"]["status"], "done");
+}
+
+/// Rigel's F5: Skip on a tools step starts exactly one new turn, told the person skipped fixing
+/// those tools (not that it declined a browser step it asked for).
+#[tokio::test]
+async fn skip_on_a_tools_step_starts_one_turn_that_carries_on_without_them() {
+    let env = setup().await;
+    let id = tools_step(&env, "tools-skip-turn", "TOOLS_SKIP_STEP the secret saved for github was rejected").await;
+    let (code, v) = call(&env.app, "POST", &format!("/api/human-steps/{id}/decline"), None).await;
+    assert_eq!(code, StatusCode::OK, "{v}");
+    assert_eq!(v["resumed"], "new_turn");
+    wait_for("the resumed turn", || async { !invocations_with("Step: TOOLS_SKIP_STEP").is_empty() }).await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    let turns = invocations_with("Step: TOOLS_SKIP_STEP");
+    assert_eq!(turns.len(), 1, "exactly one turn");
+    assert!(turns[0].contains("[The person skipped fixing your github tools]\nStep: TOOLS_SKIP_STEP"), "{}", turns[0]);
+    assert!(turns[0].contains("tell the person plainly what you can't do without them"), "{}", turns[0]);
+    assert!(!turns[0].contains("browser step"), "{}", turns[0]);
+    assert_eq!(step(&env, &id).await["step"]["status"], "declined");
+}
