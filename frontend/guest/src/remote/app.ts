@@ -437,19 +437,9 @@ export class RemoteApp {
       out.push(
         this.btn('next', 'next', s.ok, () => void this.next(), ic(s.action === 'resume' ? 'play' : s.action === 'start' ? 'play' : 'skip', 'ri lg'), h('span', { class: 'nx' }, h('b', null, s.label), s.sub ? h('small', null, s.sub) : null)),
       );
-    if (!over && v.phase !== 'lobby') {
-      out.push(
-        h(
-          'div',
-          { class: `rrow${isPaused ? ' two' : ''}` },
-          isPaused ? null : this.btn('pause', 'tile', v.can.includes('pause'), () => void this.pause(), ic('pause', 'ri md'), h('span', null, 'Pause')),
-          this.later('skip', 'tile', LATER.skip, ic('skip', 'ri md'), h('span', null, 'Skip question')),
-          this.later('voice', 'tile', LATER.voice, ic('voice', 'ri md'), h('span', null, 'Voice off')),
-        ),
-        // Touch has no hover, so the reason for the two dead tiles is said out loud (Mira round 1, fix 1).
-        h('p', { class: 'small center rlater', 'data-k': 'later-line' }, 'Skip and Voice come in a later update.'),
-      );
-    }
+    // Skip and Voice stay hidden until they ship (ux-pass-0952 Minor g): only Pause, and only while it can pause.
+    if (!over && v.phase !== 'lobby' && !isPaused)
+      out.push(h('div', { class: 'rrow one' }, this.btn('pause', 'tile', v.can.includes('pause'), () => void this.pause(), ic('pause', 'ri md'), h('span', null, 'Pause'))));
     if (!over && v.pending.length && v.can.includes('judge')) out.push(this.nearMiss(v));
     if (!over) out.push(this.btn('end', 'endlink', v.can.includes('end'), () => this.openSheet({ kind: 'end' }, 'end'), ic('flag', 'ri'), 'End the quiz'));
     return out;
