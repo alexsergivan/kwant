@@ -43,7 +43,7 @@ test('"From this reply" is a quiet caption at every width, not a chip', () => {
     assert.ok(!cls.includes(chip), `no chip class ${chip}`);
   }
   assert.ok(!cls.some((c) => c.startsWith('bg-') || c.startsWith('hover:') || c.startsWith('active:')), 'no background or hover');
-  for (const quiet of ['text-zinc-400', 'font-normal', 'cursor-default', 'items-center', 'self-center', 'min-w-0', '[&>svg]:text-muted']) {
+  for (const quiet of ['text-zinc-500', 'font-normal', 'cursor-default', 'items-center', 'self-center', 'min-w-0', '[&>svg]:text-zinc-500']) {
     assert.ok(cls.includes(quiet), `has ${quiet}`);
   }
 });

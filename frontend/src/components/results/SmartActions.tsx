@@ -13,7 +13,7 @@ export const actionClass =
 /** A fact in the row ("From this reply"): a quiet caption with an icon, at every width. No border, background or
  *  chip padding, so it never reads as a button next to the real ones; it does nothing, so no hover either. */
 export const evidenceClass =
-  'inline-flex items-center self-center gap-1.5 min-w-0 max-w-full px-1 text-xs font-normal text-zinc-400 cursor-default [&>svg]:text-muted';
+  'inline-flex items-center self-center gap-1.5 min-w-0 max-w-full px-1 text-xs font-normal text-zinc-500 cursor-default [&>svg]:text-zinc-500';
 /** A chip that is switched on (Show as text while showing text). */
 export const actionOnClass = 'border-sky-500/50 bg-sky-500/15 text-sky-100 hover:bg-sky-500/20';
 
