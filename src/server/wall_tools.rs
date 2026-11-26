@@ -110,17 +110,19 @@ pub fn follow_up_prompt(host: &str, names: &[String]) -> String {
 
 /// The person's step when the covering tools are failing (B): what is wrong, where to fix it,
 /// and that Done starts the bot again.
-pub fn failing_reason(kwant_name: &str, server: &str, health: Health) -> String {
+pub fn failing_reason(kwant_name: &str, server: &str, host: &str, health: Health) -> String {
+    // "has <server> tools for <host>" first: the card shows the host right under it, so the
+    // reason says why there's no sign-in there (Mira's copy check D1-D3)
     let reason = match health {
         Health::SignedOut => format!(
-            "{kwant_name}'s {server} tools can't connect: the sign-in for {server} has run out. Sign in to it again in Tools › MCP servers, then press Done."
+            "{kwant_name} has {server} tools for {host}, but their sign-in has run out. Sign in to {server} again in Tools, then press Done."
         ),
         Health::KeyRejected => format!(
-            "{kwant_name}'s {server} tools can't connect: the key saved for {server} was rejected. Put a new key in Tools › MCP servers, then press Done."
+            "{kwant_name} has {server} tools for {host}, but the secret saved for {server} was rejected. Edit {server} in Tools and paste a new secret, then press Done."
         ),
-        Health::NotConnecting | Health::Works => {
-            format!("{kwant_name}'s {server} tools aren't connecting. Check {server} in Tools › MCP servers, then press Done.")
-        }
+        Health::NotConnecting | Health::Works => format!(
+            "{kwant_name} has {server} tools for {host}, but they aren't connecting. Press Test connection on {server} in Tools to see why, then press Done."
+        ),
     };
     reason.chars().take(300).collect()
 }
@@ -130,13 +132,13 @@ pub fn browser_hint_text(names: &[String], host: &str, health: Health) -> String
     let tools = ticked(names);
     let why = match health {
         Health::Works => return format!("You have the {tools} tools for {host}; use them rather than the browser."),
-        Health::KeyRejected => "the key saved for it was rejected",
-        Health::SignedOut => "its sign-in has run out",
-        Health::NotConnecting => "it isn't connecting",
+        Health::KeyRejected => "the secret saved for it was rejected",
+        Health::SignedOut => "their sign-in has run out",
+        Health::NotConnecting => "they aren't connecting",
     };
     format!(
-        "You have the {tools} tools for {host}, but they can't connect right now: {why}. Tell the person to fix it in Tools › MCP \
-         servers rather than asking them to sign in to {host} in the browser."
+        "You have the {tools} tools for {host}, but they can't connect right now: {why}. Tell the person to fix it in Tools rather \
+         than asking them to sign in to {host} in the browser."
     )
 }
 
@@ -227,7 +229,7 @@ pub async fn on_covered_wall(
     }
     // the server the step is about: the failing one `pick` named
     let server = names.first().and_then(|n| servers.iter().find(|s| &s.name == n)).or(servers.first())?;
-    let reason = failing_reason(&scope.kwant_name, &server.name, health);
+    let reason = failing_reason(&scope.kwant_name, &server.name, host, health);
     super::human_steps::ask_to_fix_tools(state, scope, &reason, url, server).await.then_some(reason)
 }
 
@@ -281,27 +283,34 @@ mod tests {
     fn the_lines_name_the_tools_and_the_real_problem() {
         let gh = vec!["github".to_string()];
         assert_eq!(
-            failing_reason("Architect", "github", Health::KeyRejected),
-            "Architect's github tools can't connect: the key saved for github was rejected. Put a new key in Tools › MCP servers, then press Done."
+            failing_reason("Architect", "github", "github.com", Health::KeyRejected),
+            "Architect has github tools for github.com, but the secret saved for github was rejected. Edit github in Tools and paste a new secret, then press Done."
         );
         assert_eq!(
-            failing_reason("Architect", "github", Health::SignedOut),
-            "Architect's github tools can't connect: the sign-in for github has run out. Sign in to it again in Tools › MCP servers, then press Done."
+            failing_reason("Architect", "github", "github.com", Health::SignedOut),
+            "Architect has github tools for github.com, but their sign-in has run out. Sign in to github again in Tools, then press Done."
         );
         assert_eq!(
-            failing_reason("Architect", "github", Health::NotConnecting),
-            "Architect's github tools aren't connecting. Check github in Tools › MCP servers, then press Done."
+            failing_reason("Architect", "github", "github.com", Health::NotConnecting),
+            "Architect has github tools for github.com, but they aren't connecting. Press Test connection on github in Tools to see why, then press Done."
         );
         assert_eq!(browser_hint_text(&gh, "github.com", Health::Works), "You have the `github` tools for github.com; use them rather than the browser.");
         assert_eq!(
             browser_hint_text(&gh, "github.com", Health::KeyRejected),
-            "You have the `github` tools for github.com, but they can't connect right now: the key saved for it was rejected. \
-             Tell the person to fix it in Tools › MCP servers rather than asking them to sign in to github.com in the browser."
+            "You have the `github` tools for github.com, but they can't connect right now: the secret saved for it was rejected. \
+             Tell the person to fix it in Tools rather than asking them to sign in to github.com in the browser."
         );
+        assert!(browser_hint_text(&gh, "github.com", Health::SignedOut).contains("right now: their sign-in has run out. Tell"));
+        // Tools has no "MCP servers" section, and calls the value a secret, not a key
+        for h in [Health::KeyRejected, Health::SignedOut, Health::NotConnecting] {
+            for line in [failing_reason("Architect", "github", "github.com", h), browser_hint_text(&gh, "github.com", h)] {
+                assert!(!line.contains("MCP servers") && !line.contains(" key"), "{line}");
+            }
+        }
         let prompt = follow_up_prompt("github.com", &gh);
         assert!(prompt.starts_with("[Your browser stopped at github.com's sign-in page]\nYou have the `github` tools for github.com"), "{prompt}");
         assert!(prompt.contains("request_human_step"), "{prompt}");
-        assert!(!failing_reason("Architect", "github", Health::KeyRejected).contains("sign in to github.com"));
+        assert!(!failing_reason("Architect", "github", "github.com", Health::KeyRejected).contains("sign in to github.com"));
     }
 
     /// B never loops: one follow-up per bot, chat and site, until the person writes there again.

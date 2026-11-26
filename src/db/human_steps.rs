@@ -54,8 +54,8 @@ pub struct HumanStep {
     #[sqlx(default)]
     pub page_key: Option<String>,
     /// sign-in-wall-uses-tools: `"tools"` on the step kwnt raises when a sign-in wall is on a site
-    /// the bot's MCP server covers but that server fails: the person fixes it in Tools › MCP
-    /// servers, not in the browser. Left out of the JSON on every other step.
+    /// the bot's MCP server covers but that server fails: the person fixes it in Tools,
+    /// not in the browser. Left out of the JSON on every other step.
     #[sqlx(default)]
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fix_in: Option<String>,

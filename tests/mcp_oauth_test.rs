@@ -333,7 +333,7 @@ async fn user_authorization_header_wins_over_sign_in() {
     assert!(tested.get("auth_required").is_none(), "{tested}");
     assert!(tested["error"].as_str().unwrap().contains("401"));
     // sign-in-wall-uses-tools E: it names the refused key, not a sign-in
-    assert!(tested["error"].as_str().unwrap().contains("the key saved for this server was rejected"), "{tested}");
+    assert!(tested["error"].as_str().unwrap().contains("the secret saved for this server was rejected"), "{tested}");
     assert!(!tested["error"].as_str().unwrap().contains("sign in"), "{tested}");
     assert!(!tested.to_string().contains("user-own-key") && !tested.to_string().contains(&token.access_token));
     assert!(stored_token(&e, &id).await.is_some(), "kwnt's sign-in is kept");
@@ -370,7 +370,7 @@ async fn a_refused_key_header_is_a_key_error_not_a_sign_in() {
     assert_eq!(tested["ok"], false);
     assert!(tested.get("auth_required").is_none(), "{tested}");
     let error = tested["error"].as_str().unwrap();
-    assert!(error.contains("401") && error.contains("the key saved for this server was rejected"), "{tested}");
+    assert!(error.contains("401") && error.contains("the secret saved for this server was rejected"), "{tested}");
     assert!(!tested.to_string().contains("old-key-123"));
 }
 

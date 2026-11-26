@@ -268,6 +268,15 @@ fn kind_label(kind: &str) -> &'static str {
     }
 }
 
+/// The card text's prefix: a tools step says what it is about (Mira's copy check D5)
+fn card_label(s: &HumanStep) -> &'static str {
+    if is_tools_step(s) {
+        "Tools need a fix"
+    } else {
+        kind_label(&s.kind)
+    }
+}
+
 fn card_meta(s: &HumanStep) -> Value {
     let mut meta = json!({
         "kind": "human_step",
@@ -527,7 +536,7 @@ async fn raise_step(
             if wait_for_it {
                 waiter = Some((s.id.clone(), hub.register(&s.id, waits_in.clone())));
             }
-            let mut text = format!("{}: {}", kind_label(&s.kind), s.reason);
+            let mut text = format!("{}: {}", card_label(s), s.reason);
             if let Some(u) = &s.url {
                 text.push_str(&format!("\n{u}"));
             }
@@ -965,7 +974,7 @@ async fn resume(state: &AppState, s: &HumanStep, outcome: Outcome) {
     };
     let prompt = match outcome {
         Outcome::Done if is_tools_step(s) => format!(
-            "[The person fixed your tools in Tools › MCP servers]\nStep: {}\n\nCarry on with the task using those tools rather than the \
+            "[The person fixed your tools in Tools]\nStep: {}\n\nCarry on with the task using those tools rather than the \
              browser. If they still can't connect, tell the person plainly what the error says.",
             s.reason
         ),

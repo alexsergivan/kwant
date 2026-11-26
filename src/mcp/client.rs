@@ -58,7 +58,7 @@ pub fn unauthorized_hint(key: &bool) -> &'static str {
 }
 
 /// [`unauthorized_hint`] for a server with a key header.
-pub const UNAUTHORIZED_KEY_HINT: &str = "the key saved for this server was rejected; put a new key in Tools › MCP servers";
+pub const UNAUTHORIZED_KEY_HINT: &str = "the secret saved for this server was rejected; edit the server in Tools and paste a new one";
 
 /// Whether a stored header carries a key or token (`Authorization`, `X-API-Key`, `X-Auth-Token`…).
 /// Header names only: values are never read.
@@ -629,7 +629,7 @@ mod tests {
             };
             assert!(matches!(e, McpError::Unauthorized { key: true, .. }), "{header}: {e:?}");
             let text = e.to_string();
-            assert_eq!(text, "transport error: HTTP 401 Unauthorized (the key saved for this server was rejected; put a new key in Tools › MCP servers)");
+            assert_eq!(text, "transport error: HTTP 401 Unauthorized (the secret saved for this server was rejected; edit the server in Tools and paste a new one)");
             assert!(!text.contains("sign in") && !text.contains("old-key"), "{text}");
         }
         for headers in [vec![], vec![("X-Workspace", "acme")]] {
