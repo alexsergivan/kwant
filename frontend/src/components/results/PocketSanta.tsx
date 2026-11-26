@@ -35,6 +35,7 @@ import {
   UserMinus,
   Users,
   Wifi,
+  WifiOff,
   X,
   Zap,
 } from 'lucide-react';
@@ -524,7 +525,7 @@ const SantaJoinBox: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s
               </p>
             ) : onlyHere ? (
               <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body" data-no-link="this-computer-only">
-                {THIS_COMPUTER_WIFI_LINE} Use From anywhere for the family chat.
+                {THIS_COMPUTER_WIFI_LINE} Send the From anywhere link instead: it works on Wi-Fi too.
               </p>
             ) : (
               <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">People on your Wi-Fi open the page; anyone else can't reach it. Pick From anywhere for the family chat.</p>
@@ -543,7 +544,7 @@ const SantaJoinBox: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s
               </p>
             ) : onlyHere ? (
               <p className="flex items-start gap-2 text-[15px] leading-[22px] text-zinc-200 sm:text-[13px] sm:leading-5" data-no-link="this-computer-only">
-                <Wifi size={15} className={`${ICON} text-zinc-500`} aria-hidden="true" />
+                <WifiOff size={15} className={`${ICON} text-zinc-500`} aria-hidden="true" />
                 <span>
                   <strong className="font-semibold text-zinc-50">Only this Mac can open the page right now.</strong> {THIS_COMPUTER_WIFI_LINE}
                 </span>

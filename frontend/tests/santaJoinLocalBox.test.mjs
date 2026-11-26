@@ -98,6 +98,8 @@ test('127.0.0.1 box: the this-computer line, the stays line, and the Funnel how-
   assert.equal(join.querySelectorAll('[role=radio]').length, 0, 'nothing to pick');
   const said = join.querySelector('[data-no-link="this-computer-only"]');
   assert.ok(said, 'the this-computer note is said');
+  assert.ok(said.querySelector('svg.lucide-wifi-off'), 'a Wi-Fi-off glyph, not a Wi-Fi one');
+  assert.equal(said.querySelector('svg.lucide-wifi'), null);
   assert.match(squash(said.textContent), new RegExp(`Only this Mac can open the page right now\\. ${WIFI_LINE.replace(/[.:']/g, '\\$&')}`));
   assert.equal(join.querySelector('[data-stays-line]').textContent, `${STAYS_LINE} Funnel is free and takes about 5 minutes.`);
   assert.doesNotMatch(join.textContent, /hasn't said its Wi-Fi address/);
@@ -137,7 +139,7 @@ test('127.0.0.1 box with Funnel on: From anywhere as today, the Wi-Fi tab says w
   await click(button(v, 'Same Wi-Fi'));
   assert.equal(join.querySelector('[data-qr]'), null, 'no QR for a link phones cannot open');
   assert.equal(join.querySelector('input'), null);
-  assert.equal(squash(join.querySelector('[data-no-link="this-computer-only"]').textContent), `${WIFI_LINE} Use From anywhere for the family chat.`);
+  assert.equal(squash(join.querySelector('[data-no-link="this-computer-only"]').textContent), `${WIFI_LINE} Send the From anywhere link instead: it works on Wi-Fi too.`);
   assert.doesNotMatch(join.textContent, /hasn't said its Wi-Fi address/);
 });
 
@@ -152,6 +154,8 @@ test('a box with a Wi-Fi address is unchanged: its QR, the closed how-to, the Wi
   assert.match(join.textContent, /No address that stays the same is set up on this Mac\./);
   assert.equal(join.querySelector('[data-no-link="this-computer-only"]'), null);
   assert.equal(join.querySelector('[data-stays-line]'), null);
+  const wifiLine = [...join.querySelectorAll('p')].find((p) => /Same Wi-Fi only, for now\./.test(p.textContent));
+  assert.ok(wifiLine.querySelector('svg.lucide-wifi'), 'the Wi-Fi box keeps its Wi-Fi glyph');
   const how = button(v, 'How to');
   assert.equal(how.getAttribute('aria-expanded'), 'false');
   await click(how);
