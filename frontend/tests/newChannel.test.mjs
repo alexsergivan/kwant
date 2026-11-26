@@ -48,8 +48,8 @@ test('the Laya pill follows the routing rule, not the channel name', () => {
 
 test('the picker explains what one bot versus several means', () => {
   assert.match(c.routingHint(0), /at least one/);
-  assert.match(c.routingHint(1), /Add another and Laya picks/);
-  assert.match(c.routingHint(3), /Laya picks/);
+  assert.match(c.routingHint(1), /Add another and kwant picks/);
+  assert.match(c.routingHint(3), /^kwant picks which of these bots answers each message\.$/);
 });
 
 test('the sidebar offers New channel and the app creates it through /api/channels', async () => {

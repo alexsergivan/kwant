@@ -1,0 +1,30 @@
+{
+  "version": "0.9.53",
+  "date": "2026-11-26",
+  "highlights": [
+    {
+      "id": "sidebar-fewer-rows",
+      "title": "A shorter sidebar",
+      "text": "A new space shows Search, Inbox and Routines. Mission board, Idea jar and Parallel Universe wait under More, and each one moves up once you've opened it, or when the jar has ideas ready.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "specific-step-titles",
+      "title": "Steps say what each command did",
+      "text": "Instead of a list of \"Running a command\", each step now reads like \"Checking git status\" or \"Fetching shop.example.com\". The full command is still behind Show command.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Restarting or updating kwant on Linux no longer stops programs your bots left running in the background.",
+    "When Telegram's answer to a message gets lost, kwant no longer sends it again, so replies and questions don't show up twice.",
+    "Dev mode's grid no longer runs behind your messages: it stays at the edges of the chat, and phones don't show it.",
+    "/api/health now shows when kwant last checked routines and follow-ups, and says stale if that stopped for over 90 seconds.",
+    "/api/health now names the scheduler step that is running, and the log warns when one step takes over 60 seconds.",
+    "The chat no longer shows a \"Running on … tier\" line, and pushes and the Mac menu say \"kwant\" instead of \"kwant bots\".",
+    "Routine form labels are a little larger, and screen readers now say \"Needs you\" like the screen does.",
+    "Saying hi or thanks to a team gets one hello back, not a round of hand-offs."
+  ]
+}

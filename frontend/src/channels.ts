@@ -71,6 +71,6 @@ export function layaRoutes(c: ChannelLike, botsInSpace: number): boolean {
 /** The line under the bot picker, for `picked` bots. */
 export function routingHint(picked: number): string {
   if (picked === 0) return 'Pick at least one bot.';
-  if (picked === 1) return 'With one bot, it answers every message. Add another and Laya picks who answers.';
-  return 'Laya picks which of these bots answers each message.';
+  if (picked === 1) return 'With one bot, it answers every message. Add another and kwant picks who answers.';
+  return 'kwant picks which of these bots answers each message.';
 }
