@@ -566,7 +566,7 @@ const SantaJoinBox: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s
                   <span>No address that stays the same is set up on this Mac. To let people join from anywhere for weeks, turn on Tailscale Funnel: free, about 5 minutes.</span>
                 )}
               </p>
-              <HowTo port={port} defaultOpen={onlyHere} />
+              <HowTo key={onlyHere ? "local" : "wifi"} port={port} defaultOpen={onlyHere} />
               <NoQuickLink />
             </div>
             {url && <LinkField url={url} />}

@@ -23,7 +23,7 @@ const m = await loadBundled(`
   export { validPocket } from './src/components/results/Pocket';
   export { validSantaJoin, santaFromHost } from './src/components/results/PocketSanta';
   export { ONLY_THIS_COMPUTER_LINE, THIS_COMPUTER_WIFI_LINE, SANTA_STAYS_LINE } from './src/components/results/pocketParts';
-  export { SANTA_FIXTURES, santaHostView, SANTA_LIVE_JOIN } from './src/components/results/fixtures';
+  export { SANTA_FIXTURES, santaHostView, santaRead, SANTA_LIVE_BLOCK, SANTA_LIVE_JOIN } from './src/components/results/fixtures';
 `);
 const { React, createRoot } = m;
 const h = React.createElement;
@@ -161,4 +161,32 @@ test('a box with a Wi-Fi address is unchanged: its QR, the closed how-to, the Wi
   await click(how);
   assert.match(join.querySelectorAll('[data-how-to] li')[2].textContent, /tailscale funnel --bg 7480/);
   assert.equal(calls.filter(([, url]) => url === '/api/pockets').length, 0);
+});
+
+// Rigel's QA D1 (qa.md at 3aa8a8a2): santa_join hands the chat block a join without wifi_note; only the live read
+// adds it. The how-to mounted closed for the Wi-Fi-less block, so it must open once the read says this-computer-only.
+test('real flow: a block without the note, then a live read with it, opens the how-to with the list port', async () => {
+  const calls = [];
+  g.fetch = async (url, init) => {
+    calls.push([init?.method ?? 'GET', url]);
+    if (url === '/api/pockets') return new Response(JSON.stringify({ enabled: true, pocket_port: 7481, kits: [], pockets: [] }), { status: 200 });
+    const r = m.santaRead(m.santaHostView(0));
+    r.join = { mode: 'none', anywhere_kind: null, anywhere_url: null, wifi_url: null, wifi_note: 'this_computer_only', quick_tunnel: false, tunnel: { state: 'off', url: null, note: null } };
+    return new Response(JSON.stringify(r), { status: 200 });
+  };
+  const block = structuredClone(m.SANTA_LIVE_BLOCK);
+  block.santa.join = { mode: 'none', anywhere_kind: null, anywhere_url: null, wifi_url: null };
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  const root = createRoot(host);
+  root.render(h(m.MarkdownRenderer, { content: 'x', results: { version: 1, blocks: [block] }, messageId: 'm-realflow' }));
+  mounted.add({ done: () => (root.unmount(), host.remove()) });
+  for (let i = 0; i < 60; i++) await new Promise((r) => setTimeout(r, 5));
+  const join = host.querySelector('[data-join="full"]');
+  const said = join.querySelector('[data-no-link="this-computer-only"]');
+  assert.ok(said, 'the live read brings the this-computer line');
+  assert.ok(said.querySelector('svg.lucide-wifi-off'));
+  assert.ok(join.querySelector('[data-stays-line]'));
+  assert.equal(join.querySelector('[data-action="how-to"]').getAttribute('aria-expanded'), 'true', 'the how-to opens after the read');
+  assert.match(join.querySelectorAll('[data-how-to] li')[2].textContent, /tailscale funnel --bg 7481/);
 });
