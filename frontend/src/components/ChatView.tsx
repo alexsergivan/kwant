@@ -14,7 +14,9 @@ import { onContinuity } from '../continuity';
 import { TrialWaitsCard } from './SkillsPanel';
 import { agentSenderLabel, messageAbout, otherSenderLabel, senderLetter } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, User, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
-import { ModernAvatar } from './ModernAvatar';
+import { ModernAvatar, creatureFor } from './ModernAvatar';
+import { bubbleTintStyle } from './bubbleTint';
+import { botLooksRev, subscribeBotLooks } from '../botLooks';
 import { WorkingAvatar } from './WorkingAvatar';
 import { BotHome } from './BotHome';
 import { accountCardShows } from '../firstScreen';
@@ -242,6 +244,9 @@ function SenderLetter({ name }: { name: string }) {
 const REPLY_AVATAR_PHONE = 20;
 const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
 const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
+/** A bot reply in its avatar's colour (Mira's reply-bubble-bot-tint): --kw-bubble-bg/-line come inline from bubbleTint.ts. */
+const REPLY_BUBBLE_BOT_TINT = 'kw-bubble-tint text-zinc-200 rounded-tl-sm border';
+const botBubble = (tint?: React.CSSProperties) => (tint ? REPLY_BUBBLE_BOT_TINT : REPLY_BUBBLE_BOT);
 /** 36d: the live bubble while the scene shows: the same card, its parts pad themselves (scene row, steps, words). */
 const REPLY_BUBBLE_SCENE = 'rounded-2xl text-sm leading-relaxed shadow-sm w-full overflow-hidden';
 // 25b: a customer's or a bot's chat-API message, on the left. Outline only: not yours (filled, lighter), not a bot reply (filled); never violet.
@@ -739,6 +744,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   deciding,
   onChangeDecision,
 }) => {
+  // A changed avatar look re-tints the reply bubbles, as it already redraws the avatars.
+  useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
   const [internalIsVmPaneOpen, setInternalIsVmPaneOpen] = useState(false);
   const vmOpen = isVmPaneOpen !== undefined ? isVmPaneOpen : internalIsVmPaneOpen;
   const toggleVm = onToggleVmPane || (() => setInternalIsVmPaneOpen((prev) => !prev));
@@ -924,6 +931,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const liveSpeaker = streamingSpeakerName || title;
   // Who the live row shows: the current speaker in a discussion, else the replying bot.
   const liveName = discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : liveSpeaker;
+  // The live bubble wears the live avatar's colour from its first frame (same args as that ModernAvatar).
+  const liveTint = bubbleTintStyle(creatureFor(liveName, liveName).body);
   // 36a: who the live steps' words name; never the team or room chat's title (stepsWho).
   const stepsName = stepsWho({
     discussing: discussionState?.inProgress,
@@ -2200,6 +2209,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const replyKwantId = isUser
       ? undefined
       : routed?.kwant_id ?? (home?.kind === 'bot' ? home.bot?.id : undefined) ?? botOf(msg.sender_id, knownBots)?.id;
+    // A bot's reply bubble takes its avatar's colour, resolved with the avatar's own args so the two always agree.
+    const replyTint = isUser || onYourSide || workAhead ? undefined : bubbleTintStyle(creatureFor(title, displayName, replyKwantId).body);
 
     return (
       <div
@@ -2344,8 +2355,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   ? `${OTHER_BUBBLE} max-w-2xl`
                   : workAhead
                     ? 'bg-sky-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-sky-400/25'
-                    : REPLY_BUBBLE_BOT
+                    : botBubble(replyTint)
             }`}
+            style={replyTint}
             data-other-bubble={isUser && !onYourSide ? '' : undefined}
             data-work-ahead={workAhead ? '' : undefined}
           >
@@ -3143,7 +3155,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {/* 36d: the scene is the one working status, on a phone too. On a phone the strip still says "waiting" (with Answer ↑), so no "Paused on…" bubble there. */}
               {sceneShown ? (
-                <div className={`${REPLY_BUBBLE_SCENE} ${REPLY_BUBBLE_BOT} kw-live-in`} data-live-bubble-body="">
+                <div className={`${REPLY_BUBBLE_SCENE} ${botBubble(liveTint)} kw-live-in`} style={liveTint} data-live-bubble-body="">
                   <WorkingAvatar
                     name={
                       discussionState?.inProgress && discussionState.currentSpeaker
@@ -3168,7 +3180,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   </WorkingAvatar>
                 </div>
               ) : (!phone || queued || writing) && (
-              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${REPLY_BUBBLE_BOT} kw-live-in`} data-live-bubble-body="">
+              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${botBubble(liveTint)} kw-live-in`} style={liveTint} data-live-bubble-body="">
                 {queued ? (
                   <p className="text-zinc-300" role="status">
                     {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
