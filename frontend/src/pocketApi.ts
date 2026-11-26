@@ -35,9 +35,16 @@ export interface PocketList {
 
 /** How guests reach the pocket (pa10a): each url ends in /p/<code> on the guest port. */
 export interface PocketJoin {
-  mode: 'wifi' | 'anywhere';
+  /** "none": neither address yet (a box bound to 127.0.0.1 with no tunnel, src/pocket/address.rs `choose`). */
+  mode: 'wifi' | 'anywhere' | 'none';
   anywhere_url: string | null;
   wifi_url: string | null;
+  /** Why there's no Wi-Fi address: "this_computer_only" (bound to 127.0.0.1), "no_network", "listener_off". */
+  wifi_note?: string | null;
+  /** False: the box won't offer a quick link for this pocket. */
+  quick_tunnel?: boolean;
+  /** The quick tunnel as this pocket sees it; `note` is the box's own line. */
+  tunnel?: { state: 'off' | 'starting' | 'on' | 'failed'; url: string | null; note: string | null };
 }
 
 export interface PocketRead {
@@ -203,6 +210,8 @@ export const pocketApi = {
   read: async (code: string) => call<PocketRead>('GET', one(code)),
   /** Stop (before the game) and End quiz (during it) both end the pocket: the link closes. */
   end: async (code: string) => call<{ pocket: PocketCard }>('POST', `${one(code)}/end`),
+  /** Join from anywhere through a quick tunnel, on or off (pa6). Starts in the background: re-read `join.tunnel.state`. */
+  tunnel: async (code: string, on: boolean) => call<PocketRead>('POST', `${one(code)}/tunnel`, { on }),
   /** Final: players, answers and the pocket go now. */
   remove: async (code: string) => call<void>('DELETE', one(code)),
   // pa10a: the host's own calls, person-only on the main port (Lin's src/pocket/host_api.rs, #1074). No /host

@@ -33,16 +33,16 @@ import {
   X,
   Zap,
 } from 'lucide-react';
-import type { PocketBlock, PocketJoinMode, PocketMiss, PocketResults, PocketRound, PocketState, PocketTeam } from '../../smartResults';
-import { inRange, isHttpUrl, isIndex, isNum, isObj, isText, optText, parseCommon } from '../../smartResults';
+import type { PocketBlock, PocketJoinInfo, PocketJoinMode, PocketMiss, PocketResults, PocketRound, PocketState, PocketTeam, PocketTunnelState } from '../../smartResults';
+import { MAX_TEXT, inRange, isHttpUrl, isIndex, isNum, isObj, isText, optText, parseCommon } from '../../smartResults';
 import { Sticker } from '../Sticker';
 import { QrImage } from '../DeviceSignIn';
-import { BTN, Bar, Callout, GHOST, HALF, ICON, LATER_CLS, LaterButton, LinkField, NoLinkYet, PRIMARY, Qr, Row, STOP, WARN_FILL } from './pocketParts';
+import { BTN, Bar, Callout, GHOST, HALF, ICON, LATER_CLS, LaterButton, LinkField, NoLinkYet, ONLY_THIS_COMPUTER_LINE, PRIMARY, Qr, Row, STOP, THIS_COMPUTER_ONLY, WARN_FILL } from './pocketParts';
 import { TEAM_PALETTES, isPalette, paletteCreature, renderCreature } from '../ModernAvatar';
-import { linkUrl, pocketApi, PocketApiError } from '../../pocketApi';
+import { linkUrl, pocketApi, PocketApiError, validPocketCode } from '../../pocketApi';
 import { useMedia } from '../../useMedia';
 import { useFocusAfterRender } from '../../focusAfterRender';
-import type { DraftCard, PocketLinkRole } from '../../pocketApi';
+import type { DraftCard, PocketLinkRole, PocketRead } from '../../pocketApi';
 import { EditPanel } from './PocketEdit';
 import { SantaCard, findMatchLike, validSanta } from './PocketSanta';
 import { WallCard, validWall } from './PocketWall';
@@ -380,7 +380,7 @@ const StateChip: React.FC<{ block: PocketBlock }> = ({ block }) => {
         </span>
       );
     case 'ended':
-      return <span className="kw-chip">{block.ended ? `Ended ${block.ended.at}` : 'Ended'}</span>;
+      return <span className="kw-chip">{block.ended?.at ? `Ended ${block.ended.at}` : 'Ended'}</span>;
   }
 };
 
@@ -431,10 +431,105 @@ const joinCopy = (block: PocketBlock) =>
     : { heading: 'How friends join', text: JOIN_TEXT, hint: null };
 const urlFor = (join: NonNullable<PocketBlock['join']>, mode: PocketJoinMode) => (mode === 'wifi' ? join.wifi_url : join.anywhere_url);
 
+// ---------------------------------------------------------------------------------------------------
+// The live read (ux-pass-0952 fix #3): the chat block's join is null on purpose (smart_results/pocket.rs)
+// and its state is whatever it was when posted, so the quiz card reads the box itself.
 
-const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: PocketJoinMode) => void }> = ({ block, mode, setMode }) => {
+/** While the card says ready or live: one read on mount, then every 15 s; every 3 s while a quick link starts. */
+export const POLL_MS = 15_000;
+export const TUNNEL_POLL_MS = 3_000;
+const TUNNEL_STATES: PocketTunnelState[] = ['off', 'starting', 'on', 'failed'];
+
+/** The read's `join` (src/pocket/address.rs `join`), or null when it's junk. "none" and a 127.0.0.1 box open on From anywhere. */
+export function readJoin(v: unknown): PocketJoinInfo | null {
+  if (!isObj(v) || (v.mode !== 'wifi' && v.mode !== 'anywhere' && v.mode !== 'none')) return null;
+  const url = (u: unknown) => (u === undefined || u === null ? null : isHttpUrl(u) ? u : undefined);
+  const wifi_url = url(v.wifi_url);
+  const anywhere_url = url(v.anywhere_url);
+  if (wifi_url === undefined || anywhere_url === undefined) return null;
+  const wifi_note = isText(v.wifi_note, 40) ? v.wifi_note : null;
+  const t = v.tunnel;
+  const tunnel = isObj(t) && TUNNEL_STATES.includes(t.state as PocketTunnelState) ? { state: t.state as PocketTunnelState, note: isText(t.note, MAX_TEXT) ? t.note : null } : undefined;
+  const mode: PocketJoinMode = anywhere_url || (!wifi_url && wifi_note === THIS_COMPUTER_ONLY) ? 'anywhere' : 'wifi';
+  return { mode, wifi_url, anywhere_url, ...(v.quick_tunnel === false ? { quick_tunnel: false } : {}), wifi_note, ...(tunnel ? { tunnel } : {}) };
+}
+
+/** What the box says about this pocket now. `gone`: deleted (404 not_found). */
+export interface BoxRead {
+  code: string;
+  state: 'open' | 'ended' | 'gone';
+  endedAt: string | null;
+  join: PocketJoinInfo | null;
+}
+export const fromRead = (code: string, r: PocketRead): BoxRead => {
+  const p = isObj(r) && isObj(r.pocket) ? r.pocket : null;
+  return {
+    code,
+    state: p?.state === 'ended' ? 'ended' : 'open',
+    endedAt: typeof p?.ended_at === 'string' ? p.ended_at : null,
+    join: isObj(r) ? readJoin(r.join) : null,
+  };
+};
+const clock = (iso: string | null) => {
+  const d = iso ? new Date(iso) : null;
+  return d && Number.isFinite(d.getTime()) ? d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '';
+};
+
+/** The card as the box sees it: ended or gone turns a ready or live card Ended; the read's join wins over the block's. */
+export function withRead(b: PocketBlock, r: BoxRead | null): PocketBlock {
+  if (!r || r.code !== b.code || (b.state !== 'ready' && b.state !== 'live')) return b;
+  if (r.state !== 'open') {
+    return { ...b, state: 'ended', paused: false, ended: b.ended ?? { at: clock(r.endedAt), winner: null, stats: null, deletes_on: null } };
+  }
+  return r.join ? { ...b, join: r.join } : b;
+}
+
+/** A box bound to 127.0.0.1 with no from-anywhere address: a quick link is the only way phones get in. */
+export const needsPhoneLink = (join: PocketBlock['join']) => !!join && join.wifi_note === THIS_COMPUTER_ONLY && !join.anywhere_url && join.quick_tunnel !== false;
+
+export interface PhoneLinkCtl {
+  busy: boolean;
+  error: string | null;
+  make: () => void;
+}
+
+/** One primary button that starts a quick link, the box's tunnel state while it starts, and its own words if it fails. */
+const PhoneLink: React.FC<{ join: PocketJoinInfo; ctl: PhoneLinkCtl }> = ({ join, ctl }) => {
+  const state = join.tunnel?.state ?? 'off';
+  if (ctl.busy || state === 'starting') {
+    return (
+      <p role="status" className="flex items-start gap-2 text-[15px] leading-[22px] text-zinc-200 sm:text-[13px] sm:leading-5" data-phone-link="starting">
+        <Loader2 size={15} className={`${ICON} text-sky-300 motion-safe:animate-spin`} aria-hidden="true" />
+        <span>Making a link for phones. This takes up to a minute; the QR code and link show here when it's ready.</span>
+      </p>
+    );
+  }
+  const failed = ctl.error ?? (state === 'failed' ? join.tunnel?.note ?? "The link for phones didn't start." : null);
+  return (
+    <div className="flex flex-col gap-2.5" data-phone-link={failed ? 'failed' : 'off'}>
+      {failed && (
+        <p role="status" className="flex items-start gap-2 text-[15px] leading-[22px] text-zinc-200 sm:text-[13px] sm:leading-5">
+          <AlertTriangle size={15} className={`${ICON} text-warn`} aria-hidden="true" />
+          <span className="min-w-0">{failed}</span>
+        </p>
+      )}
+      <button type="button" onClick={ctl.make} className={`${PRIMARY} w-full sm:w-auto sm:self-start`} data-action="phone-link">
+        <Smartphone size={14} aria-hidden="true" />
+        {failed ? 'Try again' : 'Make a link for phones'}
+      </button>
+    </div>
+  );
+};
+
+/** Where the link goes when there's none: the phone-link button on a 127.0.0.1 box, the box's line, or "not yet". */
+const NoUrl: React.FC<{ join: PocketBlock['join']; mode: PocketJoinMode; phoneLink?: PhoneLinkCtl }> = ({ join, mode, phoneLink }) =>
+  noQuick(join, mode) ? null : mode === 'anywhere' && phoneLink && join && needsPhoneLink(join) ? <PhoneLink join={join} ctl={phoneLink} /> : <NoLinkYet mode={mode} note={join?.wifi_note} />;
+
+
+const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: PocketJoinMode) => void; phoneLink?: PhoneLinkCtl }> = ({ block, mode, setMode, phoneLink }) => {
   const join = block.join;
   const url = join ? urlFor(join, mode) : null;
+  const onlyHere = mode === 'wifi' && !url && join?.wifi_note === THIS_COMPUTER_ONLY;
   const radios = useRef<Array<HTMLButtonElement | null>>([]);
   const labelId = useId();
   const modes: PocketJoinMode[] = ['wifi', 'anywhere'];
@@ -480,21 +575,30 @@ const JoinBox: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m:
             );
           })}
         </div>
-        <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">{copy.text[mode].body}</p>
-        {noQuick(join, mode) ? <StableOnly /> : <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">{copy.text[mode].limit}</p>}
-        {copy.hint && (
-          <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-join-hint>
-            {copy.hint}
+        {onlyHere ? (
+          // A 127.0.0.1 box on the Wi-Fi tab: one plain line instead of a Wi-Fi promise it can't keep (Mira D1).
+          <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body" data-no-link="this-computer-only">
+            {ONLY_THIS_COMPUTER_LINE}
           </p>
+        ) : (
+          <>
+            <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">{copy.text[mode].body}</p>
+            {noQuick(join, mode) ? <StableOnly /> : <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">{copy.text[mode].limit}</p>}
+            {copy.hint && (
+              <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-join-hint>
+                {copy.hint}
+              </p>
+            )}
+            {url ? <LinkField url={url} /> : <NoUrl join={join} mode={mode} phoneLink={phoneLink} />}
+          </>
         )}
-        {url ? <LinkField url={url} /> : noQuick(join, mode) ? null : <NoLinkYet mode={mode} />}
       </div>
     </div>
   );
 };
 
 /** Live: a smaller code for late arrivals, the mode in words, the link. */
-const CompactJoin: React.FC<{ block: PocketBlock }> = ({ block }) => {
+const CompactJoin: React.FC<{ block: PocketBlock; phoneLink?: PhoneLinkCtl }> = ({ block, phoneLink }) => {
   const join = block.join;
   const mode = join?.mode ?? 'wifi';
   const url = join ? urlFor(join, mode) ?? urlFor(join, mode === 'wifi' ? 'anywhere' : 'wifi') : null;
@@ -506,9 +610,10 @@ const CompactJoin: React.FC<{ block: PocketBlock }> = ({ block }) => {
       <div className="flex min-w-0 flex-1 flex-col gap-2">
         <p className="flex items-center gap-1.5 text-[13px] text-zinc-300 sm:text-meta">
           <Icon size={14} className="shrink-0 text-sky-300" aria-hidden="true" />
-          {JOIN_TEXT[shownMode].label} · late arrivals can still scan in
+          {JOIN_TEXT[shownMode].label}
+          {url ? ' · late arrivals can still scan in' : ''}
         </p>
-        {url ? <LinkField url={url} /> : noQuick(join, shownMode) ? <StableOnly /> : <NoLinkYet mode={shownMode} />}
+        {url ? <LinkField url={url} /> : noQuick(join, shownMode) ? <StableOnly /> : <NoUrl join={join} mode={shownMode} phoneLink={phoneLink} />}
       </div>
     </div>
   );
@@ -592,7 +697,7 @@ const CheckRow: React.FC<{ block: PocketBlock; aside?: React.ReactNode }> = ({ b
     </Row>
   ) : null;
 
-const Body: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: PocketJoinMode) => void; closed?: boolean }> = ({ block, mode, setMode, closed }) => {
+const Body: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: PocketJoinMode) => void; closed?: boolean; phoneLink?: PhoneLinkCtl; gone?: boolean }> = ({ block, mode, setMode, closed, phoneLink, gone }) => {
   // After a successful Stop or End the link is closed on the box: no QR or Copy link, even before a new block arrives.
   const qr = showsQr(block) && !closed;
   const dr = block.dry_run;
@@ -689,7 +794,7 @@ const Body: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: Po
             )}
             {block.opens_line && <Row icon={<CalendarClock size={15} />}>{block.opens_line}</Row>}
           </ul>
-          {qr && <JoinBox block={block} mode={mode} setMode={setMode} />}
+          {qr && <JoinBox block={block} mode={mode} setMode={setMode} phoneLink={phoneLink} />}
         </>
       );
     case 'live': {
@@ -723,7 +828,7 @@ const Body: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: Po
             )}
             <Row icon={<Hourglass size={15} />}>This box stays awake until the quiz ends.</Row>
           </ul>
-          {qr && <CompactJoin block={block} />}
+          {qr && <CompactJoin block={block} phoneLink={phoneLink} />}
         </>
       );
     }
@@ -744,13 +849,15 @@ const Body: React.FC<{ block: PocketBlock; mode: PocketJoinMode; setMode: (m: Po
             </Row>
           )}
           {e?.stats && <Row icon={<Users size={15} />}>{e.stats}</Row>}
-          <Row icon={<Lock size={15} />}>{deletionLine(block)}</Row>
+          <Row icon={<Lock size={15} />}>{gone ? GONE_LINE : deletionLine(block)}</Row>
         </ul>
       );
     }
   }
 };
 
+/** The box answered 404 for this pocket: it was deleted (ux-pass-0952 #3). */
+export const GONE_LINE = 'Deleted. The link is closed, and the names and answers are gone.';
 const deletionLine = (b: PocketBlock) =>
   `The link is closed. Names and answers are deleted ${b.ended?.deletes_on ? `on ${b.ended.deletes_on}` : b.kit === 'quiz' ? '7 days after the quiz' : 'when the keep time ends'}.`;
 
@@ -851,7 +958,9 @@ const Actions: React.FC<{
   editId: string;
   /** The server said pocket apps are off: no Edit or See questions at all. */
   editOff?: boolean;
-}> = ({ block, url, ask, onStop, onEnd, onLink, shown, panelId, onEdit, editing, editId, editOff }) => {
+  /** Deleted on the box: nothing left to keep. */
+  gone?: boolean;
+}> = ({ block, url, ask, onStop, onEnd, onLink, shown, panelId, onEdit, editing, editId, editOff, gone }) => {
   const bigScreen = (
     <button type="button" onClick={() => onLink('screen')} aria-expanded={shown === 'screen'} aria-controls={panelId} className={`kw-btn-ghost ${HALF}`} data-action="screen">
       <Monitor size={14} aria-hidden="true" />
@@ -924,7 +1033,7 @@ const Actions: React.FC<{
     case 'live':
       return (
         <div className={grid}>
-          <button type="button" onClick={() => onLink('host')} aria-expanded={shown === 'host'} aria-controls={panelId} className={`${PRIMARY} ${full}`} data-action="remote">
+          <button type="button" onClick={() => onLink('host')} aria-expanded={shown === 'host'} aria-controls={panelId} className={`${needsPhoneLink(block.join) ? GHOST : PRIMARY} ${full}`} data-action="remote">
             <Smartphone size={14} aria-hidden="true" />
             Open the remote
           </button>
@@ -949,9 +1058,11 @@ const Actions: React.FC<{
             Run it again next Friday
           </button>
           {see}
-          <LaterButton icon={<Archive size={14} aria-hidden="true" />} why={LATER.keep} className="col-span-2 border-transparent bg-transparent text-sky-300 sm:ml-auto">
-            Keep the results
-          </LaterButton>
+          {!gone && (
+            <LaterButton icon={<Archive size={14} aria-hidden="true" />} why={LATER.keep} className="col-span-2 border-transparent bg-transparent text-sky-300 sm:ml-auto">
+              Keep the results
+            </LaterButton>
+          )}
         </div>
       );
   }
@@ -1132,13 +1243,84 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, as
   // pa4c: after an edit the reply's card stands in until the chat's own next block arrives.
   const [over, setOver] = useState<{ from: PocketBlock; card: DraftCard } | null>(null);
   // Same block re-rendered (a fresh object with the same content) keeps the card; a changed block replaces it.
-  const block = over && sameBlock(over.from, chatBlock) ? withCard(chatBlock, over.card) : chatBlock;
+  const base = over && sameBlock(over.from, chatBlock) ? withCard(chatBlock, over.card) : chatBlock;
+  // ux-pass-0952 #3: what the box says now (join, ended, deleted), read on mount and every 15 s while ready or live.
+  const [box, setBox] = useState<BoxRead | null>(null);
+  const read = box && box.code === chatBlock.code ? box : null;
+  const boxOver = read?.state === 'ended' || read?.state === 'gone';
+  const watch = (chatBlock.state === 'ready' || chatBlock.state === 'live') && !boxOver && validPocketCode(chatBlock.code);
+  const fast = read?.join?.tunnel?.state === 'starting';
+  // Read at once only the first time for a code; a restart (a quick link starting or started) waits its interval.
+  const readFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!watch) return;
+    const code = chatBlock.code;
+    let stop = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    let answered = false;
+    const tick = async () => {
+      try {
+        const r = await pocketApi.read(code);
+        if (stop) return;
+        answered = true;
+        const next = fromRead(code, r);
+        setBox(next);
+        if (next.state !== 'open') return;
+      } catch (e) {
+        if (stop) return;
+        // 404 not_found: deleted. Pocket apps turned off (404 pocket_apps_off) or a missed read keeps the card as it is.
+        if (e instanceof PocketApiError && e.status === 404 && (e.code === 'not_found' || e.code === null)) {
+          setBox((b) => ({ code, state: 'gone', endedAt: b?.code === code ? b.endedAt : null, join: null }));
+          return;
+        }
+      }
+      timer = setTimeout(tick, fast ? TUNNEL_POLL_MS : POLL_MS);
+    };
+    if (readFor.current === code) timer = setTimeout(tick, fast ? TUNNEL_POLL_MS : POLL_MS);
+    else {
+      readFor.current = code;
+      void tick();
+    }
+    return () => {
+      stop = true;
+      clearTimeout(timer);
+      // Stopped before the first answer (React's dev double effect): the next run reads at once.
+      if (!answered && !read) readFor.current = null;
+    };
+  }, [chatBlock.code, watch, fast]);
+  const block = withRead(base, read);
+  const gone = read?.state === 'gone' && block !== base;
+  const [phoneLinkState, setPhoneLinkState] = useState<{ busy: boolean; error: string | null }>({ busy: false, error: null });
+  const phoneLink: PhoneLinkCtl = {
+    ...phoneLinkState,
+    make: async () => {
+      const code = chatBlock.code;
+      setPhoneLinkState({ busy: true, error: null });
+      try {
+        const r = await pocketApi.tunnel(code, true);
+        setBox(fromRead(code, r));
+        setPhoneLinkState({ busy: false, error: null });
+      } catch (e) {
+        setPhoneLinkState({ busy: false, error: `Couldn't make a link for phones: ${e instanceof PocketApiError ? e.message : 'something went wrong.'}` });
+      }
+    },
+  };
   const [editing, setEditing] = useState(false);
   const [editOff, setEditOff] = useState<string | null>(null);
   const editId = useId();
   const focusAfter = useFocusAfterRender();
   const phone = useMedia(PHONE);
-  const [mode, setMode] = useState<PocketJoinMode>(block.join?.mode ?? 'wifi');
+  const [mode, setModeRaw] = useState<PocketJoinMode>(block.join?.mode ?? 'wifi');
+  // The box's own mode wins until the person picks one (a 127.0.0.1 box opens on From anywhere).
+  const picked = useRef(false);
+  const setMode = (m: PocketJoinMode) => {
+    picked.current = true;
+    setModeRaw(m);
+  };
+  const readMode = read?.join?.mode;
+  useEffect(() => {
+    if (readMode && !picked.current) setModeRaw(readMode);
+  }, [readMode]);
   const [confirm, setConfirm] = useState<Confirm>(null);
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<Done>(null);
@@ -1177,6 +1359,8 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, as
     setBusy(true);
     try {
       await pocketApi.end(block.code);
+      // The chip turns Ended with the line, not at the next read (Mira D3).
+      if (kind === 'end') setBox({ code: block.code, state: 'ended', endedAt: new Date().toISOString(), join: null });
       setDone({ kind: 'ok', text: kind === 'end' ? 'Ended. Quizmaster is posting the winners in this chat.' : `Stopped. Nobody can join ${block.name} now.` });
       setConfirm(null);
     } catch (e) {
@@ -1189,11 +1373,12 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, as
   const mint = async (role: PocketLinkRole): Promise<{ url: string; expires: number }> => {
     let join = block.join;
     try {
-      join = (await pocketApi.read(block.code)).join ?? join;
+      join = readJoin((await pocketApi.read(block.code)).join) ?? join;
     } catch {
       // keep the card's copy
     }
     const base = join ? urlFor(join, mode) ?? urlFor(join, mode === 'wifi' ? 'anywhere' : 'wifi') : null;
+    if (!base && needsPhoneLink(join)) throw new PocketApiError('Make a link for phones first. The remote and the big screen use it too.', 0, 'no_address');
     if (!base) throw new PocketApiError("Your box hasn't said its address yet. Try again in a moment.", 0, 'no_address');
     const minted = await pocketApi.mintLink(block.code, role);
     const at = Date.parse(minted.expires_at);
@@ -1273,18 +1458,18 @@ const QuizPocket: React.FC<RendererProps<PocketBlock>> = ({ block: chatBlock, as
             <span className="min-w-0">{block.notice}</span>
           </p>
         ) : null}
-        <Body block={block} mode={mode} setMode={setMode} closed={done?.kind === 'ok'} />
+        <Body block={block} mode={mode} setMode={setMode} closed={done?.kind === 'ok'} phoneLink={phoneLink} gone={gone} />
         {done ? (
           <p role="status" className={`flex items-start gap-2 text-[15px] sm:text-[13px] ${done.kind === 'ok' ? 'text-ok' : 'text-bad'}`} data-done={done.kind}>
             {done.kind === 'ok' ? <Check size={15} className={ICON} aria-hidden="true" /> : <AlertTriangle size={15} className={ICON} aria-hidden="true" />}
             {done.text}
           </p>
         ) : null}
-        {confirm ? (
+        {confirm && !(boxOver && block !== base) ? (
           <ConfirmBox block={block} kind={confirm.kind} busy={busy} onYes={() => act(confirm.kind)} onNo={close} />
         ) : done?.kind === 'ok' ? null : (
           <div ref={opener}>
-            <Actions block={block} url={url} ask={ask} onStop={() => setConfirm({ kind: 'stop' })} onEnd={() => setConfirm({ kind: 'end' })} onLink={showLink} shown={link?.role ?? null} panelId={panelId} onEdit={canEdit ? () => setEditing((v) => !v) : null} editing={editing} editId={editId} editOff={!!editOff} />
+            <Actions block={block} url={url} ask={ask} onStop={() => setConfirm({ kind: 'stop' })} onEnd={() => setConfirm({ kind: 'end' })} onLink={showLink} shown={link?.role ?? null} panelId={panelId} onEdit={canEdit ? () => setEditing((v) => !v) : null} editing={editing} editId={editId} editOff={!!editOff} gone={gone} />
           </div>
         )}
         {link && !confirm && done?.kind !== 'ok' && (block.state === 'live' || block.state === 'ready') ? (

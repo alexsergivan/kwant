@@ -91,11 +91,17 @@ export const LinkField: React.FC<{ url: string }> = ({ url }) => (
   </div>
 );
 
-export const NoLinkYet: React.FC<{ mode: PocketJoinMode }> = ({ mode }) => (
-  <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-no-link>
+/** The box's own Wi-Fi note: bound to 127.0.0.1, no phone can reach it on Wi-Fi (src/pocket/address.rs `wifi`). */
+export const THIS_COMPUTER_ONLY = 'this_computer_only';
+export const ONLY_THIS_COMPUTER_LINE = "Phones can't reach this box on Wi-Fi: it only answers this computer. Pick From anywhere to make a link for phones.";
+
+export const NoLinkYet: React.FC<{ mode: PocketJoinMode; note?: string | null }> = ({ mode, note }) => (
+  <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-no-link={mode === 'wifi' && note === THIS_COMPUTER_ONLY ? 'this-computer-only' : ''}>
     {mode === 'anywhere'
       ? "The from-anywhere link isn't set up on this box yet. Same Wi-Fi works now."
-      : "Your box hasn't said its Wi-Fi address yet. It shows here as soon as it does."}
+      : note === THIS_COMPUTER_ONLY
+        ? ONLY_THIS_COMPUTER_LINE
+        : "Your box hasn't said its Wi-Fi address yet. It shows here as soon as it does."}
   </p>
 );
 
