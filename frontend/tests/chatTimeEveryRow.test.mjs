@@ -63,7 +63,7 @@ test("other people's user-side rows (customer, bot, coding agent, you via Telegr
 
 test('a <time dateTime> for screen readers; on your side the header mirrors so the name stays by your avatar', () => {
   const mine = row(html, 'p1');
-  assert.match(mine, new RegExp(`<time class="shrink-0 whitespace-nowrap text-xs text-zinc-400" data-message-time="user" dateTime="${AT}">`));
+  assert.match(mine, new RegExp(`<time class="shrink-0 whitespace-nowrap text-zinc-400" data-message-time="user" dateTime="${AT}">`));
   const header = mine.match(/<div class="([^"]*)"[^>]*>(?:<span[^>]*>You<\/span>)/)?.[1] ?? '';
   assert.match(header, /whitespace-nowrap/, 'one line, no new wrapping');
   assert.match(header, /flex-row-reverse/, 'your side mirrors');

@@ -68,7 +68,7 @@ export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
 );
 
 /** #1278: a message's time on its name line, one look for every row: "3:42 PM" today, "Nov 3, 3:42 PM" on another
- *  day (localClock). A bot reply (and the live row, which becomes it) puts "· " before it on phones, where the avatar
+ *  day (localClock). It takes its row's type size (11 px beside "You", 12 px on a reply). A bot reply (and the live row, which becomes it) puts "· " before it on phones, where the avatar
  *  sits in the line; a person's row has no avatar there, so no dot. A <time dateTime> so screen readers get the
  *  moment, not only the words. Nothing is drawn without a readable time. */
 export const MessageTime: React.FC<{ at?: string | number | null; now?: number; kind?: 'reply' | 'live' | 'user' }> = ({ at, now, kind = 'reply' }) => {
@@ -76,7 +76,7 @@ export const MessageTime: React.FC<{ at?: string | number | null; now?: number; 
   if (!time || at === null || at === undefined) return null;
   const iso = new Date(at).toISOString();
   return kind === 'user' ? (
-    <time className="shrink-0 whitespace-nowrap text-xs text-zinc-400" data-message-time="user" dateTime={iso}>
+    <time className="shrink-0 whitespace-nowrap text-zinc-400" data-message-time="user" dateTime={iso}>
       {time}
     </time>
   ) : (
