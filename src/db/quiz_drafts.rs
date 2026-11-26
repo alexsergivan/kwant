@@ -108,6 +108,21 @@ impl Database {
         Ok(sqlx::query_as(&format!("SELECT {COLS} FROM quiz_drafts WHERE space_id = ? AND id = ?")).bind(space_id).bind(id).fetch_optional(&self.pool).await?)
     }
 
+    /// quiz-open-without-id: one bot's drafts in one space whose state is one of `states`, newest
+    /// `updated_at` first, at most `limit`. Never another bot's or another space's.
+    pub async fn quiz_drafts_of_kwant(&self, space_id: &str, kwant_id: &str, states: &[&str], limit: i64) -> Result<Vec<QuizDraftRow>, DbError> {
+        if states.is_empty() {
+            return Ok(Vec::new());
+        }
+        let marks = vec!["?"; states.len()].join(", ");
+        let q = format!("SELECT {COLS} FROM quiz_drafts WHERE space_id = ? AND kwant_id = ? AND state IN ({marks}) ORDER BY updated_at DESC, id LIMIT ?");
+        let mut query = sqlx::query_as(&q).bind(space_id).bind(kwant_id);
+        for s in states {
+            query = query.bind(*s);
+        }
+        Ok(query.bind(limit).fetch_all(&self.pool).await?)
+    }
+
     /// The draft a pocket was opened from (pa3b: the live judge reads its allowance here).
     pub async fn quiz_draft_by_pocket(&self, pocket_code: &str) -> Result<Option<QuizDraftRow>, DbError> {
         Ok(sqlx::query_as(&format!("SELECT {COLS} FROM quiz_drafts WHERE pocket_code = ? ORDER BY updated_at DESC LIMIT 1"))
@@ -165,6 +180,44 @@ mod tests {
         assert!(db.quiz_draft_set_judge_calls("qd9", 2).await.unwrap(), "a late, lower count doesn't lower it");
         let b: serde_json::Value = serde_json::from_str(&db.quiz_draft_get("s1", "qd9").await.unwrap().unwrap().budget).unwrap();
         assert_eq!(b, serde_json::json!({"writing_calls": 2, "source_fetches": 4, "judge_allowance": 16, "judge_calls": 3}));
+    }
+
+    #[tokio::test]
+    async fn a_bots_drafts_are_listed_newest_first_and_only_its_own() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let row = |id: &str, space: &str, kwant: &str, state: &str, at: i64| QuizDraftRow {
+            id: id.into(),
+            space_id: space.into(),
+            kwant_id: kwant.into(),
+            title: id.into(),
+            spec: "{}".into(),
+            state: state.into(),
+            problems: "[]".into(),
+            sources: "[]".into(),
+            dry_run: None,
+            budget: "{}".into(),
+            pocket_code: None,
+            created_at: at,
+            updated_at: at,
+            own_keys: "[]".into(),
+        };
+        for r in [
+            row("qd_old", "s1", "k1", "ready", 1),
+            row("qd_new", "s1", "k1", "writing", 3),
+            row("qd_shut", "s1", "k1", "closed", 4),
+            row("qd_other_bot", "s1", "k2", "ready", 5),
+            row("qd_other_space", "s2", "k1", "ready", 6),
+        ] {
+            db.quiz_draft_save(&r).await.unwrap();
+        }
+        let ids = |v: Vec<QuizDraftRow>| v.into_iter().map(|r| r.id).collect::<Vec<_>>();
+        let live = ["writing", "checking", "dry_run_stopped", "ready", "open"];
+        assert_eq!(ids(db.quiz_drafts_of_kwant("s1", "k1", &live, 10).await.unwrap()), ["qd_new", "qd_old"]);
+        assert_eq!(ids(db.quiz_drafts_of_kwant("s1", "k1", &live, 1).await.unwrap()), ["qd_new"]);
+        assert_eq!(ids(db.quiz_drafts_of_kwant("s1", "k1", &["closed"], 10).await.unwrap()), ["qd_shut"]);
+        assert!(db.quiz_drafts_of_kwant("s1", "k1", &[], 10).await.unwrap().is_empty());
+        assert!(db.quiz_drafts_of_kwant("s1", "k3", &live, 10).await.unwrap().is_empty());
     }
 
     #[tokio::test]

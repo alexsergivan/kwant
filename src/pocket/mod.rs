@@ -327,8 +327,31 @@ pub fn view_json(s: &Snapshot, viewer: &Viewer, now: DateTime<Utc>) -> Value {
         "viewer": role,
         "pocket": pocket_json(s),
         "me": me,
-        "view": kit.view(&ctx, &s.kit_state, viewer),
+        "view": match viewer {
+            Viewer::Host => host_view_with_locks(s, kit.view(&ctx, &s.kit_state, viewer)),
+            _ => kit.view(&ctx, &s.kit_state, viewer),
+        },
     })
+}
+
+/// santa-pin-locked-live: the host's view of a pocket with PINs says, per person, whether their
+/// name is locked by 10 wrong PINs (`locked`, a boolean, so a reset made elsewhere clears it on a
+/// card that keeps the last value it read). Only the host's view, here and on the person's card
+/// (`host_api::read_json`): a guest or the big screen never learns about a lock, and the kit's
+/// `Player` carries no PIN facts. Kit-neutral: any `people` entry with an `id` of a player.
+pub fn host_view_with_locks(s: &Snapshot, mut view: Value) -> Value {
+    if !s.rules().is_some_and(|r| r.needs_pin) {
+        return view;
+    }
+    if let Some(people) = view.get_mut("people").and_then(Value::as_array_mut) {
+        for row in people.iter_mut().filter_map(Value::as_object_mut) {
+            let Some(id) = row.get("id").and_then(Value::as_str) else { continue };
+            if let Some(p) = s.rows.iter().find(|r| r.id == id && r.removed_at.is_none()) {
+                row.insert("locked".into(), json!(p.pin_locked));
+            }
+        }
+    }
+    view
 }
 
 /// pa13a: one part of the host's view by key (`guest:<id>`: a front desk conversation), for the
@@ -867,7 +890,14 @@ pub fn after_wrong_try(p: &PlayerRow, now: DateTime<Utc>) -> PinCounters {
 async fn wrong_try(state: &AppState, code: &str, p: &PlayerRow, now: DateTime<Utc>) -> PResult<PocketError> {
     let c = after_wrong_try(p, now);
     state.db.pocket_set_pin_counters(code, &p.id, &c).await?;
-    refresh(state, code).await?;
+    if c.pin_locked && !p.pin_locked {
+        // santa-pin-locked-live: the host's view now says "locked", so the host's page and
+        // card get a new version (the other wrong tries change nothing anyone else sees)
+        state.db.pocket_bump(code).await?;
+        changed(state, code).await?;
+    } else {
+        refresh(state, code).await?;
+    }
     Ok(if c.pin_locked {
         hard_locked()
     } else if let Some(until) = c.locked_until {

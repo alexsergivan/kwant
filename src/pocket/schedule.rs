@@ -258,9 +258,20 @@ pub fn ended_block(s: &Snapshot, sched: Option<&ScheduleRow>, zone: &Zone) -> Va
         "opens_line": null,
         "live": null,
         "join": null,
-        "ended": { "at": s.row.ended_at, "winner": winner, "stats": null, "deletes_on": s.row.expires_at },
+        "ended": ended_part(zone, s.row.ended_at, s.row.expires_at, winner),
         "budget": null,
         "results": results,
+    })
+}
+
+/// The card's `ended`: when it ended and the day names are deleted, as the card prints them ("10:12 PM",
+/// "Fri, Dec 4") in the person's zone, not raw timestamps (quiz-card-and-results).
+fn ended_part(zone: &Zone, ended_at: Option<DateTime<Utc>>, expires_at: Option<DateTime<Utc>>, winner: Option<Value>) -> Value {
+    json!({
+        "at": ended_at.map(|t| clock(zone.local(t))),
+        "winner": winner,
+        "stats": null,
+        "deletes_on": expires_at.map(|t| zone.local(t).format("%a, %b %-d").to_string()),
     })
 }
 
@@ -458,6 +469,14 @@ async fn forget_names(state: &AppState, now: DateTime<Utc>) -> usize {
                     tracing::warn!("pocket apps: couldn't clear names from a results message: {e}");
                     continue;
                 }
+                // The chat's results card is a stored copy of the block: it loses the names too
+                m.results = match state.db.refresh_pocket_results(&id, &meta).await {
+                    Ok(v) => v,
+                    Err(e) => {
+                        tracing::warn!("pocket apps: couldn't clear names from a results card: {e}");
+                        continue;
+                    }
+                };
                 m.meta = Some(meta.to_string());
                 let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&m).unwrap_or(Value::Null) });
                 done += 1;
@@ -711,6 +730,15 @@ mod tests {
         assert_eq!(when_line(&z, w - Duration::minutes(30)), "Fri, Nov 27 · 7:30 PM");
         let long = "x".repeat(200);
         assert_eq!(short_title(&long).chars().count(), TITLE_CHARS);
+    }
+
+    #[test]
+    fn the_ended_part_says_its_times_in_the_persons_zone() {
+        let z = zone_for(None, Some(DateTime::parse_from_rfc3339("2026-11-27T20:00:00+01:00").unwrap()));
+        let winner = Some(json!({ "name": "Quizzly Bears", "points": 34 }));
+        let e = ended_part(&z, Some(utc(2026, 11, 27, 21, 12)), Some(utc(2026, 12, 4, 23, 30)), winner.clone());
+        assert_eq!(e, json!({ "at": "10:12 PM", "winner": winner, "stats": null, "deletes_on": "Sat, Dec 5" }));
+        assert_eq!(ended_part(&z, None, None, None), json!({ "at": null, "winner": null, "stats": null, "deletes_on": null }));
     }
 
     #[test]

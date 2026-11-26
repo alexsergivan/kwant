@@ -56,6 +56,29 @@ impl Database {
             }
         }
     }
+
+    /// Stores again the results card of a pocket results message whose `meta` kwnt changed (guest
+    /// names blanked), and returns what the chat now shows. When the new `meta` gives no card the
+    /// stored one is removed, so an older copy never keeps the names. An error means the old
+    /// copy may still be there.
+    pub async fn refresh_pocket_results(&self, message_id: &str, meta: &Value) -> Result<Option<Value>, DbError> {
+        let extra = MessageExtra { thread_id: None, meta: Some(meta.clone()) };
+        let value = sr::pocket_results(&extra).and_then(|set| serde_json::to_value(&set).ok());
+        match &value {
+            Some(v) => {
+                sqlx::query("INSERT OR REPLACE INTO message_results (message_id, version, payload) VALUES (?, ?, ?)")
+                    .bind(message_id)
+                    .bind(i64::from(sr::VERSION))
+                    .bind(v.to_string())
+                    .execute(&self.pool)
+                    .await?;
+            }
+            None => {
+                sqlx::query("DELETE FROM message_results WHERE message_id = ?").bind(message_id).execute(&self.pool).await?;
+            }
+        }
+        Ok(value)
+    }
 }
 
 /// A stored payload this build can serve, or `None` (an unknown version, a type no longer
@@ -74,8 +97,9 @@ fn read(version: i64, payload: &str) -> Option<Value> {
 const REPLY_KINDS: &[&str] = &["delegation_result"];
 
 /// `meta.kind`s that are a card kwant builds from its own data and that have a block of their own:
-/// a mission task's report line (`verification`) and an agent's shared file (`files`).
-const DATA_KINDS: &[&str] = &["mission", "file"];
+/// a mission task's report line (`verification`), an agent's shared file (`files`) and a pocket's
+/// results message (`pocket`; its reminders have no block, so they get nothing).
+const DATA_KINDS: &[&str] = &["mission", "file", "pocket"];
 
 /// Computes and stores the block set for a message just inserted on `conn` as `id`, and returns
 /// it for the message object. Only bot replies qualify: `sender_role` "kwant" and no `meta.kind`

@@ -85,6 +85,7 @@ import type { AgentFormData } from './components/NewAgentModal';
 import { NewTeamModal } from './components/NewTeamModal';
 import { ReadyTeamsProvider, TeamNeedsTop, type ReadyTeam } from './components/ReadyTeams';
 import { SpaceReadyCard } from './components/SpaceReadyCard';
+import { afterNewBot, generalOf, phoneFirstView } from './firstBot';
 import { NewChannelModal } from './components/NewChannelModal';
 import type { NewChannelBody } from './channels';
 import { channelBotIds } from './channels';
@@ -499,17 +500,36 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // browser's getting-started state changes (choice, kept, dismissed).
   useStartVersion();
   const gsDismissed = getStartedDismissed(space.id);
-  // C1: on a phone, open #general while getting started is unfinished (not the chats list). Once.
+  // C1 + Minor d: on a phone, open #general while getting started is unfinished (not the chats list): when
+  // nothing can run yet, or when #general shows its Get started card (firstBot.ts phoneFirstView). Once.
   const c1Done = useRef(false);
   useEffect(() => {
-    if (c1Done.current || !isPhone || !loaded || canRun === null) return;
+    if (c1Done.current || !isPhone || !loaded) return;
+    const general = generalOf(channels, space.general_channel_id);
+    const view = phoneFirstView({
+      linked: !!(initialView || initialTarget?.channelId || initialTarget?.botId || initialTarget?.live),
+      canRun,
+      dismissed: gsDismissed,
+      hasBots: kwants.length > 0,
+      inGeneral: isChannel && !!general && selectedId === general.id && !openThreadId,
+      generalLoaded: messagesLoadedFor === openCtx,
+      // The same rule as the card itself (getStartedEligible, further down), read once #general has loaded.
+      cardShows: showGetStarted({
+        dismissed: gsDismissed,
+        canRun,
+        generalMessages: messages.length,
+        teams: teams.length,
+        started: getStartedWasStarted(space.id),
+        mainSpace: space.is_default,
+      }),
+    });
+    if (view === 'wait') return;
     c1Done.current = true;
-    if (canRun !== false || gsDismissed || initialView || initialTarget?.channelId || initialTarget?.botId || initialTarget?.live) return;
-    const general = channels.find((c) => c.id === space.general_channel_id) ?? channels.find((c) => c.name === 'general');
+    if (view !== 'general') return;
     if (general) handleSelectChannel(general);
     else setPhoneView('chat');
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isPhone, loaded, canRun, channels]);
+  }, [isPhone, loaded, canRun, channels, messagesLoadedFor]);
   // The sidebar and chat under Settings or the New bot modal: inert while either is open (the space rail stays usable).
   const contentRef = useRef<HTMLDivElement>(null);
   // Moving between Settings tabs drops the card's sheet too: Apps & accounts remounts on the way back and
@@ -3274,13 +3294,22 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
       if (res.ok) {
         const created: Kwant = await res.json();
-        setKwants((prev) => [...prev, created]);
+        const team = newAgentTeam && (teams.find((t) => t.id === newAgentTeam.id) ?? newAgentTeam);
+        const opens = afterNewBot({ botsBefore: kwants.length, inTeam: !!team });
         // Saved even when empty: switching every server off means none.
         const mcpError = await saveKwantMcpServers(created.id, agentData.mcp_server_ids);
         if (mcpError) console.error(mcpError);
+        // The server makes #general with the space's first bot: read it before the checklist goes, so the
+        // first bot lands in #general as the checklist says, with no blank pane in between.
+        const readChannels = (): Promise<Channel[] | null> =>
+          fetch('/api/channels')
+            .then((r) => (r.ok ? r.json() : null))
+            .then((c) => (Array.isArray(c) ? (c as Channel[]) : null))
+            .catch(() => null);
+        const fresh = opens === 'general' ? await readChannels() : null;
+        setKwants((prev) => [...prev, created]);
         setIsNewAgentOpen(false);
         playSfx('fanfare');
-        const team = newAgentTeam && (teams.find((t) => t.id === newAgentTeam.id) ?? newAgentTeam);
         setNewAgentTeam(null);
         if (team) {
           const memberIds = memberIdsOf(team);
@@ -3288,12 +3317,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           handleSelectTeam(team);
           return;
         }
-        // The first bot opens the space's #general; counts change either way.
+        // Counts change either way (and #general appears in the space's details).
         onSpacesChanged();
-        fetch('/api/channels')
-          .then((r) => (r.ok ? r.json() : null))
-          .then((fresh: Channel[] | null) => fresh && setChannels(fresh))
-          .catch(() => undefined);
+        if (fresh) setChannels(fresh);
+        else void readChannels().then((c) => c && setChannels(c));
+        const general = fresh ? generalOf(fresh, space.general_channel_id) : null;
+        if (general) {
+          handleSelectChannel(general);
+          return;
+        }
         setSelectedId(created.id);
         selectedIdRef.current = created.id;
         setPhoneView('chat');

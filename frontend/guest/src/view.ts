@@ -54,7 +54,8 @@ export interface Question {
 }
 
 export interface Reveal {
-  outcome: 'right' | 'near' | 'wrong' | 'none' | 'overturned';
+  /** `judging`: a near miss the Quizmaster or the host is still settling (the engine's waiting_for_judge). */
+  outcome: 'right' | 'near' | 'wrong' | 'none' | 'overturned' | 'judging';
   points: number;
   /** Right answers: base + speed bonus, as the kit scored them. */
   base?: number;
