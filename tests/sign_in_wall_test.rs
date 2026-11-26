@@ -323,14 +323,14 @@ async fn a_sign_in_wall_on_a_site_whose_tools_fail_asks_to_fix_the_tools_not_to_
     assert_eq!((step.kind.as_str(), step.source.as_str(), step.status.as_str()), ("other", "auto", "open"));
     assert_eq!(
         step.reason,
-        "Arch has github tools for github.com, but the secret saved for github was rejected. Edit github in Tools and paste a new secret, then press Done."
+        "Arch has github tools for github.localhost, but the secret saved for github was rejected. Edit github in Tools and paste a new secret, then press Done."
     );
     assert!(!step.reason.contains("old-key-123"));
     assert_eq!((step.page_key.as_deref(), step.sandbox_target.as_deref()), (None, None), "not a browser step");
     let page = kwnt::server::browser_pages::job_page_key(&bot, &bot, &bot).unwrap();
     assert!(!kwnt::server::human_steps::browser_is_held(&env.state, &page).await, "the bot keeps its browser");
     let card = env.state.db.get_message(step.message_id.as_deref().unwrap()).await.unwrap().unwrap();
-    assert!(card.text.starts_with("Tools need a fix: Arch has github tools for github.com, but"), "{}", card.text);
+    assert!(card.text.starts_with("Tools need a fix: Arch has github tools for github.localhost, but"), "{}", card.text);
     assert!(!card.text.contains("browser panel"), "{}", card.text);
     // The frontend contract: the step and its card say "fix it in Tools", and which server
     let meta: Value = serde_json::from_str(card.meta.as_deref().unwrap()).unwrap();
