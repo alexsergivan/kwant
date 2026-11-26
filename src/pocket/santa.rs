@@ -1206,6 +1206,86 @@ mod tests {
         assert_eq!(Santa.view(&ctx, &state, &Viewer::Host)["counts"]["questions_asked"], 1);
     }
 
+    fn at(s: &str) -> DateTime<Utc> {
+        DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&Utc)
+    }
+
+    /// Ticks the kit at `now`: (changed, finished).
+    fn tick_at(spec: &Value, ps: &[Player], state: &mut Value, now: &str) -> (bool, bool) {
+        let changed = Santa.tick(&mut KitCtx::new(spec, ps, at(now)), state);
+        (changed, Santa.finished(state))
+    }
+
+    /// Joins `ps` and draws at `now`, without the shared spec.
+    fn drawn_with(spec: &Value, ps: &[Player], now: &str) -> Value {
+        let mut state = Santa.init(spec);
+        for i in 0..ps.len() {
+            Santa.on_join(&mut KitCtx::new(spec, &ps[..=i], at(now)), &mut state, &ps[i]);
+        }
+        Santa.act(&mut KitCtx::new(spec, ps, at(now)), &mut state, &Viewer::Host, "draw_now", &json!({})).unwrap();
+        state
+    }
+
+    #[test]
+    fn a_revealed_santa_is_over_a_day_after_the_reveal_and_only_once() {
+        let spec = json!({ "title": "Office Santa", "gift_on": "2026-12-18", "reveal_at": "2026-12-18T19:00:00Z" });
+        let ps = players(&["Ana", "Ben", "Cleo", "Dev", "Eli", "Fay"]);
+        let mut state = drawn_with(&spec, &ps, "2026-12-01T09:00:00Z");
+        assert!(!Santa.finished(&state));
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-18T19:00:00Z"), (true, false), "the reveal runs, the Santa isn't over");
+        assert_eq!(load(&state).phase, REVEALED);
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-19T18:59:00Z"), (false, false), "not at reveal + 23:59");
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-19T19:00:00Z"), (true, true), "over at reveal + 1 day");
+        assert_eq!(at(state["done_at"].as_str().unwrap()), at("2026-12-19T19:00:00Z"));
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-19T19:01:00Z"), (false, true), "set once; later ticks change nothing");
+        assert_eq!(at(state["done_at"].as_str().unwrap()), at("2026-12-19T19:00:00Z"));
+        // A reveal the host showed early counts from when it was shown
+        let mut state = drawn_with(&spec, &ps, "2026-12-01T09:00:00Z");
+        Santa.act(&mut KitCtx::new(&spec, &ps, at("2026-12-17T12:00:00Z")), &mut state, &Viewer::Host, "reveal_now", &json!({})).unwrap();
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-18T11:59:00Z"), (false, false));
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-18T12:00:00Z"), (true, true));
+    }
+
+    #[test]
+    fn a_skipped_or_secret_reveal_is_over_a_day_after_the_gift_day() {
+        let ps = players(&["Ana", "Ben", "Cleo"]);
+        // Skipped: the planned reveal time passes without a reveal, and the gift day's end + 1 day ends it
+        let spec = json!({ "title": "Office Santa", "gift_on": "2026-12-18", "reveal_at": "2026-12-18T19:00:00Z" });
+        let mut state = drawn_with(&spec, &ps, "2026-12-01T09:00:00Z");
+        Santa.act(&mut KitCtx::new(&spec, &ps, at("2026-12-02T09:00:00Z")), &mut state, &Viewer::Host, "skip_reveal", &json!({})).unwrap();
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-19T19:00:00Z"), (false, false), "a skipped reveal doesn't end it a day after reveal_at");
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-19T23:59:58Z"), (false, false), "not before gift_on + 1 day");
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-19T23:59:59Z"), (true, true), "over at gift_on + 1 day");
+        assert_eq!(load(&state).phase, DRAWN, "and the matches stay secret");
+        // Never: the spec turned the reveal off
+        let spec = json!({ "title": "Office Santa", "gift_on": "2026-12-18", "reveal": false });
+        let mut state = drawn_with(&spec, &ps, "2026-12-01T09:00:00Z");
+        assert_eq!(load(&state).reveal, "never");
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-19T23:59:58Z"), (false, false));
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-19T23:59:59Z"), (true, true));
+        // A gift_on with a time counts from that time
+        let spec = json!({ "title": "Office Santa", "gift_on": "2026-12-18T17:00:00Z", "reveal": false });
+        let mut state = drawn_with(&spec, &ps, "2026-12-01T09:00:00Z");
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-19T16:59:00Z"), (false, false));
+        assert_eq!(tick_at(&spec, &ps, &mut state, "2026-12-19T17:00:00Z"), (true, true));
+    }
+
+    #[test]
+    fn a_santa_that_never_drew_names_is_never_over_by_itself() {
+        let spec = json!({ "title": "Office Santa", "gift_on": "2026-12-18", "reveal_at": "2026-12-18T19:00:00Z" });
+        let ps = players(&["Ana", "Ben"]);
+        let mut state = Santa.init(&spec);
+        for i in 0..ps.len() {
+            Santa.on_join(&mut KitCtx::new(&spec, &ps[..=i], at("2026-12-01T09:00:00Z")), &mut state, &ps[i]);
+        }
+        let before = state.clone();
+        for now in ["2026-12-19T19:00:00Z", "2026-12-20T00:00:00Z", "2027-01-31T00:00:00Z"] {
+            assert_eq!(tick_at(&spec, &ps, &mut state, now), (false, false), "{now}");
+        }
+        assert_eq!(state, before, "nothing written: the End button, the abandoned rule or the expiry sweep end it");
+        assert!(before.get("done_at").is_none(), "an open Santa's stored state has no done_at");
+    }
+
     #[test]
     fn a_late_joiner_changes_nothing_the_host_sees_whoever_the_giver_is() {
         // F2 (pa10a QA): the redraw once dropped the changed giver's ticks, so the host (who
