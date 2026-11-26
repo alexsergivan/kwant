@@ -1,0 +1,90 @@
+title: Claude Duet Alternative: Open-Source & Self-Hosted
+description: kwant is an open-source, self-hosted alternative to Claude Duet. Run a team of AI bots on your own machine, with approvals, routines and the models you already have.
+path: alternatives/claude-duet.html
+active: alternatives
+faq: yes
+card_title: Claude Duet alternative
+card: Open-source and self-hosted. Your machine, your models, your approvals.
+card_art: avatar:brand
+---
+<section class="page-head">
+  <div class="wrap">
+    <p class="kicker">Alternatives · Claude Duet</p>
+    <h1>A Claude Duet alternative you run yourself</h1>
+    <p class="lede">kwant is an open-source, self-hosted team of AI bots in one binary. It runs on your laptop, a VPS or Docker, with routines, @mention handoffs and a fail-closed approval broker.</p>
+    <div class="cta">
+      <a class="btn btn-violet" href="../docs/install.html">Install kwant</a>
+      <a class="btn btn-soft" href="https://github.com/alexsergivan/kwant" rel="noopener">View on GitHub</a>
+    </div>
+  </div>
+</section>
+
+<div class="wrap">
+  <article class="prose solo">
+<p>Claude Duet is Anthropic's proactive agent product. According to <a href="https://claude.com/product/claude-duet" rel="noopener">Anthropic's product page</a>, it can monitor connected apps, send morning briefs, complete tasks in the cloud, and ask for approval before consequential actions. Availability and plan details are on that page and in <a href="https://support.claude.com/en/articles/17631495-get-started-with-claude-duet" rel="noopener">Anthropic's help centre</a>; we will not restate them here. kwant works the other way round: your bots run on a machine you control, with the logins you already have, and the source code is public.</p>
+
+<h2 id="why">Why people look for a Claude Duet alternative</h2>
+<p>The reasons are usually practical:</p>
+<ul>
+  <li><strong>Where the agent runs.</strong> Some people want their bots on hardware they control, not on a cloud computer someone else operates.</li>
+  <li><strong>Source you can read.</strong> kwant is AGPL-3.0, and the code is public on <a href="https://github.com/alexsergivan/kwant" rel="noopener">GitHub</a>.</li>
+  <li><strong>More than one model.</strong> kwant bots can run on Claude, Codex or Grok CLI logins, API keys, local Ollama or any OpenAI-compatible server, so you are not tied to one provider. A Claude login is one option among several.</li>
+  <li><strong>Control over what bots do.</strong> kwant asks before bots run commands or edit files outside their folder. Payments, locks, doors and alarms always ask, in every approval mode.</li>
+</ul>
+<p>None of this makes Claude Duet a bad product. These are the cases where a self-hosted setup fits better.</p>
+
+<h2 id="kwant">kwant in one paragraph</h2>
+<p>kwant is a <a href="../index.html">self-hosted AI agent team</a>: bots share chats and hand work to each other with @mentions. Bots can work on a schedule or while you are away, using routines and cron rules that run on your own machine. You add the logins you already have, several per engine if you like, with failover when one runs out of usage. The program you install is called <code>kwnt</code> (start it with <code>kwnt serve</code>). kwant sends no telemetry to its developers. See all <a href="../features.html">features</a>.</p>
+
+<h2 id="compare">Claude Duet vs kwant</h2>
+<p>We only list what we can show from kwant's own docs. Where we have not verified a Claude Duet detail, we point you to Anthropic's site rather than guess.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th scope="col">Topic</th><th scope="col">Claude Duet</th><th scope="col">kwant</th></tr></thead>
+  <tbody>
+    <tr><th scope="row">Where it runs</th><td>See <a href="https://claude.com/product/claude-duet" rel="noopener">Anthropic's product page</a></td><td>Your laptop, a VPS or Docker, on hardware you control</td></tr>
+    <tr><th scope="row">Scheduled and proactive work</th><td>See Anthropic's site</td><td>Routines and cron rules on your own machine; they run while the machine is on</td></tr>
+    <tr><th scope="row">Models</th><td>See Anthropic's site</td><td>Claude, Codex or Grok CLI logins, API keys, local Ollama or any OpenAI-compatible server, with failover across accounts</td></tr>
+    <tr><th scope="row">Approvals</th><td>See Anthropic's site</td><td>Three <a href="../docs/approvals.html">approval</a> modes per space or bot. Payments, locks, doors and alarms always ask, even when approvals are off</td></tr>
+    <tr><th scope="row">Source</th><td>See Anthropic's site</td><td>AGPL-3.0, public on GitHub</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="after">What you get in kwant</h2>
+<ul>
+  <li><strong>Teams and handoffs.</strong> Group bots into teams with a lead and let them pass work with @mentions. See <a href="../docs/bots-and-teams.html">teams and handoffs</a>.</li>
+  <li><strong>Routines.</strong> Schedule bot work with routines, cron rules and follow-ups. See <a href="../docs/routines.html">routines</a>.</li>
+  <li><strong>Approvals.</strong> Three <a href="../docs/approvals.html">approval</a> modes per space or bot, and <a href="../docs/flight-school.html">Flight School</a> tiers (Observe, Sandbox, Act) that set how much freedom each bot has earned. Payments always ask.</li>
+  <li><strong>Spaces.</strong> Keep work and home apart, each with its own bots, routines and approval rules. See <a href="../docs/spaces.html">spaces</a>.</li>
+  <li><strong>Your models, your accounts.</strong> Add <a href="../docs/accounts.html">multiple Claude, Codex and Grok accounts</a> or API keys with failover. See <a href="../docs/models.html">models and routing</a>.</li>
+  <li><strong>Tools through MCP.</strong> Connect Model Context Protocol servers with per-bot access and approval before risky calls, including a two-field <a href="../docs/home-assistant.html">Home Assistant</a> connect. See <a href="../docs/mcp.html">MCP tools</a>.</li>
+</ul>
+
+<h2 id="stay">When Claude Duet is still the better fit</h2>
+<p>kwant runs on a machine you look after. If you would rather not run any server or computer yourself, a hosted product is simpler. And if your bots live only on a laptop that is switched off, scheduled routines wait until it is back on. A small VPS with the systemd setup in <a href="../docs/install.html">Install &amp; run</a> avoids that. If you specifically want Anthropic's hosted product and its integrations, start at <a href="https://claude.com/product/claude-duet" rel="noopener">claude.com/product/claude-duet</a>.</p>
+
+<h2 id="start">Get started</h2>
+<p>Install <code>kwnt</code> on a laptop, a VPS or with Docker, add a login, and give a bot a task.</p>
+{{install:claude-duet}}
+<ul>
+  <li><a href="../docs/install.html">Install kwnt</a></li>
+  <li><a href="../docs/quickstart.html">Quickstart</a></li>
+  <li><a href="https://github.com/alexsergivan/kwant" rel="noopener">Source and releases on GitHub</a></li>
+</ul>
+
+<section class="faq" id="faq" aria-labelledby="faq-title">
+<h2 id="faq-title">FAQ</h2>
+<h3>What is the best open-source alternative to Claude Duet?</h3>
+<p>It depends on what you need, but kwant is an open-source (AGPL-3.0), self-hosted option: a team of AI bots in one binary that runs on your laptop, a VPS or Docker, with bots that hand work to each other with @mentions.</p>
+<h3>Can I self-host Claude Duet?</h3>
+<p>Check Anthropic's site for what Claude Duet offers. If you want your bots on your own machine, kwant runs on a laptop, a VPS or Docker.</p>
+<h3>Do I need a Claude account to use kwant?</h3>
+<p>No. kwant bots can run on a Claude, Codex or Grok CLI login, an API key, local Ollama or any OpenAI-compatible server. A Claude login is one option among several.</p>
+<h3>Is kwant free?</h3>
+<p>The software is free under the AGPL-3.0, and commercial licenses are available. You pay for whatever model accounts or API keys you connect. kwant sends no telemetry to its developers.</p>
+<h3>What is kwnt?</h3>
+<p>It is the program you install and run for kwant. Start it with <code>kwnt serve</code>.</p>
+</section>
+  </article>
+</div>
