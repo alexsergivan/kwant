@@ -289,7 +289,15 @@ test('in a chat, the block’s buttons go in the message’s action row, so the 
   const rows = [...v.host.querySelectorAll('#row')];
   for (const row of rows) {
     assert.deepEqual([...row.querySelectorAll('button')].map((b) => b.textContent.trim()), ['Copy markdown', 'Show as text', 'Copy data']);
-    assert.equal(row.querySelector('[data-evidence]').textContent, 'From this reply');
+    const ev = row.querySelector('[data-evidence]');
+    assert.equal(ev.textContent, 'From this reply');
+    // a caption, not a button: no role, no tab stop, no chip border; the full text stays on hover
+    assert.equal(ev.tagName, 'SPAN');
+    assert.equal(ev.getAttribute('role'), null);
+    assert.equal(ev.getAttribute('tabindex'), null);
+    assert.equal(ev.getAttribute('title'), 'From this reply');
+    assert.match(ev.className, /\bcursor-default\b/);
+    assert.doesNotMatch(ev.className, /\b(border|rounded-lg|bg-white)/);
   }
   assert.equal(other.childNodes.length, 0, 'only its own message’s row');
   const extra = (bubble) => [...bubble.querySelectorAll('button')].filter((b) => !b.closest('th') && !/^Ask about/.test(b.getAttribute('aria-label') ?? b.textContent));

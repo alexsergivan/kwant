@@ -232,7 +232,7 @@ const Footer: React.FC<{ block: SmartBlock; messageId: string; asText: boolean; 
         Show as text
       </button>
       {block.type !== 'recipe' && <CopyData block={block} messageId={messageId} />}
-      {/* Where the numbers come from: a chip in the row's style, a fact rather than a button. */}
+      {/* Where the numbers come from: a quiet caption, a fact rather than a button. */}
       <span className={evidenceClass} data-evidence title={evidenceText(block)}>
         <EvidenceIcon block={block} />
         <span className="truncate">{evidenceText(block)}</span>
