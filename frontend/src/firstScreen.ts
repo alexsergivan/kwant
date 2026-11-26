@@ -1,6 +1,6 @@
 // 0.9.8 first screen for anyone (autonomy/first-screen/design.md, Mira): the pure parts, so tests can
-// check the words and the gating without a DOM. A: the space header's status words and the "moved"
-// pointer. D: Get started step 3 when the space already has a team. E: the "Connect an AI account" card.
+// check the words and the gating without a DOM. A: the space header's status words (the "moved"
+// pointer is gone). D: Get started step 3 when the space already has a team. E: the "Connect an AI account" card.
 
 import type { SpaceCounts } from './spaces';
 import { spaceSummary } from './spaces';

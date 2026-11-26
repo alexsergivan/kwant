@@ -35,10 +35,10 @@ pub fn menu_item(status: &Status) -> Option<(String, bool)> {
     match status.state {
         State::Available | State::Error => Some((format!("Update to {version}…"), true)),
         State::Downloading => Some(match status.progress {
-            Some(p) if p > 0.0 => (format!("Downloading kwant bots {version}… {}%", (p * 100.0).round() as u32), false),
-            _ => (format!("Downloading kwant bots {version}…"), false),
+            Some(p) if p > 0.0 => (format!("Downloading kwant {version}… {}%", (p * 100.0).round() as u32), false),
+            _ => (format!("Downloading kwant {version}…"), false),
         }),
-        State::Ready => Some(("Restarting kwant bots…".to_string(), false)),
+        State::Ready => Some(("Restarting kwant…".to_string(), false)),
         State::Idle | State::Checking => None,
     }
 }
@@ -235,12 +235,12 @@ mod tests {
         assert_eq!(menu_item(&status(State::Error, Some("0.1.2"), None)), Some(("Update to 0.1.2…".into(), true)), "retry");
         assert_eq!(
             menu_item(&status(State::Downloading, Some("0.1.2"), Some(0.0))),
-            Some(("Downloading kwant bots 0.1.2…".into(), false))
+            Some(("Downloading kwant 0.1.2…".into(), false))
         );
         assert_eq!(
             menu_item(&status(State::Downloading, Some("0.1.2"), Some(0.426))),
-            Some(("Downloading kwant bots 0.1.2… 43%".into(), false))
+            Some(("Downloading kwant 0.1.2… 43%".into(), false))
         );
-        assert_eq!(menu_item(&status(State::Ready, Some("0.1.2"), Some(1.0))), Some(("Restarting kwant bots…".into(), false)));
+        assert_eq!(menu_item(&status(State::Ready, Some("0.1.2"), Some(1.0))), Some(("Restarting kwant…".into(), false)));
     }
 }

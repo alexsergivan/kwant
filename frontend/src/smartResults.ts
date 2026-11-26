@@ -570,6 +570,57 @@ export interface DeskInfo {
   booking?: DeskBooking | null;
 }
 
+/** pa11b queue: one ticket on the host's list (Vega's host view `tickets`: waiting, called, and skipped ones still inside
+ * their 10-minute recall window). Times are RFC 3339 from the box's clock. `name` is a first name only when `ask_name`. */
+export interface QueueTicket {
+  number: number;
+  name: string | null;
+  state: 'waiting' | 'called' | 'skipped';
+  taken_at: string | null;
+  called_at: string | null;
+  /** Set only while called. */
+  call_ends_at: string | null;
+  /** Set only while skipped and still recallable. */
+  recall_until: string | null;
+}
+
+/**
+ * The queue card's view (pa11b). On the wire, block.queue is Vega's host view (`GET /api/pockets/:code` → `host_view`)
+ * plus the pocket's `join` (and `ended_at` once ended); in set-up it may be the spec alone. validQueue turns it into this.
+ */
+export interface QueueInfo {
+  /** "setup" while the bot is still setting it up (block state "writing"). */
+  state: 'setup' | 'open' | 'paused' | 'closed' | 'ended';
+  spec: { title: string; line: string | null; hours_until: string | null; call_minutes: number; ask_name: boolean; max_waiting: number; host_name: string | null };
+  pause_text: string | null;
+  close_text: string | null;
+  paused_at: string | null;
+  closed_at: string | null;
+  auto_closed: boolean;
+  closed_waiting: number;
+  /** "13:00" on the box's clock, or null: until the host closes it. */
+  hours_until: string | null;
+  now_serving: number | null;
+  next_number: number;
+  tickets: QueueTicket[];
+  summary: {
+    served_today: number;
+    skipped_today: number;
+    left_today: number;
+    waiting: number;
+    /** null until 3 calls today. */
+    avg_minutes: number | null;
+    longest_wait_minutes: number | null;
+    days: number;
+    served_total: number;
+    avg_total_minutes: number | null;
+  };
+  /** The box's clock when the view was made (RFC 3339): countdowns run against it, never the browser alone. */
+  now: string | null;
+  join: SantaInfo['join'];
+  ended_at: string | null;
+}
+
 /**
  * The wall kit's host facts on a Pocket card (pa14/card-impl.md "Shape I read"): Juno's host summary (#1139,
  * server-impl.md "Host view" without `limits`, `queue` and `wall`) plus display text the bot writes. Counts,
@@ -650,6 +701,8 @@ export interface PocketBlock extends BlockCommon<'pocket'> {
   gather?: GatherInfo | null;
   /** kit "desk" only (pa13): the front desk (Guest Guide). `state` is "writing" in set-up, "live", then "ended". */
   desk?: DeskInfo | null;
+  /** kit "queue" only (pa11b): the queue ticket host card. `state` is "writing" in set-up, "live", then "ended". */
+  queue?: QueueInfo | null;
   /** pa4c: the quiz_drafts id (the bot card's `id`) that Edit questions opens. Null or absent: no editor. */
   draft?: string | null;
   /** pa4c: questions the person wrote or changed themselves (not source-checked). */
