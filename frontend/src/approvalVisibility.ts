@@ -45,6 +45,13 @@ const SCROLL_KEYS: Record<string, 1 | -1> = { PageUp: 1, ArrowUp: 1, Home: 1, Pa
  * - touch: the finger moving down the screen scrolls up (dy is this touchmove's clientY minus the last one's);
  * - keys: PageUp/ArrowUp/Home (and Shift+Space) up; PageDown/ArrowDown/End/Space down. Not while typing.
  */
+/** chat-scroll-holds-place F1: the person's up-input stops following only when the chat can move up. One that
+ *  scrolls nothing (a chat shorter than the screen, or already at the top) makes no scroll event, so nothing would
+ *  turn following back on and the next reply would stream out of view. */
+export function inputStopsFollowing(dir: 'up' | 'down' | null, scrollTop: number): boolean {
+  return dir === 'up' && scrollTop > 0;
+}
+
 export function scrollIntent(
   e: { kind: 'wheel'; deltaY: number } | { kind: 'touch'; dy: number } | { kind: 'key'; key: string; shiftKey?: boolean; editable?: boolean },
 ): 'up' | 'down' | null {

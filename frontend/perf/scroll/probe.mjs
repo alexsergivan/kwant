@@ -8,7 +8,7 @@
 // touch, a held pointer, a scrolling key). The anchor message is picked again after each input.
 //
 // Usage (from frontend/, after `npx vite build --config perf/stream/vite.config.mts`):
-//   node perf/scroll/probe.mjs [--engine chromium|webkit|webkit-old] [--width 1280|390] [--scenario 1..6|all]
+//   node perf/scroll/probe.mjs [--engine chromium|webkit|webkit-old] [--width 1280|390] [--scenario 1..7|all]
 //                              [--stream on|off|both] [--dist perf/stream/dist] [--strip out.png] [--json out.json]
 // webkit-old is WebKit with scroll anchoring and 33q's content-visibility forced off, like an older Mac WebView
 // (the 33q rule only turns content-visibility on where `overflow-anchor` is supported).
@@ -143,7 +143,7 @@ function monitor() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-async function open(engine, width) {
+async function open(engine, width, n = N) {
   const phone = width < 500;
   const browser =
     engine === 'chromium'
@@ -162,7 +162,7 @@ async function open(engine, width) {
       s.textContent = css;
       document.addEventListener('DOMContentLoaded', () => document.head.appendChild(s));
     }, css);
-  await page.goto(`${base}/?n=${N}&mixed=1&paged=1`);
+  await page.goto(`${base}/?n=${n}&mixed=1&paged=1`);
   await page.waitForFunction(() => window.__harness?.ready() && window.__probe.scroller(), null, { timeout: 120000 });
   await sleep(1500);
   return { browser, page, phone, errors };
@@ -243,7 +243,7 @@ async function dragThumb(page, dyPx, steps = 10) {
 }
 const what = (page, w) => page.evaluate((w) => (window.__probe.what = w), w);
 
-// ---- the six scenarios. Each starts at the bottom of the chat, following it. ----
+// ---- the scenarios. Each starts at the bottom of the chat, following it. 1-6 read up; 7 has nothing to read. ----
 const SCENARIOS = {
   1: { name: 'wheel up: small steps (10-40 px), then big steps', run: async (page) => {
     await what(page, 'small');
@@ -323,6 +323,34 @@ const SCENARIOS = {
     await page.fill('textarea', '');
     await sleep(1500);
   } },
+  // F1 (Rigel): on a chat that fits the screen, an up-input scrolls nothing and makes no scroll event, so if it
+  // stops following nothing turns it back on and the next reply streams out of view.
+  7: { name: 'short chat: wheel up, a finger drag down, PageUp and Home scroll nothing; the reply is still followed', n: 1, follows: true, run: async (page, { engine, phone, streaming }) => {
+    const over = () => page.evaluate(() => { const sc = window.__probe.scroller(); return Math.round(sc.scrollHeight - sc.clientHeight); });
+    if ((await over()) > 0) return 'not short: the chat already scrolls';
+    // Streaming: the first reply has just started when the person swipes (the probe's long pre-stream would
+    // overflow a phone before the inputs land). Still: the reply starts after them.
+    // Slow enough (25 a second) that WebKit's slower inputs still land on a short chat.
+    const done = streaming ? page.evaluate(() => window.__harness.stream(400, 25)) : null;
+    await what(page, 'wheel');
+    await wheel(page, -200);
+    await sleep(200);
+    if (phone) { await what(page, 'touch'); await touchScroll(page, engine, -100); await sleep(200); }
+    await what(page, 'keys');
+    await page.evaluate(() => { const sc = window.__probe.scroller(); sc.tabIndex = -1; sc.focus({ preventScroll: true }); });
+    await page.keyboard.press('PageUp');
+    await page.keyboard.press('Home');
+    await sleep(200);
+    if (streaming && (await over()) > 0) return 'not short: the reply passed the fold before the inputs ended';
+    // From here the chat should follow the reply down: those moves are the point, not jumps.
+    await page.evaluate(() => (window.__probe.on = false));
+    await what(page, 'reply');
+    await (done ?? page.evaluate(() => window.__harness.stream(400, 80)));
+    await sleep(500);
+    const g = await page.evaluate(() => { const sc = window.__probe.scroller(); return { gap: Math.round(sc.scrollHeight - sc.scrollTop - sc.clientHeight), over: Math.round(sc.scrollHeight - sc.clientHeight) }; });
+    if (g.over <= 0) return 'reply never went past the fold';
+    return g.gap <= 2 ? '' : `not followed: the reply ran ${g.gap} px below the screen`;
+  } },
 };
 
 const runs = [];
@@ -332,24 +360,24 @@ for (const engine of ENGINES) {
     for (const streaming of STREAMS) {
       for (const k of which) {
         const sc = SCENARIOS[k];
-        const { browser, page, phone, errors } = await open(engine, width);
+        const { browser, page, phone, errors } = await open(engine, width, sc.n);
         let note = '';
         try {
-          if (streaming) {
+          if (streaming && !sc.n) {
             await page.evaluate(() => void window.__harness.stream(100000, 50));
             await sleep(1200);
           }
           await page.evaluate(() => Object.assign(window.__probe, { on: true, jumps: [], frames: 0, last: null, anchor: null, what: 'start' }));
           let strip = null;
           if (STRIP) strip = shoot(page, STRIP.replace(/\.png$/, `-${engine}-${width}-s${k}-${streaming ? 'stream' : 'still'}`));
-          note = (await sc.run(page, { engine, phone })) || '';
+          note = (await sc.run(page, { engine, phone, streaming })) || '';
           if (strip) await strip;
         } catch (e) {
           note = `error: ${String(e).split('\n')[0]}`;
         }
         const p = await page.evaluate(() => { const sc = window.__probe.scroller(); return { jumps: window.__probe.jumps, frames: window.__probe.frames, gap: Math.round(sc.scrollHeight - sc.scrollTop - sc.clientHeight) }; });
         // Every scenario ends away from the bottom (the person read up); 0 means the chat pulled them back down.
-        if (p.gap < 2) note = `${note ? `${note}; ` : ''}ended at the bottom: the chat pulled the reader back`;
+        if (p.gap < 2 && !sc.follows) note = `${note ? `${note}; ` : ''}ended at the bottom: the chat pulled the reader back`;
         await browser.close();
         const maxPx = p.jumps.reduce((m, j) => Math.max(m, Math.abs(j.dy)), 0);
         const r = { engine, width, scenario: Number(k), streaming, jumps: p.jumps.length, maxPx, frames: p.frames, note, errors: errors.slice(0, 3), first: p.jumps.slice(0, 6) };
@@ -361,7 +389,7 @@ for (const engine of ENGINES) {
 }
 server.close();
 if (JSON_OUT) fs.writeFileSync(JSON_OUT, JSON.stringify(runs, null, 1));
-const total = runs.reduce((s, r) => s + r.jumps + (/pulled|never loaded/.test(r.note) ? 1 : 0), 0);
+const total = runs.reduce((s, r) => s + r.jumps + (/pulled|never loaded|not followed|never went past|not short/.test(r.note) ? 1 : 0), 0);
 console.log(`total jumps: ${total} in ${runs.length} runs`);
 process.exit(total ? 1 : 0);
 

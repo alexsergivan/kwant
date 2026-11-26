@@ -112,7 +112,7 @@ import { IDEA_MAX, isIdeaCommand } from '../ideas';
 import { ideaBlockedLine, ideaLength } from '../ideaShell';
 import { JarIcon } from './JarIcon';
 import { consultedNames, hideStreamingDecisions, messageDecisions, parseWorkAhead } from '../decideFirst';
-import { approvalScrollAction, fullyVisible, holdPlaceBy, isAtBottom, isNearBottom, lazyRowsHold, nextFollowing, scrollIntent } from '../approvalVisibility';
+import { approvalScrollAction, fullyVisible, holdPlaceBy, inputStopsFollowing, isAtBottom, isNearBottom, lazyRowsHold, nextFollowing, scrollIntent } from '../approvalVisibility';
 import { approvalPillShows, stripStepsAside } from '../askHere';
 import { DecidingLine, DecisionChips, WorkAheadBody } from './Proactive';
 import { RouteChoiceMeta, parseRouteChoiceMeta, questionsOfReplies } from '../routeChoice';
@@ -1358,7 +1358,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const took = (dir: 'up' | 'down' | null) => {
       if (!dir) return;
       userScrollAtRef.current = performance.now();
-      if (dir === 'up') stickRef.current = false;
+      if (inputStopsFollowing(dir, el.scrollTop)) stickRef.current = false;
       jumpEndRef.current?.();
     };
     let touchY: number | null = null;

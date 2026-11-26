@@ -48,6 +48,16 @@ test('which way the person scrolls, seen from their input', () => {
   assert.equal(m.scrollIntent({ kind: 'key', key: 'a' }), null);
 });
 
+test('F1: an up-input that scrolls nothing (short chat, or at the top) keeps following', () => {
+  // A wheel up, finger drag down or PageUp/Home on a chat that fits the screen makes no scroll event, so nothing
+  // would turn following back on and the first reply streamed past the fold (Rigel, 1015 px gap).
+  assert.equal(m.inputStopsFollowing('up', 0), false, 'nothing above to move to');
+  assert.equal(m.inputStopsFollowing('up', 0.4), true, 'any room above: the scroll event follows');
+  assert.equal(m.inputStopsFollowing('up', 300), true);
+  assert.equal(m.inputStopsFollowing('down', 300), false);
+  assert.equal(m.inputStopsFollowing(null, 300), false);
+});
+
 test('holding the place: the reader’s message goes back where it was, unless the scroller itself moved', () => {
   assert.equal(m.holdPlaceBy({ top: 300, atScrollTop: 5000 }, { top: 449, scrollTop: 5000 }), 149, 'a row above settled 149 px taller');
   assert.equal(m.holdPlaceBy({ top: 300, atScrollTop: 5000 }, { top: 227, scrollTop: 5000 }), -73, 'a row above settled shorter');
@@ -70,7 +80,7 @@ test('lazy rows (33q) only where they hold still: not WebKit, even with scroll a
 test('ChatView stops following on the person’s own input, before the scroll it makes', () => {
   for (const ev of ['wheel', 'touchmove', 'pointerdown']) assert.match(chat, new RegExp(`el\\.addEventListener\\('${ev}'`), ev);
   assert.match(chat, /document\.addEventListener\('keydown', onKey/);
-  assert.match(chat, /if \(dir === 'up'\) stickRef\.current = false;/);
+  assert.match(chat, /if \(inputStopsFollowing\(dir, el\.scrollTop\)\) stickRef\.current = false;/, 'F1: only when the chat can move up');
   assert.match(chat, /jumpEndRef\.current\?\.\(\);/, 'their input ends a running jump without its late settle');
   assert.match(chat, /user: userScrolling\(\)/);
 });
