@@ -171,9 +171,9 @@ test('a task the engine guard blocked sits in Needs you and says what to do', ()
   });
   assert.equal(m.columnOfTask(blocked), 'needs_you');
   assert.equal(m.needsYouCount([blocked, task()]), 1);
-  assert.equal(m.cardStatus(blocked, names, NOW), 'Blocked: its engine can’t be held to its tier');
+  assert.equal(m.cardStatus(blocked, names, NOW), 'Blocked: its AI can’t be held to its tier');
   const t = text(ui.detail(detailProps(blocked)));
-  assert.match(t, /Engine can’t be sandboxed: Cody runs on an engine that can’t be held to a lower tier, so nothing ran\. Switch Cody to a Claude model, or set its tier for this kind of work to Act, then press Unblock\./);
+  assert.match(t, /Its AI can’t be sandboxed: Cody runs on an AI that can’t be held to a lower tier, so nothing ran\. Switch Cody to a Claude model, or set its tier for this kind of work to Act, then press Unblock\./);
 });
 
 // ---------------------------------------------------------------- the approval card

@@ -39,7 +39,7 @@ fn reply(result: Result<Status, Refused>) -> Response {
 
 /// Tells the person once per version that an update is out, through the usual notifications.
 /// Runs for the life of the server; only in the app that installs (a server's own "is ready, open
-/// kwant bots to update" would be wrong: there the card says how).
+/// kwant to update" would be wrong: there the card says how).
 pub fn spawn_notifier(state: AppState) {
     let mut rx = state.app_update.subscribe();
     tokio::spawn(async move {
@@ -74,8 +74,8 @@ pub async fn notify_once(state: &AppState, version: &str) -> bool {
             kwant_id: String::new(),
             kwant_name: "kwant".into(),
             channel_id: None,
-            title: format!("kwant bots {version} is ready"),
-            body: "Open kwant bots to update and restart.".into(),
+            title: format!("kwant {version} is ready"),
+            body: "Open kwant to update and restart.".into(),
             thread_id: None,
             card_id: None,
         },

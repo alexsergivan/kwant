@@ -3,7 +3,7 @@ import { Smartphone, X } from 'lucide-react';
 import { isAndroid, isIos } from '../pwa';
 import { dismissPhoneTip, phoneTipDismissed } from '../nav';
 
-// The desktop sidebar's way to "Use kwant bots on your phone" (PhoneAppCard, Settings › All spaces).
+// The desktop sidebar's way to "Use kwant on your phone" (PhoneAppCard, Settings › All spaces).
 // Apart from the card so the sidebar doesn't load the card's sign-in pieces.
 
 export const PHONE_APP_ANCHOR = 'phone-app';
@@ -44,7 +44,7 @@ export const PhoneAppTip: React.FC<{ className: string; onOpen: () => void }> = 
         >
           <Smartphone size={15} className="shrink-0 text-sky-400" aria-hidden="true" />
           {/* Wraps instead of truncating: the sidebar is ~240 px, and "on your phone" is the point of the tip. */}
-          <span className="flex-1 min-w-0 leading-snug">Tip: use kwant bots on your phone</span>
+          <span className="flex-1 min-w-0 leading-snug">Tip: use kwant on your phone</span>
         </button>
         <button
           type="button"

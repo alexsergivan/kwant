@@ -338,7 +338,7 @@ const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? o
 /** "In past runs: 2 outside actions, 1 workspace change; needed your OK twice." */
 export function pastText(p: DiscoveryPermissions['past'] | undefined): string {
   if (!p) return '';
-  const did = [p.external ? plural(p.external, 'outside action') : '', p.workspace ? plural(p.workspace, 'workspace change') : ''].filter(Boolean);
+  const did = [p.external ? plural(p.external, 'outside action') : '', p.workspace ? plural(p.workspace, 'file change') : ''].filter(Boolean);
   const ok = p.needed_ok ? `needed your OK ${p.needed_ok === 1 ? 'once' : p.needed_ok === 2 ? 'twice' : `${p.needed_ok} times`}` : 'never needed your OK';
   return did.length ? `In past runs: ${did.join(', ')}; ${ok}.` : `In past runs it changed nothing outside its chat, and ${ok}.`;
 }

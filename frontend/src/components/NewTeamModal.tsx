@@ -285,7 +285,7 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
           {/* Team Workspace */}
           <div>
             <label className="block text-xs font-medium text-zinc-400 mb-1.5">
-              Team Workspace
+              Team folder
             </label>
             <div className="grid grid-cols-3 gap-1.5 p-1 bg-zinc-950 rounded-lg border border-zinc-800 text-xs mb-2">
               <button
@@ -438,7 +438,7 @@ export const NewTeamModal: React.FC<NewTeamModalProps> = ({
 
             {workspaceType === 'default' && (
               <p className="text-[11px] text-zinc-500">
-                Uses the default shared workspace directory.
+                Uses kwant’s shared folder.
               </p>
             )}
           </div>

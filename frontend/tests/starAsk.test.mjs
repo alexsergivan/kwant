@@ -102,12 +102,12 @@ test('storage that throws never breaks the app', () => {
 
 test('the card and settings link open the repo in the browser, with no opener', () => {
   const html = s.card();
-  assert.match(html, /kwant bots run on coffee and GitHub stars/);
+  assert.match(html, /kwant runs on coffee and GitHub stars/);
   assert.match(html, /Star on GitHub/);
   assert.match(html, /Maybe later/);
   assert.match(html, /Don’t ask again/);
   assert.match(html, /href="https:\/\/github.com\/alexsergivan\/kwant" target="_blank" rel="noopener noreferrer"/);
   const link = s.settingsLink();
-  assert.match(link, /Star kwant bots on GitHub/);
+  assert.match(link, /Star kwant on GitHub/);
   assert.match(link, /rel="noopener noreferrer"/);
 });

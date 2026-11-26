@@ -100,7 +100,7 @@ test('a Composio connection is marked as storing its login on Composio’s serve
 
 test('the page groups rows, counts them, and offers Composio with where it keeps sign-ins', () => {
   const html = ui.view(viewProps({ onOpenTools: noop, onOpenAccounts: noop, onOpenLooseEnds: noop }));
-  for (const t of ['Connections', '2 connected · 2 need you', 'Tool servers (MCP)', 'Engine accounts', 'Saved website logins', 'Mail and GitHub (Loose ends)', 'Out of quota until 14:00', 'Open Loose ends', 'Optional connectors', 'Composio', 'Add Composio']) {
+  for (const t of ['Connections', '2 connected · 2 need you', 'Tool servers (MCP)', 'AI accounts', 'Saved website logins', 'Mail and GitHub (Loose ends)', 'Out of quota until 14:00', 'Open Loose ends', 'Optional connectors', 'Composio', 'Add Composio']) {
     assert.ok(html.includes(t), `page shows "${t}"`);
   }
   assert.ok(html.includes('data-composio-tile="new"'), 'Composio is the one-key tile (design.md §3)');
@@ -143,7 +143,7 @@ test('a locked vault hides saved logins and offers to unlock; loading, error and
 test('empty groups say so instead of leaving a gap', () => {
   const html = ui.view(viewProps({ data: list({ connections: [], catalog: [] }) }));
   assert.ok(html.includes('Nothing connected yet'));
-  for (const t of ['No tool servers yet.', 'No engine accounts yet.', 'No saved website logins.', 'No mail or GitHub sources.']) assert.ok(html.includes(t));
+  for (const t of ['No tool servers yet.', 'No AI accounts yet.', 'No saved website logins.', 'No mail or GitHub sources.']) assert.ok(html.includes(t));
   // 0.7.8: Telegram lives in Optional connectors, so that group shows even on an empty page.
   assert.ok(html.includes('Optional connectors') && html.includes('data-catalog="telegram"'));
 });
@@ -232,7 +232,7 @@ test('the add list offers tool server, engine account and Composio, each only wh
   assert.match(html, /aria-expanded="true"/);
   assert.ok(html.includes('aria-label="Add a connection"'));
   for (const key of ['mcp', 'account', 'composio']) assert.ok(html.includes(`data-add-choice="${key}"`), key);
-  for (const t of ['Tool server (MCP)', 'Engine account', 'App via Composio']) assert.ok(html.includes(t), t);
+  for (const t of ['Tool server (MCP)', 'AI account', 'App via Composio']) assert.ok(html.includes(t), t);
 
   const keys = (links, composio) => ui.addChoices(links, composio).map((c) => c.key);
   assert.deepEqual(keys({ onOpenTools: noop, onOpenAccounts: noop }, noop), ['mcp', 'account', 'composio']);

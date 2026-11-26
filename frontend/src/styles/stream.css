@@ -242,41 +242,51 @@
   --kw-wa-name: #1d1840;
 }
 
-/* The bubble body keeps this height while the reply is live, so the first words land without a jump. */
-.kw-wa-hold { min-height: 62px; }
-
+/* 36d (working-scene/design.md §2): the scene is the one working status. The bubble is the card; the bot sits
+   on a dark stage tile, like every other kwant pixel creature, with line 1 (what it does) and line 2 (clock, Steps)
+   beside it. On a phone the stage is smaller and line 2 runs under both. Nothing here moves. */
 .kw-wa {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  height: 62px;
-  animation: kw-wa-swap 150ms var(--kw-ease, cubic-bezier(0.2, 0.7, 0.2, 1)) both;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  align-content: center;
+  column-gap: 14px;
+  row-gap: 2px;
+  padding: 12px 14px;
 }
-.kw-wa[hidden] { display: none; }
+.kw-wa-stage {
+  grid-row: 1 / span 2;
+  display: grid;
+  place-items: center;
+  width: 120px;
+  height: 64px;
+  border-radius: 10px;
+  background: var(--kw-surface-main);
+  box-shadow: inset 0 0 0 1px var(--kw-hairline);
+}
 .kw-wa-scene { flex: none; display: block; width: 108px; height: 54px; shape-rendering: crispEdges; image-rendering: pixelated; }
-.kw-wa-text {
-  margin: 0;
-  min-width: 0;
-  font-size: 14px;
-  line-height: 22px;
-  color: var(--kw-wa-text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.kw-wa-name { color: var(--kw-wa-name); font-weight: 500; }
-/* 16b: an audit turn says whose work it double-checks. The line wraps (it is a sentence, not a name),
-   so the scene grows past 62 px instead of cutting it off, and "Open the task" sits under it. */
-.kw-wa[data-audit] { height: auto; min-height: 62px; }
-.kw-wa-audit { white-space: normal; overflow: visible; }
-.kw-wa-audit p { margin: 0; overflow-wrap: anywhere; }
+.kw-wa-now { margin: 0; align-self: end; }
+.kw-wa-meta { align-self: start; font-size: 12px; line-height: 16px; }
+.kw-wa-card[data-phone] .kw-wa { padding: 12px 12px 4px; column-gap: 12px; row-gap: 4px; }
+.kw-wa-card[data-phone] .kw-wa-stage { grid-row: 1; width: 84px; height: 46px; border-radius: 8px; }
+.kw-wa-card[data-phone] .kw-wa-scene { width: 72px; height: 36px; }
+.kw-wa-card[data-phone] .kw-wa-now { align-self: center; }
+.kw-wa-card[data-phone] .kw-wa-meta { grid-column: 1 / -1; font-size: 13px; line-height: 18px; }
+/* Mira 36d fix 2: the row is the 44 px Steps target's height before the first step too, so the card never grows. */
+.kw-wa-card[data-phone] .kw-wa-meta { min-height: 44px; }
+/* Mira 36d fix 4: the phone meta row is 13 px throughout (Watch only inside the scene). */
+.kw-wa-card[data-phone] .kw-wa-open,
+.kw-wa-card[data-phone] .kw-wa-meta [data-watch-button] { font-size: 13px; line-height: 18px; }
+.kw-wa-lead { padding: 0 14px 10px; }
+/* B · writing: the words stream under the scene, behind the hairline; the scene never swaps out (no kw-wa-hold). */
+.kw-wa-words { padding: 12px 14px; }
+@media (min-width: 640px) { .kw-wa-words { padding: 16px 20px; } }
 .kw-wa-open {
-  margin-top: 2px;
   padding: 0;
   border: 0;
   background: none;
   font: inherit;
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 500;
   color: #b8adff;
   text-decoration: underline;
@@ -287,7 +297,6 @@
 .kw-wa-open:hover { color: #d6d0ff; }
 .kw-wa-open:focus-visible { outline: 2px solid #b8adff; outline-offset: 2px; }
 [data-theme="light"] .kw-wa-open { color: #5b4bc4; }
-.kw-wa-dots { display: inline-block; width: 1.1em; }
 
 /* 32e: the live bubble fades in as one piece with what is inside it, so its frame never shows empty. */
 @keyframes kw-wa-in { from { opacity: 0; } to { opacity: 1; } }
@@ -352,8 +361,7 @@
 .kw-wa-s2 { animation: kw-wa-s2 7.2s linear infinite; }
 .kw-wa-s3 { animation: kw-wa-s3 7.2s linear infinite; }
 
-/* Reduced motion: the resting frame. Lines full, paw down, no spark, no bob, dots still ("…"). */
+/* Reduced motion: the resting frame. Lines full, paw down, no spark, no bob, no fade-in. */
 @media (prefers-reduced-motion: reduce) {
-  .kw-wa, .kw-wa-in, .kw-live-in, .kw-wa-scene *, .kw-wa-dots > * { animation: none !important; }
-  .kw-wa-dots > * { opacity: 0.8; }
+  .kw-wa-in, .kw-live-in, .kw-wa-scene * { animation: none !important; }
 }
