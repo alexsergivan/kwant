@@ -222,7 +222,10 @@ pub(super) async fn run_test(state: &AppState, stored: &McpServer) -> Value {
     }
     let mut outcome = match result {
         Ok((server_info, tools)) => json!({ "ok": true, "server_info": server_info, "tools": tools }),
-        Err((McpError::Unauthorized { .. }, _)) if token_use != TokenUse::UserHeader => {
+        // A sign-in kwnt holds was refused, or a server with no key wants one: sign in. A key the
+        // person saved (an Authorization or other key header) that was refused is a plain error
+        // naming the key (sign-in-wall-uses-tools E): there's no sign-in to do for it
+        Err((McpError::Unauthorized { key, .. }, _)) if token_use == TokenUse::Injected || (token_use == TokenUse::None && !key) => {
             if token_use == TokenUse::Injected {
                 // Still rejected after a refresh: the sign-in is no longer valid
                 let _ = state.db.delete_mcp_oauth_token(id).await;

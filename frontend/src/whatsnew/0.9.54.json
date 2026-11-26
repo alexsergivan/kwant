@@ -1,0 +1,26 @@
+{
+  "version": "0.9.54",
+  "date": "2026-11-26",
+  "highlights": [
+    {
+      "id": "first-bot-opens-general",
+      "title": "Your first bot opens #general",
+      "text": "Make a space's first bot and #general opens with it, as the Get started checklist says. Later bots open their own chat. On a phone, #general opens while Get started is there.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "space-icons-2",
+      "title": "24 space icons, and a holo edge on your pick",
+      "text": "The space icon picker now has 24 pixel icons, from coffee to code. The one you pick gets a holographic edge, and the preview shines once when you change the icon or colour.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Get started in your main space now names the starter bots you actually have.",
+    "Saying hi to a team, like \"hi team!\", gets one short hello instead of a reply from every bot.",
+    "The README names the starter bots a fresh install really has: Assistant, Researcher and Writer.",
+    "Smart results no longer show a \"From this reply\" label that looked like a button but did nothing."
+  ]
+}

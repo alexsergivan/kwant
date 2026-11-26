@@ -76,7 +76,7 @@ pub struct PocketCounts {
     pub removed: i64,
 }
 
-const POCKET_COLS: &str = "code, kit, title, spec, kit_state, state, version, owner_kwant_id, opens_at, closes_at, \
+pub(crate) const POCKET_COLS: &str = "code, kit, title, spec, kit_state, state, version, owner_kwant_id, opens_at, closes_at, \
     ended_at, expires_at, host_key_hash, created_at";
 const PLAYER_COLS: &str = "pocket_code, id, name, name_key, avatar, team, pin_hash, pin_salt, wrong_tries, \
     total_wrong, locked_until, pin_locked, last_wrong_at, reset_code_hash, reset_expires_at, pin_reset_at, \

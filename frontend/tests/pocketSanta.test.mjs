@@ -438,3 +438,41 @@ test('Santa avatar: a picker style, green with the knit hat; guests get the crea
   assert.equal(m.guestCreature('horns').accessory, 'horns');
   assert.equal(m.guestCreature('nope').accessory, m.guestCreature('antenna').accessory, 'unknown falls back to antenna');
 });
+
+// santa-create-from-chat: the block the server attaches to the reply of a turn that called santa_create
+// (smart_results/pocket.rs santa_block + santa_tool::card), field for field as serde writes it: every quiz part
+// null or empty, the card in `santa`, the join inside it. The chat draws it as is.
+const serverSanta = (santa, state = 'live') => ({
+  id: 'b0', type: 'pocket', title: null, source: { kind: 'slot' }, provenance: { kind: 'kwant_data', ref: 'pocket:AB12CD' },
+  code: 'AB12CD', kit: 'santa', name: 'Team Secret Santa', when: '£20 each · gifts on Fri, Dec 18 · reveal at 7 PM', state,
+  paused: false, progress: null, rounds: [], checks: null, dry_run: null, eta: null, opens_line: null, live: null, join: null,
+  ended: null, budget: null, results: null, draft: null, yours: null,
+  santa: {
+    phase: 'collecting', joined: 0, expected: 6, waiting_for: ['Anna', 'Ben', 'Chloe', 'Dev', 'Erin', 'Femi'], people: [],
+    looked: null, gifts_ready: null, asks_asked: null, asks_answered: null, keep_apart: [['Anna', 'Ben']],
+    draw_rule: 'when all 6 are in', drawn_at: null, reveal: 'scheduled', reveal_at: '7 PM', revealed_at: null,
+    deletes_on: 'Fri, Jan 15', ended_on: null, can_draw: false, blocked: 'Waiting for at least 3 people.',
+    join: { mode: 'wifi', anywhere_kind: null, anywhere_url: null, wifi_url: 'http://192.168.1.20:7480/p/AB12CD' },
+    ...santa,
+  },
+});
+
+test('santa_create: the block the server sends after "make us a Secret Santa" is one the chat draws', () => {
+  const b = m.validPocket(serverSanta({}));
+  assert.ok(b, 'collecting card passes');
+  assert.equal(b.kit, 'santa');
+  assert.equal(m.findMatchLike(serverSanta({})), null);
+  const people = ['Anna', 'Ben', 'Chloe', 'Dev', 'Erin', 'Femi'].map((name, i) => ({ id: `p${i + 1}`, name, avatar: null, looked: false, gift_ready: false }));
+  const drawn = serverSanta({ phase: 'drawn', joined: 6, waiting_for: [], people, looked: 0, gifts_ready: 0, asks_asked: 0, asks_answered: 0, draw_rule: null, drawn_at: 'Thu, Dec 3 at 6 PM', can_draw: false, blocked: null });
+  assert.ok(m.validPocket(drawn), 'drawn card passes');
+  // No join at all (no address set up yet) still draws
+  assert.ok(m.validPocket(serverSanta({ join: null })));
+  // An ended Santa is ended on both sides, with no join
+  assert.ok(m.validPocket(serverSanta({ phase: 'ended', join: null, ended_on: 'Dec 19' }, 'ended')));
+  // The rules the server mirrors: state follows the phase, no top-level join, no quick tunnel, no match anywhere
+  assert.equal(m.validPocket(serverSanta({}, 'ended')), null);
+  assert.equal(m.validPocket({ ...serverSanta({}), join: { mode: 'anywhere', wifi_url: null, anywhere_url: null, quick_tunnel: false } }), null);
+  assert.equal(m.validPocket(serverSanta({ join: { mode: 'anywhere', anywhere_kind: 'https', anywhere_url: 'https://x.trycloudflare.com/p/AB12CD', wifi_url: null } })), null);
+  assert.equal(m.validPocket(serverSanta({ people: [{ ...people[0], gives_to: 'Ben' }], joined: 1 })), null);
+  assert.equal(m.validPocket({ ...serverSanta({}), kit: 'quiz' }), null);
+});
