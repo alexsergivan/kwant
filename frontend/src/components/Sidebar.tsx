@@ -719,6 +719,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
         data-pin-row={pin ? k.id : undefined}
         data-rank={att?.rank}
         data-chat-row={chat ? (asked ? 'needs' : 'bot') : undefined}
+        // Living avatars: blinks only in the list; hovering the row makes its avatar glance
+        data-life-row=""
         className={`group/fleet relative w-full flex items-center gap-2.5 px-2 ${chat ? 'min-h-14 py-2' : 'py-1.5'} rounded-xl text-left transition-colors ${
           active ? 'bg-accent-soft text-zinc-50 shadow-card border border-sky-300/25' : 'text-zinc-300 hover:text-zinc-50 hover:bg-white/[0.05] border border-transparent'
         }`}
@@ -736,7 +738,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           className="absolute inset-0 rounded-xl cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-400 data-[arrived]:outline data-[arrived]:outline-2 data-[arrived]:outline-sky-400"
         />
         <span className="shrink-0" title={avatarStatusTitle}>
-          <ModernAvatar role={k.avatar_sprite} name={k.name} size={chat ? 32 : 28} status={status} kwantId={k.id} />
+          <ModernAvatar role={k.avatar_sprite} name={k.name} size={chat ? 32 : 28} status={status} kwantId={k.id} life="list" />
         </span>
         <div className="flex-1 min-w-0">
           {/* The name line never changes on hover: padding it here made the name wrap and the row jump */}

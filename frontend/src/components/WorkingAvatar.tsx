@@ -96,7 +96,7 @@ export const WorkingAvatar: React.FC<WorkingAvatarProps> = ({ name, audit, live,
           <svg className="kw-wa-scene" viewBox="0 0 36 18" width={36 * cell} height={18 * cell} aria-hidden="true" focusable="false" data-glyph={glyph ? 'command' : 'lines'}>
             <rect x={1} y={17} width={35} height={1} fill="var(--kw-wa-ground)" />
             <g transform="translate(-5 -2)">
-              <g className="kw-wa-bob">{renderCreature(c).filter((r) => r.key !== 'shadow')}</g>
+              <g className="kw-wa-bob">{renderCreature(c, { mood: 'working' }).filter((r) => r.key !== 'shadow')}</g>
             </g>
             <rect x={14} y={16} width={22} height={1} fill="var(--kw-wa-edge)" />
             <rect x={15} y={15} width={20} height={1} fill="var(--kw-wa-deck)" />

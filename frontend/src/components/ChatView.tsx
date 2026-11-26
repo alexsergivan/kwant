@@ -20,6 +20,8 @@ import { BotHome } from './BotHome';
 import { accountCardShows } from '../firstScreen';
 import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine } from '../botHome';
 import { moodNoticed } from '../kwantMood';
+import { perkBot } from '../avatarLife';
+import { newestReplyIds } from '../avatarFaces';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, SM_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
@@ -617,6 +619,8 @@ const MessageRows = React.memo(
   },
   (a, b) => a.draw === b.draw && a.deps.length === b.deps.length && a.deps.every((v, i) => Object.is(v, b.deps[i])),
 );
+
+
 
 export const ChatView: React.FC<ChatViewProps> = ({
   heldNotes,
@@ -1920,8 +1924,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
       void (sent as Promise<boolean | void>).then((ok) => {
         if (ok === false) setReplyTo((now) => now ?? replying);
       });
-    // The bots this goes to blink once, so you see who received it.
-    recipientsOf(inputVal, activeKwants, home?.kind === 'bot' ? home.bot?.id : undefined).forEach(moodNoticed);
+    // The bots this goes to blink once, so you see who received it. The bot whose chat this is also perks up
+    // (living avatars: wide eyes, "o", one hop on its live avatars); an @mentioned bot keeps the plain blink.
+    const directId = home?.kind === 'bot' ? home.bot?.id : undefined;
+    recipientsOf(inputVal, activeKwants, directId).forEach(moodNoticed);
+    if (directId) perkBot(directId);
     setInputVal('');
     setUploads([]);
     setUploadNote(null);
@@ -2106,6 +2113,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [endedTrials, setEndedTrials] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => onContinuity('trial_ended', (t) => setEndedTrials((prev) => (prev.has(t.skill_id) ? prev : new Set(prev).add(t.skill_id)))), []);
   const trialCards = useMemo(() => trialCardsAfter(messages, endedTrials), [messages, endedTrials]);
+  // Living avatars: only each bot's newest reply row shows its mood face; older rows keep the plain face (reading stays calm).
+  const newestReplies = useMemo(() => newestReplyIds(messages), [messages]);
 
   // `prev`: the message shown just above, so a kwant line under another sits close to it (0.9.5 F5)
   const renderMessage = (msg: ChatMessage, prev?: ChatMessage) => {
@@ -2366,6 +2375,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 size={REPLY_AVATAR}
                 kwantId={replyKwantId}
                 modelBadge={false}
+                face={newestReplies.has(msg.id) ? 'mood' : 'plain'}
               />
             ) : null}
           </span>
@@ -2386,7 +2396,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               name={displayName}
               at={msg.created_at}
               sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
-              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
+              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} face={newestReplies.has(msg.id) ? 'mood' : 'plain'} /></span>}
               ranOn={ranOn}
               account={account}
               effort={effortWords(msg.reasoning_content)}
@@ -2996,7 +3006,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </button>
         )}
         {home?.kind === 'bot' && home.bot && (
-          <ModernAvatar role={home.bot.avatar_sprite} name={home.bot.name} size={phone ? (kbd ? 28 : 32) : 34} kwantId={home.bot.id} className="rounded-xl" />
+          <ModernAvatar role={home.bot.avatar_sprite} name={home.bot.name} size={phone ? (kbd ? 28 : 32) : 34} kwantId={home.bot.id} className="rounded-xl" life="header" />
         )}
         <div className="min-w-0 flex-1">
           <h2
