@@ -26,6 +26,9 @@ const m = await loadBundled(`
   export { INBOX_FIXTURE_EMPTY } from './src/api/inbox';
   export { itemLabel } from './src/away';
   export { busyLines } from './src/botStatus';
+  export * as ws from './src/workingStrip';
+  export { onlyAskOpen, stepWaitFlags } from './src/waitingState';
+  export { needsYouRows } from './src/chatsTab';
 `);
 const { React, h, ask } = m;
 const el = React.createElement;
@@ -241,4 +244,34 @@ test('Tools opens on the server row: by id, else one unique name, else the list 
   assert.equal(m.focusedServerId(servers, { id: null, name: 'GitHub', seq: 1 }), 'mcp-7');
   assert.equal(m.focusedServerId(servers, { id: 'gone', name: 'notion', seq: 1 }), null, 'two named alike: no guess');
   assert.equal(m.focusedServerId(servers, null), null);
+});
+
+test('Rigel F1: a turn paused on a Tools step is a step wait in Tools words, never the question layout', () => {
+  const turns = [{ turn_id: 't9', state: 'running' }];
+  const none = new Set();
+  const f = m.stepWaitFlags(turns, new Set(['t9']), none, new Set(['t9']));
+  assert.deepEqual(f, { answer: true, step: true, tools: true });
+  const st = { awaitingAnswer: f.answer, awaitingBrowser: f.step, awaitingTools: f.tools };
+  assert.equal(m.ws.workingLabel(st), 'waiting for you in Tools');
+  assert.equal(m.ws.waitingOn(st), null, 'no "Answer ↑" on the phone strip');
+  assert.equal(m.ws.liveBubble(st), 'browser', 'the step bubble, not the question one');
+  assert.equal(m.onlyAskOpen({ ...st, streaming: true }), false, 'not the question-only layout');
+  // guards: a browser step, a question, a browser and a Tools step together, and a turn still working
+  const b = m.stepWaitFlags(turns, new Set(['t9']), new Set(['t9']), none);
+  assert.deepEqual(b, { answer: true, step: true, tools: false });
+  assert.equal(m.ws.workingLabel({ awaitingAnswer: true, awaitingBrowser: true, awaitingTools: false }), 'waiting for you in the browser');
+  assert.deepEqual(m.stepWaitFlags(turns, new Set(['t9']), none, none), { answer: true, step: false, tools: false });
+  assert.equal(m.ws.workingLabel({ awaitingAnswer: true }), 'waiting for your answer');
+  const two = [{ turn_id: 't1', state: 'running' }, { turn_id: 't9', state: 'running' }];
+  assert.deepEqual(m.stepWaitFlags(two, new Set(['t1', 't9']), new Set(['t1']), new Set(['t9'])), { answer: true, step: true, tools: false });
+  assert.deepEqual(m.stepWaitFlags(two, new Set(['t9']), none, new Set(['t9'])), { answer: false, step: false, tools: false });
+  assert.deepEqual(m.stepWaitFlags([], none, none, none), { answer: false, step: false, tools: false });
+});
+
+test('Rigel N3: the Chats tab fallback line says Tools when all of a bot\u2019s open steps are Tools fixes', () => {
+  const all = new Set(['arch', 'pix']);
+  const rows = m.needsYouRows([], { arch: 1, pix: 2 }, all, { arch: 1, pix: 1 });
+  assert.equal(rows.find((r) => r.kwant_id === 'arch').line, 'Needs you in Tools');
+  assert.equal(rows.find((r) => r.kwant_id === 'pix').line, 'Needs you in the browser', 'mixed stays browser');
+  assert.equal(m.needsYouRows([], { arch: 1 }, all)[0].line, 'Needs you in the browser', 'no Tools map: as before');
 });

@@ -32,7 +32,7 @@ import { StarAsk } from './components/StarAsk';
 import { starAskStore } from './starAsk';
 import { LiveActivity, appendThinking, applyActivity, parseStep, seedActivity } from './activity';
 import { liveNamingOrder, namesToFill } from './workingStrip';
-import { doneLines } from './waitingState';
+import { doneLines, stepWaitFlags } from './waitingState';
 import { botOf } from './sharedFiles';
 import {
   HumanStep,
@@ -3891,8 +3891,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const browserTurns = turnsAwaitingStep(humanSteps, false);
   const toolsTurns = turnsAwaitingStep(humanSteps, true);
   const awaitingTurns = new Set([...turnsAwaitingAnswer(questions), ...browserTurns, ...toolsTurns]);
-  const awaitingHere = openTurns.some((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) && !openTurns.some((t) => t.state === 'running' && !awaitingTurns.has(t.turn_id));
-  const awaitingBrowserHere = awaitingHere && openTurns.some((t) => t.state === 'running' && browserTurns.has(t.turn_id));
+  // A Tools step is a step wait too (never the question layout); awaitingToolsHere only changes its words (Rigel F1).
+  const { answer: awaitingHere, step: awaitingBrowserHere, tools: awaitingToolsHere } = stepWaitFlags(openTurns, awaitingTurns, browserTurns, toolsTurns);
   // The bot whose question the chat waits on, for the waiting banner (UX audit #2).
   const awaitingTurnHere = awaitingHere ? openTurns.find((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) : undefined;
   const awaitingBotHere = awaitingTurnHere ? { id: awaitingTurnHere.kwant_id, name: kwants.find((k) => k.id === awaitingTurnHere.kwant_id)?.name ?? '' } : null;
@@ -4395,7 +4395,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const attention = awayDone
     ? attentionRows({
         kwants,
-        needs: needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))),
+        needs: needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id)), needsYouToolsByKwant),
         failed: awayFailed,
         finished: awayDone.finished,
         busy: busyKwants,
@@ -4463,7 +4463,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       botStatus={botStatus}
       needsYou={needsYouByKwant}
       needsYouTools={needsYouToolsByKwant}
-      needsYouRows={isPhone && section === 'chats' ? needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))) : undefined}
+      needsYouRows={isPhone && section === 'chats' ? needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id)), needsYouToolsByKwant) : undefined}
       attention={attention}
       onOpenNeedsYou={(row) => {
         // A question or approval opens its chat (or thread) on the card; a browser step, the bot's chat.
@@ -4937,6 +4937,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onSendToOtherBot={openThreadId ? undefined : handleSendToOtherBot}
           awaitingAnswer={awaitingHere}
           awaitingBrowser={awaitingBrowserHere}
+          awaitingTools={awaitingToolsHere}
           awaitingBot={awaitingBotHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
           liveAudit={liveAudit}

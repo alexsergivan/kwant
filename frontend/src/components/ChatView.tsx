@@ -457,6 +457,8 @@ export interface ChatViewProps {
   awaitingAnswer?: boolean;
   /** …and the pause is a browser step (sign-in, CAPTCHA) rather than a question. */
   awaitingBrowser?: boolean;
+  /** 0.9.55: the step wait is a Tools fix (with awaitingBrowser): Tools words instead of browser ones. */
+  awaitingTools?: boolean;
   /** The bot whose question the open chat's turn waits on (its id and name), for the waiting banner. */
   awaitingBot?: { id: string; name: string } | null;
   /** The running reply's steps so far (thinking, tools, waits). */
@@ -731,6 +733,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   recheckingEngines,
   awaitingAnswer,
   awaitingBrowser,
+  awaitingTools,
   awaitingBot,
   liveActivity,
   liveAudit,
@@ -1233,6 +1236,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       queued={!!queued}
       awaitingAnswer={!!awaitingAnswer}
       awaitingBrowser={!!awaitingBrowser}
+      awaitingTools={!!awaitingTools}
       writing={writing}
       // 22i: one ask gets one button. While the Needs-you strip shows it, the strip's Go to … is that button.
       onAnswer={needsYouOpen ? undefined : showWaitingCard}
@@ -3118,7 +3122,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 ) : (awaitingAnswer || bubble === 'approval') && !phone ? (
                   <span className="inline-flex items-center gap-1 text-amber-300 text-[10px]">
                     <span className="w-1.5 h-1.5 rounded-full bg-amber-300" aria-hidden="true" />
-                    {bubble === 'approval' ? 'Waiting for your OK' : awaitingBrowser ? 'Waiting for you in the browser' : 'Waiting for your answer'}
+                    {bubble === 'approval' ? 'Waiting for your OK' : awaitingBrowser ? (awaitingTools ? 'Waiting for you in Tools' : 'Waiting for you in the browser') : 'Waiting for your answer'}
                   </span>
                 ) : discussionState?.inProgress ? (
                   <span className="inline-flex items-center gap-1 text-sky-400 text-[10px]">
@@ -3178,7 +3182,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   <StreamPart stream={stream} part="text" onGrow={onStreamGrow} />
                 ) : awaitingAnswer ? (
                   <p className="text-zinc-400" role="status">
-                    {awaitingBrowser
+                    {awaitingBrowser && awaitingTools
+                      ? 'Paused on the Tools step above. Open Tools and fix it, then press Done on the card; this reply carries on from it.'
+                      : awaitingBrowser
                       ? 'Paused on the browser step above. Do it in the browser panel and press Done; this reply carries on from it.'
                       : 'Paused on the question above. Answer it there; this reply carries on from it.'}
                   </p>

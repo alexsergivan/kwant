@@ -488,7 +488,8 @@ export const McpServersModal: React.FC<McpServersModalProps> = ({ isOpen, onClos
   }, [refresh, runTest]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    // Closed: the next open waits for its own list, so a Tools row is never looked for in this one's (Rigel F2)
+    if (!isOpen) return setListFresh(false);
     setEditing(null);
     setPicking(startAdding);
     setConfirmDelete(null);
