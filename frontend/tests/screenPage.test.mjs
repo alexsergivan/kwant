@@ -244,7 +244,7 @@ test('reduced motion: no drop-in, no twinkle, no reorder slide', async () => {
 
 test('the screen signs in once with its token, then only reads host/state?view=screen and ws?view=screen; never a host write', async () => {
   const t = await open('question');
-  assert.deepEqual(t.calls[0], { at: t.calls[0].at, method: 'POST', path: 'host/signin', body: { key: 'tok-1' } });
+  assert.deepEqual(t.calls[0], { at: t.calls[0].at, method: 'POST', path: 'host/signin', body: { token: 'tok-1' } });
   assert.equal(t.sockets[0].url, 'ws://localhost:8790/api/pocket/screen-question/ws?view=screen');
   t.sockets[0].onopen();
   // The socket drops: the screen asks state, gets it, opens again.
@@ -279,7 +279,7 @@ test('no WebSocket: the screen polls host/state?view=screen&since=', async () =>
 
 test('the fake box refuses any host write from a screen session (403 screen_only) and records it', () => {
   const box = new ScreenBox('screen-question');
-  assert.equal(box.handle('host/signin', { key: 'x' }, { method: 'POST' }).status, 200);
+  assert.equal(box.handle('host/signin', { token: 'x' }, { method: 'POST' }).status, 200);
   for (const w of ['host/action', 'host/next', 'host/pause', 'host/end']) assert.equal(box.handle(w, {}, { signed: true, method: 'POST' }).status, 403);
   assert.equal(box.writes.length, 4);
 });
@@ -476,13 +476,13 @@ test('sign-in 429 slow_down retries on the backoff with the same token instead o
   assert.equal(t.screen(), 'lobby');
   const ins = t.calls.filter((c) => c.path === 'host/signin');
   assert.equal(ins.length, 3);
-  assert.ok(ins.every((c) => c.body.key === 'tok-1'));
+  assert.ok(ins.every((c) => c.body.token === 'tok-1'));
   t.app.gone(401);
 });
 
 test('the fake uses the real v1.1 messages for a used link and a screen-only refusal', () => {
   const b = new ScreenBox('screen-expired');
-  assert.equal(b.handle('host/signin', { key: 'x' }, { method: 'POST' }).body.message, 'This link was already used or is too old. Open a new one from the card.');
+  assert.equal(b.handle('host/signin', { token: 'x' }, { method: 'POST' }).body.message, 'This link was already used or is too old. Open a new one from the card.');
   const c = new ScreenBox('screen-lobby');
   assert.equal(c.handle('host/next', {}, { method: 'POST', signed: true }).body.message, 'This screen can only show the game.');
 });

@@ -694,7 +694,7 @@ for (const name of order) {
     results.screen[scene] = { screen, scale: mm.s, stage: mm.box };
     const b = fake.box(code);
     if (b.writes?.length) problems.push(`${file}: the screen called a host write: ${b.writes.join(', ')}`);
-    if (scene !== 'away' && scene !== 'expired' && !(b.signins?.length === 1 && b.signins[0].key === `tok-${scene}`)) problems.push(`${file}: signed in ${JSON.stringify(b.signins)}`);
+    if (scene !== 'away' && scene !== 'expired' && !(b.signins?.length === 1 && b.signins[0].token === `tok-${scene}`)) problems.push(`${file}: signed in ${JSON.stringify(b.signins)}`);
     await ctx.close();
   }
   // A new player drops in on the live lobby (ws push); a reload of the tab stays a screen (cookie, no token).

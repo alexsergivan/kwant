@@ -7,7 +7,7 @@ import { JSDOM } from 'jsdom';
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { gzipSync } from 'node:zlib';
 import { loadBundled } from './bundle.mjs';
-import { scenarios, order, CSP, FakeBox, envelope } from '../guest/fake/views.mjs';
+import { scenarios, order, CSP, FakeBox, EngineBox, quizViews, envelope } from '../guest/fake/views.mjs';
 
 const dom = new JSDOM('<!doctype html><html><body><div id="app"></div></body></html>', { url: 'http://localhost/p/join', pretendToBeVisual: true });
 const g = globalThis;
@@ -18,7 +18,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInputEle
 
 const m = await loadBundled(`
   export { GuestApp, privacyLine, day } from './guest/src/app';
-  export { BACKOFF, backoff, codeFrom, fromState, retentionFrom } from './guest/src/api';
+  export { BACKOFF, backoff, codeFrom, fromState, quizPhone, retentionFrom } from './guest/src/api';
   export * as art from './guest/src/art';
 `);
 const settle = () => new Promise((r) => setTimeout(r, 0));
@@ -28,12 +28,12 @@ const flush = async () => {
 const clone = (v) => (v && typeof v === 'object' ? JSON.parse(JSON.stringify(v).replaceAll('/CODE/', '/t/')) : v);
 
 /** A fake box (pa1's guest API, from views.mjs) and a hand-driven clock. */
-function harness(name, { ws = false, overrides = {} } = {}) {
+function harness(name, { ws = false, overrides = {}, box: given } = {}) {
   const calls = [];
   let now = 1_000_000;
   let timers = [];
   let nextId = 1;
-  const box = new FakeBox(name, { code: 't', overrides });
+  const box = given ?? new FakeBox(name, { code: 't', overrides });
   box.up = true;
   box.actionReply = null;
   const fetch = async (url, init = {}) => {
@@ -123,7 +123,7 @@ const expect = {
   ended: ['ended', ['This quiz has ended', 'Quizzly Bears won with 3,420 points. Thanks for playing!', 'Your name and answers are deleted on Fri, Dec 4.']],
   choice: ['question', ['1994', '1996', '1998', '2000', 'Tap one. Your first tap counts.']],
   text: ['question', ['What is the capital city of Australia?', "Spelling doesn't have to be perfect. Quizmaster settles close ones.", 'Send answer']],
-  number: ['question', ['How many bones', 'Closest answer wins. Exact gets a 50 point bonus.', 'Send 212']],
+  number: ['question', ['How many bones', 'Send the number. Your first answer counts.', 'Send 212']],
   picture: ['question', ['Which fruit is this, cut in half?', 'Picture: drawn by Quizmaster', 'Kiwi']],
   locked: ['question', ['Locked in', '1996', 'Waiting for 5 more players. Eyes on the TV!']],
   right: ['reveal', ['Right!', '+120', '100 + 20 for speed', '62% got it', 'Source: Wikipedia', 'Quizzly Bears', '1,960', '1,360 pts']],
@@ -579,7 +579,7 @@ test('3a: first tap counts; later taps are ignored; then locked in', async () =>
   await flush();
   const sent = t.calls.filter((c) => c.what === 'action');
   assert.equal(sent.length, 1);
-  assert.deepEqual(sent[0].body, { name: 'answer', body: { q: 'q8', choice: 'B' } });
+  assert.deepEqual(sent[0].body, { name: 'answer', body: { q: 7, value: 1 } });
   assert.ok(btn('B').classList.contains('pick'));
   assert.equal(btn('B').getAttribute('aria-pressed'), 'true');
   assert.equal(btn('C').disabled, true);
@@ -600,7 +600,7 @@ test('3a: an answer sent while the box blinks is retried, and a 409 keeps the fi
   await flush();
   await t.advance(4500);
   assert.equal(n, 3);
-  assert.deepEqual(t.calls.filter((c) => c.what === 'action').map((c) => c.body.body), [{ q: 'q8', choice: 'A' }, { q: 'q8', choice: 'A' }, { q: 'q8', choice: 'A' }]);
+  assert.deepEqual(t.calls.filter((c) => c.what === 'action').map((c) => c.body.body), [{ q: 7, value: 0 }, { q: 7, value: 0 }, { q: 7, value: 0 }]);
   t.app.stop();
 });
 
@@ -621,7 +621,7 @@ test('D1: a lost answer is never shown as sent; it says so after 6 tries and is 
   down = false;
   t.box.actionReply = null;
   await t.advance(5000);
-  assert.deepEqual(reach().at(-1).body, { name: 'answer', body: { q: 'q8', choice: 'B' } });
+  assert.deepEqual(reach().at(-1).body, { name: 'answer', body: { q: 7, value: 1 } });
   assert.ok(t.text().includes('Locked in'), t.text());
   const n = reach().length;
   await t.advance(20_000);
@@ -644,7 +644,7 @@ test('D1: an answer lost while the box was away is sent again when it is back', 
   assert.equal(t.screen(), 'question');
   assert.ok(t.text().includes('Locked in'), t.text());
   const ok = t.calls.filter((c) => c.what === 'action');
-  assert.deepEqual(ok.at(-1).body.body, { q: 'q8', choice: 'C' });
+  assert.deepEqual(ok.at(-1).body.body, { q: 7, value: 2 });
   t.app.stop();
 });
 
@@ -682,7 +682,7 @@ test('D1: an answer pending when the host pauses is sent again when the question
   await flush();
   const sent = t.calls.filter((c) => c.what === 'action');
   assert.equal(sent.length, 2, 'resent when the question is back with no answer');
-  assert.deepEqual(sent.at(-1).body.body, { q: 'q8', choice: 'C' });
+  assert.deepEqual(sent.at(-1).body.body, { q: 7, value: 2 });
   t.app.stop();
 });
 
@@ -752,7 +752,7 @@ test('3b: text answer sends once and keeps typing across pushes', async () => {
   await flush();
   const sent = t.calls.filter((c) => c.what === 'action');
   assert.equal(sent.length, 1);
-  assert.deepEqual(sent[0].body, { name: 'answer', body: { q: 'q3', text: 'Canbera' } });
+  assert.deepEqual(sent[0].body, { name: 'answer', body: { q: 2, value: 'Canbera' } });
   assert.ok(t.text().includes('Locked in'));
   assert.ok(t.text().includes('Canbera'));
   t.app.stop();
@@ -768,7 +768,7 @@ test('3c: number answer steps within bounds and sends the number', async () => {
   assert.ok(t.text().includes('Send 213'));
   submit(t.root.querySelector('form'));
   await flush();
-  assert.deepEqual(t.calls.filter((c) => c.what === 'action')[0].body.body, { q: 'q2', number: 213 });
+  assert.deepEqual(t.calls.filter((c) => c.what === 'action')[0].body.body, { q: 1, value: 213 });
   t.app.stop();
 });
 
@@ -950,4 +950,206 @@ test('built: index.html fits the CSP with no inline script or style; the app is 
 test('built: the guest files are not in the app service-worker shell', { skip: !existsSync(new URL('../dist/sw.js', import.meta.url)) && !process.env.CI ? 'app not built here' : false }, () => {
   const top = new URL('../dist/', import.meta.url);
   for (const f of readdirSync(top).filter((n) => /^(sw|service-worker).*\.js$/.test(n))) assert.doesNotMatch(readFileSync(new URL(f, top), 'utf8'), /pocket|\/p\/_a\//, f);
+});
+
+// ---------- quiz-guest-phone-plays: the engine's own views (guest/fake/quiz-views.json, from tests/quiz_guest_fakes_test.rs) ----------
+
+test("quiz on the engine's own views: round and question, a counting timer, {q, value} answers, every reveal, the board, the end", async () => {
+  const box = new EngineBox('lobby', { code: 't' });
+  const t = harness('lobby', { box });
+  await t.app.start(null);
+  await flush();
+  assert.equal(t.screen(), 'lobby');
+  assert.ok(t.text().includes("You're in, Mia!"), t.text());
+  assert.ok(t.text().includes('Quizzly Bears'));
+  assert.ok(!/undefined|NaN/.test(t.text()), t.text());
+
+  // Question 1 (choice): "Round 1 · General knowledge", "Question 1 of 3", 16 s left and counting.
+  box.go('question_choice');
+  await t.advance(2000);
+  assert.equal(t.screen(), 'question');
+  const text = t.text();
+  assert.ok(text.includes('Round 1 · General knowledge'), text);
+  assert.ok(text.includes('Question 1 of 3'), text);
+  assert.ok(!/undefined|NaN/.test(text), text);
+  const bar = t.root.querySelector('[data-timer]');
+  assert.equal(bar.getAttribute('aria-label'), '16 seconds left');
+  await t.advance(3000);
+  assert.equal(bar.getAttribute('aria-label'), '13 seconds left');
+
+  // Tapping B (Oasis) sends the engine's answer: the option's position, and the question number as a number.
+  const btn = (k) => t.root.querySelector(`button[data-answer="${k}"]`);
+  assert.equal(btn('B').getAttribute('aria-label'), 'B: Oasis');
+  click(btn('B'));
+  await flush();
+  assert.deepEqual(box.answers, [{ q: 0, value: 1 }]);
+  const sent = t.calls.filter((c) => c.what === 'action');
+  assert.equal(sent.length, 1);
+  assert.equal(sent[0].body.name, 'answer');
+  assert.ok(t.text().includes('Locked in'), t.text());
+  assert.ok(t.text().includes('Oasis'));
+
+  // Time's up (locked), then the reveal: right, wrong, no answer.
+  box.go('locked');
+  await t.advance(2000);
+  assert.equal(t.screen(), 'question');
+  assert.ok(t.text().includes('Oasis'));
+  box.go('reveal_right');
+  await t.advance(2000);
+  assert.equal(t.screen(), 'reveal');
+  assert.ok(t.text().includes('Right!'), t.text());
+  assert.ok(t.text().includes('+2'));
+  assert.ok(t.text().includes('en.wikipedia.org'));
+  assert.ok(!/undefined|NaN/.test(t.text()), t.text());
+  t.app.stop();
+
+  for (const [name, words] of [
+    ['reveal_wrong', ['Not this time', 'Oasis']],
+    ['reveal_no_answer', ['Oasis']],
+    ['reveal_judging', ['You wrote "Canbera".', 'Quizmaster is checking whether it counts.']],
+    ['reveal_judged', ['Right!', '+2']],
+    ['reveal_number', ['Right!', '+3', '206']],
+  ]) {
+    const b = new EngineBox(name, { code: 't' });
+    const s = harness(name, { box: b });
+    await s.app.start(null);
+    await flush();
+    assert.equal(s.screen(), 'reveal', name);
+    for (const w of words) assert.ok(s.text().includes(w), `${name}: ${w} in ${s.text()}`);
+    assert.ok(!/undefined|NaN/.test(s.text()), `${name}: ${s.text()}`);
+    if (name === 'reveal_judging') {
+      // Pending is waiting, not earned: a neutral panel, no icon, the smaller word, no points.
+      const panel = s.root.querySelector('.big-result');
+      assert.ok(!panel.classList.contains('near') && !panel.classList.contains('ok'), panel.className);
+      assert.equal(panel.querySelector('.ic'), null, 'no coloured star');
+      assert.equal(panel.querySelector('.word').className, 'word mid');
+      assert.equal(panel.querySelector('.word').textContent, 'Close one');
+      assert.equal(panel.querySelector('.pts'), null);
+    }
+    s.app.stop();
+  }
+
+  // Text and number questions answer with the text and the number.
+  {
+    const b = new EngineBox('question_text', { code: 't' });
+    const s = harness('question_text', { box: b });
+    await s.app.start(null);
+    await flush();
+    assert.ok(s.text().includes('Question 2 of 3'), s.text());
+    type(s.root.querySelector('input[type="text"], textarea'), 'Canbera');
+    submit(s.root.querySelector('form'));
+    await flush();
+    assert.deepEqual(b.answers, [{ q: 1, value: 'Canbera' }]);
+    s.app.stop();
+  }
+  {
+    const b = new EngineBox('question_number', { code: 't' });
+    const s = harness('question_number', { box: b });
+    await s.app.start(null);
+    await flush();
+    assert.ok(s.text().includes('Round 2 · Numbers'), s.text());
+    assert.ok(s.text().includes('Question 3 of 3'), s.text());
+    assert.ok(s.text().includes('Send the number. Your first answer counts.'), s.text());
+    assert.ok(!s.text().includes('bonus'), 'no made-up bonus rule');
+    // No start from the engine: the field opens empty and nothing can be sent yet.
+    const input = s.root.querySelector('input.num');
+    const send = s.root.querySelector('button[data-send]');
+    assert.equal(input.value, '');
+    assert.equal(input.getAttribute('placeholder'), 'Your number');
+    assert.equal(input.getAttribute('enterkeyhint'), 'send');
+    assert.equal(send.textContent, 'Send answer');
+    assert.ok(send.disabled);
+    submit(s.root.querySelector('form'));
+    await flush();
+    assert.equal(b.answers.length, 0, 'an empty field sends nothing');
+    type(input, '206');
+    assert.equal(send.textContent, 'Send 206');
+    assert.ok(!send.disabled);
+    type(input, '');
+    assert.equal(send.textContent, 'Send answer');
+    assert.ok(send.disabled, 'clearing disables the button again');
+    type(input, '2.5');
+    assert.ok(send.disabled, 'not a whole number');
+    type(input, '206');
+    submit(s.root.querySelector('form'));
+    await flush();
+    assert.deepEqual(b.answers, [{ q: 2, value: 206 }]);
+    s.app.stop();
+  }
+  {
+    // On an empty field + sets 1 and − sets −1, then they step.
+    const b = new EngineBox('question_number', { code: 't' });
+    const s = harness('question_number', { box: b });
+    await s.app.start(null);
+    await flush();
+    const input = s.root.querySelector('input.num');
+    click(s.root.querySelector('[aria-label="Plus 1"]'));
+    assert.equal(input.value, '1');
+    assert.equal(s.root.querySelector('button[data-send]').textContent, 'Send 1');
+    type(input, '');
+    click(s.root.querySelector('[aria-label="Minus 1"]'));
+    assert.equal(input.value, '-1');
+    click(s.root.querySelector('[aria-label="Minus 1"]'));
+    assert.equal(input.value, '-2');
+    s.app.stop();
+  }
+
+  // The scores after round 1, with the teams' own colours from info; then the end.
+  {
+    const b = new EngineBox('leaderboard', { code: 't' });
+    const s = harness('leaderboard', { box: b });
+    await s.app.start(null);
+    await flush();
+    await s.advance(10_000);
+    assert.equal(s.screen(), 'between');
+    assert.ok(s.text().includes('After round 1 of 2'), s.text());
+    assert.ok(s.text().includes('Quizzly Bears') && s.text().includes('Fact Hunters'));
+    assert.ok(!/undefined|NaN/.test(s.text()), s.text());
+    assert.ok(s.calls.some((c) => c.what === 'info'), 'asks info for the team colours');
+    assert.ok(s.text().includes('Next round soon'), s.text());
+    // The colours come from info even when state has nothing new (204): Quizzly Bears 0, Fact Hunters 1, as on the TV.
+    const sw = [...s.root.querySelectorAll('[data-screen] .sw')].map((e) => e.className);
+    assert.equal(sw.length, 2);
+    assert.deepEqual(sw, ['sw t0', 'sw t1'], `team swatches differ: ${sw.join(' | ')}`);
+    s.app.stop();
+  }
+  {
+    const b = new EngineBox('final', { code: 't' });
+    const s = harness('final', { box: b });
+    await s.app.start(null);
+    await flush();
+    assert.equal(s.screen(), 'ended');
+    assert.ok(s.text().includes('Quizzly Bears won with 9 points'), s.text());
+    s.app.stop();
+  }
+});
+
+test('quizPhone: engine fields map one to one, nothing computed but units and letters', () => {
+  const v = quizViews.views;
+  const q = m.quizPhone(v.question_choice.view, { teams: quizViews.info.teams }).view;
+  assert.equal(q.phase, 'question');
+  assert.deepEqual(
+    { id: q.question.id, round: q.question.round, rounds: q.question.rounds, round_name: q.question.round_name, n: q.question.n, of: q.question.of, kind: q.question.kind, secs_left: q.question.secs_left, total_secs: q.question.total_secs },
+    { id: '0', round: 1, rounds: 2, round_name: 'General knowledge', n: 1, of: 3, kind: 'choice', secs_left: 16, total_secs: 20 },
+  );
+  assert.deepEqual(m.quizPhone(v.answered_choice.view).view.question.answer, { choice: 'B' });
+  assert.equal(m.quizPhone(v.locked.view).view.question.secs_left, 0);
+  const r = m.quizPhone(v.reveal_right.view).view.reveal;
+  assert.deepEqual([r.outcome, r.points, r.answer, r.answer_letter], ['right', 2, 'Oasis', 'B']);
+  assert.equal(m.quizPhone(v.reveal_wrong.view).view.reveal.outcome, 'wrong');
+  assert.equal(m.quizPhone(v.reveal_no_answer.view).view.reveal.outcome, 'none');
+  assert.equal(m.quizPhone(v.reveal_judging.view).view.reveal.outcome, 'judging');
+  const known = m.quizPhone(v.leaderboard.view, { teams: quizViews.info.teams });
+  assert.equal(known.missing, false);
+  assert.deepEqual(known.view.between.board.map((b) => [b.rank, b.name, b.color, b.score, b.me]), quizViews.views.leaderboard.view.team_board.map((t) => [t.rank, t.team, quizViews.info.teams.find((x) => x.name === t.team).color, t.score, t.team === 'Quizzly Bears']));
+  assert.equal(m.quizPhone(v.leaderboard.view).missing, true, 'no colours yet: ask info');
+  assert.equal(m.quizPhone(v.final.view).view.phase, 'ended');
+});
+
+test("quiz on the engine's views: an answer in the old shape is refused by the box, as on a real one", () => {
+  const b = new EngineBox('question_choice');
+  assert.equal(b.handle('action', { name: 'answer', body: { q: 'q0', choice: 'B' } }).status, 400);
+  assert.equal(b.handle('action', { name: 'answer', body: { q: '0', value: 1 } }).status, 400);
+  assert.equal(b.handle('action', { name: 'answer', body: { q: 0, value: 9 } }).status, 400);
+  assert.equal(b.handle('action', { name: 'answer', body: { q: 0, value: 1 } }).status, 200);
 });

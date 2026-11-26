@@ -253,8 +253,8 @@ jobs:
     needs: [version, installer]
     if: needs.version.outputs.upload == 'true'
     runs-on: ubuntu-latest
-    # the wait below plus the upload
-    timeout-minutes: 140
+    # the wait below plus the upload (keep it >= WAIT_MINUTES + 20)
+    timeout-minutes: 180
     permissions:
       contents: write
     env:
@@ -263,8 +263,9 @@ jobs:
       VERSION: ${{ needs.version.outputs.version }}
       NAME: ${{ needs.installer.outputs.name }}
       SHA256: ${{ needs.installer.outputs.sha256 }}
-      # mac.yml publishes ~40-60 min after the tag (the .dmg build alone is 21-30 min)
-      WAIT_MINUTES: 120
+      # mac.yml publishes ~85-110 min after the tag (the .dmg build alone is 54-64 min); 0.9.53's
+      # publish job ran out of its old 120-min wait
+      WAIT_MINUTES: 160
     steps:
       - uses: actions/download-artifact@v4
         with:

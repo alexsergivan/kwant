@@ -2,8 +2,9 @@
 //! §A.2). A bot reply: the Quizmaster's card when its turn called a Quizmaster tool (pa3c), then a
 //! grounded `present_result` call (the bot's own declared pick), then the deterministic reply-text
 //! selectors. A task report card (`meta.kind` "mission" with a
-//! `task_id`) gets its `verification` block, an agent's shared-file card its `files` block, and no
-//! other card gets anything; each block must be enabled and pass [`super::validate`].
+//! `task_id`) gets its `verification` block, an agent's shared-file card its `files` block, a
+//! pocket's results message (`meta.kind` "pocket") its `pocket` results card, and no other card
+//! gets anything; each block must be enabled and pass [`super::validate`].
 
 use std::path::Path;
 
@@ -28,6 +29,8 @@ pub async fn compute_for_message(
         // A card kwant built from its own data: only its own block, never selectors on its text.
         Some("mission") => return from_block(verification::candidate(&mut *conn, extra).await),
         Some("file") => return from_block(files::candidate(&mut *conn, input, extra, root).await),
+        // The results a pocket posts when it ends: its own block, from the pocket's data
+        Some("pocket") => return from_block(pocket::from_meta(extra)),
         Some(k) if k != "delegation_result" => return None,
         _ => {}
     }
@@ -44,6 +47,13 @@ pub async fn compute_for_message(
         return Some(set);
     }
     super::compute(&input.text)
+}
+
+/// The checked results card of a pocket results message from its `meta` alone (it doesn't
+/// depend on the message's text): what [`compute_for_message`] stores for it, read again after
+/// kwnt changed that `meta` (guest names blanked as the pocket's data expires).
+pub fn pocket_results(extra: &MessageExtra) -> Option<ResultSet> {
+    from_block(pocket::from_meta(extra))
 }
 
 /// `block`, wrapped as a one-block [`ResultSet`], when its type is enabled and it passes
