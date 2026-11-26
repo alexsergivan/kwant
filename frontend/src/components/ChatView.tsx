@@ -1169,10 +1169,12 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const stripWaitsOn = isStreaming ? waitingOn({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser }) : null;
   // #1278: when the live turn started, for the time on its name line. Taken once, when the row stops waiting in line,
   // so it never ticks or moves; a step that started well before that (the chat was reopened mid-turn) moves it back.
-  const liveStartRef = useRef<number | null>(null);
+  // One ChatView serves every chat, so the start belongs to the chat and the bot it was taken for.
+  const liveStartRef = useRef<{ key: string; at: number } | null>(null);
+  const liveStartKey = `${contextKey ?? ''}|${streamingSpeakerName ?? ''}`;
   if (!isStreaming || queued) liveStartRef.current = null;
-  else if (liveStartRef.current === null) liveStartRef.current = Date.now();
-  const liveStartedAt = liveStartRef.current === null ? null : liveTurnStart(liveActivity, liveStartRef.current);
+  else if (liveStartRef.current === null || liveStartRef.current.key !== liveStartKey) liveStartRef.current = { key: liveStartKey, at: Date.now() };
+  const liveStartedAt = liveStartRef.current === null ? null : liveTurnStart(liveActivity, liveStartRef.current.at);
   // What the live bubble holds before its first words: a pending approval reads as "waiting for your OK", not loading.
   const bubble = liveBubble({ live: liveActivity, queued: !!queued, awaitingAnswer: !!awaitingAnswer, awaitingBrowser: !!awaitingBrowser, writing });
   // 36d: the scene is the one working status: getting started, a step, writing. Queued and waiting on the person stay plain.
