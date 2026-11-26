@@ -1006,7 +1006,7 @@ mod tests {
 
     #[test]
     fn connect_failures_name_the_key_only_for_401_and_403() {
-        let unauthorized = McpError::Unauthorized { www_authenticate: None };
+        let unauthorized = McpError::Unauthorized { www_authenticate: None, key: true };
         assert_eq!(connect_error(unauthorized), ComposioError::KeyRefused);
         let startup = |m: &str| McpError::Startup { message: m.into(), stderr_tail: String::new() };
         assert_eq!(connect_error(startup("transport error: HTTP 403 Forbidden")), ComposioError::KeyRefused);

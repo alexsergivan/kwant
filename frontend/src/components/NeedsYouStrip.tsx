@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, ChevronLeft, ChevronRight, Globe, Hand, Inbox, Loader2, Play, RotateCcw, type LucideIcon } from 'lucide-react';
+import { ArrowUp, Check, ChevronLeft, ChevronRight, Globe, Hand, Inbox, Loader2, Play, Plug, RotateCcw, type LucideIcon } from 'lucide-react';
 import type { AwayItem } from '../away';
 import { approvalLine } from '../approvals';
 import { localClock } from '../clock';
@@ -57,6 +57,7 @@ const ICON: Record<AskAction, LucideIcon> = {
   answer: ArrowUp,
   decide: ArrowUp,
   browser: Globe,
+  tools: Plug,
   run_again: RotateCcw,
 };
 
@@ -314,7 +315,9 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
         ? 'This one clears when you Allow or Deny it on its card.'
         : switched === 'browser'
           ? `This one clears when you finish or decline it in ${bot}’s browser.`
-          : null;
+          : switched === 'tools'
+            ? 'This one clears when you press Done or Skip on its card in the chat.'
+            : null;
   const hint = gone ? 'Its card isn’t in this chat anymore.' : sent ? (action === 'run_again' ? 'Started.' : `Sent. This clears once ${bot} answers.`) : skipped ? RUN_AGAIN_SKIPPED : switchedHint ?? askHint(item, action, bot, clearable);
   const stepBtn =
     'kws-hit inline-flex items-center justify-center w-7 h-7 rounded-lg border border-hairline-strong text-zinc-200 hover:bg-white/[0.08] disabled:opacity-40 disabled:cursor-default kw-focus';
@@ -322,7 +325,7 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
   const buttons = (
     <div
       data-strip-buttons
-      className={phone ? `mt-2.5 flex gap-2 ${action === 'browser' && !gone ? 'flex-col-reverse' : ''}` : stacked ? 'mt-2 flex justify-end gap-2' : 'flex items-center gap-2 self-center row-start-2 col-start-2'}
+      className={phone ? `mt-2.5 flex gap-2 ${(action === 'browser' || action === 'tools') && !gone ? 'flex-col-reverse' : ''}` : stacked ? 'mt-2 flex justify-end gap-2' : 'flex items-center gap-2 self-center row-start-2 col-start-2'}
     >
       {clearable && (
         <button
