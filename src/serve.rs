@@ -110,7 +110,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> Result<(
         "Starting Kwant..."
     );
     println!(
-        "⚡ kwant bots: your team of super-intelligent bots, listening at http://{}",
+        "⚡ kwant: your team of super-intelligent bots, listening at http://{}",
         addr
     );
     // stdout only: a one-time link, never the API token

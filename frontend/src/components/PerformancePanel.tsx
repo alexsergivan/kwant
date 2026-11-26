@@ -77,7 +77,7 @@ export const PerformanceTable: React.FC<{ groups: PerfGroup[]; by: PerfBy; minN:
           <th scope="col" className={`${th} text-right`} title="Median time a bot held the task">
             Median time
           </th>
-          <th scope="col" className={`${th} text-right`} title="Median fresh tokens per task">
+          <th scope="col" className={`${th} text-right`} title="Median AI use per task, in tokens">
             Median tokens
           </th>
           <th scope="col" className={`${th} text-right`}>

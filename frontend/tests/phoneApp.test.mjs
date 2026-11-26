@@ -1,4 +1,4 @@
-// 20h: "Use kwant bots on your phone" in Settings › All spaces. Which state this address gets
+// 20h: "Use kwant on your phone" in Settings › All spaces. Which state this address gets
 // (one-time sign-in QR, address QR, loopback, plain http), what each says, and that a loopback or
 // plain-http address never gets a QR.
 import assert from 'node:assert/strict';
@@ -68,10 +68,10 @@ test('address: a QR of this address at once, Copy link, the three steps and the 
   const t = text(html);
   assert.match(html, /id="phone-app"/);
   assert.match(html, /data-phone-app="address"/);
-  assert.match(t, /Use kwant bots on your phone/);
-  assert.match(t, /It opens kwant bots at kwant\.example\.com on the phone\./);
+  assert.match(t, /Use kwant on your phone/);
+  assert.match(t, /It opens kwant at kwant\.example\.com on the phone\./);
   assert.equal(qrs(html), 1);
-  assert.match(html, /aria-label="QR code for this kwant bots address"/);
+  assert.match(html, /aria-label="QR code for this kwant address"/);
   assert.match(html, /value="https:\/\/kwant\.example\.com\/"/);
   assert.match(t, /Copy link/);
   assert.match(t, /Add it to the Home Screen/);
@@ -96,7 +96,7 @@ test('copy: Copied, or the copy-it-yourself line', () => {
 test('signin: step 1 is the AddDevice slot, never an address QR', () => {
   const html = m.cardWith({ ...base, kind: 'signin' }, { kind: 'idle' });
   const t = text(html);
-  assert.match(t, /It opens kwant bots on the phone and signs it in once\./);
+  assert.match(t, /It opens kwant on the phone and signs it in once\./);
   assert.match(t, /Show QR code/);
   assert.equal(qrs(html), 0, 'no QR until Show QR code mints a link');
   assert.doesNotMatch(html, /data-phone-qr/);
@@ -111,7 +111,7 @@ test('loopback: no QR anywhere, says this Mac, links to the guide and Telegram',
   const t = text(html);
   assert.equal(qrs(html), 0);
   assert.doesNotMatch(html, /127\.0\.0\.1:8799\/"/, 'no address field to copy');
-  assert.match(t, /Your phone can't reach this one\. kwant bots runs at 127\.0\.0\.1:8799, an address only this Mac can open\./);
+  assert.match(t, /Your phone can't reach this one\. kwant runs at 127\.0\.0\.1:8799, an address only this Mac can open\./);
   assert.match(t, /To have it on your phone:/);
   assert.match(html, /href="https:\/\/kwant\.si\/docs\/phone\.html"/);
   assert.match(t, /How to set it up/);
@@ -142,7 +142,7 @@ test('phone: installs this phone, never a QR', () => {
   for (const phoneCase of ['prompt', 'ios', 'android', 'insecure']) {
     const html = m.card({ ...phone, kind: 'signin', phoneCase });
     assert.equal(qrs(html), 0, phoneCase);
-    assert.match(text(html), /Add kwant bots to your Home Screen/, phoneCase);
+    assert.match(text(html), /Add kwant to your Home Screen/, phoneCase);
   }
 });
 

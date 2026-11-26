@@ -105,9 +105,9 @@ export function usedLine(b: Pick<BotBudget, 'over' | 'used_tokens' | 'budget_tok
   const about = b.estimated ? 'about ' : '';
   const month = monthName(b.month);
   if (b.budget_tokens <= 0 && b.budget_usd <= 0)
-    return `${about}${compactTokens(b.used_tokens)} fresh tokens${b.used_usd > 0 ? ` · ${usdText(b.used_usd)}` : ''} in ${month}`;
+    return `${about}${compactTokens(b.used_tokens)} tokens${b.used_usd > 0 ? ` · ${usdText(b.used_usd)}` : ''} in ${month}`;
   if (leadIsUsd(b)) return `${about}${usdText(b.used_usd) ?? '$0.00'} of ${usdText(b.budget_usd)} in ${month}`;
-  return `${about}${compactTokens(b.used_tokens)} of ${compactTokens(b.budget_tokens)} fresh tokens in ${month}`;
+  return `${about}${compactTokens(b.used_tokens)} of ${compactTokens(b.budget_tokens)} tokens in ${month}`;
 }
 
 /** The line under the meter: what the bot does now, in plain words. */

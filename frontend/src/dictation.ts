@@ -16,7 +16,7 @@ export type TranscribeResult =
 /** A network failure (status 0): nothing came back from kwant. */
 export const NETWORK_ERROR = 'Couldn’t reach the server to turn this into text.';
 export const NO_WORDS = 'Didn’t catch any words. Try again a little closer to the microphone.';
-export const INSECURE_WHY = 'Your browser only lets pages on https, or on this computer, use the microphone. Open kwant bots that way to dictate.';
+export const INSECURE_WHY = 'Your browser only lets pages on https, or on this computer, use the microphone. Open kwant that way to dictate.';
 /** The longest recording, in seconds (about 2.4 MB of opus, far under the server's 25 MB). */
 export const MAX_SECONDS = 600;
 /** From here the timer says how much is left, in amber. */

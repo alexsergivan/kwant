@@ -1,7 +1,7 @@
 {
   "id": "/",
-  "name": "kwant bots",
-  "short_name": "kwant bots",
+  "name": "kwant",
+  "short_name": "kwant",
   "description": "Your team of AI bots",
   "start_url": "/",
   "scope": "/",

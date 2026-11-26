@@ -50,7 +50,7 @@ export const DeviceWaitView: React.FC<{ state: WaitState; now?: number; onStart:
         {code ? (
           <>
             <p className="text-xs text-zinc-300 leading-relaxed">
-              On a phone or computer where you’re already signed in to kwant bots, open it and approve this code:
+              On a phone or computer where you’re already signed in to kwant, open it and approve this code:
             </p>
             <p className="text-center font-mono text-2xl font-semibold tracking-[0.15em] text-zinc-50 select-all" aria-label={`Code ${code.split('').join(' ')}`}>
               {code}
@@ -230,7 +230,7 @@ export const DeviceRequestCard: React.FC<{
           </p>
         </div>
         <p id="kwnt-device-request-warning" className="text-xs text-amber-200/90 leading-relaxed">
-          Approve only if this exact code is on a screen you’re holding right now. That device gets full control of kwant bots, as you. If someone asked you to
+          Approve only if this exact code is on a screen you’re holding right now. That device gets full control of kwant, as you. If someone asked you to
           approve a code, deny it.
         </p>
         <label className="flex items-start gap-2 text-xs text-zinc-200 cursor-pointer min-h-[32px]">
@@ -423,7 +423,7 @@ export const QrImage: React.FC<{ text: string; label?: string }> = ({ text, labe
   );
 };
 
-/** Where AddDevice sits: Settings › Signed-in devices (`settings`), or step 1 of "Use kwant bots on
+/** Where AddDevice sits: Settings › Signed-in devices (`settings`), or step 1 of "Use kwant on
  *  your phone" (`phone`), where step 2 right below already says to add it to the Home Screen. */
 export type AddDeviceVariant = 'settings' | 'phone';
 
@@ -669,7 +669,7 @@ export const SignedInDevices: React.FC = () => {
         <MonitorSmartphone size={14} aria-hidden="true" /> Signed-in devices
       </legend>
       <p className="text-[11px] text-zinc-500 leading-relaxed">
-        Browsers that can use kwant bots as you. Sign out any you don’t recognise; signing out here doesn’t change the access token.
+        Browsers that can use kwant as you. Sign out any you don’t recognise; signing out here doesn’t change the access token.
       </p>
       <AddDevice onSignedIn={load} />
       <SessionsList

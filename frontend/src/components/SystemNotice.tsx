@@ -125,7 +125,7 @@ export const BudgetPausedNotice: React.FC<BudgetPausedNoticeProps> = ({ messageI
             <span className="min-w-0">{text}</span>
           </p>
           <p className="mt-1 pl-[23px] text-[11px] text-amber-200/60 font-mono">
-            {compactTokens(meta.used)} of {compactTokens(meta.budget)} fresh tokens
+            {compactTokens(meta.used)} of {compactTokens(meta.budget)} tokens
           </p>
         </div>
         {onContinue && (

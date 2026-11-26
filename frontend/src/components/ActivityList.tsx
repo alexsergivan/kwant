@@ -326,7 +326,7 @@ const StepDetail: React.FC<{ text: string; path: boolean }> = ({ text, path }) =
   return <>{parts.map((p, i) => <React.Fragment key={i}>{i > 0 && <wbr />}{p}</React.Fragment>)}</>;
 };
 
-const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string; openStep?: string | null; who?: string }> = ({
+export const Steps: React.FC<{ steps: ActivityStep[]; live?: LiveActivity; dropped?: number; id: string; openStep?: string | null; who?: string }> = ({
   steps,
   live,
   dropped = 0,
@@ -443,7 +443,7 @@ export const LiveActivityList: React.FC<{
               onClick={() => setNoteOpen((o) => !o)}
               aria-expanded={noteOpen}
               aria-controls={noteOpen ? noteId : undefined}
-              aria-label="About this engine's steps"
+              aria-label="About this AI’s steps"
               className="shrink-0 inline-flex items-center justify-center w-11 h-11 text-zinc-400 hover:text-zinc-200 focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[#b8adff]"
             >
               <Info size={16} aria-hidden="true" />

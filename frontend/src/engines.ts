@@ -280,7 +280,7 @@ export function pickLabel(value: string, engines: EngineInfo[] | null = null): s
 
 /** A bot's engine in words, for its tooltip in the bot list: "Laya picks the model", "Runs on Claude · Sonnet". */
 export function engineTip(value: string, engines: EngineInfo[] | null = null): string {
-  return parsePick(value).family === 'auto' ? 'Laya picks the model' : `Runs on ${pickLabel(value, engines)}`;
+  return parsePick(value).family === 'auto' ? 'kwant picks the AI' : `Runs on ${pickLabel(value, engines)}`;
 }
 
 /** "Claude Haiku (latest)" → "Haiku" when shown after the family name. */
@@ -475,20 +475,20 @@ export function modelBadgeFor(
     const label = liveTurn.picked_by === 'fallback'
       ? `Moved to ${what} for this reply`
       : auto
-        ? `Laya picked ${what} for this reply`
+        ? `kwant picked ${what} for this reply`
         : `Runs on ${what}`;
     return { mark: family, resting: false, auto, cantRun: null, label, key: `${family}:${liveTurn.model ?? ''}` };
   }
   if (auto) {
     const last = kwant.last_ran_on;
     const family = last ? familyOfRun(last) : null;
-    if (!last || !family) return { mark: 'laya', resting: false, auto, cantRun: null, label: 'Laya picks the model', key: 'laya' };
+    if (!last || !family) return { mark: 'laya', resting: false, auto, cantRun: null, label: 'kwant picks the AI', key: 'laya' };
     return {
       mark: family,
       resting: true,
       auto,
       cantRun: null,
-      label: `Laya picks the model. Last reply: ${runsOnLabel(last, engines)}`,
+      label: `kwant picks the AI. Last reply: ${runsOnLabel(last, engines)}`,
       key: `${family}:${last.model ?? ''}:rest`,
     };
   }
