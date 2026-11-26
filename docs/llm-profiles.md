@@ -46,8 +46,8 @@ when the account list or the Engines page is read and the last check is over a m
 instead for its address), `key_rejected` or `error`, with a readable `detail`. A server that lists
 no models is ready when the account has a `model`. A turn runs the bot's pinned model
 (`custom:<model id>`) as is, else the account's `model`, else the first listed model for the
-effort's tier; replies stream. MCP tools are offered on `openai-chat` only (`supports_tools`);
-`anthropic-messages` turns run without them and say so. Custom API never falls back to the host:
+effort's tier; replies stream. MCP tools are offered on both `openai-chat` and
+`anthropic-messages` servers (`supports_tools` is true for both protocols). Custom API never falls back to the host:
 a space without an enabled account answers "No Custom API account is on in this space".
 The accounts need database schema version 2; if that change failed at start (see the log),
 creating one answers `503`.

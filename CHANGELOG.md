@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Changed
+- The Custom API docs now say MCP tools are offered on Anthropic-Messages servers too, not only OpenAI-chat ones (#1219)
+
 ## [Mac 0.9.53] - 2026-11-26
 
 kwant 0.9.53: restarts keep programs your bots left running, no double messages in Telegram, a shorter sidebar, Dev mode's grid out from behind your messages, /api/health shows whether routines are still being checked, /api/health and the log name a scheduler step that runs too long, plain words in the chat, pushes and the Mac menu, easier-to-read routine labels, one reply to a hello and steps that say what each command did.
