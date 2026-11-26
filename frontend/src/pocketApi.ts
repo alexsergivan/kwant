@@ -258,6 +258,9 @@ export const pocketApi = {
     call<PocketRead>('POST', `${one(code)}/action`, { name: 'set_slots', body: { slots } }),
   deskGuest: async (code: string, guest: string) => call<PocketRead>('GET', `${one(code)}?view=${encodeURIComponent(`guest:${guest}`)}`),
   /** The Needs-you list (`GET /api/waiting`); the desk keeps only its own `pocket_desk` items (validDeskItems). */
+  /** pa11b queue host actions (call_next, serve, skip, recall, remove, pause, resume, close, reopen, set_hours): the read back. */
+  queueAction: async (code: string, name: string, body?: Record<string, unknown>) =>
+    call<PocketRead>('POST', `${one(code)}/action`, body === undefined ? { name } : { name, body }),
   waiting: async () => call<unknown>('GET', '/api/waiting'),
 };
 

@@ -21,7 +21,8 @@ export function workingLabel(s: WorkingState): string {
   // An approval: the card says what it is for; the strip only says whose move it is.
   if (open?.kind === 'approval' && open.status === 'waiting') return 'waiting for your OK';
   if (open) {
-    // 36d: a shell step says where it runs ("running a command on 203.0.113.66"), as its row does (36a).
+    // specific-step-titles + 36d: a shell step says the same words as its row ("fetching shop.example.com",
+    // "running a command on 203.0.113.66"), never the raw command, which can carry a URL's query or a token.
     const t = plainShellTitle(open)?.text ?? readableStepTitle(plainTitle(open.title).trim());
     if (t) return lower(t);
   }

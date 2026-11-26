@@ -14,7 +14,11 @@ use kwnt::{
     config::Config,
     db::Database,
     router::LayaRouter,
-    server::{create_router, scheduler, scheduler_heartbeat::STALE_AFTER, AppState},
+    server::{
+        create_router, scheduler,
+        scheduler_heartbeat::{Step, STALE_AFTER, STEP_SLOW_AFTER},
+        AppState,
+    },
     tools::ToolRunner,
 };
 use serde_json::Value;
@@ -95,7 +99,10 @@ async fn a_stale_scheduler_is_reported_and_health_still_says_ok() {
     // Not started (as in tests and before serve starts it): nothing to report, not stale
     let (status, text, body) = health(&app).await;
     assert_unchanged_shape(status, &text, &body);
-    assert_eq!(body["scheduler"], serde_json::json!({ "last_tick_at": null, "pass_started_at": null, "stale": false }));
+    assert_eq!(
+        body["scheduler"],
+        serde_json::json!({ "last_tick_at": null, "pass_started_at": null, "stale": false, "step": null, "step_started_at": null })
+    );
 
     // Started 5 minutes ago, last finished a pass past the limit, and the next pass never finished
     let limit = STALE_AFTER.as_millis() as i64;
@@ -122,4 +129,38 @@ async fn a_stale_scheduler_is_reported_and_health_still_says_ok() {
     let (status, text, body) = health(&app).await;
     assert_unchanged_shape(status, &text, &body);
     assert_eq!(body["scheduler"]["stale"], false);
+}
+
+/// scheduler-step-watchdog: a pass stuck in one awaited call names that call in health, and
+/// health still answers 200 with `"status":"ok"`.
+#[tokio::test]
+async fn a_stuck_step_is_named_in_health_and_health_still_says_ok() {
+    let (_tmp, state, app) = setup().await;
+    let now = now_ms();
+    let limit = STALE_AFTER.as_millis() as i64;
+    let slow = STEP_SLOW_AFTER.as_millis() as i64;
+
+    // A pass started 100 s ago and has been in the missions step for 74 s; the last pass ended
+    // before that, past the stale limit
+    let pass = now - 100_000;
+    let step_at = now - 74_000;
+    assert!(now - step_at > slow);
+    state.scheduler_heartbeat.set_for_tests(now - 600_000, pass, pass - limit);
+    state.scheduler_heartbeat.set_step_for_tests(Some(Step::Missions), step_at);
+    let (status, text, body) = health(&app).await;
+    assert_unchanged_shape(status, &text, &body);
+    let s = &body["scheduler"];
+    assert_eq!(s["stale"], true, "{s}");
+    assert_eq!(s["step"], "missions", "{s}");
+    let started: DateTime<Utc> = s["step_started_at"].as_str().unwrap().parse().unwrap();
+    assert_eq!(started.timestamp_millis(), step_at);
+
+    // The step ends and the scheduler goes to sleep: no step shown
+    state.scheduler_heartbeat.set_for_tests(now - 600_000, pass, now_ms());
+    state.scheduler_heartbeat.set_step_for_tests(None, 0);
+    let (status, text, body) = health(&app).await;
+    assert_unchanged_shape(status, &text, &body);
+    let s = &body["scheduler"];
+    assert_eq!(s["stale"], false, "{s}");
+    assert!(s["step"].is_null() && s["step_started_at"].is_null(), "{s}");
 }
