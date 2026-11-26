@@ -628,6 +628,7 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
     if super::quizmaster_tools::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::quizmaster_tools::tools());
+            list.push(super::santa_tool::tool());
         }
     }
     // pa14b: a wall's two pick tools, only while this bot picks a wall's best 30
@@ -659,6 +660,7 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
     if super::quizmaster_tools::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::quizmaster_tools::tools());
+            list.push(super::santa_tool::tool());
         }
     }
     if crate::pocket::wall_pick::picking_bot(state, &scope.kwant_id) {
@@ -946,6 +948,13 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
             }
             let (after, _) = run_browser_tool(state, target, &reader, BROWSER_PAGE, &json!({"full": true})).await;
             return (format!("{note}\n\nThe page now:\n{after}"), false);
+        }
+    }
+    // sign-in-wall-uses-tools C: the page is on a site the bot has tools for (github.com and a
+    // `github` server): say so once per turn and site, before it tries to sign in there
+    if !is_error {
+        if let Some(hint) = Box::pin(super::wall_tools::browser_hint(state, scope, page.as_ref())).await {
+            return (format!("{text}\n\n{hint}"), false);
         }
     }
     (text, is_error)
@@ -1555,6 +1564,7 @@ async fn call_tool(
         super::connection_suggest::TOOL if scope.origin.is_some() => super::connection_suggest::tool_call(state, scope, args).await,
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
         n if super::quizmaster_tools::handles(n) => super::quizmaster_tools::call(state, scope, n, args).await,
+        n if super::santa_tool::handles(n) => super::santa_tool::call(state, scope, args).await,
         n if super::smart_results::present_result_handles(n) => super::smart_results::present_result_call(state, scope, n, args).await,
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
         n if super::missions::tools::handles(n) => super::missions::tools::call(state, scope, n, args).await,

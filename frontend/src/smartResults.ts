@@ -362,7 +362,14 @@ export interface SantaInfo {
   /** Why the rules leave someone with no one (Santa needs_you); plain text from the box. */
   blocked: string | null;
   /** How people join: own https, else Tailscale Funnel, else Same Wi-Fi. Never a quick tunnel. */
-  join: { mode: 'anywhere' | 'wifi' | 'none'; anywhere_kind: 'https' | 'funnel' | null; anywhere_url: string | null; wifi_url: string | null } | null;
+  join: {
+    mode: 'anywhere' | 'wifi' | 'none';
+    anywhere_kind: 'https' | 'funnel' | null;
+    anywhere_url: string | null;
+    wifi_url: string | null;
+    /** The box's Wi-Fi note: `this_computer_only` when it is bound to 127.0.0.1 (src/pocket/address.rs). */
+    wifi_note?: string | null;
+  } | null;
 }
 
 /** pa10b: the gather kit's three faces on one engine. */
