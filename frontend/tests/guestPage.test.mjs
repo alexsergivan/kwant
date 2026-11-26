@@ -17,7 +17,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInputEle
 }
 
 const m = await loadBundled(`
-  export { GuestApp, privacyLine, day } from './guest/src/app';
+  export { GuestApp, privacyLine, day, when, doorsLine } from './guest/src/app';
   export { BACKOFF, backoff, codeFrom, fromState, quizPhone, retentionFrom } from './guest/src/api';
   export * as art from './guest/src/art';
 `);
@@ -28,9 +28,9 @@ const flush = async () => {
 const clone = (v) => (v && typeof v === 'object' ? JSON.parse(JSON.stringify(v).replaceAll('/CODE/', '/t/')) : v);
 
 /** A fake box (pa1's guest API, from views.mjs) and a hand-driven clock. */
-function harness(name, { ws = false, overrides = {}, box: given } = {}) {
+function harness(name, { ws = false, overrides = {}, at = 1_000_000, box: given } = {}) {
   const calls = [];
-  let now = 1_000_000;
+  let now = at;
   let timers = [];
   let nextId = 1;
   const box = given ?? new FakeBox(name, { code: 't', overrides });
@@ -117,7 +117,7 @@ const submit = (form) => form.dispatchEvent(new dom.window.Event('submit', { bub
 const expect = {
   join: ['join', ['Friday Pub Quiz', 'Hosted by Dana · 4 rounds · teams of up to 4', 'Your name', 'Pick your creature', 'Quizzly Bears', 'Full', 'Start a new team', 'Join the quiz', 'Your name and answers are deleted 7 days after the quiz.', 'made with kwant']],
   'join-solo': ['lobby', ["You're in, Ana!"]],
-  lobby: ['lobby', ["You're in, Mia!", 'Quizzly Bears · 3 of 4', 'Grab a seat. When the TV shows question 1, your answers appear right here.', '14 players · 5 teams', 'Jonas', 'Keep this page open.', 'Starts 8:00 PM']],
+  lobby: ['lobby', ["You're in, Mia!", 'Quizzly Bears · 3 of 4', 'Grab a seat. When the TV shows question 1, your answers appear right here.', '14 players · 5 teams', 'Jonas', 'Keep this page open.', 'Starts Fri, Nov 27, 8:00 PM']],
   rejoin: ['question', ['1,240 pts', 'Round 2 · 90s music', 'Question 8 of 10', 'Tap one. Your first tap counts.']],
   full: ['full', ['This quiz is full', '60 players have joined, the most this quiz takes. Ask the host if a team has room for one more.']],
   ended: ['ended', ['This quiz has ended', 'Quizzly Bears won with 3,420 points. Thanks for playing!', 'Your name and answers are deleted on Fri, Dec 4.']],
@@ -440,6 +440,43 @@ test('v1: join errors from pa1 are plain words', async () => {
     assert.equal(t.root.querySelector('[data-err]').textContent, line, code);
   }
   t.app.stop();
+});
+
+// Wed Nov 25 2026, 3:00 PM on the phone's own clock; the fixture quiz starts Fri Nov 27, 8:00 PM.
+const WED = new Date(2026, 10, 25, 15, 0).getTime();
+const local = (d, hh, mm) => new Date(2026, 10, d, hh, mm).toISOString();
+
+test('ux-pass-0952 b: a scan before the doors open says when they open, from the 409 opens_at', async () => {
+  const t = await open('join-solo', { at: WED });
+  type(t.root.querySelector('#name'), 'Ana');
+  const err = () => t.root.querySelector('[data-err]').textContent;
+  t.box.joinError = 'not_open_yet';
+  t.box.joinExtra = { opens_at: local(27, 19, 30) };
+  submit(t.root.querySelector('form'));
+  await flush();
+  assert.equal(err(), 'Doors open Fri 7:30 PM.');
+  t.box.joinExtra = { opens_at: local(25, 19, 30) };
+  submit(t.root.querySelector('form'));
+  await flush();
+  assert.equal(err(), 'Doors open at 7:30 PM.');
+  t.box.joinExtra = { opens_at: null };
+  submit(t.root.querySelector('form'));
+  await flush();
+  assert.equal(err(), "This quiz isn't open yet. Try again in a minute.");
+  t.app.stop();
+});
+
+test('ux-pass-0952 c: the header start time gets the weekday when it is not today', async () => {
+  const two = await open('lobby', { at: WED });
+  assert.equal(two.root.querySelector('[data-bar]').textContent, 'Starts Fri 8:00 PM');
+  two.app.stop();
+  const fri = await open('lobby', { at: new Date(2026, 10, 27, 18, 0).getTime() });
+  assert.equal(fri.root.querySelector('[data-bar]').textContent, 'Starts 8:00 PM');
+  fri.app.stop();
+  // Further than a week out (or already past), the date is said too.
+  assert.equal(m.when(local(27, 20, 0), new Date(2026, 10, 10, 9, 0).getTime()).text, 'Fri, Nov 27, 8:00 PM');
+  assert.equal(m.when('not a date', WED).text, '');
+  assert.equal(m.doorsLine(42, WED, 'quiz'), "This quiz isn't open yet. Try again in a minute.");
 });
 
 test('v1: ws signed_out goes back to the join screen; gone ends the page; 410 is the ended screen', async () => {

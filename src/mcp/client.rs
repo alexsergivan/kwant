@@ -36,13 +36,38 @@ pub enum McpError {
     #[error("transport error: {0}")]
     Transport(String),
     /// HTTP 401: the server wants a (new) access token. Keeps its `WWW-Authenticate` header.
-    #[error("transport error: HTTP 401 Unauthorized (sign in to this server from the Tools screen)")]
-    Unauthorized { www_authenticate: Option<String> },
+    /// `key`: the request carried a key header ([`is_key_header`]), so the fix is a new key, not
+    /// a sign-in (sign-in-wall-uses-tools E: GitHub's MCP server takes a key and has no sign-in).
+    #[error("transport error: HTTP 401 Unauthorized ({})", unauthorized_hint(.key))]
+    Unauthorized { www_authenticate: Option<String>, key: bool },
     #[error("invalid response: {0}")]
     Protocol(String),
     /// The server failed before the handshake completed; keeps what it wrote to stderr.
     #[error("{message}")]
     Startup { message: String, stderr_tail: String },
+}
+
+/// What a 401 tells the person to do: sign in for a server that signs in (OAuth), put in a new
+/// key for one that sends a key header.
+pub fn unauthorized_hint(key: &bool) -> &'static str {
+    if *key {
+        UNAUTHORIZED_KEY_HINT
+    } else {
+        "sign in to this server from the Tools screen"
+    }
+}
+
+/// [`unauthorized_hint`] for a server with a key header.
+pub const UNAUTHORIZED_KEY_HINT: &str = "the secret saved for this server was rejected; edit the server in Tools and paste a new one";
+
+/// Whether a stored header carries a key or token (`Authorization`, `X-API-Key`, `X-Auth-Token`…).
+/// Header names only: values are never read.
+pub fn is_key_header(name: &str) -> bool {
+    let n = name.trim().to_ascii_lowercase();
+    n == "authorization"
+        || n == "proxy-authorization"
+        || n == "cookie"
+        || ["key", "token", "secret", "auth", "password"].iter().any(|w| n.contains(w))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -91,6 +116,8 @@ struct HttpTransport {
     client: reqwest::Client,
     url: String,
     headers: reqwest::header::HeaderMap,
+    /// A stored header carries a key ([`is_key_header`]): a 401 means that key was rejected.
+    key: bool,
     session_id: StdMutex<Option<String>>,
     protocol_version: StdMutex<Option<String>>,
 }
@@ -293,6 +320,7 @@ impl McpClient {
         Ok(HttpTransport {
             client,
             url,
+            key: server.headers.keys().any(|k| is_key_header(k)),
             headers,
             session_id: StdMutex::new(None),
             protocol_version: StdMutex::new(None),
@@ -435,7 +463,7 @@ impl McpClient {
                 .get(reqwest::header::WWW_AUTHENTICATE)
                 .and_then(|v| v.to_str().ok())
                 .map(str::to_string);
-            return Err(McpError::Unauthorized { www_authenticate });
+            return Err(McpError::Unauthorized { www_authenticate, key: h.key });
         }
         if !status.is_success() {
             return Err(McpError::Transport(format!("HTTP {status}")));
@@ -556,5 +584,68 @@ mod tests {
         ]}"#);
         assert_eq!(t.len(), 3);
         assert!(t.iter().all(|t| !t.read_only), "{t:?}");
+    }
+
+    /// Answers every request with a bare 401, like an MCP server refusing its key or token.
+    async fn refusing_server() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            while let Ok((mut sock, _)) = listener.accept().await {
+                tokio::spawn(async move {
+                    let mut buf = vec![0u8; 8192];
+                    let _ = sock.read(&mut buf).await;
+                    let _ = sock.write_all(b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").await;
+                });
+            }
+        });
+        format!("http://{addr}/mcp/")
+    }
+
+    fn http_server(url: &str, headers: &[(&str, &str)]) -> McpServer {
+        McpServer {
+            id: "srv".into(),
+            name: "github".into(),
+            transport: "http".into(),
+            command: None,
+            args: Vec::new(),
+            url: Some(url.into()),
+            env: Default::default(),
+            headers: headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect(),
+            enabled: true,
+            timeout_secs: 5,
+            created_at: None,
+        }
+    }
+
+    /// sign-in-wall-uses-tools E: a 401 on a server that sends a key says the key was rejected
+    /// (GitHub's MCP server has no sign-in to do); one with no key still says to sign in.
+    #[tokio::test]
+    async fn a_401_names_a_rejected_key_for_a_key_header_server_and_sign_in_otherwise() {
+        let url = refusing_server().await;
+        for header in ["Authorization", "X-API-Key", "x-auth-token"] {
+            let Err(e) = McpClient::connect(&http_server(&url, &[(header, "Bearer old-key")]), None).await else {
+                panic!("a 401 connects");
+            };
+            assert!(matches!(e, McpError::Unauthorized { key: true, .. }), "{header}: {e:?}");
+            let text = e.to_string();
+            assert_eq!(text, "transport error: HTTP 401 Unauthorized (the secret saved for this server was rejected; edit the server in Tools and paste a new one)");
+            assert!(!text.contains("sign in") && !text.contains("old-key"), "{text}");
+        }
+        for headers in [vec![], vec![("X-Workspace", "acme")]] {
+            let Err(e) = McpClient::connect(&http_server(&url, &headers), None).await else { panic!("a 401 connects") };
+            assert!(matches!(e, McpError::Unauthorized { key: false, .. }), "{e:?}");
+            assert_eq!(e.to_string(), "transport error: HTTP 401 Unauthorized (sign in to this server from the Tools screen)");
+        }
+    }
+
+    #[test]
+    fn key_headers_are_told_apart_by_name() {
+        for name in ["Authorization", "authorization", "X-API-Key", "api-key", "X-Auth-Token", "Private-Token", "X-Client-Secret", "Cookie"] {
+            assert!(is_key_header(name), "{name}");
+        }
+        for name in ["X-Workspace", "Accept", "User-Agent", "X-Region"] {
+            assert!(!is_key_header(name), "{name}");
+        }
     }
 }

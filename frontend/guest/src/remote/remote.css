@@ -48,8 +48,8 @@ svg.ri.big { width: 48px; height: 48px; }
 .rbtn.next b { font-size: 20px; line-height: 26px; font-weight: 700; }
 .rbtn.next small { font-size: 13px; line-height: 18px; font-weight: 500; color: var(--zinc-100); }
 .rrow { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 10px; }
-.rrow.two { grid-template-columns: 1fr 1fr; }
-.rlater { margin-top: -6px; font-size: 13px; line-height: 18px; }
+.rrow.one { grid-template-columns: 1fr; }
+.rrow.one .rbtn.tile { flex-direction: row; height: 56px; gap: 8px; font-size: 15px; }
 .rbtn.tile { flex-direction: column; height: 72px; border-radius: 16px; gap: 4px; font-size: 13px; padding: 0 6px; }
 .rbtn.sq { width: 44px; min-height: 44px; padding: 0; background: var(--kw-surface-main); }
 .rbtn.endlink { align-self: center; background: transparent; border-color: transparent; color: var(--kw-bad); font-size: 14px; }

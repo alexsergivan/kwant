@@ -274,18 +274,16 @@ test('game: nobody joined yet: Start is disabled and says why', async () => {
   t.app.gone(401);
 });
 
-test('game: Skip question and Voice are drawn but disabled with the reason (not in the quiz kit yet)', async () => {
+test('game: Skip and Voice stay hidden until they ship; Pause stands alone, and the paused remote has no tile row (ux-pass-0952 g)', async () => {
   const t = await open('question');
-  for (const k of ['skip', 'voice']) {
-    const b = t.$(`[data-k="${k}"]`);
-    assert.equal(b.getAttribute('aria-disabled'), 'true');
-    assert.equal(b.getAttribute('data-later'), m.LATER[k]);
-  }
-  // Touch has no hover: the reason is also a visible line under the row.
-  assert.equal(t.$('[data-k="later-line"]').textContent, 'Skip and Voice come in a later update.');
-  await t.click('[data-k="skip"]');
-  assert.deepEqual(t.writes(), []);
+  for (const k of ['skip', 'voice', 'later-line']) assert.equal(t.$(`[data-k="${k}"]`), null, k);
+  assert.ok(!t.text().includes('later update'));
+  assert.equal(t.$$('.rrow .rbtn').length, 1);
+  assert.ok(t.$('.rrow [data-k="pause"]'));
   t.app.gone(401);
+  const p = await open('paused');
+  assert.equal(p.$('.rrow'), null);
+  p.app.gone(401);
 });
 
 test('Quizmaster mood: no badge in lobby, live and paused; thinking only while the box is away; finished when ended', async () => {
