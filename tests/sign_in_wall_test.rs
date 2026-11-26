@@ -209,6 +209,12 @@ async fn a_turn_that_ends_on_a_sign_in_form_asks_the_person_once_to_sign_in() {
     // Its card is in the chat
     let card = env.state.db.get_message(step.message_id.as_deref().unwrap()).await.unwrap().unwrap();
     assert!(env.state.db.list_messages(&bot, 50).await.unwrap().iter().any(|m| m.id == card.id));
+    // A browser sign-in, not a "fix it in Tools" step: neither its record nor its card says so
+    let meta: Value = serde_json::from_str(card.meta.as_deref().unwrap()).unwrap();
+    let record = serde_json::to_value(step).unwrap();
+    for key in ["fix_in", "tools_server", "tools_server_id"] {
+        assert!(meta.get(key).is_none() && record.get(key).is_none(), "{key}: {meta} / {record}");
+    }
     // And in Needs you, in the same words
     let (_, away) = call(&env.app, "GET", "/api/away", None).await;
     let items: Vec<_> = away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").cloned().collect();
@@ -303,7 +309,7 @@ fn github_login(env: &Env) -> String {
 async fn a_sign_in_wall_on_a_site_whose_tools_fail_asks_to_fix_the_tools_not_to_sign_in() {
     let Some(env) = setup().await else { return };
     let bot = add_bot(&env, "Arch").await;
-    github_server(&env).await;
+    let server = github_server(&env).await;
     std::fs::write(behave_dir().join("Arch.curl"), github_login(&env)).unwrap();
     send(&env, &bot, "open the PR on github").await;
     assert_eq!(read("Arch", "status"), "200", "the bot opened the page");
@@ -323,6 +329,14 @@ async fn a_sign_in_wall_on_a_site_whose_tools_fail_asks_to_fix_the_tools_not_to_
     let card = env.state.db.get_message(step.message_id.as_deref().unwrap()).await.unwrap().unwrap();
     assert!(card.text.starts_with("Your help is needed: Arch's github tools can't connect"), "{}", card.text);
     assert!(!card.text.contains("browser panel"), "{}", card.text);
+    // The frontend contract: the step and its card say "fix it in Tools", and which server
+    let meta: Value = serde_json::from_str(card.meta.as_deref().unwrap()).unwrap();
+    let (_, listed) = call(&env.app, "GET", "/api/human-steps?status=open", None).await;
+    for json in [&meta, &serde_json::to_value(step).unwrap(), &listed[0]] {
+        assert_eq!(json["fix_in"], "tools", "{json}");
+        assert_eq!(json["tools_server"], "github", "{json}");
+        assert_eq!(json["tools_server_id"], server.as_str(), "{json}");
+    }
 
     // The person answers in words: the card closes, and the new turn (on the same wall) asks nothing
     send(&env, &bot, "you have github mcp access!").await;

@@ -53,6 +53,20 @@ pub struct HumanStep {
     /// before pages existed, which held the team page ([`Self::page`]).
     #[sqlx(default)]
     pub page_key: Option<String>,
+    /// sign-in-wall-uses-tools: `"tools"` on the step kwnt raises when a sign-in wall is on a site
+    /// the bot's MCP server covers but that server fails: the person fixes it in Tools › MCP
+    /// servers, not in the browser. Left out of the JSON on every other step.
+    #[sqlx(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fix_in: Option<String>,
+    /// With `fix_in`: the failing server's name as Tools shows it (`github`).
+    #[sqlx(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools_server: Option<String>,
+    /// With `fix_in`: the failing server's id (`[data-server-card=<id>]` in Tools).
+    #[sqlx(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tools_server_id: Option<String>,
 }
 
 fn target_object<S: serde::Serializer>(target: &Option<String>, s: S) -> Result<S::Ok, S::Error> {
@@ -152,6 +166,15 @@ pub struct HumanStepPlace {
     pub sandbox_target: Option<String>,
     /// The page it holds; `None` is the team page (`sandbox_target`).
     pub page_key: Option<String>,
+    /// sign-in-wall-uses-tools: the step is "fix this server in Tools" (`fix_in = 'tools'`).
+    pub tools: Option<ToolsFix>,
+}
+
+/// The MCP server a "fix it in Tools" step is about.
+#[derive(Debug, Clone)]
+pub struct ToolsFix {
+    pub server_id: String,
+    pub server: String,
 }
 
 /// A new step (with `true`), or one already open that the ask gets back (with `false`): the
@@ -169,9 +192,9 @@ fn same_sign_in([kwant, channel, direct, thread, browser, site]: [&str; 6]) -> S
 }
 
 /// Every column of `human_steps`, as [`CREATE_HUMAN_STEPS`] makes it.
-const HUMAN_STEP_COLUMNS: [&str; 17] = [
+const HUMAN_STEP_COLUMNS: [&str; 20] = [
     "id", "kwant_id", "channel_id", "direct_kwant_id", "thread_id", "turn_id", "kind", "reason", "url", "sandbox_target",
-    "target", "source", "status", "message_id", "created_at", "closed_at", "page_key",
+    "target", "source", "status", "message_id", "created_at", "closed_at", "page_key", "fix_in", "tools_server", "tools_server_id",
 ];
 
 const CREATE_HUMAN_STEPS: &str = "CREATE TABLE IF NOT EXISTS human_steps (
@@ -191,7 +214,10 @@ const CREATE_HUMAN_STEPS: &str = "CREATE TABLE IF NOT EXISTS human_steps (
     message_id TEXT,
     created_at TIMESTAMP NOT NULL,
     closed_at TIMESTAMP,
-    page_key TEXT
+    page_key TEXT,
+    fix_in TEXT,
+    tools_server TEXT,
+    tools_server_id TEXT
 )";
 
 impl Database {
@@ -223,6 +249,17 @@ impl Database {
         if has_page == 0 {
             sqlx::query("ALTER TABLE human_steps ADD COLUMN page_key TEXT").execute(&self.pool).await?;
         }
+        // 0.9.55 sign-in-wall-uses-tools: what a "fix it in Tools" step is about (additive; NULL
+        // on every other step)
+        for column in ["fix_in", "tools_server", "tools_server_id"] {
+            let has: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM pragma_table_info('human_steps') WHERE name = ?")
+                .bind(column)
+                .fetch_one(&self.pool)
+                .await?;
+            if has == 0 {
+                sqlx::query(&format!("ALTER TABLE human_steps ADD COLUMN {column} TEXT")).execute(&self.pool).await?;
+            }
+        }
         sqlx::query("CREATE INDEX IF NOT EXISTS human_steps_by_status ON human_steps (status, kwant_id)").execute(&self.pool).await?;
         Ok(())
     }
@@ -250,8 +287,8 @@ impl Database {
         // Writes first so the transaction holds SQLite's write lock before it reads
         let id = Uuid::new_v4().to_string();
         let inserted = sqlx::query(&format!(
-            "INSERT INTO human_steps (id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, kind, reason, url, sandbox_target, source, status, created_at, target, page_key)
-             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'open', ?12, ?14, ?16
+            "INSERT INTO human_steps (id, kwant_id, channel_id, direct_kwant_id, thread_id, turn_id, kind, reason, url, sandbox_target, source, status, created_at, target, page_key, fix_in, tools_server, tools_server_id)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, 'open', ?12, ?14, ?16, ?17, ?18, ?19
              WHERE (SELECT COUNT(*) FROM human_steps WHERE kwant_id = ?2 AND status = 'open') < ?13
                AND NOT EXISTS (SELECT 1 FROM human_steps WHERE status = 'open' AND ?6 IS NOT NULL AND turn_id = ?6)
                AND NOT EXISTS (SELECT 1 FROM human_steps WHERE {})",
@@ -273,6 +310,9 @@ impl Database {
         .bind(target)
         .bind(&site)
         .bind(&place.page_key)
+        .bind(place.tools.as_ref().map(|_| "tools"))
+        .bind(place.tools.as_ref().map(|t| t.server.as_str()))
+        .bind(place.tools.as_ref().map(|t| t.server_id.as_str()))
         .execute(&mut *tx)
         .await?;
         if inserted.rows_affected() == 0 {
@@ -373,7 +413,7 @@ impl Database {
     /// fix is in Tools, whichever page met the wall.
     pub async fn tools_step_asked_since(&self, kwant_id: &str, site: &str, since: DateTime<Utc>) -> Result<bool, DbError> {
         let n: i64 = sqlx::query_scalar(
-            "SELECT COUNT(*) FROM human_steps WHERE kind = 'other' AND source = 'auto' AND kwant_id = ?1 \
+            "SELECT COUNT(*) FROM human_steps WHERE fix_in = 'tools' AND source = 'auto' AND kwant_id = ?1 \
              AND substr(url, 1, length(?2)) = ?2 AND created_at >= ?3",
         )
         .bind(kwant_id)
@@ -390,7 +430,7 @@ impl Database {
     /// Never a CAPTCHA, and never a step the bot asked for.
     pub async fn open_auto_sign_in_steps(&self, kwant_id: &str, chat: &str) -> Result<Vec<HumanStep>, DbError> {
         Ok(sqlx::query_as::<_, HumanStep>(
-            "SELECT * FROM human_steps WHERE status = 'open' AND source = 'auto' AND kind IN ('sign_in', 'two_factor', 'other') \
+            "SELECT * FROM human_steps WHERE status = 'open' AND source = 'auto' AND (kind IN ('sign_in', 'two_factor') OR fix_in = 'tools') \
              AND kwant_id = ?1 AND COALESCE(thread_id, channel_id, direct_kwant_id) = ?2 ORDER BY created_at",
         )
         .bind(kwant_id)
@@ -488,6 +528,10 @@ mod tests {
             turn_id: Some(turn.into()),
             ..Default::default()
         };
+        let fix_github = |kwant: &str, turn: &str| HumanStepPlace {
+            tools: Some(ToolsFix { server_id: "mcp-gh".into(), server: "github".into() }),
+            ..place(kwant, turn)
+        };
         let hour_ago = Utc::now() - chrono::Duration::hours(1);
         let gh = "https://github.com/";
         db.create_human_step_with_card(&place("k", "t0"), "sign_in", "Sign in", Some("https://github.com/login"), None, "auto", |_| None)
@@ -498,8 +542,12 @@ mod tests {
             .await
             .unwrap();
         assert!(!db.tools_step_asked_since("k", gh, hour_ago).await.unwrap(), "a step the bot asked for isn't either");
+        db.create_human_step_with_card(&place("k", "t1b"), "other", "Something else", Some("https://github.com/login"), None, "auto", |_| None)
+            .await
+            .unwrap();
+        assert!(!db.tools_step_asked_since("k", gh, hour_ago).await.unwrap(), "nor an auto step that isn't about tools");
         let (s, _, _) = db
-            .create_human_step_with_card(&place("k", "t2"), "other", "Fix the key", Some("https://github.com/login"), None, "auto", |_| None)
+            .create_human_step_with_card(&fix_github("k", "t2"), "other", "Fix the key", Some("https://github.com/login"), None, "auto", |_| None)
             .await
             .unwrap();
         assert!(db.tools_step_asked_since("k", gh, hour_ago).await.unwrap());
@@ -529,7 +577,12 @@ mod tests {
         };
         let sign_in = make(dm("k", "t1"), "sign_in", "auto").await;
         let code = make(dm("k", "t2"), "two_factor", "auto").await;
-        let tools = make(dm("k", "t3"), "other", "auto").await;
+        let tools = make(
+            HumanStepPlace { tools: Some(ToolsFix { server_id: "mcp-gh".into(), server: "github".into() }), ..dm("k", "t3") },
+            "other",
+            "auto",
+        )
+        .await;
         let captcha = make(dm("k", "t4"), "captcha", "auto").await;
         let asked = make(dm("k", "t5"), "sign_in", "bot").await;
         make(dm("k2", "t6"), "sign_in", "auto").await;
@@ -543,6 +596,28 @@ mod tests {
         assert!(db.open_auto_sign_in_steps("k", "c").await.unwrap().is_empty(), "a thread's step isn't its channel's");
         assert!(db.close_human_step(&sign_in.id, "done").await.unwrap());
         assert_eq!(db.open_auto_sign_in_steps("k", "k").await.unwrap().len(), 2, "closed ones are gone");
+    }
+
+    /// sign-in-wall-uses-tools frontend contract: the "fix it in Tools" step's JSON carries
+    /// `fix_in: "tools"`, `tools_server` and `tools_server_id`; a plain sign-in step's JSON leaves
+    /// all three out (not `null`).
+    #[tokio::test]
+    async fn the_tools_step_says_fix_in_tools_and_a_sign_in_step_doesnt() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let place = |turn: &str| HumanStepPlace { kwant_id: "k".into(), direct_kwant_id: Some("k".into()), turn_id: Some(turn.into()), ..Default::default() };
+        let tools = HumanStepPlace { tools: Some(ToolsFix { server_id: "mcp-gh".into(), server: "github".into() }), ..place("t1") };
+        let (fix, _, _) = db.create_human_step_with_card(&tools, "other", "Fix the key", Some("https://github.com/login"), None, "auto", |_| None).await.unwrap();
+        let (sign_in, _, _) =
+            db.create_human_step_with_card(&place("t2"), "sign_in", "Sign in", Some("https://gitlab.com/users/sign_in"), None, "auto", |_| None).await.unwrap();
+        let fix = serde_json::to_value(db.get_human_step(&fix.id).await.unwrap().unwrap()).unwrap();
+        assert_eq!(fix["fix_in"], "tools");
+        assert_eq!(fix["tools_server"], "github");
+        assert_eq!(fix["tools_server_id"], "mcp-gh");
+        let sign_in = serde_json::to_value(db.get_human_step(&sign_in.id).await.unwrap().unwrap()).unwrap();
+        for key in ["fix_in", "tools_server", "tools_server_id"] {
+            assert!(sign_in.get(key).is_none(), "a sign-in step has no {key}: {sign_in}");
+        }
     }
 
     #[test]

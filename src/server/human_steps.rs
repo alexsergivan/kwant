@@ -18,8 +18,8 @@
 use super::continuity::{notify, Notification, SelfScope};
 use super::routes::{scope_for, try_kwant_turn, TurnOpts};
 use super::AppState;
-use crate::db::human_steps::{clean_request, HumanStep, HumanStepError, HumanStepPlace, HUMAN_STEP_STATUSES};
-use crate::db::models::{MessageExtra, NewMessage};
+use crate::db::human_steps::{clean_request, HumanStep, HumanStepError, HumanStepPlace, ToolsFix, HUMAN_STEP_STATUSES};
+use crate::db::models::{McpServer, MessageExtra, NewMessage};
 use crate::drivers::events::RuntimeEvent;
 use crate::sandbox::browser::{detect_bot_wall, BrowserController, CaptchaHit};
 use axum::{
@@ -269,7 +269,7 @@ fn kind_label(kind: &str) -> &'static str {
 }
 
 fn card_meta(s: &HumanStep) -> Value {
-    json!({
+    let mut meta = json!({
         "kind": "human_step",
         "human_step_id": s.id,
         "step_kind": s.kind,
@@ -281,7 +281,15 @@ fn card_meta(s: &HumanStep) -> Value {
         "source": s.source,
         "status": s.status,
         "target": s.target.as_deref().and_then(|t| serde_json::from_str::<Value>(t).ok()),
-    })
+    });
+    // sign-in-wall-uses-tools: the "fix it in Tools" step says so, and which server; every other
+    // step leaves these out
+    if let (Some(fix_in), Some(obj)) = (&s.fix_in, meta.as_object_mut()) {
+        obj.insert("fix_in".into(), json!(fix_in));
+        obj.insert("tools_server".into(), json!(s.tools_server));
+        obj.insert("tools_server_id".into(), json!(s.tools_server_id));
+    }
+    meta
 }
 
 /// How long the person has to solve a CAPTCHA: `captcha_timeout_minutes` (1 to 60, default 10).
@@ -459,7 +467,7 @@ pub async fn raise(
     source: &str,
 ) -> Result<Option<Outcome>, String> {
     let page = super::browser_pages::scope_page(scope);
-    raise_step(state, scope, page, kind, reason, url, target, source, true).await
+    raise_step(state, scope, page, kind, reason, url, target, source, true, None).await
 }
 
 /// [`raise`]; `wait: false` only asks (card, notification, held browser, CAPTCHA watcher) and
@@ -477,6 +485,7 @@ async fn raise_step(
     target: Option<&CaptchaHit>,
     source: &str,
     wait_for_it: bool,
+    tools: Option<ToolsFix>,
 ) -> Result<Option<Outcome>, String> {
     let Some(origin) = &scope.origin else {
         return Err("You can only ask the person for a step from a chat.".into());
@@ -495,6 +504,7 @@ async fn raise_step(
         sandbox_target: scope.sandbox_target.clone(),
         // only a page of this turn's own bot browser
         page_key: page.filter(|p| scope.sandbox_target.as_deref() == Some(super::browser_pages::page_team(p))),
+        tools,
     };
     // The browser is the person's before anyone can see the step: a bot action that lands between
     // the two would otherwise run on a page the person was just asked to use (and a test reading
@@ -674,7 +684,7 @@ pub const ASKED_NOTE: &str = "A CAPTCHA / human check blocked the page, so kwnt 
 pub async fn ask_for_bot_wall(state: &AppState, scope: &SelfScope, on: &str, page: &Value) -> Option<String> {
     scope.origin.as_ref()?;
     let (reason, url, target) = wall_request(page);
-    match raise_step(state, scope, Some(on.to_string()), "captcha", &reason, url.as_deref(), target.as_ref(), "auto", false).await {
+    match raise_step(state, scope, Some(on.to_string()), "captcha", &reason, url.as_deref(), target.as_ref(), "auto", false, None).await {
         Ok(Some(outcome)) => Some(format!("A CAPTCHA blocked the page, so the person was asked to solve it. {}", outcome_text(Some(outcome), true))),
         Ok(None) => Some(ASKED_NOTE.to_string()),
         Err(e) => {
@@ -726,7 +736,7 @@ pub async fn ask_for_sign_in_wall(state: &AppState, scope: &SelfScope, page: &st
         return None;
     }
     let reason = sign_in_reason(&scope.kwant_name, kind, &host);
-    match raise_step(state, scope, Some(page.to_string()), kind, &reason, Some(&url), None, "auto", false).await {
+    match raise_step(state, scope, Some(page.to_string()), kind, &reason, Some(&url), None, "auto", false, None).await {
         Ok(_) => {
             tracing::info!(kwant_id = %scope.kwant_id, page, kind, "a turn ended on a sign-in wall: asked the person");
             Some(reason)
@@ -739,17 +749,18 @@ pub async fn ask_for_sign_in_wall(state: &AppState, scope: &SelfScope, page: &st
 }
 
 /// sign-in-wall-uses-tools B: the step kwnt raises when a turn ended on the sign-in page of a site
-/// the bot has tools for, but those tools are failing (kind `other`, source `auto`).
+/// the bot has tools for, but those tools are failing (kind `other`, source `auto`, `fix_in = "tools"`).
 pub fn is_tools_step(s: &HumanStep) -> bool {
-    s.kind == "other" && s.source == "auto"
+    s.fix_in.as_deref() == Some("tools")
 }
 
 /// B: asks the person to fix the bot's failing tools (`reason` says what and where). Not a
 /// browser step: it holds no browser page, so the bot keeps its browser meanwhile; its Done
 /// starts a new turn. Whether it asked.
-pub(super) async fn ask_to_fix_tools(state: &AppState, scope: &SelfScope, reason: &str, url: &str) -> bool {
+pub(super) async fn ask_to_fix_tools(state: &AppState, scope: &SelfScope, reason: &str, url: &str, server: &McpServer) -> bool {
     let not_the_browser = SelfScope { sandbox_target: None, ..scope.clone() };
-    match raise_step(state, &not_the_browser, None, "other", reason, Some(url), None, "auto", false).await {
+    let tools = ToolsFix { server_id: server.id.clone(), server: server.name.clone() };
+    match raise_step(state, &not_the_browser, None, "other", reason, Some(url), None, "auto", false, Some(tools)).await {
         Ok(_) => {
             tracing::info!(kwant_id = %scope.kwant_id, "a turn ended on a sign-in wall its tools cover, but they fail: asked the person to fix them");
             true

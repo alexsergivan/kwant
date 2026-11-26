@@ -225,8 +225,10 @@ pub async fn on_covered_wall(
     if state.db.tools_step_asked_since(&scope.kwant_id, site, since).await.unwrap_or(true) {
         return None;
     }
-    let reason = failing_reason(&scope.kwant_name, names.first().map(String::as_str).unwrap_or(host), health);
-    super::human_steps::ask_to_fix_tools(state, scope, &reason, url).await.then_some(reason)
+    // the server the step is about: the failing one `pick` named
+    let server = names.first().and_then(|n| servers.iter().find(|s| &s.name == n)).or(servers.first())?;
+    let reason = failing_reason(&scope.kwant_name, &server.name, health);
+    super::human_steps::ask_to_fix_tools(state, scope, &reason, url, server).await.then_some(reason)
 }
 
 /// C: the line to add to a browser result whose page is `page`, once per turn and site; `None`
