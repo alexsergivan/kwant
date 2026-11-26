@@ -4,6 +4,10 @@
 // `view` (the quiz guest view pa5 proposes to pa2, see pa5/impl.md). `FakeBox` is the one box both
 // tests/guestPage.test.mjs and guest/fake/server.mjs (Chrome under the CSP, guest/e2e/csp.mjs) talk to.
 // Names, teams and questions are sample data from the pa0a mockups.
+// quiz-guest-phone-plays: those flat scenarios are the page's own shape. What a real box sends for a quiz is the engine's
+// view (src/kits/quiz/view.rs), kept word for word in quiz-views.json by tests/quiz_guest_fakes_test.rs; `EngineBox`
+// below plays a quiz on it and takes answers only as the engine does ({q: number, value}).
+import { readFileSync } from 'node:fs';
 
 const base = {
   v: 1,
@@ -32,14 +36,14 @@ const players = [
 ].map(([name, avatar]) => ({ name, avatar }));
 
 const qChoice = {
-  id: 'q8', round: 2, round_name: '90s music', n: 8, of: 10, kind: 'choice',
+  id: '7', round: 2, round_name: '90s music', n: 8, of: 10, kind: 'choice',
   text: 'In which year did the Spice Girls release their first single, "Wannabe"?',
   options: ['1994', '1996', '1998', '2000'], secs_left: 14, total_secs: 20,
 };
-const qText = { id: 'q3', round: 1, round_name: 'General knowledge', n: 3, of: 10, kind: 'text', text: 'What is the capital city of Australia?', secs_left: 22, total_secs: 30 };
-const qNumber = { id: 'q2', round: 4, round_name: 'Numbers', n: 2, of: 10, kind: 'number', text: 'How many bones are in an adult human body?', number: { start: 212, min: 0, max: 1000 }, secs_left: 9, total_secs: 30 };
+const qText = { id: '2', round: 1, round_name: 'General knowledge', n: 3, of: 10, kind: 'text', text: 'What is the capital city of Australia?', secs_left: 22, total_secs: 30 };
+const qNumber = { id: '1', round: 4, round_name: 'Numbers', n: 2, of: 10, kind: 'number', text: 'How many bones are in an adult human body?', number: { start: 212, min: 0, max: 1000 }, secs_left: 9, total_secs: 30 };
 const qPicture = {
-  id: 'q4', round: 3, round_name: 'Pictures', n: 4, of: 10, kind: 'picture', text: 'Which fruit is this, cut in half?',
+  id: '3', round: 3, round_name: 'Pictures', n: 4, of: 10, kind: 'picture', text: 'Which fruit is this, cut in half?',
   picture: { url: '/api/pocket/CODE/media/kiwi.svg', alt: 'A green fruit cut in half, with a pale centre and small black seeds', caption: 'Picture: drawn by Quizmaster', pixel: true },
   options: ['Lime', 'Kiwi', 'Fig', 'Guava'], secs_left: 17, total_secs: 30,
 };
@@ -222,3 +226,74 @@ export const CSP = "default-src 'self'; connect-src 'self'; img-src 'self' data:
 
 /** A tiny pixel picture for the picture question (a kiwi cut in half). */
 export const KIWI_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 20" shape-rendering="crispEdges"><rect width="32" height="20" fill="#120e26"/><rect x="8" y="2" width="16" height="16" fill="#7a5230"/><rect x="9" y="3" width="14" height="14" fill="#8fd14f"/><rect x="13" y="7" width="6" height="6" fill="#f2f7d9"/><rect x="11" y="6" width="1" height="1" fill="#1d1840"/><rect x="20" y="6" width="1" height="1" fill="#1d1840"/><rect x="11" y="13" width="1" height="1" fill="#1d1840"/><rect x="20" y="13" width="1" height="1" fill="#1d1840"/><rect x="15" y="5" width="1" height="1" fill="#1d1840"/><rect x="16" y="14" width="1" height="1" fill="#1d1840"/></svg>`;
+
+/** The quiz engine's own guest views, per phase (written by tests/quiz_guest_fakes_test.rs; never edit by hand). */
+export const quizViews = JSON.parse(readFileSync(new URL('./quiz-views.json', import.meta.url), 'utf8'));
+
+/**
+ * A box that sends the engine's views exactly as a real one does: the v1 envelope around `quizViews.views[name].view`,
+ * `info` with the engine's public lobby (`teams[].color`), and `answer` only as `{q: <number>, value}` where value is the
+ * option's position (choice), a string (text) or a number (number). Anything else is 400, like the engine's bad_request.
+ * `go(name)` moves the box to another kept view (the host pressing Next), as a new state version.
+ */
+export class EngineBox {
+  constructor(name = 'lobby', { code = 'quiz' } = {}) {
+    this.code = code;
+    this.version = 1;
+    this.answers = [];
+    this.go(name);
+  }
+  go(name) {
+    const kept = quizViews.views[name];
+    if (!kept) throw new Error(`no engine view ${name}`);
+    this.name = name;
+    this.viewer = kept.viewer;
+    this.view = JSON.parse(JSON.stringify(kept.view));
+    this.version++;
+  }
+  player() {
+    return quizViews.players.find((p) => p.id === this.viewer);
+  }
+  env(withSeat = true) {
+    const p = this.player();
+    const out = {
+      api: 'pocket/1',
+      version: this.version,
+      viewer: withSeat ? 'guest' : 'anyone',
+      pocket: { code: this.code, kit: 'quiz', title: quizViews.title, state: 'open', opens_at: null, closes_at: null, ended_at: null, expires_at: null, players: quizViews.players.length, max_players: 60, needs_pin: false, retention: { kind: 'after_end', days: 7 } },
+    };
+    if (withSeat) {
+      out.me = { id: p.id, name: p.name, avatar: p.avatar, team: p.team ?? null, notices: [] };
+      out.view = this.view;
+    } else out.view = quizViews.info;
+    return out;
+  }
+  handle(path, body = {}) {
+    const [what, query] = path.split('?');
+    const err = (status, error) => ({ status, body: { error, message: 'Fake engine box.' } });
+    if (what === 'info') return { status: 200, body: this.env(false) };
+    if (what === 'state') {
+      const since = Number(new URLSearchParams(query).get('since'));
+      if (since && since === this.version) return { status: 204, body: null };
+      return { status: 200, body: this.env() };
+    }
+    if (what === 'action') {
+      const a = body?.body;
+      const q = this.view.question;
+      if (body?.name !== 'answer' || !a || typeof a.q !== 'number' || !Number.isInteger(a.q) || !('value' in a)) return err(400, 'bad_request');
+      if (this.view.phase !== 'question' || !q || a.q !== q.q) return err(409, 'not_now');
+      const v = a.value;
+      const ok =
+        q.kind === 'choice' ? Number.isInteger(v) && v >= 0 && v < q.options.length : q.kind === 'text' ? typeof v === 'string' && v.trim() !== '' : typeof v === 'number' && Number.isFinite(v);
+      if (!ok) return err(400, 'bad_request');
+      if (this.view.me.answered) return err(409, 'already_answered');
+      this.answers.push(a);
+      // What the engine does on a first answer: this player has answered, with their answer as text, and the count moves.
+      this.view.me = { ...this.view.me, answered: true, my_answer: q.kind === 'choice' ? q.options[v] : String(v) };
+      this.view.answered = { ...this.view.answered, count: this.view.answered.count + 1 };
+      this.version++;
+      return { status: 200, body: this.env() };
+    }
+    return err(404, 'not_found');
+  }
+}

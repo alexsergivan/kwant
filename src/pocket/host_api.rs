@@ -177,7 +177,7 @@ async fn read_json(state: &AppState, s: &Snapshot) -> PResult<Value> {
             }
         }
     }
-    let host_view = s.kit().map(|k| k.view(&ctx, &s.kit_state, &Viewer::Host));
+    let host_view = s.kit().map(|k| super::host_view_with_locks(s, k.view(&ctx, &s.kit_state, &Viewer::Host)));
     let join = super::address::join(state, s).await;
     Ok(json!({ "pocket": card(s), "summary": summary, "removed": counts.removed, "host_view": host_view, "join": join }))
 }

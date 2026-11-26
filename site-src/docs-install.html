@@ -137,6 +137,8 @@ Type=simple
 User=kwnt
 ExecStart=/usr/local/bin/kwnt serve --host 0.0.0.0 --port 8799
 Restart=always
+<span class="c"># Stop and restart only kwnt itself: programs a bot left running in the background keep running</span>
+KillMode=process
 Environment=KWNT_DATA_DIR=/var/lib/kwnt
 Environment=LAYA_URL=http://127.0.0.1:8000
 
@@ -144,6 +146,7 @@ Environment=LAYA_URL=http://127.0.0.1:8000
 WantedBy=multi-user.target</code></pre>
 <pre><code>systemctl daemon-reload
 systemctl enable --now kwnt</code></pre>
+<p><code>KillMode=process</code> means an update or a restart stops only kwnt, not programs a bot deliberately started in the background (a dev server, a long build). kwant itself still stops a command that times out or a turn you cancel, with everything it started. Without that line, systemd stops every program kwnt ever started. <code>systemctl status kwnt</code> lists the ones still running; stop one with <code>kill &lt;pid&gt;</code>.</p>
 
 <h2 id="docker">VPS in 5 minutes with Docker Compose</h2>
 <p>One command starts kwnt, Laya (with its model baked in) and a private Chromium for the bots, so VM mode works without mounting the Docker socket. You need Docker with Compose and about 4 GB of free RAM.</p>
