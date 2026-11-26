@@ -8,6 +8,7 @@
 - the CI step exists in the fresh-machine job and is not a required check yet.
 """
 import json
+import os
 import re
 import sys
 import unittest
@@ -87,6 +88,24 @@ class Numbers(unittest.TestCase):
 
 
 DOWN = {"error": "The bot browser could not start kwant's Chrome on this computer: Chrome started but did not open its debugging port in time.", "is_running": False}
+
+
+class MemorySplit(unittest.TestCase):
+    STATUS = "Name:\tkwnt\nVmRSS:\t   91124 kB\nRssAnon:\t   28324 kB\nRssFile:\t   62800 kB\nRssShmem:\t       0 kB\n"
+
+    def test_heap_and_mapped_files_are_read_apart(self):
+        self.assertEqual(pb.rss_split(self.STATUS), {"anon_mb": 27.7, "file_mb": 61.3})
+
+    def test_a_kernel_without_the_fields_gives_none_not_an_error(self):
+        self.assertEqual(pb.rss_split("Name:\tkwnt\nVmRSS:\t 1 kB\n"), {"anon_mb": None, "file_mb": None})
+
+    def test_a_process_that_is_gone_gives_none(self):
+        self.assertIsNone(pb.rss_split_of(2 ** 22 + 12345))
+
+    def test_this_process_has_both(self):
+        split = pb.rss_split_of(os.getpid())
+        self.assertGreater(split["anon_mb"], 0)
+        self.assertGreater(split["file_mb"], 0)
 
 
 class ChromeThatWillNotStart(unittest.TestCase):

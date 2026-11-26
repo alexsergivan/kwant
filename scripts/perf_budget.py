@@ -198,6 +198,26 @@ def make_machine(root: Path):
     return home, binp, data
 
 
+def rss_split(status_text):
+    """{"anon_mb", "file_mb"} from a /proc/<pid>/status text: the heap and other private memory (RssAnon) and the
+    mapped files, mostly kwnt's own executable (RssFile). Not judged: it tells a heap regression from a bigger binary
+    (perf-idle-memory). A field the kernel doesn't show is None."""
+    out = {"anon_mb": None, "file_mb": None}
+    for line in status_text.splitlines():
+        for field, key in (("RssAnon:", "anon_mb"), ("RssFile:", "file_mb")):
+            if line.startswith(field):
+                out[key] = round(int(line.split()[1]) / 1024, 1)
+    return out
+
+
+def rss_split_of(pid):
+    """rss_split for a running process; None when /proc has no such process."""
+    try:
+        return rss_split(Path(f"/proc/{pid}/status").read_text())
+    except OSError:
+        return None
+
+
 def rss_mb(pid):
     """kwnt's resident memory in MB (VmRSS), or None when /proc has no such process."""
     try:
@@ -386,8 +406,10 @@ def one_run(kwnt, browser, idle_seconds, take_memory, log, browser_wait=60):
             # 30 s after startup, then 30 s after the reply (measured from when each happened)
             time.sleep(max(0.0, t_up + idle_seconds - time.perf_counter()))
             out["idle_rss_mb"] = rss_mb(proc.pid)
+            out["idle_rss_split"] = rss_split_of(proc.pid)
             time.sleep(max(0.0, events.first_text + idle_seconds - time.perf_counter()))
             out["after_reply_rss_mb"] = rss_mb(proc.pid)
+            out["after_reply_rss_split"] = rss_split_of(proc.pid)
 
         if browser:
             try:
@@ -463,6 +485,7 @@ def main():
         "when": datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds"),
         "kwnt": str(kwnt), "runs": args.runs, "memory_runs": args.memory_runs, "idle_seconds": args.idle_seconds,
         "browser": found_browser, "browser_skip": skipped.get("browser_launch_s"), "chrome_diagnosis": diagnosis, "measures": rows, "samples": {k: [r.get(k) for r in runs] for k in MEASURES},
+        "memory_split": {k: [r.get(f"{k}_rss_split") for r in runs[:args.memory_runs]] for k in ("idle", "after_reply")},
     }
     Path(args.out).write_text(json.dumps(results, indent=2) + "\n")
     print(f"\nwrote {args.out}")
