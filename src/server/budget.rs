@@ -94,6 +94,8 @@ pub(super) async fn pause_if_over(scope: &TurnScope, spoken: &[String], replies:
     });
     let msg = scope.message("system", "kwant", text);
     let saved = scope.save(&msg, Some(meta)).await;
+    // RED PROOF ONLY (never merges): widen the gap between the notice and its Needs-you item
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     // …and in Needs you, with the same Continue (0.9.5). The chain is the last bot's that spoke
     let by = replies.last().and_then(|(from, _)| scope.teammates.iter().find(|k| &k.name == from)).or(scope.teammates.first());
     if let (Some(by), Some(m)) = (by, &saved) {

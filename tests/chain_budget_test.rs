@@ -234,6 +234,10 @@ async fn the_continue_button_carries_a_paused_chain_on() {
     let notice = env.notices().await.remove(0);
     // 0.9.5: the pause is in Needs you too, once, with the notice's Continue
     let stopped = |away: Value| -> Vec<Value> { away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").cloned().collect() };
+    // budget.rs `pause_if_over` saves the notice and only then adds the Needs-you item, so the
+    // notice can show up first: wait for the item (a Continue pressed before it existed would
+    // also leave it open at the check after Bob's turn)
+    env.wait_for("the Needs-you item", || async { !stopped(ok(&env.app, "GET", "/api/away", None).await).is_empty() }).await;
     let items = stopped(ok(&env.app, "GET", "/api/away", None).await);
     assert_eq!(items.len(), 1, "{items:?}");
     assert_eq!(items[0]["message_id"], notice.id.as_str());
@@ -311,4 +315,30 @@ async fn a_200k_limit_set_after_the_upgrade_is_kept() {
     // The migration runs once: opening again doesn't clear a 200k the person picked since
     let db = Database::init(tmp.path()).await.unwrap();
     assert_eq!(db.get_setting(kwnt::server::budget::SETTING).await.unwrap().as_deref(), Some("200000"));
+}
+
+// RED PROOF ONLY (never merges): main's test as it was, against the delay in budget.rs
+#[tokio::test]
+async fn red_proof_mains_test_reads_needs_you_once() {
+    let env = setup().await;
+    ok(&env.app, "POST", "/api/settings", Some(json!({"chain_token_budget": 1}))).await;
+    env.say("@Ann look at this MENTION:Bob").await;
+    env.wait_for("the notice", || async { !env.notices().await.is_empty() }).await;
+    let notice = env.notices().await.remove(0);
+    // 0.9.5: the pause is in Needs you too, once, with the notice's Continue
+    let stopped = |away: Value| -> Vec<Value> { away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").cloned().collect() };
+    let items = stopped(ok(&env.app, "GET", "/api/away", None).await);
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(items[0]["message_id"], notice.id.as_str());
+    assert_eq!(items[0]["retry"], json!({"type": "continue"}));
+    let title = items[0]["title"].as_str().unwrap();
+    assert!(title.contains("Bob") && title.ends_with("Continue in the chat carries on."), "{title}");
+    ok(&env.app, "POST", &format!("/api/chains/{}/continue", notice.id), None).await;
+    env.wait_for("Bob's turn", || async { env.replies_from("Bob").await == 1 }).await;
+    assert!(stopped(ok(&env.app, "GET", "/api/away", None).await).is_empty(), "Continue answered it");
+    assert!(env.messages().await.iter().any(|m| m.sender_role == "user" && m.text == "continue"), "the person's continue is in the chat");
+    // Not a notice: refused
+    let first = env.messages().await.remove(0);
+    let (s, _) = call(&env.app, "POST", &format!("/api/chains/{}/continue", first.id), None).await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
 }
