@@ -190,7 +190,7 @@ async fn a_failed_turn_says_the_bot_stopped() {
         &Note {
             kind: "turn_stopped".into(),
             title: "Researcher stopped".into(),
-            body: "Researcher couldn't finish in your direct chat. Open kwant bots to retry.".into(),
+            body: "Researcher couldn't finish in your direct chat. Open kwant to retry.".into(),
         }
     );
     // One notification for the stop, and no "replied"
@@ -200,7 +200,7 @@ async fn a_failed_turn_says_the_bot_stopped() {
 }
 
 /// A turn parked behind a usage limit retries by itself at the reset, and its chat says when:
-/// "stopped… Open kwant bots to retry" would ask the person for nothing (Rigel, 33e QA).
+/// "stopped… Open kwant to retry" would ask the person for nothing (Rigel, 33e QA).
 #[tokio::test]
 async fn a_turn_waiting_for_its_limit_retry_sends_no_stop() {
     let mut env = setup().await;
