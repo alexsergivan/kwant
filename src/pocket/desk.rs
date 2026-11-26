@@ -1652,7 +1652,10 @@ mod tests {
         assert_eq!(code(act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "s1", "note": "after 5" }))), "ok");
         say(&mut st, &mut ctx, "pl_ann", "can I get a discount?").unwrap();
         Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ann", "why": "Discount" })).unwrap();
-        assert_eq!(item(&st), booking_item, "the hand-off doesn't replace the request");
+        // desk-inbox-rows-server (m2): the request no longer hides the hand-off: two rows
+        let mut both = booking_item.clone();
+        both.push(("pl_ann".to_string(), HANDOFF, None, "can I get a discount?".to_string()));
+        assert_eq!(item(&st), both, "the hand-off doesn't replace the request, nor the request the hand-off");
         assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "resolve", json!({ "guest": "pl_ann" }))), "ok");
         assert_eq!(item(&st), booking_item, "resolve leaves the request");
         Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ann", "why": "Discount" })).unwrap();
