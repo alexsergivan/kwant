@@ -420,7 +420,9 @@ async fn a_file_wakes_only_the_wait_in_its_own_thread() {
 /// itself are up there and no turn waits on them ("you have github mcp access!"). Those close as
 /// `left_for_message`, so the "needs you" strip clears. A step the bot asked for, a CAPTCHA, a
 /// step in another chat of the bot, and another bot's step stay open. (A step a turn still waits
-/// on stays open on typed text: `a_file_sent_in_the_chat_returns_the_turn_waiting_on_its_step`.)
+/// on stays open on typed text: `a_file_sent_in_the_chat_returns_the_turn_waiting_on_its_step`.
+/// A plain `other` step: `typed_text_leaves_a_plain_other_step_kwnt_raised_open`.) A bot may hold
+/// at most MAX_OPEN_PER_KWANT (5) open steps, so Arch holds exactly five here.
 #[tokio::test]
 async fn typed_text_closes_the_sign_in_cards_kwnt_raised_that_nobody_waits_on() {
     use kwnt::db::human_steps::HumanStepPlace;
@@ -437,14 +439,12 @@ async fn typed_text_closes_the_sign_in_cards_kwnt_raised_that_nobody_waits_on() 
         async move { db.create_human_step_with_card(&place, kind, "Sign in to github.com", None, None, source, |_| None).await.unwrap().0.id }
     };
     let sign_in = make(dm(&env.a, "ended-1"), "sign_in", "auto").await;
-    // The tools step carries its marker (fix_in "tools"), as ask_to_fix_tools raises it; a plain
-    // `other` step kwnt raised without it isn't a sign-in step and stays open
+    // The tools step carries its marker (fix_in "tools"), as ask_to_fix_tools raises it
     let tools_place = HumanStepPlace {
         tools: Some(kwnt::db::human_steps::ToolsFix { server_id: "mcp-gh".into(), server: "github".into() }),
         ..dm(&env.a, "ended-2")
     };
     let tools = make(tools_place, "other", "auto").await;
-    let plain_other = make(dm(&env.a, "ended-7"), "other", "auto").await;
     let captcha = make(dm(&env.a, "ended-3"), "captcha", "auto").await;
     let asked = make(dm(&env.a, "ended-4"), "sign_in", "bot").await;
     let in_thread = make(HumanStepPlace { thread_id: Some(thread.id.clone()), ..dm(&env.a, "ended-5") }, "sign_in", "auto").await;
@@ -454,7 +454,6 @@ async fn typed_text_closes_the_sign_in_cards_kwnt_raised_that_nobody_waits_on() 
     for (id, status) in [
         (&sign_in, "left_for_message"),
         (&tools, "left_for_message"),
-        (&plain_other, "open"),
         (&captcha, "open"),
         (&asked, "open"),
         (&in_thread, "open"),
@@ -462,6 +461,31 @@ async fn typed_text_closes_the_sign_in_cards_kwnt_raised_that_nobody_waits_on() 
     ] {
         assert_eq!(step(&env, id).await["step"]["status"], status, "{id} should be {status}");
     }
+}
+
+/// sign-in-wall-uses-tools D: a plain `other` step kwnt raised without the tools marker isn't a
+/// sign-in step, so typed text leaves it open while the sign-in card beside it closes. (Its own
+/// test so the one above stays within MAX_OPEN_PER_KWANT open steps for Arch.)
+#[tokio::test]
+async fn typed_text_leaves_a_plain_other_step_kwnt_raised_open() {
+    use kwnt::db::human_steps::HumanStepPlace;
+    let env = setup().await;
+    let make = |turn: &'static str, kind: &'static str| {
+        let db = env.state.db.clone();
+        let place = HumanStepPlace {
+            kwant_id: env.a.clone(),
+            direct_kwant_id: Some(env.a.clone()),
+            turn_id: Some(turn.into()),
+            ..Default::default()
+        };
+        async move { db.create_human_step_with_card(&place, kind, "Sign in to github.com", None, None, "auto", |_| None).await.unwrap().0.id }
+    };
+    let sign_in = make("ended-po-1", "sign_in").await;
+    let plain_other = make("ended-po-2", "other").await;
+
+    send_direct(&env, &env.a, "you have github mcp access! REPLYTAG:d2", json!({})).await;
+    assert_eq!(step(&env, &sign_in).await["step"]["status"], "left_for_message");
+    assert_eq!(step(&env, &plain_other).await["step"]["status"], "open");
 }
 
 /// A tools step (sign-in-wall-uses-tools B): kwnt raised it for a turn that already ended, so no
