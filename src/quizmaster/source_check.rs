@@ -7,7 +7,8 @@
 //!   addresses that were checked; redirects are followed by hand, at most [`Policy::max_redirects`],
 //!   and each new address is checked the same way;
 //! - the page must answer within [`Policy::timeout`] and be at most [`Policy::max_bytes`] (the
-//!   body is read in a stream and stopped at the cap), as HTML or plain text;
+//!   body is read in a stream and stopped at the cap), as HTML or plain text. Wikipedia's biggest
+//!   articles are up to ~3.6 MB of HTML, so its hosts get [`WIKIPEDIA_MAX_BYTES`] ([`Policy::big_hosts`]);
 //! - the quote, normalised like guest answers (`matching::normalise`), must be on the page;
 //! - the answer must be in the quote: the text answer or an accepted spelling as whole words, the
 //!   right option's text, or for a number the same number (commas between digits ignored).
@@ -26,6 +27,9 @@ use std::time::Duration;
 pub const USER_AGENT: &str = "kwant-quizmaster/1 (source check)";
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 pub const MAX_BYTES: usize = 2 * 1024 * 1024;
+/// The cap for `wikipedia.org` and its subdomains: its most-read articles measured 1.6-3.6 MB of
+/// HTML on Nov 26, 2026 (quiz-source-big-pages/impl.md), about twice that leaves room to grow.
+pub const WIKIPEDIA_MAX_BYTES: usize = 8 * 1024 * 1024;
 pub const MAX_REDIRECTS: usize = 3;
 /// Pages checked at the same time.
 pub const PARALLEL: usize = 6;
@@ -45,13 +49,22 @@ pub struct Policy {
     pub timeout: Duration,
     pub max_bytes: usize,
     pub max_redirects: usize,
+    /// Sites whose pages may be bigger than `max_bytes`: a host name, matching itself and its
+    /// subdomains (never a look-alike such as `notwikipedia.org`), and its cap.
+    pub big_hosts: Vec<(String, usize)>,
     /// Tests only: also fetch `http://` and loopback addresses (still nothing else private).
     pub local_http: bool,
 }
 
 impl Default for Policy {
     fn default() -> Self {
-        Self { timeout: TIMEOUT, max_bytes: MAX_BYTES, max_redirects: MAX_REDIRECTS, local_http: false }
+        Self {
+            timeout: TIMEOUT,
+            max_bytes: MAX_BYTES,
+            max_redirects: MAX_REDIRECTS,
+            big_hosts: vec![("wikipedia.org".into(), WIKIPEDIA_MAX_BYTES)],
+            local_http: false,
+        }
     }
 }
 
@@ -59,6 +72,24 @@ impl Policy {
     /// The policy the bot tools use: the default, unless a test opened loopback.
     pub fn current() -> Self {
         Self { local_http: LOCAL_HTTP.load(Ordering::SeqCst), ..Self::default() }
+    }
+
+    /// The size cap for a page at `url`: a [`Policy::big_hosts`] cap when its host is that host or
+    /// one of its subdomains, else `max_bytes`.
+    pub fn cap_for(&self, url: &url::Url) -> usize {
+        // RED PROOF: main's behaviour, one cap for every host
+        let _ = url;
+        self.max_bytes
+    }
+}
+
+/// "over 2 MB": the cap that applied, for [`Fail::TooBig`]'s detail.
+#[allow(dead_code)] // RED PROOF: unused until the fix
+fn over(cap: usize) -> String {
+    if cap >= 1024 * 1024 {
+        format!("over {} MB", cap / (1024 * 1024))
+    } else {
+        format!("over {} KB", cap.div_ceil(1024))
     }
 }
 
@@ -573,6 +604,7 @@ mod tests {
         let (base, h) = stub().await;
         let big = run(&text_q("a", &[], &format!("{base}/big"), "a a"), &local()).await;
         assert_eq!(big.fail, Some(Fail::TooBig), "{big:?}");
+        assert_eq!(big.detail.as_deref(), Some("over 2 MB"), "the line names the cap that applied");
         let pdf = run(&text_q("Paris", &[], &format!("{base}/pdf"), "PDF Paris"), &local()).await;
         assert_eq!(pdf.fail, Some(Fail::NotAPage));
         let gone = run(&text_q("Paris", &[], &format!("{base}/missing"), QUOTE), &local()).await;
@@ -583,6 +615,96 @@ mod tests {
         let to_lan = run(&text_q("Paris", &[], &format!("{base}/to-lan"), QUOTE), &local()).await;
         assert_eq!(to_lan.fail, Some(Fail::NotHttps), "a redirect is checked again: {to_lan:?}");
         h.abort();
+    }
+
+    /// quiz-source-big-pages: a 3 MB article (mostly markup, the quote near the end), a page over
+    /// 8 MB, and a redirect from the big host to another one. `localhost` stands in for Wikipedia;
+    /// `127.0.0.1` is the same server under a name the policy doesn't treat as big.
+    async fn big_stub() -> (u16, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let markup = "<span class=\"mw-ref\"><a href=\"#cite\"></a></span>";
+        let article = format!("{}<p>{QUOTE}</p>", markup.repeat(3 * 1024 * 1024 / markup.len() + 1));
+        let huge = format!("{}<p>{QUOTE}</p>", markup.repeat(WIKIPEDIA_MAX_BYTES / markup.len() + 1));
+        let app = Router::new()
+            .route("/wiki/Eiffel_Tower", get(move || async move { ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], article).into_response() }))
+            .route("/wiki/Huge", get(move || async move { ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], huge).into_response() }))
+            .route("/wiki/Away", get(move || async move { (axum::http::StatusCode::FOUND, [(header::LOCATION, format!("http://127.0.0.1:{port}/wiki/Eiffel_Tower"))]) }));
+        let h = tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        (port, h)
+    }
+
+    fn wiki_local() -> Policy {
+        Policy { big_hosts: vec![("localhost".into(), WIKIPEDIA_MAX_BYTES)], ..local() }
+    }
+
+    // Checked when the tests compile: the Wikipedia cap is the bigger one.
+    const _: () = assert!(WIKIPEDIA_MAX_BYTES > MAX_BYTES);
+
+    #[test]
+    fn wikipedia_hosts_get_the_bigger_cap_and_look_alikes_do_not() {
+        let p = Policy::default();
+        let cap = |u: &str| p.cap_for(&url::Url::parse(u).unwrap());
+        for u in [
+            "https://en.wikipedia.org/wiki/Joe_Biden",
+            "https://de.wikipedia.org/wiki/Vereinigte_Staaten",
+            "https://en.m.wikipedia.org/wiki/Mars",
+            "https://wikipedia.org/",
+            "https://EN.Wikipedia.ORG./wiki/Mars",
+        ] {
+            assert_eq!(cap(u), WIKIPEDIA_MAX_BYTES, "{u}");
+        }
+        for u in [
+            "https://wikipedia.org.evil.example/wiki/Mars",
+            "https://en.wikipedia.org.evil.example/wiki/Mars",
+            "https://notwikipedia.org/wiki/Mars",
+            "https://enwikipedia.org/wiki/Mars",
+            "https://wikipedia.org.au/",
+            "https://evil.example/en.wikipedia.org/wiki/Mars",
+            "https://en.wikipedia.org@evil.example/wiki/Mars",
+            "https://evil.example/?u=https://en.wikipedia.org",
+            "https://wikimedia.org/",
+            "https://example.org/",
+            "https://203.0.113.7/wiki/Mars",
+        ] {
+            assert_eq!(cap(u), MAX_BYTES, "{u}");
+        }
+        assert_eq!(Policy::current().cap_for(&url::Url::parse("https://en.wikipedia.org/wiki/Mars").unwrap()), WIKIPEDIA_MAX_BYTES, "the bot tools' policy has it");
+        let none = Policy { big_hosts: vec![(String::new(), WIKIPEDIA_MAX_BYTES)], ..Policy::default() };
+        assert_eq!(none.cap_for(&url::Url::parse("https://example.org/").unwrap()), MAX_BYTES, "an empty host matches nothing");
+    }
+
+    #[tokio::test]
+    async fn a_big_page_on_a_wikipedia_host_is_checked_and_nowhere_else() {
+        let (port, h) = big_stub().await;
+        let wiki = format!("http://localhost:{port}/wiki/Eiffel_Tower");
+        let ok = run(&text_q("Paris", &[], &wiki, QUOTE), &wiki_local()).await;
+        assert!(ok.ok, "a 3 MB article on the big host is checked: {ok:?}");
+        let missing = run(&text_q("Paris", &[], &wiki, "The Eiffel Tower is in Paris, the capital of France."), &wiki_local()).await;
+        assert_eq!(missing.fail, Some(Fail::QuoteMissing), "the big page is still read: {missing:?}");
+
+        let elsewhere = run(&text_q("Paris", &[], &format!("http://127.0.0.1:{port}/wiki/Eiffel_Tower"), QUOTE), &wiki_local()).await;
+        assert_eq!((elsewhere.fail, elsewhere.detail.as_deref()), (Some(Fail::TooBig), Some("over 2 MB")), "any other host keeps 2 MB: {elsewhere:?}");
+        let default_hosts = run(&text_q("Paris", &[], &wiki, QUOTE), &local()).await;
+        assert_eq!(default_hosts.fail, Some(Fail::TooBig), "only the hosts in the policy: {default_hosts:?}");
+
+        let huge = run(&text_q("Paris", &[], &format!("http://localhost:{port}/wiki/Huge"), QUOTE), &wiki_local()).await;
+        assert_eq!((huge.fail, huge.detail.as_deref()), (Some(Fail::TooBig), Some("over 8 MB")), "{huge:?}");
+
+        let away = run(&text_q("Paris", &[], &format!("http://localhost:{port}/wiki/Away"), QUOTE), &wiki_local()).await;
+        assert_eq!((away.fail, away.detail.as_deref()), (Some(Fail::TooBig), Some("over 2 MB")), "the cap follows the redirect's host: {away:?}");
+        h.abort();
+    }
+
+    #[test]
+    fn the_too_big_line_names_the_cap_that_applied() {
+        assert_eq!(over(MAX_BYTES), "over 2 MB");
+        assert_eq!(over(WIKIPEDIA_MAX_BYTES), "over 8 MB");
+        assert_eq!(over(300 * 1024), "over 300 KB");
+        assert_eq!(Fail::TooBig.says(), "the source page is too big", "the size comes from the detail");
+        assert_eq!(serde_json::to_value(Fail::TooBig).unwrap(), serde_json::json!("too_big"), "the stored name stays");
     }
 
     #[tokio::test]
