@@ -41,6 +41,7 @@ import {
   isImported,
   isKept,
   keepOwnBotsLine,
+  keepStarterBotsLine,
   isLive,
   isSignInUrl,
   loginApi as defaultLoginApi,
@@ -891,7 +892,7 @@ export const TeamStep: React.FC<{
         {!start && <li>
           <button type="button" data-keep-starter onClick={onKeep} className={`${tile} h-full flex flex-col gap-1 border-dashed border-zinc-600 bg-transparent hover:border-zinc-500`}>
             <span className="text-sm font-semibold text-zinc-100">{mainSpace ? 'Keep the starter bots' : 'Keep the bots you have'}</span>
-            <span className="text-[12.5px] leading-[18px] text-zinc-300">{mainSpace ? 'Architect, TechLead and DevOps, in #general.' : keepOwnBotsLine(botNames, spaceName)}</span>
+            <span className="text-[12.5px] leading-[18px] text-zinc-300">{mainSpace ? keepStarterBotsLine(botNames) : keepOwnBotsLine(botNames, spaceName)}</span>
             <span className="mt-auto text-right text-xs text-sky-300" aria-hidden="true">
               Use ›
             </span>

@@ -16,11 +16,26 @@ const m = await loadBundled(`
   export const newSpace = (props) => renderToStaticMarkup(React.createElement(NewSpaceModal, props));
 `);
 
-const NAMES = ['work', 'nature', 'books', 'games', 'home', 'rocket', 'art', 'lab'];
+// space-icons-2: 24 icons, 3 rows of 8 (work and money, make and learn, life), in this order.
+const NAMES = [
+  'work', 'code', 'chart', 'money', 'shop', 'mail', 'chat', 'box',
+  'rocket', 'lab', 'art', 'writing', 'photo', 'music', 'books', 'school',
+  'home', 'nature', 'games', 'health', 'travel', 'coffee', 'pets', 'star',
+];
 
-test('pixelIconFor: each of the 8 SPACE_ICONS gets its glyph', () => {
-  assert.equal(m.SPACE_ICONS.length, 8);
+test('pixelIconFor: each of the 24 SPACE_ICONS gets its glyph, in the design order', () => {
+  assert.equal(m.SPACE_ICONS.length, 24);
   m.SPACE_ICONS.forEach((i, n) => assert.equal(m.pixelIconFor(i)?.name, NAMES[n], i));
+  assert.equal(Object.keys(m.SPACE_PIXEL_ICONS).length, 24);
+});
+
+test('no duplicate emoji or names, and each stored emoji round-trips to the same picker icon', () => {
+  const keys = m.SPACE_ICONS.map(m.iconKey);
+  assert.equal(new Set(keys).size, 24);
+  assert.equal(new Set(m.SPACE_ICONS.map((i) => m.pixelIconFor(i).name)).size, 24);
+  // With or without U+FE0F, the stored value finds the same glyph (✉️ ❤️ ✈️ ✏️ carry it).
+  for (const i of m.SPACE_ICONS) assert.equal(m.pixelIconFor(i.replace(/\uFE0F/g, '')), m.pixelIconFor(i), i);
+  assert.equal(m.pixelIconFor('\u2709')?.name, 'mail');
 });
 
 test('pixelIconFor: trims and ignores the emoji variation selector', () => {
@@ -28,8 +43,9 @@ test('pixelIconFor: trims and ignores the emoji variation selector', () => {
   assert.equal(m.pixelIconFor(' 💼 ')?.name, 'work');
 });
 
-test('pixelIconFor: 📦, empty, old words and custom emoji fall back (null)', () => {
-  for (const v of ['📦', '', 'box', '🦄']) assert.equal(m.pixelIconFor(v), null, JSON.stringify(v));
+test('pixelIconFor: empty, old words and custom emoji fall back (null); 📦 is now a pixel box', () => {
+  for (const v of ['', 'box', '🦄', '⚡']) assert.equal(m.pixelIconFor(v), null, JSON.stringify(v));
+  assert.equal(m.pixelIconFor('📦')?.name, 'box');
 });
 
 test('glyphPx keeps every pixel square', () => {
@@ -44,8 +60,12 @@ test('every grid is 9x9 and uses only #, o and .', () => {
   }
 });
 
-test('every detail pixel sits inside main pixels (never floats on the tile)', () => {
+// space-icons-2 exception, by design (Mira's design check): "coffee"'s surface is the cup's open top.
+// Every other glyph keeps 36j's rule.
+const OPEN_DETAIL = new Set(['coffee']);
+test('every detail pixel sits inside main pixels (never floats on the tile), except the by-design one', () => {
   for (const g of Object.values(m.SPACE_PIXEL_ICONS)) {
+    if (OPEN_DETAIL.has(g.name)) continue;
     g.rows.forEach((r, y) => [...r].forEach((ch, x) => {
       if (ch !== 'o') return;
       const at = (dx, dy) => g.rows[y + dy]?.[x + dx] ?? '.';
@@ -68,12 +88,15 @@ test('SpaceTile with 💼 draws an svg glyph and no emoji text', () => {
   assert.ok(!/font-size/.test(html));
 });
 
-test('SpaceTile with 🦄, 📦 or an old word keeps the emoji', () => {
-  for (const [icon, shown] of [['🦄', '🦄'], ['📦', '📦'], ['box', '📦']]) {
+test('SpaceTile with 🦄 keeps the emoji; 📦, empty and an old word draw the pixel box', () => {
+  const uni = m.tile({ space: { id: 'spc_a', icon: '🦄', color: '#10b981' }, size: 40 });
+  assert.ok(!uni.includes('<svg'));
+  assert.ok(uni.includes('🦄'));
+  assert.match(uni, /font-size:20px/);
+  for (const icon of ['📦', '', 'box']) {
     const html = m.tile({ space: { id: 'spc_a', icon, color: '#10b981' }, size: 40 });
-    assert.ok(!html.includes('<svg'), icon);
-    assert.ok(html.includes(shown), icon);
-    assert.match(html, /font-size:20px/);
+    assert.match(html, /data-space-glyph/, JSON.stringify(icon));
+    assert.ok(!html.includes('📦'), JSON.stringify(icon));
   }
 });
 
@@ -86,17 +109,18 @@ test('New space picker: glyphs in the picked colour, named "Icon: <name>"', () =
   const html = m.newSpace({ spaces: [], onClose: () => {}, onCreated: () => {} });
   for (const n of NAMES) assert.ok(html.includes(`aria-label="Icon: ${n}"`), n);
   assert.ok(!html.includes('aria-label="Icon 💼"'));
-  // 8 picker buttons plus the 48 px preview tile above them.
-  assert.equal((html.match(/data-space-glyph/g) || []).length, 9);
+  // 24 picker buttons plus the 48 px preview tile above them.
+  assert.equal((html.match(/data-space-glyph/g) || []).length, 25);
   assert.match(html, /<svg[^>]*width="27"/);
   assert.match(html, /<svg[^>]*width="18"/);
   // A new space takes the first unused colour; the picker previews it.
   assert.match(html, /color-mix\(in srgb, #f59e0b 65%, white\)/);
 });
 
-test('Space settings picker uses the same glyph and names', async () => {
+test('Space settings uses the same picker, in the tile colour, 6 columns below md', async () => {
   const { readFileSync } = await import('node:fs');
   const src = readFileSync(new URL('../src/components/SpaceSettings.tsx', import.meta.url), 'utf8');
-  assert.match(src, /aria-label=\{`Icon: \$\{pixelIconFor\(i\)\?\.name \?\? i\}`\}/);
-  assert.match(src, /<PickerGlyph icon=\{i\} colour=\{spaceColor\(\{ id: space\.id, color \}\)\} \/>/);
+  assert.match(src, /const tileColour = spaceColor\(\{ id: space\.id, color \}\);/);
+  assert.match(src, /<SpaceIconPicker[\s\S]*?colour=\{tileColour\}[\s\S]*?gridClass="max-md:grid-cols-6 md:grid-cols-8 md:w-max"/);
+  assert.ok(!src.includes('PickerGlyph'));
 });

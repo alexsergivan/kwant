@@ -1010,6 +1010,11 @@ mod tests {
             ("Thanks, looks great!", "show me mockup image"),
             ("nice work", "Fix differences!"),
             ("I see", "What cool feature could we add?"),
+            // 0.9.54 greeting-one-reply: a hello or goodbye to the team
+            ("hi team!", "Fix the login button colour"),
+            ("hey guys", "show me mockup image"),
+            ("thanks team!", "Fix differences!"),
+            ("bye folks", "show me mockup image"),
         ] {
             assert_eq!(expected_kind(msg, &[earlier]), Other, "{msg} after {earlier}");
         }
@@ -1018,6 +1023,8 @@ mod tests {
         assert_eq!(expected_kind("Thanks! Now show me the dark version", &[]), Visual);
         assert_eq!(expected_kind("looks good, but why is the footer red?", &[]), Explain);
         assert_eq!(expected_kind("Perfect, now push it", &[]), Change);
+        assert_eq!(expected_kind("thanks team, now show me the dark version", &[]), Visual);
+        assert_eq!(expected_kind("hi team, fix the login button", &[]), Change);
         // Not thanks: a look, a "no", or seeing something
         assert_eq!(expected_kind("look at the header", &[]), Visual);
         assert_eq!(expected_kind("this is not good, fix it", &[]), Change);

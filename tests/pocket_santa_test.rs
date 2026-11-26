@@ -731,3 +731,86 @@ async fn santa_needs_a_pin_and_ten_wrong_guesses_lock_the_name() {
     let text = r.body.to_string();
     assert!(ids.iter().all(|i| !text.contains(i.as_str())) && !text.contains("Ana") && !text.contains("Cleo"), "{text}");
 }
+
+/// Every key named `name` anywhere in `v`, as `path=value` (empty when there is none).
+fn keys_named(v: &Value, name: &str, path: &str, out: &mut Vec<String>) {
+    match v {
+        Value::Object(o) => {
+            for (k, x) in o {
+                if k == name {
+                    out.push(format!("{path}.{k}={x}"));
+                }
+                keys_named(x, name, &format!("{path}.{k}"), out);
+            }
+        }
+        Value::Array(a) => {
+            for (i, x) in a.iter().enumerate() {
+                keys_named(x, name, &format!("{path}[{i}]"), out);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn no_locked(v: &Value, who: &str) {
+    let mut found = Vec::new();
+    keys_named(v, "locked", "", &mut found);
+    assert!(found.is_empty(), "{who} must never see a lock: {found:?}");
+}
+
+/// The host's `people` entry for `id` on the person's card and on the host page, and the page's version.
+async fn host_locked(t: &T, code: &str, host_key: &str, id: &str) -> (Value, Value, i64) {
+    let card = send(&t.main, "GET", &format!("/api/pockets/{code}"), None, &person()).await.body;
+    let page = send(&t.guest, "GET", &format!("/api/pocket/{code}/host/state"), None, &host_req(host_key)).await.body;
+    let pick = |people: &Value| people.as_array().unwrap().iter().find(|p| p["id"] == json!(id)).unwrap()["locked"].clone();
+    (pick(&card["host_view"]["people"]), pick(&page["view"]["people"]), page["version"].as_i64().unwrap())
+}
+
+#[tokio::test]
+async fn the_host_sees_a_pin_locked_name_live_and_nobody_else_does() {
+    // santa-pin-locked-live (Rigel F2 on #1245): 10 wrong PINs lock a name until the host's
+    // reset; the host's card and page say so at once, a guest and the big screen never do
+    let t = setup().await;
+    let (code, host_key) = make(&t, spec(Utc::now(), json!({ "keep_apart": [] }))).await;
+    let (ana, ana_key) = joined(&t, &code, "Ana").await;
+    let (ben, ben_key) = joined(&t, &code, "Ben").await;
+    joined(&t, &code, "Cleo").await;
+    assert_eq!(host_act(&t, &code, "draw_now", json!({})).await.status, StatusCode::OK);
+    let (card, page, _) = host_locked(&t, &code, &host_key, &ana).await;
+    assert_eq!((card, page), (json!(false), json!(false)), "nobody is locked yet, and the host is told so");
+    // Nine wrong tries (with the 10-minute wait after the 5th taken away): not locked yet
+    for n in 1..=9 {
+        assert_ne!(rejoin(&t, &code, "Ana", "0000").await.body["error"], "hard_locked", "try {n}");
+        if n == 5 {
+            let p = t.state.db.pocket_player(&code, &ana).await.unwrap().unwrap();
+            let c = kwnt::db::pocket::PinCounters { wrong_tries: p.wrong_tries, total_wrong: p.total_wrong, locked_until: Some(Utc::now() - Duration::seconds(1)), pin_locked: p.pin_locked, last_wrong_at: p.last_wrong_at };
+            t.state.db.pocket_set_pin_counters(&code, &ana, &c).await.unwrap();
+        }
+    }
+    let (card, page, before) = host_locked(&t, &code, &host_key, &ana).await;
+    assert_eq!((card, page), (json!(false), json!(false)));
+    // The 10th locks the name: the host's viewers are told (a new version and a push)
+    let mut rx = t.state.pocket.subscribe(&code);
+    assert_eq!(rejoin(&t, &code, "Ana", "0000").await.body["error"], "hard_locked");
+    let (card, page, after) = host_locked(&t, &code, &host_key, &ana).await;
+    assert_eq!((card, page), (json!(true), json!(true)), "the host's card and page say Ana is locked");
+    assert!(after > before, "the lock is a new version for the host's poll ({before} -> {after})");
+    assert!(matches!(rx.try_recv(), Ok(pocket::Signal::Changed(v)) if v == after), "the host's socket is pushed the lock");
+    let r = send(&t.guest, "GET", &format!("/api/pocket/{code}/host/state?since={before}"), None, &host_req(&host_key)).await;
+    assert_eq!(r.status, StatusCode::OK, "a poll with the old version gets the new view");
+    let (card, page, _) = host_locked(&t, &code, &host_key, &ben).await;
+    assert_eq!((card, page), (json!(false), json!(false)), "only Ana is locked");
+    // Guests (another player, and Ana on her phone that still has its key) and the big screen: no lock anywhere
+    no_locked(&state_of(&t, &code, &ben_key).await, "another guest");
+    no_locked(&state_of(&t, &code, &ana_key).await, "the locked guest's own page");
+    let screen = send(&t.guest, "GET", &format!("/api/pocket/{code}/host/state?view=screen"), None, &host_req(&host_key)).await;
+    assert_eq!(screen.status, StatusCode::OK, "{}", screen.body);
+    assert_eq!(screen.body["viewer"], "screen");
+    no_locked(&screen.body, "the big screen");
+    // The host's reset clears it, as a new version
+    let r = send(&t.main, "POST", &format!("/api/pockets/{code}/reset-pin"), Some(json!({ "player_id": ana })), &person()).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let (card, page, reset) = host_locked(&t, &code, &host_key, &ana).await;
+    assert_eq!((card, page), (json!(false), json!(false)), "the reset unlocks Ana on the host's side");
+    assert!(reset > after, "the reset is a new version ({after} -> {reset})");
+}

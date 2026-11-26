@@ -613,6 +613,37 @@ fn no_guest_view_holds_an_answer_before_its_reveal() {
 }
 
 #[test]
+fn a_game_saved_before_creatures_were_kept_restores_and_plays() {
+    let mut g = small(json!({}));
+    g.join("a", "Ann", t0()).unwrap();
+    g.join("b", "Bob", t0()).unwrap();
+    assert!(g.set_avatar("a", " beret "));
+    assert!(g.set_avatar("b", ""), "blank is no creature");
+    assert!(!g.set_avatar("zz", "horns"), "no such player");
+    let screen = serde_json::to_value(g.view(&Viewer::BigScreen, t0())).unwrap();
+    assert_eq!(screen["lobby"], json!([{"name": "Ann", "avatar": "beret"}, {"name": "Bob"}]));
+    // What main cf87adfc saved: players without the key
+    let mut saved = g.save();
+    for p in saved["players"].as_array_mut().unwrap() {
+        p.as_object_mut().unwrap().remove("avatar");
+    }
+    assert!(!saved.to_string().contains("avatar"));
+    let mut g = QuizGame::restore(g.spec().clone(), &saved).expect("an old save still restores");
+    let screen = serde_json::to_value(g.view(&Viewer::BigScreen, t0())).unwrap();
+    assert_eq!(screen["lobby"], json!([{"name": "Ann"}, {"name": "Bob"}]));
+    assert!(!g.save().to_string().contains("avatar"), "no creature, no key");
+    // ...and plays
+    next(&mut g, at(1));
+    answer(&mut g, "a", 0, json!(1), at(2)).unwrap();
+    next(&mut g, at(3));
+    next(&mut g, at(4));
+    assert_eq!(guest_json(&g, "a", at(4))["me"]["score"], 2);
+    // The big screen keeps its roster after the start
+    let screen = serde_json::to_value(g.view(&Viewer::BigScreen, at(4))).unwrap();
+    assert_eq!(screen["lobby"], json!([{"name": "Ann"}, {"name": "Bob"}]));
+}
+
+#[test]
 fn a_guest_score_moves_only_at_the_reveal() {
     let mut g = small(json!({}));
     g.join("a", "Ann", t0()).unwrap();

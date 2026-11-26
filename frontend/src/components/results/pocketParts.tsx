@@ -41,7 +41,7 @@ export const Callout: React.FC<{ tone?: 'warn'; children: React.ReactNode }> = (
 // Buttons: 44 px on phone, 36 px on desktop, 15 px type on phone (design.md §1 "Phone 390").
 export const BTN = 'min-h-[44px] sm:min-h-[36px] whitespace-nowrap text-[15px] sm:text-meta';
 // Half-width secondary buttons on phone (two columns): 14 px and tighter padding so labels stay on one line.
-export const HALF = 'min-h-[44px] sm:min-h-[36px] whitespace-nowrap text-[14px] px-2.5 sm:px-3 sm:text-meta';
+export const HALF = '[&>svg]:shrink-0 min-h-[44px] sm:min-h-[36px] whitespace-nowrap text-[14px] px-2.5 sm:px-3 sm:text-meta';
 export const PRIMARY = `kw-btn-primary kw-hover-deepen ${BTN}`;
 export const GHOST = `kw-btn-ghost ${BTN}`;
 export const STOP = `inline-flex items-center justify-center gap-1.5 rounded-xl px-3 font-medium text-bad hover:bg-rose-300/10 kw-focus ${BTN}`;
