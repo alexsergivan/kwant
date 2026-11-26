@@ -985,6 +985,7 @@ mod tests {
             turn_id: None,
             sandbox_target: None,
             page_key: None,
+            tools: None,
         };
         db.create_human_step_with_card(&step_place, "captcha", "Solve the CAPTCHA", None, None, "auto", |_| None).await.unwrap();
         let steps = db.list_human_steps(Some("open"), None, Some(&space)).await.unwrap();

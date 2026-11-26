@@ -163,6 +163,8 @@ export class FakeBox {
     this.seat = null; // flat view after join or rejoin
     this.version = 1;
     this.joinError = null;
+    /** Extra fields on the join refusal, as pa1 adds them (not_open_yet carries `opens_at`). */
+    this.joinExtra = null;
   }
   env(v) {
     return envelope(fill(v, this.code), { code: this.code, version: this.version });
@@ -194,7 +196,10 @@ export class FakeBox {
       return { status: 200, body: this.env(pub) };
     }
     if (what === 'join') {
-      if (this.joinError) return err(this.joinError === 'full' || this.joinError === 'name_taken' || this.joinError === 'not_open_yet' ? 409 : 400, this.joinError);
+      if (this.joinError) {
+        const r = err(this.joinError === 'full' || this.joinError === 'name_taken' || this.joinError === 'not_open_yet' ? 409 : 400, this.joinError);
+        return this.joinExtra ? { ...r, body: { ...r.body, ...this.joinExtra } } : r;
+      }
       if (this.s.info?.first_names_only && notFirstName(body.name)) return { status: 400, body: { error: 'name_first_only', message: FIRST_ONLY } };
       if (!this.s.join) return err(410);
       const v = fill(this.s.join, this.code);

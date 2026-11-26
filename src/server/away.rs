@@ -414,7 +414,7 @@ pub(super) async fn stopped_items(state: &AppState, space: &SpaceId, by_request:
     // #9), so it is in Needs you too, not only a card in its chat
     for s in state.db.list_human_steps(Some("open"), None, Some(space)).await.unwrap_or_default() {
         let name = state.db.get_kwant(&s.kwant_id).await.ok().flatten().map(|k| k.name);
-        out.push(json!({
+        let mut item = json!({
             "kind": "stopped",
             "id": s.id,
             "human_step_id": s.id,
@@ -431,7 +431,10 @@ pub(super) async fn stopped_items(state: &AppState, space: &SpaceId, by_request:
                 "channel_id": s.channel_id,
                 "direct_kwant_id": s.direct_kwant_id,
             },
-        }));
+        });
+        // sign-in-wall-uses-tools: a "fix it in Tools" step says so here too
+        super::human_steps::add_tools_fix(&mut item, &s);
+        out.push(item);
     }
     out
 }
