@@ -276,16 +276,17 @@ test('Sign-up open: pips, Full, waiting list and plain chips', async () => {
   assert.equal(button(v, 'People').getAttribute('title'), m.GATHER_LATER.signupPeople);
 });
 
-test('Vote open: who voted, no count until the close (even if one arrives), no ballot words', async () => {
-  // secret-ballot-unlinkable: the server sends live: null while open; this fixture still carries
-  // counts, and the open card draws none of them
+test('Vote open: who voted, live bars with the leader, no ballot words', async () => {
   const v = await card('voteOpen');
   const t = v.host.textContent;
   assert.match(t, /Voting · 15 of 22/);
   assert.match(t, /15 of 22 members voted/);
-  assert.doesNotMatch(t, /Live count/);
-  assert.equal(v.host.querySelectorAll('[data-vbars]').length, 0);
-  assert.match(t, /You see who voted, never what they picked\. Totals show when voting closes\./);
+  assert.match(t, /Live count · 1st choices/);
+  assert.match(t, /You see who voted, never what they picked\./);
+  const lead = v.host.querySelectorAll('[data-vbars] [data-lead]');
+  assert.equal(lead.length, 1);
+  assert.match(lead[0].textContent, /The Old Mill/);
+  assert.match(lead[0].querySelector('i').className, /bg-sky-400/);
   assert.equal(v.host.querySelector('[data-mood]').dataset.mood, 'working');
 });
 
