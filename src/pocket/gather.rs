@@ -1686,4 +1686,14 @@ mod tests {
         assert_eq!(fill(&spec, "maybe", "Leo", None), "Hi Leo! Still a maybe for the club dinner on Sat at The Old Mill? Tap to change it: {link}");
         assert!(fill(&spec, "not_paid", "Ana", None).contains("Pay Oleks"), "the default when there's no template");
     }
+
+    /// signup-waiting-note m3: the default not-paid nudge names the price, and with no price
+    /// leaves no "()" behind.
+    #[test]
+    fn the_not_paid_default_names_the_price_or_drops_its_brackets() {
+        let spec = json!({ "face": "rsvp", "title": "Office party", "host_name": "Nina", "price": "EUR 15 each" });
+        assert_eq!(fill(&spec, "not_paid", "Cleo", None), "Hi Cleo, a quick one: your share for Office party (EUR 15 each) is still open. Pay Nina whenever suits you before the day. Thanks!");
+        let spec = json!({ "face": "rsvp", "title": "Office party", "host_name": "Nina" });
+        assert_eq!(fill(&spec, "not_paid", "Cleo", None), "Hi Cleo, a quick one: your share for Office party is still open. Pay Nina whenever suits you before the day. Thanks!");
+    }
 }
