@@ -941,6 +941,29 @@ async fn a_deleted_or_unknown_link_gets_the_gone_page() {
     assert!(!r.body.to_string().contains("pocket-boot"), "{}", r.body);
 }
 
+/// santa-gone-page F1: when the box can't read its own database, a link answers that error's status
+/// with the "Try again" placeholder, never the gone page: the pocket may well still be there.
+#[tokio::test]
+async fn a_link_the_box_cant_read_says_try_again_never_gone() {
+    let t = setup(true).await;
+    let path = "/p/zzzzzz";
+    assert!(keys::valid_code("zzzzzz"));
+    // Control: a readable database with no such pocket is the gone page
+    assert_eq!(send(&t.guest, "GET", path, None, &Req::default()).await.status, StatusCode::NOT_FOUND);
+    // Another connection takes the pockets table away, so the next read fails (not "no such pocket")
+    let opts = sqlx::sqlite::SqliteConnectOptions::new().filename(t._tmp.path().join("data").join("kwnt.db"));
+    let raw = sqlx::sqlite::SqlitePoolOptions::new().max_connections(1).connect_with(opts).await.unwrap();
+    sqlx::query("ALTER TABLE pocket_apps RENAME TO pocket_apps_away").execute(&raw).await.unwrap();
+    raw.close().await;
+    let r = send(&t.guest, "GET", path, None, &Req::default()).await;
+    assert_eq!(r.status, StatusCode::INTERNAL_SERVER_ERROR, "{}", r.body);
+    assert_eq!(r.headers["content-type"], "text/html; charset=utf-8");
+    assert_eq!(r.headers["content-security-policy"], guest::CSP);
+    let html = r.body.as_str().unwrap();
+    assert!(html.contains("<title>Try again</title>") && html.contains("Reload in a moment."), "{html}");
+    assert!(!html.contains("pocket-boot") && !html.contains("gone") && !html.contains("<script"), "never the gone boot: {html}");
+}
+
 /// Every object field name in `v`, at any depth.
 fn field_names(v: &Value) -> Vec<String> {
     match v {

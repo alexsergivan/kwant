@@ -234,6 +234,10 @@ async fn the_continue_button_carries_a_paused_chain_on() {
     let notice = env.notices().await.remove(0);
     // 0.9.5: the pause is in Needs you too, once, with the notice's Continue
     let stopped = |away: Value| -> Vec<Value> { away["waiting"].as_array().unwrap().iter().filter(|i| i["kind"] == "stopped").cloned().collect() };
+    // budget.rs `pause_if_over` saves the notice and only then adds the Needs-you item, so the
+    // notice can show up first: wait for the item (a Continue pressed before it existed would
+    // also leave it open at the check after Bob's turn)
+    env.wait_for("the Needs-you item", || async { !stopped(ok(&env.app, "GET", "/api/away", None).await).is_empty() }).await;
     let items = stopped(ok(&env.app, "GET", "/api/away", None).await);
     assert_eq!(items.len(), 1, "{items:?}");
     assert_eq!(items[0]["message_id"], notice.id.as_str());

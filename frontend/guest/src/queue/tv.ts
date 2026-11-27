@@ -66,10 +66,10 @@ export function untilText(hhmm: string): string {
   return `${h12}${mm ? `:${String(mm).padStart(2, '0')}` : ''} ${hh < 12 ? 'AM' : 'PM'}`;
 }
 
-/** The box's `now` as the wall clock reads it here, 12-hour like the phone's clock(): "11:05 PM". */
+/** The box's `now` as the wall clock reads it here, in the screen's locale like the phone's clock(): "11:05 PM" or "23:05". */
 export function hm(iso?: string): string {
   const d = iso ? new Date(iso) : null;
-  return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' }) : '';
+  return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
 }
 
 export class QueueTV {
@@ -264,7 +264,7 @@ export class QueueTV {
                       'span',
                       null,
                       h('i', { class: 'nw' }, 'Scan with your phone'),
-                      h('i', { class: 'nw' }, `${v.waiting.toLocaleString('en-US')} waiting`),
+                      h('i', { class: 'nw' }, `${v.waiting.toLocaleString()} waiting`),
                       v.avg_minutes ? h('i', { class: 'nw' }, `~${v.avg_minutes} min each`) : null,
                     ),
                   ),

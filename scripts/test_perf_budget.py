@@ -6,7 +6,9 @@
 - limits are the baseline x 1.5 (memory x 1.3), rounded up;
 - the shipped perf_budget.json names only known measures, and every limit is above its baseline;
 - the CI step exists in the fresh-machine job, has no continue-on-error, and only "blocking" measures exit 1;
-- --judge re-judges a saved results file without a kwnt (how a doctored file proves a FAIL turns the step red).
+- --judge re-judges a saved results file without a kwnt (how a doctored file proves a FAIL turns the step red);
+- the release profile (perf-release job) is judged against perf_budget.json's own "release" limits, never unjudged;
+  its limits are the median of 3 CI runs + 15%, rounded up; the job runs on PRs that touch the release build only.
 """
 import json
 import os
@@ -240,6 +242,167 @@ class JudgeASavedFile(unittest.TestCase):
         results["samples"]["browser_launch_s"] = [None] * 5
         results["browser_skip"] = "Chrome did not start"
         self.assertEqual(self.run_main(results, {"limits": LIMITS}), 0)
+
+
+RELEASE_LIMITS = {"cold_start_s": 0.4, "first_reply_s": 0.06, "idle_rss_mb": 80.0, "after_reply_rss_mb": 80.0,
+                  "after_search_rss_mb": 100.0, "browser_launch_s": 2.4}
+
+
+def release_file(limits=RELEASE_LIMITS, blocking=None):
+    """A limits file with the debug limits at the top and a "release" object, as perf_budget.json has."""
+    return {"limits": LIMITS, "blocking": ["idle_rss_mb"],
+            "release": {"limits": dict(limits), "blocking": sorted(blocking or pb.DEFAULT_RELEASE_BLOCKING)}}
+
+
+def release_results(idle, profile="release"):
+    return {"profile": profile, "when": "2026-11-26T18:00:00+00:00",
+            "samples": {"cold_start_s": [0.3] * 5, "first_reply_s": [0.05] * 5, "idle_rss_mb": idle,
+                        "after_reply_rss_mb": [70.0, 71.0, 69.0], "after_search_rss_mb": [90.0, 91.0, 89.0],
+                        "browser_launch_s": [9.3] * 5}}
+
+
+class ReleaseProfile(unittest.TestCase):
+    """perf-release-budget: the release build has its own limits; a release run is never judged by the debug ones."""
+
+    def run_main(self, argv, limits_data, files=None):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            lim = Path(d) / "limits.json"
+            lim.write_text(json.dumps(limits_data))
+            paths = []
+            for i, data in enumerate(files or []):
+                f = Path(d) / f"perf-results-{i}.json"
+                f.write_text(json.dumps(data))
+                paths.append(str(f))
+            args = [a.format(*paths) for a in argv]
+            with mock.patch.object(sys, "argv", ["perf_budget.py", *args, "--limits", str(lim)]), mock.patch("builtins.print"):
+                code = pb.main()
+            return code, json.loads(lim.read_text())
+
+    def test_debug_is_the_top_level_and_release_its_own_object(self):
+        data = release_file()
+        self.assertIs(pb.section_of(data, "debug"), data)
+        self.assertEqual(pb.section_of(data, "release")["limits"], RELEASE_LIMITS)
+        self.assertEqual(pb.blocking_of(pb.section_of(data, "release")), pb.DEFAULT_RELEASE_BLOCKING)
+
+    def test_a_file_without_release_limits_is_an_error_not_a_pass(self):
+        for data in ({"limits": LIMITS}, {"limits": LIMITS, "release": {}}, {"limits": LIMITS, "release": {"limits": {}}}):
+            with self.assertRaises(ValueError):
+                pb.section_of(data, "release")
+        with self.assertRaises(ValueError):
+            pb.section_of(release_file(), "profiling")
+        # a release run (and a release --judge) with such a file stops with exit 2 before it measures anything
+        self.assertEqual(self.run_main(["--profile", "release", "--kwnt", "/nonexistent/kwnt"], {"limits": LIMITS})[0], 2)
+        self.assertEqual(self.run_main(["--judge", "{0}"], {"limits": LIMITS}, [release_results([60.0] * 3)])[0], 2)
+
+    def test_judge_over_a_release_limit_exits_1_and_at_it_exits_0(self):
+        self.assertEqual(self.run_main(["--judge", "{0}"], release_file(), [release_results([79.0, 80.0, 80.5])])[0], 0)
+        self.assertEqual(self.run_main(["--judge", "{0}"], release_file(), [release_results([80.0, 81.0, 80.5])])[0], 1)
+
+    def test_a_saved_release_file_is_judged_by_the_release_limits_even_when_it_passes_the_debug_ones(self):
+        # idle 100 MB is under the debug 150 but over the release 80: a release file must fail
+        self.assertEqual(self.run_main(["--judge", "{0}"], release_file(), [release_results([100.0] * 3)])[0], 1)
+        # --profile overrides what the file says; a file without a profile is debug (files from before this PR)
+        self.assertEqual(self.run_main(["--judge", "{0}", "--profile", "debug"], release_file(), [release_results([100.0] * 3)])[0], 0)
+        old = release_results([100.0] * 3)
+        del old["profile"]
+        self.assertEqual(self.run_main(["--judge", "{0}"], release_file(), [old])[0], 0)
+
+    def test_the_browser_only_warns_in_release_too(self):
+        # browser 9.3 s is over 2.4 in every file above, yet they exit 0: it is not in the release blocking list
+        self.assertNotIn("browser_launch_s", pb.DEFAULT_RELEASE_BLOCKING)
+
+    def test_limits_are_the_median_of_the_runs_plus_15_percent_rounded_up(self):
+        runs = [{"idle_rss_mb": 60.2, "cold_start_s": 0.31, "first_reply_s": 0.05},
+                {"idle_rss_mb": 64.9, "cold_start_s": 0.29, "first_reply_s": 0.04},
+                {"idle_rss_mb": 62.0, "cold_start_s": 0.30, "first_reply_s": None}]
+        baseline, limits = pb.release_limits(runs)
+        self.assertEqual(baseline["idle_rss_mb"], 62.0)
+        self.assertEqual(limits["idle_rss_mb"], 72.0)        # 62.0 x 1.15 = 71.3 -> 72
+        self.assertEqual(limits["cold_start_s"], 0.35)      # 0.30 x 1.15 = 0.345 -> 0.35
+        self.assertEqual(limits["first_reply_s"], 0.06)     # median of 0.05 and 0.04 = 0.045 x 1.15 = 0.05175 -> 0.06
+        self.assertNotIn("after_search_rss_mb", limits)      # no run measured it: no limit is made up
+        for key, limit in limits.items():
+            self.assertGreaterEqual(limit, baseline[key] * pb.RELEASE_HEADROOM - 1e-9, key)
+
+    def test_set_release_limits_writes_only_the_release_object(self):
+        data = release_file()
+        data["release"]["note"] = "kept"
+        files = [release_results([60.0, 61.0, 62.0]), release_results([64.0] * 3), release_results([63.0] * 3)]
+        code, out = self.run_main(["--set-release-limits", "{0}", "{1}", "{2}"], data, files)
+        self.assertEqual(code, 0)
+        self.assertEqual(out["limits"], LIMITS)              # the debug limits are untouched
+        self.assertEqual(out["blocking"], ["idle_rss_mb"])
+        self.assertEqual(out["release"]["note"], "kept")
+        self.assertEqual(out["release"]["baseline"]["idle_rss_mb"], 63.0)
+        self.assertEqual(out["release"]["limits"]["idle_rss_mb"], 73.0)   # 63 x 1.15 = 72.45 -> 73
+        self.assertEqual(out["release"]["limits"]["after_reply_rss_mb"], 81.0)  # 70 x 1.15 = 80.5 -> 81
+        self.assertEqual(len(out["release"]["baseline_from"]["files"]), 3)
+
+    def test_set_release_limits_refuses_debug_results(self):
+        files = [release_results([60.0] * 3), release_results([60.0] * 3, profile="debug"), release_results([60.0] * 3)]
+        code, out = self.run_main(["--set-release-limits", "{0}", "{1}", "{2}"], release_file(), files)
+        self.assertEqual(code, 2)
+        self.assertEqual(out["release"]["limits"], RELEASE_LIMITS)
+
+    def test_update_baseline_is_debug_only(self):
+        with self.assertRaises(SystemExit):
+            with mock.patch("sys.stderr"):
+                self.run_main(["--profile", "release", "--kwnt", "/x", "--update-baseline"], release_file())
+
+
+class ReleaseRunPaths(unittest.TestCase):
+    """The perf-release job runs on a PR only when it can change the release build's numbers."""
+
+    def test_rust_cargo_and_the_budget_itself_run_it(self):
+        for path in ("src/mcp/directory.rs", "Cargo.toml", "Cargo.lock", "build.rs", "scripts/perf_budget.py",
+                     "scripts/perf_budget.json", ".github/workflows/ci.yml"):
+            self.assertTrue(pb.needs_release_run([path]), path)
+
+    def test_docs_frontend_and_other_workflows_skip_it(self):
+        for path in ("docs/mcp-api.md", "frontend/src/App.tsx", "frontend/src/main.rs", "apps/mac/Cargo.toml",
+                     ".github/workflows/mac.yml", "scripts/fresh_machine_test.py", "srcx/a.rs", "README.md"):
+            self.assertFalse(pb.needs_release_run([path]), path)
+        self.assertFalse(pb.needs_release_run([]))
+        self.assertFalse(pb.needs_release_run(["", "  "]))
+
+    def test_one_matching_path_among_many_is_enough(self):
+        self.assertTrue(pb.needs_release_run(["docs/a.md", "frontend/x.ts", "src/main.rs"]))
+
+    def test_the_cli_reads_paths_on_stdin_and_prints_true_or_false(self):
+        import io
+        for stdin, want in (("docs/a.md\nsrc/lib.rs\n", "true"), ("docs/a.md\nfrontend/x.ts\n", "false"), ("", "false")):
+            with mock.patch.object(sys, "argv", ["perf_budget.py", "--needs-release-run"]), \
+                    mock.patch("sys.stdin", io.StringIO(stdin)), mock.patch("builtins.print") as printed:
+                self.assertEqual(pb.main(), 0)
+            printed.assert_called_once_with(want)
+
+
+class ShippedReleaseJob(unittest.TestCase):
+    def ci_job(self):
+        ci = (ROOT / ".github" / "workflows" / "ci.yml").read_text()
+        job = re.search(r"\n  perf-release:\n(.*?)(?=\n  \w[\w-]*:\n|\Z)", ci, re.S)
+        self.assertTrue(job, "no perf-release job in ci.yml")
+        return job.group(1)
+
+    def test_the_job_builds_release_and_judges_it_as_release(self):
+        job = self.ci_job()
+        self.assertIn("cargo build --release --locked --bin kwnt", job)
+        self.assertIn("scripts/perf_budget.py --profile release --kwnt target/release/kwnt", job)
+        self.assertIn("--needs-release-run", job)
+        self.assertNotIn("continue-on-error", job)  # blocking from the start
+
+    def test_the_release_limits_block_the_five_measures_and_are_no_looser_than_debug(self):
+        data = json.loads((ROOT / "scripts" / "perf_budget.json").read_text())
+        release = pb.section_of(data, "release")
+        self.assertEqual(pb.blocking_of(release), pb.DEFAULT_RELEASE_BLOCKING)
+        for key in pb.DEFAULT_RELEASE_BLOCKING:
+            self.assertIn(key, release["limits"], key)
+            self.assertLessEqual(release["limits"][key], data["limits"][key], key)
+        for key, limit in release["limits"].items():
+            self.assertIn(key, pb.MEASURES)
+            if key in release.get("baseline", {}):
+                self.assertGreaterEqual(limit, release["baseline"][key], key)
 
 
 class FakeMcpRegistry(unittest.TestCase):
