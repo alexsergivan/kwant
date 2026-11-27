@@ -1233,7 +1233,7 @@ pub const SCRUBS: &[&str] = &[gather::ID];
 /// secret-ballot-unlinkable: every pocket of a kit in [`SCRUBS`], open or ended (a decided vote
 /// ends at once and keeps its data until the deletion date), gets the kit's scrub; a change is
 /// saved like any other (no event). So an upgrade fixes data an older version stored.
-async fn scrub_stored(state: &AppState) {
+pub(crate) async fn scrub_stored(state: &AppState) {
     for kit_id in SCRUBS {
         for code in state.db.pocket_codes_of_kit(kit_id).await.unwrap_or_default() {
             let lock = state.pocket.lock_for(&code);

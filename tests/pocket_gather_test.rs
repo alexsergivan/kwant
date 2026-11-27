@@ -583,7 +583,8 @@ async fn nobody_sees_a_count_while_a_vote_is_open() {
 }
 
 /// A vote closed by an older version (salt still beside the ballots) is unlinked by the next
-/// sweep, also after the pocket ended and while the switch is off. An open vote keeps its salt
+/// sweep period, also after the pocket ended and while the switch is off (Rigel's F1: the
+/// supervisor's period, not only `pocket::sweep`). An open vote keeps its salt
 /// (a voter still changes their own ballot), and an RSVP's unused salt goes too.
 #[tokio::test]
 async fn a_vote_closed_before_the_fix_is_unlinked_on_the_next_sweep() {
@@ -619,8 +620,10 @@ async fn a_vote_closed_before_the_fix_is_unlinked_on_the_next_sweep() {
     r["ballot_salt"] = json!("0123456789abcdef");
     t.state.db.pocket_save_state(&rsvp, &r.to_string(), &[], Utc::now()).await.unwrap();
 
+    // Through the supervisor's own sweep period, with the switch read the way it reads it
     t.state.db.set_setting(pocket::SETTING, "off").await.unwrap();
-    pocket::sweep(&t.state, Utc::now()).await;
+    assert!(!pocket::listener::reconcile(&t.state).await);
+    pocket::listener::sweep_once(&t.state, Utc::now()).await;
     let st = kit_state(&t, &code).await;
     unpairable(&st, &[&salt], &ids);
     assert_eq!(orders(&st), orders(&open));
