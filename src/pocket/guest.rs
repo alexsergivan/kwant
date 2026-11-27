@@ -310,7 +310,7 @@ pub fn kit_preload_links(manifest: &Value, index: &str, src: &str) -> String {
         scripts.extend(chunk.get("file").and_then(Value::as_str));
         styles.extend(names("css"));
         // Static imports only, in order; a dynamic import stays lazy
-        todo.extend(names("imports").collect::<Vec<_>>().into_iter().rev());
+        todo.extend(names("imports").rev());
     }
     let mut out = String::new();
     let mut named = HashSet::new();
