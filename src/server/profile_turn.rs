@@ -655,7 +655,6 @@ mod tests {
     use super::*;
     use crate::db::models::LlmProfileState;
     use chrono::{DateTime, Duration, TimeZone, Utc};
-    use std::collections::HashMap;
 
     fn now() -> DateTime<Utc> {
         Utc.with_ymd_and_hms(2026, 10, 17, 12, 0, 0).unwrap()
@@ -793,24 +792,118 @@ mod tests {
         assert!(!unknown.admits(personal, now(), SignInBar::SignedIn));
     }
 
-    #[test]
-    fn quota_limited_account_is_not_ready_until_it_resets() {
-        let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
-        let limited = |until: DateTime<Utc>| Availability {
-            states: HashMap::from([(
-                "p_personal".to_string(),
-                LlmProfileState {
-                    profile_id: "p_personal".into(),
+    /// `base` with `ids` out of usage until `until`.
+    fn limited(base: Availability, ids: &[&str], until: DateTime<Utc>) -> Availability {
+        let states = ids
+            .iter()
+            .map(|id| {
+                let state = LlmProfileState {
+                    profile_id: id.to_string(),
                     limited_until: Some(until),
                     last_error: Some("quota".into()),
-                },
-            )]),
-            ..signed_in(&["p_personal"])
-        };
-        let avail = limited(now() + Duration::hours(1));
-        assert_eq!(readiness(&r, &alex(), &avail, now()), (false, None));
-        let avail = limited(now() - Duration::minutes(1));
+                };
+                (id.to_string(), state)
+            })
+            .collect();
+        Availability { states, ..base }
+    }
+
+    #[test]
+    fn a_signed_in_account_on_a_usage_limit_is_still_ready() {
+        // A short limit is not "no account yet": the account stays signed in and is named
+        let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
+        let avail = limited(signed_in(&["p_personal"]), &["p_personal"], now() + Duration::hours(1));
         assert_eq!(uses(readiness(&r, &alex(), &avail, now())), (true, Some("Personal".into())));
+        assert!(avail.signed_in_ignoring_limit(&alex()[1]));
+        // And after the reset, as before
+        let avail = limited(signed_in(&["p_personal"]), &["p_personal"], now() - Duration::minutes(1));
+        assert_eq!(uses(readiness(&r, &alex(), &avail, now())), (true, Some("Personal".into())));
+    }
+
+    #[test]
+    fn a_limited_account_that_is_signed_out_or_unchecked_is_not_ready() {
+        let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
+        let later = now() + Duration::hours(1);
+        let out = Availability {
+            signed_out: HashSet::from(["p_personal".to_string()]),
+            ..Default::default()
+        };
+        let avail = limited(out, &["p_personal"], later);
+        assert_eq!(readiness(&r, &alex(), &avail, now()), (false, None));
+        assert!(!avail.signed_in_ignoring_limit(&alex()[1]));
+        // Never checked: the limit doesn't make it look signed in
+        let avail = limited(Availability::default(), &["p_personal"], later);
+        assert_eq!(readiness(&r, &alex(), &avail, now()), (false, None));
+        assert!(!avail.signed_in_ignoring_limit(&alex()[1]));
+    }
+
+    #[test]
+    fn a_limited_api_key_account_needs_its_key_to_be_ready() {
+        let api = report(EngineId::AnthropicApi, true, EngineStatus::SignedOut);
+        let profiles = vec![
+            profile("prf_system_claude", "This machine", "system", 0, true),
+            profile("p_key", "Team key", "api_key", 10, false),
+        ];
+        let later = now() + Duration::hours(1);
+        let keyless = limited(Availability::default(), &["p_key"], later);
+        assert_eq!(readiness(&api, &profiles, &keyless, now()), (false, None));
+        assert!(!keyless.signed_in_ignoring_limit(&profiles[1]));
+        let keyed = Availability {
+            with_key: HashSet::from(["p_key".to_string()]),
+            ..Default::default()
+        };
+        let keyed = limited(keyed, &["p_key"], later);
+        assert_eq!(uses(readiness(&api, &profiles, &keyed, now())), (true, Some("Team key".into())));
+    }
+
+    #[test]
+    fn a_free_account_is_named_before_a_limited_one() {
+        let r = report(EngineId::Claude, true, EngineStatus::SignedOut);
+        let profiles = vec![
+            profile("prf_system_claude", "This machine", "system", 0, false),
+            profile("p_work", "Work", "cli_home", 10, false),
+            profile("p_personal", "Personal", "cli_home", 20, true),
+        ];
+        let later = now() + Duration::hours(1);
+        // Personal is the default but out of usage: the next turn runs on Work, so Work is named
+        let avail = limited(signed_in(&["p_work", "p_personal"]), &["p_personal"], later);
+        assert_eq!(uses(readiness(&r, &profiles, &avail, now())), (true, Some("Work".into())));
+        // The host's own login, when ready, also comes before a limited account
+        let host = report(EngineId::Claude, true, EngineStatus::Ready);
+        let avail = limited(signed_in(&["p_personal"]), &["p_personal"], later);
+        assert_eq!(uses(readiness(&host, &profiles, &avail, now())), (true, Some("This machine".into())));
+        // Every account limited: the first in failover order is named
+        let avail = limited(signed_in(&["p_work", "p_personal"]), &["p_work", "p_personal"], later);
+        assert_eq!(uses(readiness(&r, &profiles, &avail, now())), (true, Some("Personal".into())));
+    }
+
+    #[test]
+    fn turn_routing_still_skips_a_limited_account() {
+        // Only what the person sees changes: a turn never runs on an account out of usage
+        let profiles = vec![
+            profile("p_work", "Work", "cli_home", 10, false),
+            profile("p_personal", "Personal", "cli_home", 20, true),
+        ];
+        let later = now() + Duration::hours(1);
+        let avail = limited(signed_in(&["p_work", "p_personal"]), &["p_personal"], later);
+        let personal = &profiles[1];
+        assert!(avail.signed_in_ignoring_limit(personal));
+        assert!(!avail.usable(personal, now()));
+        assert!(!avail.admits(personal, now(), SignInBar::SignedIn));
+        assert!(!avail.admits(personal, now(), SignInBar::NotSignedOut));
+        let order = failover_order(&profiles, Engine::Claude, Some("p_personal"), true, &avail, now());
+        assert_eq!(order.iter().map(|p| p.name.as_str()).collect::<Vec<_>>(), ["Work"]);
+        let eligible = |_: &LlmProfile| true;
+        let rules = OrderRules { host_head: false, eligible: &eligible };
+        let plan = global_order(&profiles, Engine::Claude, Some("p_personal"), true, &avail, now(), &rules);
+        assert_eq!(plan.skipped.map(|p| p.name), Some("Personal".into()));
+        assert_eq!(plan.skipped_until, Some(later));
+        let tried: Vec<_> = plan.attempts.iter().flatten().map(|p| p.name.as_str()).collect();
+        assert_eq!(tried, ["Work"]);
+        // Every account limited: the turn parks until the earliest reset, as before
+        let all = limited(signed_in(&["p_work", "p_personal"]), &["p_work", "p_personal"], later);
+        let plan = global_order(&profiles, Engine::Claude, Some("p_personal"), true, &all, now(), &rules);
+        assert_eq!(plan.all_out_until, Some(later));
     }
 
     #[test]
