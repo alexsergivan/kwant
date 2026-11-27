@@ -162,8 +162,8 @@ pub async fn items(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen
 }
 
 /// party-card-and-results (pa14 design :96): an open Photo Wall with photos waiting for the host
-/// is one Needs-you row, never one per photo: "Office holiday party wall · 1 photo waits for you",
-/// "… · 3 photos wait for you". It names the next photo (`next_photo {id, by_name}`, oldest
+/// is one Needs-you row, never one per photo: "1 photo waiting on Office holiday party",
+/// "3 photos waiting on …". It names the next photo (`next_photo {id, by_name}`, oldest
 /// first) so the row can show it with Approve / Hide, which go through the wall's own `approve` /
 /// `hide` host actions; the row itself opens the chat the wall was made in, where its card is.
 /// Id `wall:<code>`; the time is the newest waiting photo's. Only walls of the space's own bots,
@@ -206,20 +206,16 @@ pub async fn wall_needs_you(state: &AppState, space: &SpaceId) -> Result<Vec<(Da
     Ok(out)
 }
 
-/// "Office holiday party wall · 1 photo waits for you" / "… · 3 photos wait for you". The kit's
-/// own title already ends in "wall" when the person named it so; otherwise " wall" is added.
+/// Count first, so a narrow Inbox list that truncates still shows it (pa14 design :96, Mira's
+/// design check fix 2): "1 photo waiting on Office holiday party" / "3 photos waiting on …". The
+/// wall's own title, trimmed; "your photo wall" when it has none. The "Photos to check" label
+/// already says it is photos, so no " wall" is added.
 pub fn wall_needs_title(pocket_title: &str, waiting: usize) -> String {
     let t = pocket_title.trim();
-    let name = if t.is_empty() {
-        "Photo wall".to_string()
-    } else if t.to_lowercase().ends_with("wall") {
-        t.to_string()
-    } else {
-        format!("{t} wall")
-    };
+    let name = if t.is_empty() { "your photo wall" } else { t };
     match waiting {
-        1 => format!("{name} · 1 photo waits for you"),
-        n => format!("{name} · {n} photos wait for you"),
+        1 => format!("1 photo waiting on {name}"),
+        n => format!("{n} photos waiting on {name}"),
     }
 }
 
@@ -292,10 +288,11 @@ mod tests {
 
     #[test]
     fn a_wall_row_counts_its_waiting_photos_in_one_line() {
-        assert_eq!(wall_needs_title("Office holiday party", 1), "Office holiday party wall · 1 photo waits for you");
-        assert_eq!(wall_needs_title("Office holiday party", 3), "Office holiday party wall · 3 photos wait for you");
-        assert_eq!(wall_needs_title("Mia & Jonas's wedding wall", 9), "Mia & Jonas's wedding wall · 9 photos wait for you");
-        assert_eq!(wall_needs_title("  ", 2), "Photo wall · 2 photos wait for you");
+        assert_eq!(wall_needs_title("Office holiday party", 1), "1 photo waiting on Office holiday party");
+        assert_eq!(wall_needs_title(" Office holiday party ", 3), "3 photos waiting on Office holiday party");
+        assert_eq!(wall_needs_title("Mia & Jonas's wedding", 9), "9 photos waiting on Mia & Jonas's wedding");
+        assert_eq!(wall_needs_title("  ", 2), "2 photos waiting on your photo wall");
+        assert_eq!(wall_needs_title("", 1), "1 photo waiting on your photo wall");
     }
 
     #[test]

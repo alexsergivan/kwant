@@ -1569,9 +1569,9 @@ const GatherActions: React.FC<{
       return (
         <div className={GRID}>
           {g.vote!.winner ? (
-            <button type="button" onClick={() => ask(`Make the dinner RSVP for ${g.vote!.winner}.`)} className={`${PRIMARY} ${FULL}`} data-action="make-rsvp">
+            <button type="button" onClick={() => ask(`Make the RSVP for ${g.vote!.winner}.`)} className={`${PRIMARY} ${FULL}`} data-action="make-rsvp">
               <CalendarCheck size={14} aria-hidden="true" />
-              Make the dinner RSVP
+              Make the RSVP
             </button>
           ) : null}
           <CopyButton text={resultLine(g)} label="Share the result" done="Result copied" icon={<Share2 size={14} aria-hidden="true" />} action="share-result" />

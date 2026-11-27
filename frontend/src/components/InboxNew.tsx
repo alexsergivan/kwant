@@ -343,6 +343,9 @@ const AnyRow: React.FC<RowProps> = ({ item: raw, selected, focusable, wide, busy
   // done-check: one word before the summary on done rows whose item says how it was checked.
   const check = isDoneGroup(item.group) ? knownChecked(item.checked) : null;
   const wall = wallNext(item);
+  // Mira's design check fix 3: only the tapped wall button shows it is working; both stay disabled.
+  const [wallTap, setWallTap] = useState<'approve' | 'hide' | null>(null);
+  const wallBusy = busy === item.id ? wallTap : null;
   return (
     <li role="presentation" className={`relative rounded-xl border transition-colors ${tint}`} data-row={item.id} data-group={item.group}>
       <div
@@ -497,13 +500,27 @@ const AnyRow: React.FC<RowProps> = ({ item: raw, selected, focusable, wide, busy
             className="w-12 h-12 shrink-0 rounded-md object-cover bg-zinc-800"
             data-wall-thumb={wall.id}
           />
-          <button type="button" disabled={disabled} onClick={() => onWall(item, 'approve')} className={`${okBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-wall-approve={wall.id}>
-            <Check size={12} aria-hidden="true" />
-            Approve
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => (setWallTap('approve'), onWall(item, 'approve'))}
+            className={`${okBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`}
+            aria-busy={wallBusy === 'approve' || undefined}
+            data-wall-approve={wall.id}
+          >
+            {wallBusy === 'approve' ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <Check size={12} aria-hidden="true" />}
+            {wallBusy === 'approve' ? 'Approving…' : 'Approve'}
           </button>
-          <button type="button" disabled={disabled} onClick={() => onWall(item, 'hide')} className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-wall-hide={wall.id}>
-            <EyeOff size={12} aria-hidden="true" />
-            Hide
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => (setWallTap('hide'), onWall(item, 'hide'))}
+            className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`}
+            aria-busy={wallBusy === 'hide' || undefined}
+            data-wall-hide={wall.id}
+          >
+            {wallBusy === 'hide' ? <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> : <EyeOff size={12} aria-hidden="true" />}
+            {wallBusy === 'hide' ? 'Hiding…' : 'Hide'}
           </button>
         </div>
       )}
@@ -517,7 +534,7 @@ const AnyRow: React.FC<RowProps> = ({ item: raw, selected, focusable, wide, busy
         </div>
       )}
 
-      {busy === item.id && !review && (
+      {busy === item.id && !review && !(wall && onWall) && (
         <p className="px-3 pb-3 pl-[54px] inline-flex items-center gap-1.5 text-[11px] text-zinc-400">
           <Loader2 size={12} className="animate-spin motion-reduce:animate-none" aria-hidden="true" /> {runId ? 'Starting…' : 'Sending…'}
         </p>

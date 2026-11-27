@@ -233,6 +233,18 @@ pub fn blank_names(block: &mut Value, at: DateTime<Utc>) {
     results.insert("names_deleted_at".into(), json!(at));
 }
 
+/// party-card-and-results: every RSVP, sign-up or vote card in a bot reply's stored block set
+/// loses its guests' names and words, as [`blank_names`] does for a results post. Other blocks,
+/// and a pocket block of any other kit, stay as they are.
+pub fn blank_reply_cards(set: &mut Value, at: DateTime<Utc>) {
+    let Some(blocks) = set.get_mut("blocks").and_then(Value::as_array_mut) else { return };
+    for b in blocks.iter_mut().filter(|b| b["type"] == "pocket") {
+        if b.get("gather").is_some_and(Value::is_object) {
+            blank_names(b, at);
+        }
+    }
+}
+
 /// party-card-and-results: an ended RSVP, sign-up or vote card loses every guest's name and
 /// words: its lists of people empty (the card still draws them empty) and its counts, options and
 /// summary stay. Nothing is added, so the chat draws the card as before, without names.
@@ -534,6 +546,21 @@ async fn forget_names(state: &AppState, now: DateTime<Utc>) -> usize {
                 m.meta = Some(meta.to_string());
                 let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&m).unwrap_or(Value::Null) });
                 done += 1;
+            } else {
+                // party-card-and-results (Rigel's QA finding 1): a bot reply whose RSVP, sign-up or
+                // vote card is a stored copy of the host's view loses its guests' names and words
+                match state.db.edit_stored_results(&id, |set| blank_reply_cards(set, now)).await {
+                    Ok(Some(v)) => {
+                        m.results = Some(v);
+                        let _ = state.event_sender.send(RuntimeEvent::MessageAdded { message: serde_json::to_value(&m).unwrap_or(Value::Null) });
+                        done += 1;
+                    }
+                    Ok(None) => {}
+                    Err(e) => {
+                        tracing::warn!("pocket apps: couldn't clear names from a reply's pocket card: {e}");
+                        continue;
+                    }
+                }
             }
         }
         let _ = state.db.pocket_result_post_delete(&id).await;

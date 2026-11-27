@@ -1,5 +1,5 @@
 // party-card-and-results (autonomy/party-card-and-results/brief.md, item 5): photos waiting on a wall are one
-// Needs-you row, "Office holiday party wall · 2 photos wait for you", with the next photo and Approve / Hide that
+// Needs-you row, "2 photos waiting on Office holiday party" (count first, Mira fix 2), with the next photo and Approve / Hide that
 // go through the wall's own host actions.
 process.env.TZ = 'UTC';
 import assert from 'node:assert/strict';
@@ -15,8 +15,10 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLButtonEl
 }
 g.IS_REACT_ACT_ENVIRONMENT = false;
 const calls = [];
+let hold = null; // a promise a POST waits on, so a test can look at the row while the action runs
 g.fetch = async (url, init = {}) => {
   calls.push({ url: String(url), method: init.method ?? 'GET', body: init.body ? JSON.parse(init.body) : null });
+  if (hold && (init.method ?? 'GET') === 'POST') await hold;
   return { ok: true, status: 200, headers: new Map([['content-type', 'application/json']]), json: async () => ({}), text: async () => '{}' };
 };
 
@@ -37,7 +39,7 @@ const settle = async (n = 20) => {
 // Shaped like src/server/inbox_pockets.rs wall_needs_you + inbox.rs wall_item.
 const row = {
   kind: 'pocket_wall', id: 'wall:W4LLcode', kwant_id: 'k1', kwant_name: 'Ben', pocket_code: 'W4LLcode', pocket_title: 'Office holiday party',
-  title: 'Office holiday party wall · 2 photos wait for you', summary: 'Next: a photo from Cleo Marsh', waiting: 2,
+  title: '2 photos waiting on Office holiday party', summary: 'Next: a photo from Cleo Marsh', waiting: 2,
   next_photo: { id: 'p_01', by_name: 'Cleo Marsh' }, status: 'open', timestamp: '2026-11-27T18:00:00Z',
   link: { thread_id: null, channel_id: null, direct_kwant_id: 'k1' }, group: 'waiting_on_you', sort_key: [0, 0, 0, 'Ben', 'wall:W4LLcode'],
 };
@@ -59,7 +61,7 @@ test('a wall row says how many photos wait, shows the next one, and offers Appro
   const li = d.querySelector('[data-row="wall:W4LLcode"]');
   assert.ok(li, 'the row is listed');
   assert.equal(li.getAttribute('data-group'), 'waiting_on_you');
-  assert.match(li.textContent, /Office holiday party wall · 2 photos wait for you/);
+  assert.match(li.textContent, /PM2 photos waiting on Office holiday partyPhotos to check/);
   assert.match(li.textContent, /Photos to check/);
   const img = li.querySelector('[data-wall-thumb="p_01"]');
   assert.equal(img.getAttribute('src'), '/api/pockets/W4LLcode/photo/p_01');
@@ -85,7 +87,7 @@ test('a row whose code or photo id is not safe to put in a URL gets no buttons',
   assert.deepEqual(m.wallNext({ ...row, next_photo: { id: 'p_01', by_name: '  ' } }), { code: 'W4LLcode', id: 'p_01', by: null });
   const d = render({}, [{ ...row, pocket_code: '../x' }]);
   assert.equal(d.querySelector('[data-wall-approve]'), null);
-  assert.match(d.body.textContent, /2 photos wait for you/, 'the row itself still shows');
+  assert.match(d.body.textContent, /2 photos waiting on Office holiday party/, 'the row itself still shows');
 });
 
 for (const [action, button, said] of [
@@ -113,6 +115,49 @@ for (const [action, button, said] of [
     assert.ok(loads >= 1, 'the Inbox reloads after');
     assert.equal(s.inboxStore.get().notice?.text, said);
     assert.equal(el.querySelector('[data-wall-row]'), null, 'no photo waits, so the row is gone');
+    root.unmount();
+  });
+}
+
+// Mira's design check fix 3: a tap on a slow box must show it is working, and a second tap must not land on
+// the next photo after the reload.
+for (const [action, tapped, other, busyWord, otherWord] of [
+  ['approve', '[data-wall-approve="p_01"]', '[data-wall-hide="p_01"]', 'Approving…', 'Hide'],
+  ['hide', '[data-wall-hide="p_01"]', '[data-wall-approve="p_01"]', 'Hiding…', 'Approve'],
+]) {
+  test(`while ${action} runs, only the tapped button says "${busyWord}" with a spinner and aria-busy; both stay disabled`, async () => {
+    calls.length = 0;
+    document.body.innerHTML = '';
+    s.inboxStore.reset();
+    s.inboxSource.get = async () => data([]);
+    s.inboxStore.patch({ data: data() });
+    let release;
+    hold = new Promise((r) => (release = r));
+    const el = document.createElement('div');
+    document.body.appendChild(el);
+    const root = m.createRoot(el);
+    root.render(h(m.InboxNew, { onOpen: () => {}, noLoad: true, wide: true }));
+    await settle();
+    el.querySelector(tapped).dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await settle();
+    const t = el.querySelector(tapped);
+    const o = el.querySelector(other);
+    assert.equal(t.textContent.trim(), busyWord);
+    assert.equal(t.getAttribute('aria-busy'), 'true');
+    assert.ok(t.querySelector('svg.animate-spin.motion-reduce\\:animate-none'), 'the spinner, still for reduced motion');
+    assert.equal(o.textContent.trim(), otherWord, 'the other button keeps its word');
+    assert.equal(o.getAttribute('aria-busy'), null);
+    assert.ok(t.disabled && o.disabled, 'both are disabled while it runs');
+    assert.doesNotMatch(el.textContent, /Sending…/, 'no second working line under the row');
+    // A second tap does nothing: still one POST.
+    o.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    t.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+    await settle();
+    assert.equal(calls.filter((c) => c.method === 'POST').length, 1);
+    release();
+    hold = null;
+    await settle(40);
+    assert.equal(el.querySelector('[data-wall-row]'), null, 'done: the reload drops the row');
     root.unmount();
   });
 }

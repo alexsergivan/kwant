@@ -79,6 +79,30 @@ impl Database {
         }
         Ok(value)
     }
+
+    /// party-card-and-results: rewrites a bot reply's stored block set through `edit` (a pocket's
+    /// expiry blanking the guest names on its reply card) and returns what the chat now shows.
+    /// `None` when the message has no stored set. An error means the old copy may still be there.
+    pub async fn edit_stored_results(&self, message_id: &str, edit: impl FnOnce(&mut Value)) -> Result<Option<Value>, DbError> {
+        let row: Option<(i64, String)> = sqlx::query_as("SELECT version, payload FROM message_results WHERE message_id = ?")
+            .bind(message_id)
+            .fetch_optional(&self.pool)
+            .await?;
+        let Some((version, payload)) = row else { return Ok(None) };
+        let Ok(mut set) = serde_json::from_str::<Value>(&payload) else {
+            // A copy nothing can read or edit is never served; it goes rather than keep names
+            sqlx::query("DELETE FROM message_results WHERE message_id = ?").bind(message_id).execute(&self.pool).await?;
+            return Ok(None);
+        };
+        edit(&mut set);
+        let payload = set.to_string();
+        sqlx::query("UPDATE message_results SET payload = ? WHERE message_id = ?")
+            .bind(&payload)
+            .bind(message_id)
+            .execute(&self.pool)
+            .await?;
+        Ok(read(version, &payload))
+    }
 }
 
 /// A stored payload this build can serve, or `None` (an unknown version, a type no longer
@@ -129,7 +153,26 @@ pub(super) async fn store_on(
         .execute(&mut *conn)
         .await;
     match saved {
-        Ok(_) => Some(value),
+        Ok(_) => {
+            // party-card-and-results (Rigel's QA finding 1): a reply's RSVP, sign-up or vote card is
+            // the host's view as of the reply, guest names included. It is noted with the pocket's
+            // results posts, so the pocket's expiry blanks those names here too
+            // (`pocket::schedule::forget_names`). A wall card has no names, so it isn't noted.
+            for code in set.blocks.iter().filter_map(|b| match b {
+                sr::Block::Pocket(p) if p.gather.is_some() => Some(p.code.as_str()),
+                _ => None,
+            }) {
+                let noted = sqlx::query("INSERT OR IGNORE INTO pocket_result_posts (message_id, pocket_code) VALUES (?, ?)")
+                    .bind(id)
+                    .bind(code)
+                    .execute(&mut *conn)
+                    .await;
+                if let Err(e) = noted {
+                    tracing::warn!("smart results: couldn't note message {id}'s pocket card for its names' expiry: {e}");
+                }
+            }
+            Some(value)
+        }
         Err(e) => {
             tracing::warn!("smart results: couldn't store the block for message {id}: {e}");
             None
