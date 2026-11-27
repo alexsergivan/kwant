@@ -147,9 +147,11 @@ fn has_key(v: &Value, key: &str) -> bool {
 fn common_card(b: &Value, kit: &str, state: &str) {
     assert_eq!(b["kit"], kit, "{b}");
     assert_eq!(b["state"], state, "{b}");
-    for gone in ["results", "santa", "desk", "live", "rounds"] {
+    for gone in ["results", "santa", "desk", "live"] {
         assert!(b.get(gone).is_none_or(Value::is_null), "{gone} in {b}");
     }
+    // Every pocket block has `rounds` (a quiz's); a party card's is always empty
+    assert!(b.get("rounds").is_none_or(|r| r == &json!([])), "rounds in {b}");
     let other = if kit == "gather" { "wall" } else { "gather" };
     assert!(b.get(other).is_none_or(Value::is_null), "{other} in {b}");
 }
@@ -293,14 +295,11 @@ async fn join(t: &T, code: &str, name: &str) -> String {
     g.id
 }
 
-/// The results post pa7 left in the bot's chat.
+/// The results post pa7 left in the bot's chat, as the chat loads it (with its stored card).
 async fn results_post(t: &T, k: &Kwant, code: &str) -> Message {
-    t.state
-        .db
-        .list_messages(&k.id, 100)
-        .await
-        .unwrap()
-        .into_iter()
+    let mut list = t.state.db.list_messages(&k.id, 100).await.unwrap();
+    t.state.db.attach_results(&mut list).await;
+    list.into_iter()
         .find(|m| m.meta.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).is_some_and(|v| v["reason"] == "results" && v["code"] == json!(code)))
         .expect("the results post")
 }
@@ -365,7 +364,8 @@ async fn an_ended_rsvp_says_how_many_people_came_and_its_card_is_closed() {
     let t = setup().await;
     let k = bot(&t, "Party").await;
     let now = Utc::now();
-    let spec = json!({"face": "rsvp", "title": "Office holiday party", "host_name": "Nina", "event_at": (now + Duration::days(7)).to_rfc3339()});
+    let spec = json!({"face": "rsvp", "title": "Office holiday party", "host_name": "Nina", "closes_at": (now + Duration::days(6)).to_rfc3339(),
+                      "event_at": (now + Duration::days(7)).to_rfc3339()});
     let code = create(&t, "gather", spec, &k).await;
     for name in ["Ana", "Ben"] {
         let id = join(&t, &code, name).await;
@@ -391,7 +391,8 @@ async fn an_ended_signup_card_keeps_its_counts_and_no_name_or_note() {
     let t = setup().await;
     let k = bot(&t, "Party").await;
     let now = Utc::now();
-    let spec = json!({"face": "signup", "title": "Party potluck", "host_name": "Nina", "event_at": (now + Duration::days(7)).to_rfc3339(),
+    let spec = json!({"face": "signup", "title": "Party potluck", "host_name": "Nina", "closes_at": (now + Duration::days(6)).to_rfc3339(),
+                      "event_at": (now + Duration::days(7)).to_rfc3339(),
                       "slots": [{"name": "Mains", "cap": 1}, {"name": "Desserts", "cap": 4}], "fields": ["slot_note"], "waiting_list": true});
     let code = create(&t, "gather", spec, &k).await;
     for (name, slot, note) in [("Ana", 0, "Lasagne from Zofia"), ("Ben", 1, "Lemon tart"), ("Cleo", 0, "Quiche")] {
