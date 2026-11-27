@@ -999,7 +999,7 @@ main:has(.jump-bar) .page-head h1 { max-width: 13.5em; text-wrap: wrap; }
 .cloud .cloud-art { --u: 3px; display: grid; place-items: center; width: 80px; height: 80px; background: var(--v2); color: var(--v7); clip-path: var(--steps); }
 .cloud .cloud-pi { width: 48px; height: 30px; }
 .cloud .cloud-k { margin: 0; color: var(--v7); }
-.cloud h3 { margin: 12px 0 0; font: 600 clamp(23px, 2.5vw, 29px)/1.15 var(--display); color: var(--ink); text-wrap: balance; }
+.cloud .cloud-h { margin: 12px 0 0; padding: 0; border: 0; font: 600 clamp(23px, 2.5vw, 29px)/1.15 var(--display); color: var(--ink); text-wrap: balance; }
 .cloud .cloud-say { margin: 10px 0 0; max-width: 60ch; color: var(--muted); font-size: 16.5px; line-height: 1.6; }
 .cloud .cloud-act { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-top: 20px; }
 .cloud .cloud-act .btn svg { width: 14px; height: 16px; }

@@ -247,15 +247,16 @@ RAILWAY_KWANT = "https://railway.com/deploy/kwant-1?referralCode=1WRbgr&utm_medi
 RAILWAY_LAYA = "https://railway.com/deploy/kwant-laya?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant"
 
 
-def railway(uid, root):
-    """{{railway:ID}}: the "run it on Railway" card, with the deploy button and the kwant + Laya link."""
+def railway(uid, root, h="h3"):
+    """{{railway:ID}} or {{railway:ID:h2}}: the "run it on Railway" card, with the deploy button and the kwant + Laya
+    link. Its title is an h3 by default; pass h2 where the card sits right under the page's h1 (docs), so headings don't skip."""
     kwant, laya = html.escape(RAILWAY_KWANT), html.escape(RAILWAY_LAYA)
     return (
         f'<aside class="cloud cloud-{uid} px" aria-labelledby="{uid}-cloud-title">'
         f'<div class="cloud-art" aria-hidden="true">{px_icon(IC["cloud"], "cloud-pi")}</div>'
         f'<div class="cloud-copy">'
         f'<p class="cloud-k mono-label">No server needed</p>'
-        f'<h3 id="{uid}-cloud-title">Run kwant on Railway in one click</h3>'
+        f'<{h} class="cloud-h" id="{uid}-cloud-title">Run kwant on Railway in one click</{h}>'
         f'<p class="cloud-say">Railway sets up kwant, the bots\' private browser and a disk for your data, so routines '
         f'keep going while your laptop sleeps. It makes your sign-in token too.</p>'
         f'<div class="cloud-act">'
@@ -466,7 +467,7 @@ def expand(body, root):
     body = body.replace("{{root}}", root)
     body = re.sub(r"\{\{(" + "|".join(OPERATOR) + r")\}\}", lambda m: operator(m[1]), body)
     body = re.sub(r"\{\{install:([a-z0-9-]+)\}\}", lambda m: install(m[1]), body)
-    body = re.sub(r"\{\{railway:([a-z0-9-]+)\}\}", lambda m: railway(m[1], root), body)
+    body = re.sub(r"\{\{railway:([a-z0-9-]+)(?::(h[23]))?\}\}", lambda m: railway(m[1], root, m[2] or "h3"), body)
     body = body.replace("{{railway_url}}", html.escape(RAILWAY_KWANT)).replace("{{railway_laya_url}}", html.escape(RAILWAY_LAYA))
     if "{{releases}}" in body:
         body = body.replace("{{releases}}", release_line())
