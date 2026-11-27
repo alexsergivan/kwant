@@ -539,7 +539,7 @@ const capInbox = (items, onOpen = () => {}) => {
   return mount(h(m.InboxNew, { onOpen, noLoad: true, wide: false, deskItems: items }));
 };
 
-test('desk-cap-row: Yuki’s row reads “Daily limit reached · 13 messages wait” with Raise the limit to 60 and Bell’s chat, no Yes, no Book', async () => {
+test('desk-cap-row: Yuki’s row reads “Daily limit reached · 13 messages wait” with Raise the limit to 60, Write a reply and No reply needed', async () => {
   stub({ read: capRead(30) });
   const items = capItems();
   assert.equal(items[0].waiting, 13);
@@ -549,9 +549,10 @@ test('desk-cap-row: Yuki’s row reads “Daily limit reached · 13 messages wai
   assert.ok(row);
   assert.equal(row.querySelector('[data-cap-title]').textContent.replace(/\u00a0/g, ' '), 'Daily limit reached · 13 messages wait');
   assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 60');
-  assert.equal(act(v, 'open-chat').textContent.trim(), 'Answer in Bell’s chat');
-  for (const a of ['yes', 'book', 'sorry', 'write']) assert.ok(!act(v, a), `no ${a}`);
-  assert.ok(!/Book a time/.test(v.host.textContent));
+  assert.equal(act(v, 'write').textContent.trim(), 'Write a reply');
+  assert.equal(act(v, 'resolve').textContent.trim(), 'No reply needed');
+  assert.deepEqual([...row.querySelectorAll('[data-allow-actions] button')].map((b) => b.dataset.action), ['raise-cap', 'write', 'resolve'], 'Raise, Write a reply, No reply needed, in that order');
+  assert.equal(row.querySelector('[data-allow="cap"] p:last-child').textContent, 'Each answer from Bell uses your plan, so a higher limit can use more of it. Your reply goes to Yuki as you, marked “host”.');
 });
 
 test('desk-cap-row: Raise the limit sends set_cap with 60, then says “Limit raised to 60”', async () => {
@@ -562,7 +563,7 @@ test('desk-cap-row: Raise the limit sends set_cap with 60, then says “Limit ra
   const post = calls.find(([meth]) => meth === 'POST');
   assert.equal(post[1], '/api/pockets/seaview/action');
   assert.deepEqual(post[2], { name: 'set_cap', body: { cap: 60 } });
-  assert.equal(v.host.querySelector('[data-cap-done="ok"]').textContent, 'Limit raised to 60');
+  assert.equal(v.host.querySelector('[data-cap-done="ok"]').textContent, 'Limit raised to 60. Bell answers new messages again; Yuki’s 13 still need you.');
   assert.ok(!act(v, 'raise-cap'), 'raised once; the row leaves when the server stops listing it');
   assert.ok(v.host.querySelector('[data-desk-item="desk:seaview:g-yuki"]'), 'the row stays until the server drops it');
 });
@@ -576,32 +577,122 @@ test('desk-cap-row: the next step doubles the current cap; the row’s own cap w
   let v = await capInbox(capItems());
   assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 100');
   v.done();
+  m.deskAnswers.reset(); // the desk's cap is shared per desk: start each case clean
   stub();
   v = await capInbox(capItems({ daily_cap: 30 }));
   assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 60', 'a cap on the row needs no read');
   assert.ok(!calls.some(([meth, u]) => meth === 'GET' && u.startsWith('/api/pockets/')));
   v.done();
+  m.deskAnswers.reset();
   stub(); // the read fails (503)
   v = await capInbox(capItems());
   assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 60');
   v.done();
+  m.deskAnswers.reset();
   stub({ read: capRead(200) });
   v = await capInbox(capItems());
   assert.ok(!act(v, 'raise-cap'));
-  assert.match(v.host.textContent, /The limit is already 200/);
+  assert.equal(v.host.querySelector('[data-allow="cap"] p:last-child').textContent, 'The limit is already 200, the most a desk can have. Bell answers again tomorrow. Your reply goes to Yuki as you, marked “host”.');
+  assert.ok(act(v, 'write') && act(v, 'resolve'), 'at 200 the host can still reply or close');
 });
 
-test('desk-cap-row: “Answer in Bell’s chat” opens Bell’s thread', async () => {
+const typeReply = async (v, text) => {
+  await click(act(v, 'write'));
+  const ta = v.host.querySelector('textarea');
+  assert.equal(ta.getAttribute('placeholder'), 'Write to Yuki');
+  assert.equal(v.host.querySelector(`label[for="${ta.id}"]`).textContent, 'Your reply to Yuki');
+  const set = Object.getOwnPropertyDescriptor(dom.window.HTMLTextAreaElement.prototype, 'value').set;
+  set.call(ta, text);
+  ta.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  await settle();
+  return ta;
+};
+
+test('desk-cap-row: “Write a reply” posts reply with the text to Yuki, and the sent row leaves', async () => {
+  stub({ read: capRead(30) });
+  const v = await capInbox(capItems());
+  await typeReply(v, 'The hair dryer is in the hall cupboard. Quiet time is 10 PM.');
+  await click(act(v, 'send'));
+  await settle();
+  const post = calls.find(([meth]) => meth === 'POST');
+  assert.equal(post[1], '/api/pockets/seaview/action');
+  assert.deepEqual(post[2], { name: 'reply', body: { guest: 'g-yuki', text: 'The hair dryer is in the hall cupboard. Quiet time is 10 PM.' } });
+  assert.ok(!v.host.querySelector('[data-desk-item="desk:seaview:g-yuki"]'), 'sent: the row goes, as other rows do');
+});
+
+test('desk-cap-row: Esc closes the reply box; a failed reply keeps the row with the failed line', async () => {
+  stub({ read: capRead(30), action: 'fail' });
+  const v = await capInbox(capItems());
+  const ta = await typeReply(v, 'Hall cupboard.');
+  ta.dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+  await settle();
+  assert.ok(!v.host.querySelector('textarea') && act(v, 'raise-cap'), 'Esc: back to the buttons');
+  await typeReply(v, 'Hall cupboard.');
+  v.host.querySelector('textarea').dispatchEvent(new dom.window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+  await settle();
+  assert.ok(v.host.querySelector('[data-desk-item="desk:seaview:g-yuki"] [data-failed]'));
+  assert.ok(act(v, 'write'));
+});
+
+test('desk-cap-row: “No reply needed” posts resolve and sends no words', async () => {
+  stub({ read: capRead(30) });
+  const v = await capInbox(capItems());
+  await click(act(v, 'resolve'));
+  await settle();
+  assert.deepEqual(calls.find(([meth]) => meth === 'POST')[2], { name: 'resolve', body: { guest: 'g-yuki' } });
+  assert.ok(!v.host.querySelector('[data-desk-item="desk:seaview:g-yuki"]'));
+});
+
+test('desk-cap-row: the cap row has no “Answer in”, Yes, Sorry or Book, even with a chat link and an opener', async () => {
   stub({ read: capRead(30) });
   const opened = [];
-  const v = await capInbox(capItems(), (i) => opened.push(i));
-  await click(act(v, 'open-chat'));
-  assert.equal(opened.length, 1);
-  assert.equal(opened[0].kwant_id, 'kw-never-shown-01');
-  assert.deepEqual(opened[0].link, { thread_id: 't-desk', channel_id: null, direct_kwant_id: 'kw-never-shown-01' });
-  const none = capItems({ kwant_id: null, direct_kwant_id: null });
-  const v2 = await capInbox(none);
-  assert.ok(!v2.host.querySelector('[data-action="open-chat"]'), 'no bot id: no chat button');
+  const v = await capInbox(capItems({ actions: ['book', 'reply', 'resolve'] }), (i) => opened.push(i));
+  for (const a of ['open-chat', 'yes', 'sorry', 'book']) assert.ok(!act(v, a), `no ${a}`);
+  assert.ok(!/Answer in|Sorry|Yes, that|Book a time/.test(v.host.textContent));
+  assert.equal(opened.length, 0);
+});
+
+test('desk-cap-row (Rigel P1): a Booking Desk’s cap row (mode “booking”) gets the cap card, not the booking row', async () => {
+  stub({ read: capRead(30) });
+  const items = capItems({ mode: 'booking' });
+  assert.equal(items[0].ask, undefined, 'not a booking item');
+  assert.equal(items[0].need, 'daily_cap');
+  assert.equal(items[0].waiting, 13);
+  const v = await capInbox(items);
+  const row = v.host.querySelector('[data-desk-item="desk:seaview:g-yuki"]');
+  assert.ok(row.querySelector('[data-allow="cap"]'), 'the cap card');
+  assert.equal(row.querySelector('[data-cap-title]').textContent.replace(/ /g, ' '), 'Daily limit reached · 13 messages wait');
+  assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 60');
+  assert.ok(!act(v, 'sorry'));
+  assert.match(row.textContent, /Sea-view flat · Booking Desk ·/);
+  assert.equal(m.validDeskItems({ items: [{ ...structuredClone(m.DESK_CAP_WAITING.items[0]), mode: 'booking', ask: 'handoff', waiting: 4 }] })[0].ask, 'handoff', 'a booking hand-off is still a booking item');
+});
+
+test('desk-cap-row (Mira m2, Rigel P11): two cap rows of one desk share one read and one cap, and update together', async () => {
+  stub({ read: capRead(30) });
+  const items = m.validDeskItems({
+    items: [structuredClone(m.DESK_CAP_WAITING.items[0]), { ...structuredClone(m.DESK_CAP_WAITING.items[0]), id: 'desk:seaview:g-kai', guest_id: 'g-kai', guest_name: 'Kai', waiting: 1 }],
+  });
+  const v = await capInbox(items);
+  assert.equal(calls.filter(([meth, u]) => meth === 'GET' && u.startsWith('/api/pockets/seaview')).length, 1, 'one read per desk');
+  const yuki = v.host.querySelector('[data-desk-item="desk:seaview:g-yuki"]');
+  const kai = v.host.querySelector('[data-desk-item="desk:seaview:g-kai"]');
+  assert.equal(kai.querySelector('[data-action="raise-cap"]').textContent.trim(), 'Raise the limit to 60');
+  await click(yuki.querySelector('[data-action="raise-cap"]'));
+  await settle();
+  assert.equal(kai.querySelector('[data-action="raise-cap"]').textContent.trim(), 'Raise the limit to 120', 'Kai’s row follows the new cap');
+  await click(kai.querySelector('[data-action="raise-cap"]'));
+  await settle();
+  assert.deepEqual(calls.filter(([meth]) => meth === 'POST').map((c) => c[2].body.cap), [60, 120]);
+  assert.equal(kai.querySelector('[data-cap-done="ok"]').textContent, 'Limit raised to 120. Bell answers new messages again; Kai’s message still needs you.');
+});
+
+test('desk-cap-row (Mira F2): the success line with no count says the waiting messages still need you', async () => {
+  stub({ read: capRead(30) });
+  const v = await capInbox(capItems({ waiting: undefined }));
+  await click(act(v, 'raise-cap'));
+  await settle();
+  assert.equal(v.host.querySelector('[data-cap-done="ok"]').textContent, 'Limit raised to 60. Bell answers new messages again; Yuki’s waiting messages still need you.');
 });
 
 test('desk-cap-row: waiting 1 → “1 message waits”; no waiting on the wire → no count', async () => {
