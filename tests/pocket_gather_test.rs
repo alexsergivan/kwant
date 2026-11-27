@@ -570,8 +570,13 @@ async fn names_turned_on_later_keep_earlier_rsvps_counted_but_unnamed_until_they
     assert_eq!(r.status, StatusCode::OK, "{}", r.body);
     assert!(r.body.to_string().contains("\"names_hidden\":3"), "{}", r.body);
 
-    // Someone answering after the switch is listed as usual, and gets no notice
+    // Lin S1: a page painted while names were hidden (no "names": true) keeps even a first answer unnamed
     ok(&t, &code, &dev, "answer", json!({ "answer": "yes" })).await;
+    let v = view_of(&t, &code, &dev).await;
+    assert_eq!((rsvp_names(&v), v["names_notice"].as_bool()), (Some(vec![]), Some(true)));
+    assert_eq!(host_view(&t, &code).await["names_hidden"], 4);
+    // Answering from a page that shows names on lists them as usual, with no notice
+    ok(&t, &code, &dev, "answer", json!({ "answer": "yes", "names": true })).await;
     let v = view_of(&t, &code, &dev).await;
     assert_eq!((rsvp_names(&v), v["names_notice"].as_bool()), (Some(vec!["Dev".to_string()]), Some(false)));
 
@@ -580,7 +585,9 @@ async fn names_turned_on_later_keep_earlier_rsvps_counted_but_unnamed_until_they
     ok(&t, &code, &ben, "show_my_name", json!({})).await;
     let v = view_of(&t, &code, &ben).await;
     assert_eq!((rsvp_names(&v), v["names_notice"].as_bool()), (Some(vec!["Ben".into(), "Dev".into()]), Some(false)));
-    ok(&t, &code, &ana, "answer", json!({ "answer": "maybe" })).await;
+    ok(&t, &code, &ana, "answer", json!({ "answer": "maybe", "names": true })).await;
+    // Cleo changes her answer from a page still showing names off: she stays unnamed
+    ok(&t, &code, &cleo, "answer", json!({ "answer": "maybe", "names": false })).await;
     let v = view_of(&t, &code, &cleo).await;
     assert_eq!((rsvp_names(&v), v["names_notice"].as_bool()), (Some(vec!["Ana".into(), "Ben".into(), "Dev".into()]), Some(true)));
     assert!(!v["people"].to_string().contains("Cleo"), "Cleo hasn't seen the change yet");
@@ -633,7 +640,7 @@ async fn a_sign_up_switched_to_names_lists_only_people_who_saw_it() {
     ok(&t, &code, &cleo, "take", json!({ "slot": 1, "note": "Lemonade" })).await;
     assert_eq!(host_act(&t, &code, "set_show_names", json!({ "on": true })).await.status, StatusCode::OK);
     assert_eq!(host_view(&t, &code).await["names_hidden"], 3);
-    ok(&t, &code, &dev, "take", json!({ "slot": 1 })).await;
+    ok(&t, &code, &dev, "take", json!({ "slot": 1, "names": true })).await;
 
     let v = view_of(&t, &code, &cleo).await;
     assert_eq!(v["names_notice"], true);
@@ -652,9 +659,11 @@ async fn a_sign_up_switched_to_names_lists_only_people_who_saw_it() {
     assert_eq!(view_of(&t, &code, &ben).await["names_notice"], true);
     assert_eq!(host_view(&t, &code).await["names_hidden"], 2);
 
-    // Cleo shows her name; Ben sending his slot again (a note) is answering again
+    // Cleo shows her name; Ben sending his slot again from a page showing names is answering again
     ok(&t, &code, &cleo, "show_my_name", json!({})).await;
     ok(&t, &code, &ben, "take", json!({ "slot": 0, "note": "Pie" })).await;
+    assert_eq!(view_of(&t, &code, &ben).await["names_notice"], true, "a page without names on doesn't opt in");
+    ok(&t, &code, &ben, "take", json!({ "slot": 0, "note": "Pie", "names": true })).await;
     let v = view_of(&t, &code, &ana).await;
     assert_eq!(slot_names(&v, 0), (vec!["Ben".to_string()], vec![]));
     assert_eq!(slot_names(&v, 1), (vec!["Cleo".to_string(), "Dev".to_string()], vec![]));
