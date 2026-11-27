@@ -20,7 +20,7 @@ use sqlx::SqliteConnection;
 use crate::db::models::{MessageExtra, NewMessage};
 use crate::db::pocket::PocketRow;
 use crate::pocket::kits::Player;
-use crate::server::santa_tool;
+use crate::server::{desk_tool, santa_tool};
 use crate::db::quiz_drafts::QuizDraftRow;
 use crate::mcp::SELF_SERVER_NAME;
 use crate::quizmaster::card::{Card, State};
@@ -47,6 +47,7 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
     let kit = match &called {
         Called::Quiz(_) => crate::kits::quiz::KIT_ID,
         Called::Santa(_) => crate::pocket::santa::ID,
+        Called::Desk(_) => crate::pocket::desk::ID,
     };
     if !switch.allows(kit) {
         return None;
@@ -63,6 +64,11 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
         Called::Santa(Named::MadeThisTurn) => {
             let code = santa_made_this_turn(&mut *conn, input, extra).await?;
             return santa_candidate(&mut *conn, &code, input, extra, tz.as_deref()).await;
+        }
+        Called::Desk(Named::Id(code)) => return desk_candidate(&mut *conn, &code, input, extra).await,
+        Called::Desk(Named::MadeThisTurn) => {
+            let code = kit_made_this_turn(&mut *conn, crate::pocket::desk::ID, input, extra).await?;
+            return desk_candidate(&mut *conn, &code, input, extra).await;
         }
     };
     let row = match named {
@@ -83,15 +89,17 @@ enum Called {
     /// The Secret Santa `santa_create` made: its code ([`Named::Id`]), or the one this bot made
     /// this turn when the call's answer wasn't kept ([`Named::MadeThisTurn`]).
     Santa(Named),
+    /// The front desk `desk_create` made (desk-create-from-chat), named the same two ways.
+    Desk(Named),
 }
 
+/// The turn's last call that names a card, of any kind.
 fn last_named(input: &NewMessage) -> Option<Called> {
-    match (draft_named_at(input), santa_named_at(input)) {
-        (Some((qi, _)), Some((si, santa))) if si > qi => Some(Called::Santa(santa)),
-        (Some((_, named)), _) => Some(Called::Quiz(named)),
-        (None, Some((_, santa))) => Some(Called::Santa(santa)),
-        (None, None) => None,
-    }
+    let quiz = draft_named_at(input).map(|(i, n)| (i, Called::Quiz(n)));
+    let santa = santa_named_at(input).map(|(i, n)| (i, Called::Santa(n)));
+    let desk = desk_named_at(input).map(|(i, n)| (i, Called::Desk(n)));
+    // No two calls share a place in the turn
+    [quiz, santa, desk].into_iter().flatten().max_by_key(|(i, _)| *i).map(|(_, c)| c)
 }
 
 /// The Secret Santa the turn's last `santa_create` call that made one names, and that call's place
@@ -127,9 +135,15 @@ fn santa_named_at(input: &NewMessage) -> Option<(usize, Named)> {
 /// same anchor as [`made_this_turn`]). `None` without such a message or pocket. Whose pocket it
 /// is still goes through [`belongs`] in [`santa_candidate`].
 async fn santa_made_this_turn(conn: &mut SqliteConnection, input: &NewMessage, extra: &MessageExtra) -> Option<String> {
+    kit_made_this_turn(conn, crate::pocket::santa::ID, input, extra).await
+}
+
+/// [`santa_made_this_turn`] for any kit: the newest pocket of `kit` the reply's bot made since
+/// the turn began.
+async fn kit_made_this_turn(conn: &mut SqliteConnection, kit: &str, input: &NewMessage, extra: &MessageExtra) -> Option<String> {
     let (kwant, asked) = turn_began(&mut *conn, input, extra).await?;
     let sql = format!("SELECT {} FROM pocket_apps WHERE kit = ? AND owner_kwant_id = ? ORDER BY created_at DESC, rowid DESC LIMIT 1", crate::db::pocket::POCKET_COLS);
-    let row = sqlx::query_as::<_, PocketRow>(&sql).bind(crate::pocket::santa::ID).bind(&kwant).fetch_optional(&mut *conn).await.ok()??;
+    let row = sqlx::query_as::<_, PocketRow>(&sql).bind(kit).bind(&kwant).fetch_optional(&mut *conn).await.ok()??;
     // Message times keep whole seconds; pockets keep fractions
     (row.created_at.timestamp_millis() >= asked.timestamp() * 1000).then_some(row.code)
 }
@@ -203,6 +217,110 @@ fn santa_block(code: &str, c: santa_tool::Card) -> Pocket {
         yours: None,
         notice: None,
         santa: Some(c.santa),
+        desk: None,
+    }
+}
+
+/// The front desk the turn's last `desk_create` call that made one names, and that call's place:
+/// the code its answer starts with (`Pocket app · Front desk [<code>]`), or, for a call the Claude
+/// CLI engine let through ("allowed") holding a desk and with no answer kept,
+/// [`Named::MadeThisTurn`] (as #1280 did for the Santa). A failed or denied call, a call that only
+/// asked for the rules (no `title`), or another server's tool of the same name names nothing.
+fn desk_named_at(input: &NewMessage) -> Option<(usize, Named)> {
+    let calls = input.tool_calls.as_ref()?.as_array()?;
+    calls.iter().enumerate().rev().find_map(|(i, c)| {
+        if c.get("server").and_then(Value::as_str) != Some(SELF_SERVER_NAME) || c.get("tool").and_then(Value::as_str) != Some(desk_tool::TOOL) {
+            return None;
+        }
+        let status = c.get("status").and_then(Value::as_str);
+        if !matches!(status, Some("ok" | "allowed")) {
+            return None;
+        }
+        let Some(result) = c.get("result").and_then(Value::as_str) else {
+            return (status == Some("allowed") && desk_tool::holds_desk(c.get("arguments"))).then_some((i, Named::MadeThisTurn));
+        };
+        let rest = result.trim_start().strip_prefix(desk_tool::CARD_TEXT_HEAD)?;
+        let code = &rest[..rest.find(']')?];
+        valid_code(code).then(|| (i, Named::Id(code.to_string())))
+    })
+}
+
+/// A front desk's card: the stored pocket (kit `desk`, owned by the reply's sender, in the
+/// reply's space) through [`desk_tool::card`], never the call's text.
+async fn desk_candidate(conn: &mut SqliteConnection, code: &str, input: &NewMessage, extra: &MessageExtra) -> Option<Block> {
+    let sql = format!("SELECT {} FROM pocket_apps WHERE code = ?", crate::db::pocket::POCKET_COLS);
+    let row = sqlx::query_as::<_, PocketRow>(&sql).bind(code).fetch_optional(&mut *conn).await.ok()??;
+    if row.kit != crate::pocket::desk::ID {
+        return None;
+    }
+    let owner = row.owner_kwant_id.clone()?;
+    let space = sqlx::query_scalar::<_, String>("SELECT space_id FROM kwants WHERE id = ?").bind(&owner).fetch_optional(&mut *conn).await.ok()??;
+    if !belongs(&mut *conn, &owner, &space, input, extra).await {
+        return None;
+    }
+    let players: Vec<Player> = sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
+        "SELECT id, name, avatar, team, joined_at FROM pocket_players WHERE pocket_code = ? AND removed_at IS NULL ORDER BY joined_at, id",
+    )
+    .bind(code)
+    .fetch_all(&mut *conn)
+    .await
+    .ok()?
+    .into_iter()
+    .map(|(id, name, avatar, team, joined_at)| Player { id, name, avatar, team, joined_at })
+    .collect();
+    let spec: Value = serde_json::from_str(&row.spec).ok()?;
+    let kit_state: Value = serde_json::from_str(&row.kit_state).unwrap_or(Value::Null);
+    // The answering bot's model, for the card's cost line (host_api's read does the same)
+    let bot = spec["answer_bot"].as_str().unwrap_or("");
+    let model = sqlx::query_scalar::<_, String>("SELECT preferred_model FROM kwants WHERE id = ?")
+        .bind(bot)
+        .fetch_optional(&mut *conn)
+        .await
+        .ok()
+        .flatten()
+        .filter(|m| !m.trim().is_empty());
+    let ended = row.state != crate::db::pocket::OPEN;
+    let d = desk_tool::card(&desk_tool::CardInput {
+        spec: &spec,
+        kit_state: &kit_state,
+        players: &players,
+        now: Utc::now(),
+        model,
+        join: if ended { None } else { santa_tool::join_for(code) },
+    });
+    Some(Block::Pocket(Box::new(desk_block(&row.code, &row.title, ended, d))))
+}
+
+/// The `pocket` block for a front desk's card: kit `desk`, its `desk` part (which carries its own
+/// join), and none of the quiz's parts.
+fn desk_block(code: &str, title: &str, ended: bool, d: Value) -> Pocket {
+    Pocket {
+        id: "b0".into(),
+        title: None,
+        source: Source::slot(),
+        provenance: Provenance::kwant_data(format!("pocket:{code}")),
+        code: code.to_string(),
+        kit: crate::pocket::desk::ID.into(),
+        name: fit(title, 80),
+        when: None,
+        state: if ended { "ended" } else { "live" }.into(),
+        paused: false,
+        progress: None,
+        rounds: Vec::new(),
+        checks: None,
+        dry_run: None,
+        eta: None,
+        opens_line: None,
+        live: None,
+        join: None,
+        ended: None,
+        budget: None,
+        results: None,
+        draft: None,
+        yours: None,
+        notice: None,
+        santa: None,
+        desk: Some(d),
     }
 }
 
@@ -484,6 +602,7 @@ fn block(row: &QuizDraftRow, card: &Card, tz: Option<&str>) -> Pocket {
         yours: Some(card.yours as u64),
         notice,
         santa: None,
+        desk: None,
     }
 }
 
@@ -562,6 +681,7 @@ mod tests {
             yours: Some(1),
             notice: None,
             santa: None,
+            desk: None,
         }
     }
 
