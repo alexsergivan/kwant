@@ -521,6 +521,8 @@ export function bookingMood(stage: DeskStage, d: DeskInfo, code: string): Mood {
 export const DESK_LATER = {
   paste: 'Pasting from a doc comes later. Paste the guide into the chat for now.',
   noLink: 'The link exists once the desk starts.',
+  /** A started desk whose box only answers this computer (no own https, Funnel or Wi-Fi address). */
+  noAddress: 'Phones can’t reach this desk yet: the box only answers this computer.',
   address: 'Start needs an address that stays the same: turn on Tailscale Funnel, or use the flat Wi-Fi only.',
 };
 
@@ -740,11 +742,11 @@ const KeepRows: React.FC<{ d: DeskInfo }> = ({ d }) => (
   </>
 );
 
-const TryAsGuest: React.FC<{ d: DeskInfo; half?: boolean }> = ({ d, half = true }) => {
+const TryAsGuest: React.FC<{ d: DeskInfo; half?: boolean; started?: boolean }> = ({ d, half = true, started = false }) => {
   const url = joinUrl(d);
   if (!url)
     return (
-      <LaterButton icon={<Eye size={14} aria-hidden="true" />} why={DESK_LATER.noLink} half={half}>
+      <LaterButton icon={<Eye size={14} aria-hidden="true" />} why={started ? DESK_LATER.noAddress : DESK_LATER.noLink} half={half}>
         Try as a guest
       </LaterButton>
     );
@@ -756,7 +758,7 @@ const TryAsGuest: React.FC<{ d: DeskInfo; half?: boolean }> = ({ d, half = true 
   );
 };
 
-const ShareLink: React.FC<{ d: DeskInfo }> = ({ d }) => {
+const ShareLink: React.FC<{ d: DeskInfo; started?: boolean }> = ({ d, started = false }) => {
   const url = joinUrl(d);
   const [state, setState] = useState<'copied' | 'failed' | null>(null);
   useEffect(() => {
@@ -766,7 +768,14 @@ const ShareLink: React.FC<{ d: DeskInfo }> = ({ d }) => {
   }, [state]);
   if (!url)
     return (
-      <button type="button" aria-disabled="true" title={DESK_LATER.noLink} aria-description={DESK_LATER.noLink} onClick={(e) => e.preventDefault()} className={`${PRIMARY} ${FULL} ${LATER_CLS}`}>
+      <button
+        type="button"
+        aria-disabled="true"
+        title={started ? DESK_LATER.noAddress : DESK_LATER.noLink}
+        aria-description={started ? DESK_LATER.noAddress : DESK_LATER.noLink}
+        onClick={(e) => e.preventDefault()}
+        className={`${PRIMARY} ${FULL} ${LATER_CLS}`}
+      >
         <Share2 size={14} aria-hidden="true" />
         Share link
       </button>
@@ -815,6 +824,39 @@ const JoinBox: React.FC<{ d: DeskInfo }> = ({ d }) => {
     </div>
   );
 };
+
+/** A started desk: the same link and a smaller QR under the guests, so the host can still print or send it. */
+export const DeskCompactJoin: React.FC<{ d: DeskInfo }> = ({ d }) => {
+  const url = joinUrl(d);
+  if (!url)
+    return (
+      <p className={`flex items-start gap-2 ${SMALL}`} data-join="none">
+        <Wifi size={14} className={`${ICON} text-zinc-500`} aria-hidden="true" />
+        <span>{DESK_LATER.noAddress} Turn on Tailscale Funnel or set your own https address, and the link and QR show here.</span>
+      </p>
+    );
+  const anywhere = !!d.join?.anywhere_url;
+  const Icon = anywhere ? Globe : Wifi;
+  return (
+    <div className="flex items-center gap-3.5 rounded-2xl border border-sky-800/70 bg-surface-rail/40 p-3.5" data-join="compact" data-join-mode={anywhere ? 'anywhere' : 'wifi'}>
+      <Qr url={url} size="compact" name={d.title} />
+      <div className="flex min-w-0 flex-1 flex-col gap-2">
+        <p className="flex items-start gap-1.5 text-[13px] leading-5 text-zinc-300 sm:text-meta">
+          <Icon size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
+          {anywhere ? 'The same link for every guest. Print the QR or send the link.' : 'Same Wi-Fi only: guests must be on the flat Wi-Fi to open it.'}
+        </p>
+        <LinkField url={url} />
+      </div>
+    </div>
+  );
+};
+
+/** "Yuki is still waiting." / "3 guests are still waiting." for the Stop confirm (m3); null when nobody waits. */
+export function stillWaitingLine(guests: DeskGuest[]): string | null {
+  const w = guests.filter((g) => g.waiting);
+  if (w.length === 0) return null;
+  return w.length === 1 ? `${w[0].name} is still waiting.` : `${num(w.length)} guests are still waiting.`;
+}
 
 // ---------------------------------------------------------------------------------------------------
 // Guest list (For Pixel 5): rows are buttons, newest activity first, the last line cut by CSS.
@@ -1362,6 +1404,8 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
   const kitName = bkBase ? 'Booking Desk' : 'Guest Guide';
   const conv = open && (stage === 'live' || stage === 'cap' || stage === 'stopped' || stage === 'ready');
   const firstWaiting = d.guests.find((g) => g.waiting);
+  // m3: stopping while a guest still waits for the host names them first (the Inbox row goes when the desk ends).
+  const waitingLine = stillWaitingLine(d.guests);
 
   const stopButton = (
     <button type="button" onClick={() => setConfirm('stop')} className={`${STOP} col-span-2 justify-self-center sm:ml-auto`} data-action="stop">
@@ -1480,7 +1524,9 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
     );
   } else if (bk && stage !== 'stopped') {
     const full = stage === 'cap';
-    const handoffs = d.guests.filter((g) => g.waiting);
+    // A guest asking for a listed time has its own Allow card above; the guest list and the tile count only hand-offs.
+    const asking = new Set(bk.slots.flatMap((x) => x.requested.map((r) => r.guest)));
+    const handoffs = d.guests.filter((g) => g.waiting && !asking.has(g.id));
     body = editing ? (
       <TimesEditor draft={draft} setDraft={setDraft} monday={monday} setMonday={setMonday} rule={rule} setRule={setRule} quickFill={false} refusal={refusal} setRefusal={setRefusal} />
     ) : (
@@ -1498,8 +1544,9 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
         ) : (
           <>
             <BookingRequests code={block.code} slots={bkBase!.slots} host={d.host_name ?? ''} bot={bot} creatures={Object.fromEntries(d.guests.map((g) => [g.id, g.creature]))} />
-            {handoffs.length > 0 && <GuestList d={d} only="waiting" onOpen={setOpen} />}
+            {handoffs.length > 0 && <GuestList d={{ ...d, guests: d.guests.filter((g) => !asking.has(g.id)) }} only="waiting" onOpen={setOpen} />}
             <LiveWeek slots={bk.slots} />
+            <DeskCompactJoin d={d} />
           </>
         )}
         {!conv && (
@@ -1541,12 +1588,12 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
       </div>
     ) : (
       <div className={GRID}>
-        <ShareLink d={d} />
+        <ShareLink d={d} started />
         <button type="button" onClick={editTimes} className={HALF_BTN} data-action="edit-times">
           <Pencil size={14} aria-hidden="true" />
           Edit times
         </button>
-        <TryAsGuest d={d} />
+        <TryAsGuest d={d} started />
         {stopButton}
       </div>
     );
@@ -1648,9 +1695,12 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
             <JoinBox d={d} />
           </>
         ) : (
-          <div ref={listRef}>
-            <GuestList d={d} only={full ? 'waiting' : undefined} onOpen={setOpen} />
-          </div>
+          <>
+            <div ref={listRef}>
+              <GuestList d={d} only={full ? 'waiting' : undefined} onOpen={setOpen} />
+            </div>
+            <DeskCompactJoin d={d} />
+          </>
         )}
         {stage !== 'ready' && !conv && (
           <ul className="flex flex-col gap-2">
@@ -1661,9 +1711,9 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
     );
     actions = (
       <div className={GRID}>
-        <ShareLink d={d} />
-        {stage === 'ready' ? <TryAsGuest d={d} /> : editGuide}
-        {stage === 'ready' ? editGuide : <TryAsGuest d={d} />}
+        <ShareLink d={d} started />
+        {stage === 'ready' ? <TryAsGuest d={d} started /> : editGuide}
+        {stage === 'ready' ? editGuide : <TryAsGuest d={d} started />}
         {stopButton}
       </div>
     );
@@ -1705,7 +1755,15 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
           </p>
         ) : null}
         {confirm ? (
-          <div className="flex flex-col gap-2.5 rounded-xl border border-hairline-strong bg-surface-rail/60 p-3" role="group" aria-label={confirm === 'stop' ? 'Stop the desk?' : 'Delete the chats now?'} data-confirm={confirm}>
+          <div className="flex flex-col gap-2.5 rounded-xl border border-hairline-strong bg-surface-rail/60 p-3" role="group" aria-label={confirm === 'stop' ? (waitingLine ? `${waitingLine} Stop anyway?` : 'Stop the desk?') : 'Delete the chats now?'} data-confirm={confirm} data-waiting={confirm === 'stop' && waitingLine ? 'yes' : undefined}>
+            {confirm === 'stop' && waitingLine && (
+              <p className={`flex items-start gap-2 font-semibold text-zinc-50 ${P}`} data-still-waiting>
+                <AlertTriangle size={15} className={`${ICON} text-warn`} aria-hidden="true" />
+                <span>
+                  {waitingLine} Stop anyway?
+                </span>
+              </p>
+            )}
             <p className={P}>
               {confirm === 'stop'
                 ? bk
@@ -1725,10 +1783,20 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
                 className={STOP}
                 data-action={`confirm-${confirm}`}
               >
-                {confirm === 'stop' ? 'Stop the desk' : 'Delete chats now'}
+                {confirm === 'stop' ? (waitingLine ? 'Stop anyway' : 'Stop the desk') : 'Delete chats now'}
               </button>
-              <button type="button" disabled={busy} onClick={() => setConfirm(null)} className={GHOST}>
-                {confirm === 'stop' ? 'Keep it open' : 'Keep them'}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setConfirm(null);
+                  // Keep it open and go straight to the guest who waits.
+                  if (confirm === 'stop' && waitingLine && firstWaiting) setOpen(firstWaiting.id);
+                }}
+                className={GHOST}
+                data-action={confirm === 'stop' && waitingLine ? 'answer-first' : 'keep'}
+              >
+                {confirm === 'stop' ? (waitingLine ? (d.guests.filter((g) => g.waiting).length === 1 ? `Answer ${firstWaiting!.name}` : 'Answer them first') : 'Keep it open') : 'Keep them'}
               </button>
             </div>
           </div>
