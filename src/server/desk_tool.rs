@@ -190,6 +190,14 @@ pub(crate) fn build_spec(desk: &Value, now: NaiveDateTime) -> Result<Value, Stri
     if let Err(kits::KitError::Coded { message, extra, .. }) = desk::parse_slots(spec.get("slots"), false) {
         return Err(bad_slots(extra["index"].as_u64(), extra["why"].as_str().unwrap_or("slots"), &message));
     }
+    // A time already past (at or before `now`, the clock fill uses) can't be booked: the kit
+    // takes it, so refuse it here, with its index like the kit's own answers
+    for (i, slot) in spec["slots"].as_array().into_iter().flatten().enumerate() {
+        let start = slot["start"].as_str().map(str::trim).unwrap_or("");
+        if NaiveDateTime::parse_from_str(start, desk::SLOT_START_FORMAT).is_ok_and(|at| at <= now) {
+            return Err(bad_slots(Some(i as u64), "start", &format!("Slot {}: {start} is already past.", i + 1)));
+        }
+    }
     Ok(spec)
 }
 
@@ -509,6 +517,15 @@ mod tests {
         assert!(e.contains("why: \"start\", index: 0"), "{e}");
         let e = bad(booking(json!({})));
         assert!(e.contains("why: \"list\""), "{e}");
+        // An explicit time at or before now is past (the same clock and rule as fill), with its index
+        for (start, index) in [("2020-01-01T10:00", 0), ("2026-11-30T08:00", 0)] {
+            let e = bad(booking(json!({"slots": [{"start": start, "minutes": 30}]})));
+            assert!(e.contains(&format!("why: \"start\", index: {index}")) && e.contains("is already past"), "{start}: {e}");
+        }
+        let e = bad(booking(json!({"slots": [{"start": "2026-12-01T10:00", "minutes": 30}, {"start": "2026-11-29T10:00", "minutes": 30}]})));
+        assert!(e.contains("why: \"start\", index: 1") && e.contains("Slot 2: 2026-11-29T10:00 is already past."), "{e}");
+        // One minute ahead is fine
+        assert!(build_spec(&booking(json!({"slots": [{"start": "2026-11-30T08:01", "minutes": 30}]})), monday_8am()).is_ok());
         let e = bad(booking(json!({"slots": [], "fill": haircut_fill()})));
         assert!(e.contains("not both"), "{e}");
         // Times on a guide desk
