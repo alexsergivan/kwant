@@ -18,6 +18,10 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 export const FRAME_METRICS = ['commitsPerSecond', 'p95FrameMs', 'framesOver50'];
 export const BYTE_METRICS = ['appInitialGz', 'appAllGz', 'guestInitialGz', 'guestAllGz'];
+// Living avatars (autonomy/living-avatars): 30 bots on the shared clock for 20 s (perf/stream/life.mjs), once per run.
+// Commits and timers are the worst run (life must never render React or hold a second timer); p95 is the median.
+export const LIFE_METRICS = ['lifeCommits', 'lifeTimers', 'lifeP95FrameMs'];
+const LIFE_WORST = new Set(['lifeCommits', 'lifeTimers']);
 
 export const gz = (buf) => zlib.gzipSync(buf, { level: 9 }).length;
 
@@ -93,7 +97,7 @@ export const measureBytes = (dist) => {
 
 // One verdict per metric. budget: { frame: { name: { max } }, bytes: { name: { max } }, dropped: { name: why } }.
 // A metric in FRAME_METRICS/BYTE_METRICS with no limit and not dropped fails: a budget can't skip a metric by omission.
-export const check = ({ runs, bytes }, budget) => {
+export const check = ({ runs, bytes, life }, budget) => {
   const rows = [];
   const dropped = budget.dropped ?? {};
   for (const [i, r] of runs.entries()) {
@@ -109,6 +113,23 @@ export const check = ({ runs, bytes }, budget) => {
     const lim = budget.frame?.[k]?.max;
     if (k in dropped) rows.push({ metric: k, value: med[k], limit: `dropped: ${dropped[k]}`, ok: true, dropped: true, runs: xs });
     else rows.push({ metric: k, value: med[k], limit: lim, ok: Number.isFinite(med[k]) && typeof lim === 'number' && med[k] <= lim, runs: xs });
+  }
+  // The life case: checked whenever the budget has it (a budget with "life" and no life runs fails).
+  if (budget.life) {
+    const lr = life ?? [];
+    for (const [i, r] of lr.entries()) {
+      if (r.error) rows.push({ metric: `life run ${i + 1}`, value: r.error, limit: 'completes', ok: false });
+      else if (r.errors?.length) rows.push({ metric: `life run ${i + 1} page errors`, value: r.errors.join(' | ').slice(0, 300), limit: 'none', ok: false });
+    }
+    const lg = lr.filter((r) => !r.error);
+    rows.push({ metric: 'lifeEvents', value: lg.map((r) => r.lifeEvents).join(', ') || 'no runs', limit: '> 0 in every run', ok: lg.length > 0 && lg.length === lr.length && lg.every((r) => r.lifeEvents > 0) });
+    for (const k of LIFE_METRICS) {
+      const xs = lg.map((r) => r[k]).filter((x) => typeof x === 'number');
+      const v = xs.length === lg.length && xs.length ? (LIFE_WORST.has(k) ? Math.max(...xs) : median(xs)) : NaN;
+      med[k] = v;
+      const lim = budget.life[k]?.max;
+      rows.push({ metric: k, value: v, limit: lim, ok: Number.isFinite(v) && typeof lim === 'number' && v <= lim, runs: xs });
+    }
   }
   for (const k of BYTE_METRICS) {
     const v = bytes[k]?.bytes;
@@ -135,11 +156,11 @@ export const summaryTable = ({ ok, rows }, { calibrate = false, spread = {} } = 
   return lines.join('\n') + '\n';
 };
 
-const runHarness = (args) => {
+const runHarness = (args, script = 'run.mjs') => {
   const here = path.dirname(fileURLToPath(import.meta.url));
-  const p = spawnSync(process.execPath, [path.join(here, 'stream', 'run.mjs'), ...args], { encoding: 'utf8', timeout: 180000, maxBuffer: 1 << 24 });
+  const p = spawnSync(process.execPath, [path.join(here, 'stream', script), ...args], { encoding: 'utf8', timeout: 180000, maxBuffer: 1 << 24 });
   const line = (p.stdout ?? '').trim().split('\n').reverse().find((l) => l.startsWith('{'));
-  if (p.status !== 0 || !line) return { error: `run.mjs exit ${p.status ?? p.signal}: ${(p.stderr || p.stdout || '').trim().slice(-400)}` };
+  if (p.status !== 0 || !line) return { error: `${script} exit ${p.status ?? p.signal}: ${(p.stderr || p.stdout || '').trim().slice(-400)}` };
   try {
     return JSON.parse(line);
   } catch (e) {
@@ -169,8 +190,20 @@ const main = () => {
     runs.push(r);
     console.log(`run ${i + 1}/${runsN} (${((Date.now() - t) / 1000).toFixed(0)} s): ${r.error ?? JSON.stringify(r)}`);
   }
-  const verdict = check({ runs, bytes }, budget);
-  const spread = Object.fromEntries(FRAME_METRICS.map((k) => [k, spreadPct(runs.filter((r) => !r.error).map((r) => r[k]))]));
+  const life = [];
+  if (budget.life)
+    for (let i = 0; i < runsN; i++) {
+      const t = Date.now();
+      const r = runHarness(budget.life.args ?? ['--seconds', '20'], 'life.mjs');
+      life.push(r);
+      console.log(`life ${i + 1}/${runsN} (${((Date.now() - t) / 1000).toFixed(0)} s): ${r.error ?? JSON.stringify(r)}`);
+    }
+  const verdict = check({ runs, bytes, life }, budget);
+  const ok = (xs) => xs.filter((r) => !r.error);
+  const spread = {
+    ...Object.fromEntries(FRAME_METRICS.map((k) => [k, spreadPct(ok(runs).map((r) => r[k]))])),
+    ...(budget.life ? Object.fromEntries(LIFE_METRICS.map((k) => [k, spreadPct(ok(life).map((r) => r[k]))])) : {}),
+  };
   const table = summaryTable(verdict, { calibrate, spread });
   console.log(table);
   if (process.env.GITHUB_STEP_SUMMARY) fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, table);
@@ -185,6 +218,7 @@ const main = () => {
     bytes: Object.fromEntries(BYTE_METRICS.map((k) => [k, bytes[k]])),
     checks: verdict.rows,
     runs,
+    life,
   };
   if (out) fs.writeFileSync(out, JSON.stringify(result, null, 1));
   if (calibrate) {

@@ -98,6 +98,7 @@ import { clearAllTurns, forgetLastRuns, resetTurns, turnEnded, turnRunsOn, turnS
 import { setBadgeBots, setBadgeEngines, setBadgeProfiles } from './modelBadgeData';
 import { setKnownBots } from './botLooks';
 import { clearMoods, moodOutput, moodTurnEnded, moodTurnStarted, restingUntil, setMoodNeedsYou, setMoodResting } from './kwantMood';
+import { noteSpaceBots } from './avatarLife';
 import { browserTabDoc, createTabSignal, needsYouCount } from './tabSignal';
 import { recentWork, teamMembersLeadFirst, type ChatHome } from './botHome';
 import { approvalsDiffers } from './components/Sidebar';
@@ -308,6 +309,10 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // deleted bot from one not fetched yet (a card for a new bot arrives before the list reloads).
   const [rosterFresh, setRosterFresh] = useState(false);
   const botIds = useMemo(() => (rosterFresh ? new Set(kwants.map((k) => k.id)) : null), [kwants, rosterFresh]);
+  // Living avatars: a bot that joins this space after its first fresh roster says hello once (a happy hop).
+  useEffect(() => {
+    if (botIds) noteSpaceBots(space.id, [...botIds]);
+  }, [botIds, space.id]);
   const [channels, setChannels] = useState<Channel[]>([]);
   const [teams, setTeams] = useState<Team[]>([]);
   const [selectedId, setSelectedId] = useState<string>('');

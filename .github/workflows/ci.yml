@@ -89,7 +89,7 @@ jobs:
           path: frontend/dist
       - name: Build the stream harness
         run: npx vite build --config perf/stream/vite.config.mts
-      - name: UI performance budget (stream x3 median, bundle gzip)
+      - name: UI performance budget (stream x3 median, living avatars x3, bundle gzip)
         timeout-minutes: 10
         run: |
           export PLAYWRIGHT_CORE="$PWD/node_modules/playwright-core/index.mjs"
