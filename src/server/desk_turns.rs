@@ -479,6 +479,14 @@ mod tests {
     }
 
     #[test]
+    fn both_notes_say_how_to_mark_a_yes_no_request() {
+        for n in [desk_note("Ann", &[], "Wi-Fi: sea123"), booking_note("Ann", &[], "", "Open times:\n")] {
+            assert!(n.contains("start the label with Request: (like \"Request: "), "{n}");
+            assert!(n.contains("only the host can allow"), "{n}");
+        }
+    }
+
+    #[test]
     fn the_host_is_told_without_the_guests_words() {
         assert_eq!(Tell::Waiting.words("Ann", "Flat"), ("Ann needs you".into(), "A guest on Flat is waiting for your reply.".into()));
         assert_eq!(Tell::Asked(Some("Wed Dec 2, 10 AM".into())).words("Ann", "Studio Nika"), ("Ann asked for Wed Dec 2, 10 AM · Studio Nika".into(), "Only you can confirm it.".into()));
