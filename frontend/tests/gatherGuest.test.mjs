@@ -434,6 +434,16 @@ test('G9 result: the winner earns the one holo; rounds read from the server', as
   t.app.stop();
 });
 
+test('G9 a tie for last: two or more out in one round say so (vote-ties-and-members, m9)', async () => {
+  let t = await open('gather-result-tie2');
+  assert.match(t.text(), /Round 1: The Old Mill 5 · Casa Verde 4 · Sushi Bar Ko 1 · Pizza Nonna 1\. Sushi Bar Ko and Pizza Nonna tied for last, so both drop out\./);
+  assert.doesNotMatch(t.text(), /Pizza Nonna drop out/);
+  t.app.stop();
+  t = await open('gather-result-tie3');
+  assert.match(t.text(), /Round 1: .*Casa Verde, Sushi Bar Ko and Pizza Nonna tied for last, so all drop out\.\s?Round 2:/);
+  t.app.stop();
+});
+
 test('G9 tie: plain notice, no holo', async () => {
   const t = await open('gather-tie');
   assert.equal(t.screen(), 'result');
