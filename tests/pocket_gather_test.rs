@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, Request, StatusCode},
     Router,
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use kwnt::{
     broker::PermissionBroker,
     config::Config,
@@ -760,6 +760,117 @@ async fn a_full_slot_keeps_a_waiting_list_and_the_first_moves_in_at_once() {
     assert_eq!(act(&t, &code, &b, "take", json!({ "slot": 0, "note": "x" })).await.status, StatusCode::BAD_REQUEST, "no notes on this sign-up");
 }
 
+/// signup-waiting-note (Mira's office-party pass, fix #4): Leo types "cookies" while joining the
+/// full Desserts line; when Hal lets go, Leo moves up with his note, so the food plan is right.
+#[tokio::test]
+async fn a_waiting_guests_note_moves_up_with_them() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "signup", json!({ "fields": ["slot_note"] }))).await;
+    let (_, hal) = joined(&t, &code, "Hal").await;
+    let (leo_id, leo) = joined(&t, &code, "Leo").await;
+    let (_, nina) = joined(&t, &code, "Nina").await;
+    ok(&t, &code, &hal, "take", json!({ "slot": 0, "note": "Brownies" })).await;
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "cookies" })).await;
+    assert_eq!(view_of(&t, &code, &leo).await["me"]["waiting"], json!({ "slot": 0, "position": 1 }));
+    // Kept, but shown to nobody while he waits
+    assert_eq!(kit_state(&t, &code).await["slots"][0]["notes"][&leo_id], "cookies");
+    let h = host_view(&t, &code).await;
+    assert_eq!(h["slots"][0]["waiting_people"][0]["id"], json!(leo_id));
+    assert!(h["slots"][0]["waiting_people"][0].get("note").is_none(), "{h}");
+    assert!(!h.to_string().contains("cookies"), "{h}");
+    assert!(!view_of(&t, &code, &nina).await.to_string().contains("cookies"));
+    // Hal lets go: Leo moves in with his note
+    ok(&t, &code, &hal, "let_go", json!({})).await;
+    let h = host_view(&t, &code).await;
+    assert_eq!((h["slots"][0]["people"][0]["id"].clone(), h["slots"][0]["people"][0]["note"].clone()), (json!(leo_id), json!("cookies")), "{h}");
+    assert_eq!(view_of(&t, &code, &nina).await["slots"][0]["people"][0]["note"], "cookies");
+    let me = view_of(&t, &code, &leo).await["me"].clone();
+    assert_eq!((me["slot"].as_u64(), me["note"].as_str(), me["moved_up"]["slot"].as_u64()), (Some(0), Some("cookies"), Some(0)), "{me}");
+    let st = kit_state(&t, &code).await;
+    assert!(st["slots"][0].get("notes").is_none(), "the line's note moved, none left behind: {st}");
+    // The moved-up nudge and event still fill, the event without who or the note
+    let d = &h["drafts"][0];
+    assert_eq!((d["to"].as_str(), d["kind"].as_str()), (Some("Leo"), Some("moved_up")));
+    assert!(d["text"].as_str().unwrap().contains("Desserts"), "{d}");
+    let events = t.state.db.pocket_events(&code).await.unwrap();
+    let moved: Vec<_> = events.iter().filter(|(_, k, _)| k == "moved_up").collect();
+    assert_eq!(moved.len(), 1, "{events:?}");
+    assert!(moved.iter().all(|(p, _, payload)| p.is_none() && !payload.contains("pl_") && !payload.contains("cookies")), "{events:?}");
+}
+
+#[tokio::test]
+async fn a_note_in_line_can_change_or_go_and_goes_with_the_person() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "signup", json!({ "fields": ["slot_note"] }))).await;
+    let (_, hal) = joined(&t, &code, "Hal").await;
+    let (leo_id, leo) = joined(&t, &code, "Leo").await;
+    let (max_id, max) = joined(&t, &code, "Max").await;
+    let (ivy_id, ivy) = joined(&t, &code, "Ivy").await;
+    let (zoe_id, zoe) = joined(&t, &code, "Zoe").await;
+    let notes = |st: &Value| st["slots"][0].get("notes").cloned().unwrap_or(json!({}));
+    ok(&t, &code, &hal, "take", json!({ "slot": 0, "note": "Brownies" })).await;
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "cookies" })).await;
+    // A new note replaces it, the same slot with no note clears it
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "carrot cake" })).await;
+    assert_eq!(notes(&kit_state(&t, &code).await), json!({ leo_id.clone(): "carrot cake" }));
+    ok(&t, &code, &leo, "take", json!({ "slot": 0 })).await;
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["slots"][0]["waiting"].clone(), st["slots"][0].get("notes")), (json!([leo_id]), None), "still in line, no note: {st}");
+    // Leaving the line takes the note with it
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "carrot cake" })).await;
+    ok(&t, &code, &leo, "let_go", json!({})).await;
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["slots"][0]["waiting"].clone(), notes(&st)), (json!([]), json!({})), "{st}");
+    // So does moving from the line to a free slot (that slot gets the note sent with it)
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "carrot cake" })).await;
+    ok(&t, &code, &leo, "take", json!({ "slot": 1, "note": "Lemonade" })).await;
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["slots"][0]["waiting"].clone(), notes(&st)), (json!([]), json!({})), "{st}");
+    assert_eq!(st["slots"][1]["taken"][0]["note"], "Lemonade");
+    // A player removed while answers are open: their note goes with them
+    ok(&t, &code, &max, "take", json!({ "slot": 0, "note": "apple pie" })).await;
+    ok(&t, &code, &ivy, "take", json!({ "slot": 0, "note": "caramel flan" })).await;
+    ok(&t, &code, &zoe, "take", json!({ "slot": 0, "note": "lemon tart" })).await;
+    assert_eq!(send(&t.main, "POST", &format!("/api/pockets/{code}/remove"), Some(json!({ "player_id": max_id })), &person()).await.status, StatusCode::OK);
+    assert_eq!(notes(&kit_state(&t, &code).await), json!({ ivy_id.clone(): "caramel flan", zoe_id.clone(): "lemon tart" }));
+    // And after the close
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    assert_eq!(send(&t.main, "POST", &format!("/api/pockets/{code}/remove"), Some(json!({ "player_id": ivy_id })), &person()).await.status, StatusCode::OK);
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["slots"][0]["waiting"].clone(), notes(&st)), (json!([zoe_id]), json!({ zoe_id.clone(): "lemon tart" })), "{st}");
+    // Deleting the answers forgets the line's notes too
+    let r = host_act(&t, &code, "delete_answers", json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert!(kit_state(&t, &code).await["slots"].as_array().unwrap().iter().all(|s| s.get("notes").is_none()));
+    let all = t.state.db.pocket_get(&code).await.unwrap().unwrap().kit_state;
+    for w in ["cookies", "carrot cake", "apple pie", "caramel flan", "lemon tart"] {
+        assert!(!all.contains(w), "{w:?} is still kept: {all}");
+    }
+}
+
+/// A waiting list stored by an older build (plain ids, no `notes`) reads unchanged and moves up
+/// with no note; a line with no notes stores exactly what an older build stored.
+#[tokio::test]
+async fn a_waiting_list_from_an_older_build_still_moves_up() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "signup", json!({ "fields": ["slot_note"] }))).await;
+    let (_, hal) = joined(&t, &code, "Hal").await;
+    let (leo_id, leo) = joined(&t, &code, "Leo").await;
+    ok(&t, &code, &hal, "take", json!({ "slot": 0 })).await;
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "cookies" })).await;
+    let mut st = kit_state(&t, &code).await;
+    st["slots"][0].as_object_mut().unwrap().remove("notes");
+    assert_eq!(st["slots"][0], json!({ "taken": st["slots"][0]["taken"].clone(), "waiting": [leo_id.clone()] }), "the older shape");
+    save_kit_state(&t, &code, &st, &leo_id).await;
+    ok(&t, &code, &hal, "let_go", json!({})).await;
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["slots"][0]["taken"][0]["id"].clone(), st["slots"][0]["taken"][0]["note"].clone()), (json!(leo_id), Value::Null), "{st}");
+    assert_eq!(st["slots"][0].as_object().unwrap().keys().collect::<Vec<_>>(), vec!["taken", "waiting"], "{st}");
+}
+
 // ---- The Chaser ----
 
 #[tokio::test]
@@ -793,6 +904,44 @@ async fn one_nudge_per_person_every_48_hours_and_nothing_is_sent() {
     // Nothing went out: no outbox, only counts in the event log
     for (p, kind, payload) in t.state.db.pocket_events(&code).await.unwrap() {
         assert!(p.is_none() && !payload.contains("Ben") && !payload.contains("Hey"), "{kind} {payload}");
+    }
+}
+
+/// signup-waiting-note m3: the not-paid nudge names the price; a template's "({price})" goes
+/// cleanly when there's no price.
+#[tokio::test]
+async fn the_not_paid_nudge_names_the_price() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "rsvp", json!({ "price": "EUR 15" }))).await;
+    let (_, ana) = joined(&t, &code, "Ana").await;
+    ok(&t, &code, &ana, "answer", json!({ "answer": "yes" })).await;
+    let d = host_view(&t, &code).await["drafts"][0].clone();
+    assert_eq!((d["kind"].as_str(), d["text"].as_str()), (Some("not_paid"), Some("Hi Ana, a quick one: your share for Club dinner (EUR 15) is still open. Pay Oleks whenever suits you before the day. Thanks!")));
+    let (code, _) = make(&t, spec(now, "rsvp", json!({ "templates": { "maybe": "Hi {name}, still a maybe for {title} ({price})? {link}" } }))).await;
+    let (_, ana) = joined(&t, &code, "Ana").await;
+    ok(&t, &code, &ana, "answer", json!({ "answer": "maybe" })).await;
+    assert_eq!(host_view(&t, &code).await["drafts"][0]["text"], "Hi Ana, still a maybe for Club dinner? {link}");
+}
+
+/// signup-waiting-note m4: a second copy within 48 hours is refused with "Sun 1:37 AM" in the
+/// host's own zone (the offset on `event_at`), never RFC 3339 or "UTC".
+#[tokio::test]
+async fn the_48_hour_refusal_says_the_time_in_the_hosts_zone() {
+    let t = setup().await;
+    let now = Utc::now();
+    for hours in [-8, 1] {
+        let zone = FixedOffset::east_opt(hours * 3600).unwrap();
+        let (code, _) = make(&t, spec(now, "rsvp", json!({ "members": ["Cleo"], "event_at": (now + Duration::days(7)).with_timezone(&zone).to_rfc3339() }))).await;
+        assert_eq!(host_act(&t, &code, "copied", json!({ "to": "Cleo" })).await.status, StatusCode::OK);
+        let r = host_act(&t, &code, "copied", json!({ "to": "Cleo" })).await;
+        assert_eq!(r.status, StatusCode::CONFLICT);
+        let d = host_view(&t, &code).await["drafts"].as_array().unwrap().iter().find(|d| d["to"] == "Cleo").unwrap().clone();
+        let next = DateTime::parse_from_rfc3339(d["next_copy_at"].as_str().unwrap()).unwrap();
+        let shown = next.with_timezone(&zone).format("%a %-I:%M %p").to_string();
+        let msg = r.body["message"].as_str().unwrap();
+        assert_eq!(msg, format!("One nudge per person every 48 hours. The next one for Cleo is from {shown}."), "at {hours:+}");
+        assert!(!msg.contains("UTC") && !msg.contains(&next.format("%Y").to_string()) && !msg.contains('+'), "{msg}");
     }
 }
 

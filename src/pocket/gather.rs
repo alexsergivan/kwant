@@ -260,6 +260,12 @@ struct Slot {
     taken: Vec<Taken>,
     /// Player ids, first in line first.
     waiting: Vec<String>,
+    /// signup-waiting-note: the note someone in line typed (player id → note). It moves into
+    /// their `Taken` when they move up and is never shown while they wait. A separate map, so a
+    /// state from an older build (plain ids, no notes) reads unchanged and an older build reads
+    /// this one.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    notes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -364,7 +370,7 @@ fn template<'a>(spec: &'a Value, kind: &str) -> Option<&'a str> {
 fn default_template(face: &str, kind: &str) -> &'static str {
     match (face, kind) {
         (_, "maybe") => "Hi {name}! Still a maybe for {title}? Tap to change your answer: {link}",
-        (_, "not_paid") => "Hi {name}, a quick one: your share for {title} is still open. Pay {host} whenever suits you before the day. Thanks!",
+        (_, "not_paid") => "Hi {name}, a quick one: your share for {title} ({price}) is still open. Pay {host} whenever suits you before the day. Thanks!",
         (_, "moved_up") => "Hi {name}, good news: a spot opened in {slot} for {title}, so you're in now. If you can't make it, let it go here: {link}",
         (VOTE, _) => "Hi {name}! There's a vote: {title}. It takes a few seconds: {link}",
         (SIGNUP, _) => "Hi {name}! There's a sign-up: {title}. Pick what you'd like to bring: {link}",
@@ -399,6 +405,7 @@ impl St {
         for slot in self.slots.iter_mut() {
             slot.taken.clear();
             slot.waiting.clear();
+            slot.notes.clear();
         }
         self.moved.clear();
         self.voted.clear();
@@ -483,6 +490,7 @@ impl St {
         self.moved.remove(id);
         if let Some((i, p)) = self.waiting_of(id) {
             self.slots[i].waiting.remove(p);
+            self.slots[i].notes.remove(id);
             return true;
         }
         let Some(i) = self.slot_of(id) else { return false };
@@ -490,7 +498,9 @@ impl St {
         let cap = caps.get(i).map_or(0, |c| c.1);
         while self.slots[i].taken.len() < cap && !self.slots[i].waiting.is_empty() {
             let next = self.slots[i].waiting.remove(0);
-            self.slots[i].taken.push(Taken { id: next.clone(), note: None, at: Some(ctx.now) });
+            // The note they typed while waiting comes with them
+            let note = self.slots[i].notes.remove(&next);
+            self.slots[i].taken.push(Taken { id: next.clone(), note, at: Some(ctx.now) });
             self.moved.insert(next, Moved { slot: i, at: Some(ctx.now), seen: false });
             // A count, never who
             ctx.event(None, "moved_up", json!({ "slot": i }));
@@ -650,17 +660,33 @@ struct Nudge<'a> {
 }
 
 /// A draft from the spec's template (else a plain default): `{name}`, `{title}`, `{when}`,
-/// `{place}`, `{host}`, `{slot}` are filled here; `{link}` stays for the card, which knows the
-/// join link it shows.
+/// `{place}`, `{host}`, `{slot}`, `{price}` are filled here; `{link}` stays for the card, which
+/// knows the join link it shows. With no price, a bracketed " ({price})" goes with its brackets.
 fn fill(spec: &Value, kind: &str, name: &str, slot: Option<usize>) -> String {
     let t = template(spec, kind).unwrap_or_else(|| default_template(face(spec), kind));
     let slot_name = slot.and_then(|i| slot_specs(spec).get(i).map(|s| s.0.clone())).unwrap_or_default();
+    let t = match spec_str(spec, "price") {
+        Some(price) => t.replace("{price}", price),
+        None => t.replace(" ({price})", "").replace("({price})", "").replace("{price}", ""),
+    };
     t.replace("{name}", name)
         .replace("{title}", spec_str(spec, "title").unwrap_or(""))
         .replace("{when}", spec_str(spec, "when").unwrap_or(""))
         .replace("{place}", spec_str(spec, "place").unwrap_or(""))
         .replace("{host}", spec_str(spec, "host_name").unwrap_or("the host"))
         .replace("{slot}", &slot_name)
+}
+
+/// signup-waiting-note m4: a time for the host to read, "Sun 1:37 AM", in the host's own zone:
+/// the UTC offset the host's bot wrote on `event_at` (else `closes_at`), else the box's zone.
+/// Never RFC 3339, never "UTC". Within the week a nudge waits, the weekday is enough.
+fn host_time(spec: &Value, t: DateTime<Utc>) -> String {
+    const SHOWN: &str = "%a %-I:%M %p";
+    let offset = DATE_FIELDS.iter().find_map(|f| spec_str(spec, f).and_then(|v| DateTime::parse_from_rfc3339(v).ok()).map(|d| *d.offset()));
+    match offset {
+        Some(o) => t.with_timezone(&o).format(SHOWN).to_string(),
+        None => t.with_timezone(&chrono::Local).format(SHOWN).to_string(),
+    }
 }
 
 fn tally_json(spec: &Value, s: &St) -> Value {
@@ -1222,6 +1248,7 @@ impl Kit for Gather {
             for slot in s.slots.iter_mut() {
                 slot.taken.retain(|t| t.id != player_id);
                 slot.waiting.retain(|w| w != player_id);
+                slot.notes.remove(player_id);
             }
             s.moved.remove(player_id);
         }
@@ -1313,7 +1340,11 @@ impl Kit for Gather {
                         t.note = note;
                     }
                 } else if s.waiting_of(me).map(|w| w.0) == Some(i) {
-                    // Already in line for it
+                    // Already in line for it: a new note replaces the old one, none clears it
+                    match note {
+                        Some(n) => s.slots[i].notes.insert(me.clone(), n),
+                        None => s.slots[i].notes.remove(me),
+                    };
                 } else {
                     let full = s.slots[i].taken.len() >= caps[i].1;
                     if full && !flag(spec, "waiting_list") {
@@ -1322,6 +1353,9 @@ impl Kit for Gather {
                     s.leave(ctx, me, &caps);
                     if full {
                         s.slots[i].waiting.push(me.clone());
+                        if let Some(n) = note {
+                            s.slots[i].notes.insert(me.clone(), n);
+                        }
                     } else {
                         s.slots[i].taken.push(Taken { id: me.clone(), note, at: Some(now) });
                     }
@@ -1419,7 +1453,7 @@ impl Kit for Gather {
                 let d = drafts.iter().find(|d| d["to"].as_str().map(key).as_deref() == Some(k.as_str())).ok_or_else(|| not_now(format!("There's no note for {to} right now.")))?;
                 if let Some(until) = d["next_copy_at"].as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok()) {
                     // The view carries the same time as next_copy_at
-                    return Err(not_now(format!("One nudge per person every {NUDGE_HOURS} hours. The next one for {to} is from {}.", until.with_timezone(&Utc).to_rfc3339())));
+                    return Err(not_now(format!("One nudge per person every {NUDGE_HOURS} hours. The next one for {to} is from {}.", host_time(spec, until.with_timezone(&Utc)))));
                 }
                 s.copied.insert(k, now);
             }
@@ -1782,5 +1816,15 @@ mod tests {
         let spec = json!({ "face": "rsvp", "title": "the club dinner", "when": "Sat", "place": "The Old Mill", "host_name": "Oleks", "templates": { "maybe": "Hi {name}! Still a maybe for {title} on {when} at {place}? Tap to change it: {link}" } });
         assert_eq!(fill(&spec, "maybe", "Leo", None), "Hi Leo! Still a maybe for the club dinner on Sat at The Old Mill? Tap to change it: {link}");
         assert!(fill(&spec, "not_paid", "Ana", None).contains("Pay Oleks"), "the default when there's no template");
+    }
+
+    /// signup-waiting-note m3: the default not-paid nudge names the price, and with no price
+    /// leaves no "()" behind.
+    #[test]
+    fn the_not_paid_default_names_the_price_or_drops_its_brackets() {
+        let spec = json!({ "face": "rsvp", "title": "Office party", "host_name": "Nina", "price": "EUR 15 each" });
+        assert_eq!(fill(&spec, "not_paid", "Cleo", None), "Hi Cleo, a quick one: your share for Office party (EUR 15 each) is still open. Pay Nina whenever suits you before the day. Thanks!");
+        let spec = json!({ "face": "rsvp", "title": "Office party", "host_name": "Nina" });
+        assert_eq!(fill(&spec, "not_paid", "Cleo", None), "Hi Cleo, a quick one: your share for Office party is still open. Pay Nina whenever suits you before the day. Thanks!");
     }
 }
