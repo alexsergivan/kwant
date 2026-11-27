@@ -450,24 +450,83 @@ pub fn page_file_name_ok(name: &str) -> bool {
 
 /// One of the page's files, through `lookup` (the build's files; tests pass their own).
 pub fn page_file_response(name: &str, lookup: impl Fn(&str) -> Option<Cow<'static, [u8]>>) -> Response {
+    page_file_response_for(name, lookup, false)
+}
+
+/// `page_file_response` for a phone that may take gzip (`accepts_gzip`). santa-first-screen-preload: on
+/// slow 4G Santa's first screen is mostly bytes (entry, style, kit chunk: 124 KB raw, about 40 KB gzipped).
+pub fn page_file_response_for(name: &str, lookup: impl Fn(&str) -> Option<Cow<'static, [u8]>>, gzip_ok: bool) -> Response {
     let (true, Some(mime)) = (page_file_name_ok(name), page_file_type(name)) else {
         return PocketError::not_found().into_response();
     };
     let Some(data) = lookup(name) else {
         return PocketError::not_found().into_response();
     };
-    let mut res = (StatusCode::OK, data.into_owned()).into_response();
+    let text = page_file_gzips(name);
+    let gz = if gzip_ok && text { gzipped_page_file(name, &data) } else { None };
+    let zipped = gz.is_some();
+    let mut res = match gz {
+        Some(body) => (StatusCode::OK, body).into_response(),
+        None => (StatusCode::OK, data.into_owned()).into_response(),
+    };
     let h = res.headers_mut();
     h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime));
     // Names carry a content hash, so a file never changes under its name
     h.insert(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=31536000, immutable"));
+    if text {
+        // The same name answers gzipped or not, so a cache in between keys on what the phone takes
+        h.insert(header::VARY, HeaderValue::from_static("accept-encoding"));
+    }
+    if zipped {
+        h.insert(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
+    }
     res
+}
+
+/// Scripts, styles and SVG are text; fonts and photos are compressed already.
+fn page_file_gzips(name: &str) -> bool {
+    matches!(name.rsplit_once('.').map(|(_, ext)| ext.to_ascii_lowercase()).as_deref(), Some("js" | "mjs" | "css" | "svg"))
+}
+
+/// Whether the phone's `Accept-Encoding` names gzip without refusing it (`gzip;q=0`).
+pub fn accepts_gzip(headers: &HeaderMap) -> bool {
+    headers.get_all(header::ACCEPT_ENCODING).iter().filter_map(|v| v.to_str().ok()).flat_map(|v| v.split(',')).any(|part| {
+        let mut params = part.split(';');
+        let gzip = params.next().is_some_and(|coding| coding.trim().eq_ignore_ascii_case("gzip"));
+        let refused = params.any(|p| {
+            let p = p.trim();
+            let q = p.strip_prefix("q=").or_else(|| p.strip_prefix("Q="));
+            q.is_some_and(|q| q.trim().parse::<f32>().is_ok_and(|q| q <= 0.0))
+        });
+        gzip && !refused
+    })
+}
+
+/// A file of the build, gzipped once per process (names carry a content hash, so the bytes behind a name never
+/// change). `None` when gzip doesn't make it smaller: the file goes out as it is. Only names the build has reach
+/// here, so the cache holds at most one entry per file in the build.
+fn gzipped_page_file(name: &str, data: &[u8]) -> Option<axum::body::Bytes> {
+    static GZIPPED: OnceLock<std::sync::Mutex<HashMap<String, Option<axum::body::Bytes>>>> = OnceLock::new();
+    let cache = GZIPPED.get_or_init(Default::default);
+    if let Some(hit) = cache.lock().ok()?.get(name) {
+        return hit.clone();
+    }
+    let gz = gzip(data).filter(|gz| gz.len() < data.len()).map(axum::body::Bytes::from);
+    cache.lock().ok()?.insert(name.to_owned(), gz.clone());
+    gz
+}
+
+fn gzip(data: &[u8]) -> Option<Vec<u8>> {
+    use std::io::Write;
+    let mut gz = flate2::write::GzEncoder::new(Vec::with_capacity(data.len() / 2), flate2::Compression::best());
+    gz.write_all(data).ok()?;
+    gz.finish().ok()
 }
 
 /// `GET /p/_a/<file>`: the page's hashed scripts, styles and fonts. Can't meet a pocket code:
 /// codes never contain `_`.
-async fn page_file(Path(file): Path<String>) -> Response {
-    page_file_response(&file, page_asset)
+async fn page_file(headers: HeaderMap, Path(file): Path<String>) -> Response {
+    page_file_response_for(&file, page_asset, accepts_gzip(&headers))
 }
 
 /// The public facts anyone with the link sees before joining (`info`, and the page's boot
@@ -920,6 +979,84 @@ mod tests {
             let res = page_file_response(name, files);
             assert_eq!(res.status(), StatusCode::NOT_FOUND, "{name:?}");
             assert!(res.headers().get(header::CACHE_CONTROL).is_none(), "{name:?}: the gate adds no-store");
+        }
+    }
+
+    /// santa-first-screen-preload: text files that compress, under names no other test uses (the gzip cache is
+    /// per name, like the build's hashed files).
+    fn big_files(name: &str) -> Option<Cow<'static, [u8]>> {
+        let body = match name {
+            "g-gz1.js" => "export const santa = () => document.title;\n".repeat(200),
+            "g-gz2.css" => ".card{padding:1rem;border-radius:12px}\n".repeat(200),
+            "g-gz3.svg" => "<svg><path d=\"M0 0L10 10\"/></svg>\n".repeat(50),
+            "g-gz4.js" => "x".to_owned(),
+            "inter-gz5.woff2" => "wOF2".repeat(500),
+            _ => return None,
+        };
+        Some(Cow::Owned(body.into_bytes()))
+    }
+
+    fn gunzip(bytes: &[u8]) -> Vec<u8> {
+        use std::io::Read;
+        let mut out = Vec::new();
+        flate2::read::GzDecoder::new(bytes).read_to_end(&mut out).unwrap();
+        out
+    }
+
+    #[tokio::test]
+    async fn a_phone_that_takes_gzip_gets_scripts_and_styles_gzipped() {
+        for (name, mime) in [("g-gz1.js", "application/javascript; charset=utf-8"), ("g-gz2.css", "text/css; charset=utf-8"), ("g-gz3.svg", "image/svg+xml")] {
+            let raw = big_files(name).unwrap().into_owned();
+            // Twice: the second answer comes from the cache and is the same
+            for _ in 0..2 {
+                let res = page_file_response_for(name, big_files, true);
+                assert_eq!(res.status(), StatusCode::OK, "{name}");
+                assert_eq!(res.headers()[header::CONTENT_ENCODING], "gzip", "{name}");
+                assert_eq!(res.headers()[header::VARY], "accept-encoding", "{name}");
+                assert_eq!(res.headers()[header::CONTENT_TYPE], mime);
+                assert_eq!(res.headers()[header::CACHE_CONTROL], "public, max-age=31536000, immutable");
+                let body = to_bytes(res.into_body(), usize::MAX).await.unwrap();
+                assert!(body.len() * 4 < raw.len(), "{name}: {} of {}", body.len(), raw.len());
+                assert_eq!(gunzip(&body), raw, "{name}");
+            }
+            // A phone that doesn't take gzip gets the file as it is, still marked as varying
+            let res = page_file_response_for(name, big_files, false);
+            assert!(res.headers().get(header::CONTENT_ENCODING).is_none(), "{name}");
+            assert_eq!(res.headers()[header::VARY], "accept-encoding", "{name}");
+            assert_eq!(to_bytes(res.into_body(), usize::MAX).await.unwrap(), raw);
+        }
+        // A font is never gzipped, and a file gzip doesn't shrink goes out as it is
+        for name in ["inter-gz5.woff2", "g-gz4.js"] {
+            let res = page_file_response_for(name, big_files, true);
+            assert_eq!(res.status(), StatusCode::OK, "{name}");
+            assert!(res.headers().get(header::CONTENT_ENCODING).is_none(), "{name}");
+            assert_eq!(to_bytes(res.into_body(), usize::MAX).await.unwrap(), big_files(name).unwrap().into_owned(), "{name}");
+        }
+        assert!(page_file_response_for("inter-gz5.woff2", big_files, true).headers().get(header::VARY).is_none());
+        // gzip never opens a name the folder doesn't serve
+        for name in ["index.html", "../g-gz1.js", "g-missing.js", "manifest.json"] {
+            let res = page_file_response_for(name, big_files, true);
+            assert_eq!(res.status(), StatusCode::NOT_FOUND, "{name}");
+            assert!(res.headers().get(header::CONTENT_ENCODING).is_none(), "{name}");
+        }
+    }
+
+    #[test]
+    fn accept_encoding_is_read_as_browsers_send_it() {
+        let takes = |values: &[&str]| {
+            let mut h = HeaderMap::new();
+            for v in values {
+                h.append(header::ACCEPT_ENCODING, HeaderValue::from_str(v).unwrap());
+            }
+            accepts_gzip(&h)
+        };
+        let yes: [&[&str]; 6] = [&["gzip, deflate, br"], &["br, GZIP"], &["gzip;q=0.5"], &["deflate", "gzip"], &["br;q=1.0, gzip; q=0.8"], &["gzip;q=x"]];
+        for yes in yes {
+            assert!(takes(yes), "{yes:?}");
+        }
+        let no: [&[&str]; 9] = [&[], &[""], &["br"], &["identity"], &["x-gzip"], &["gzip;q=0"], &["deflate, gzip; Q=0.000"], &["*"], &["gzipped"]];
+        for no in no {
+            assert!(!takes(no), "{no:?}");
         }
     }
 
