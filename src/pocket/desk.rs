@@ -64,6 +64,12 @@ pub const NOTE: &str = "note";
 
 pub const HANDOFF: &str = "handoff";
 pub const CAPPED: &str = "daily_cap";
+/// desk-inbox-rows-server: a hand-off where the guest asks the host's permission for something
+/// only the host can allow (a late check-out, an early check-in, an extra guest). The bot marks
+/// it by starting its `[[person]]` reason with [`REQUEST_PREFIX`]; the server strips the prefix
+/// and the Needs-you row gets `ask: "request"` (the app offers "Yes, that's fine" only there).
+pub const ASK_REQUEST: &str = "request";
+pub const REQUEST_PREFIX: &str = "Request:";
 /// The note when no reply came at all (the bot is gone, had nothing it could send, or its turn
 /// failed): the guest page says the bot can't answer and the host has the message. The bot's own
 /// `[[person]]` gets [`HANDOFF`].
@@ -140,6 +146,10 @@ struct St {
     /// pa13b: confirmed seats whose guest's data was deleted; no names.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     gone: Vec<Gone>,
+    /// desk-inbox-rows-server: guests still waiting for the host when the desk ended (set once,
+    /// at the end); the Inbox's Done row says "Ended with N unanswered".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ended_unanswered: Option<u64>,
 }
 
 /// pa13b: a confirmed seat kept after its guest's data went: the seat stays taken, nameless.
@@ -375,8 +385,8 @@ struct Msg {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct Waiting {
-    /// `handoff` or `daily_cap`. (`booking` only in state written before pa13b round 2: a
-    /// request is read from the guest's booking now, F1.)
+    /// `handoff`, `request` (a yes/no permission hand-off) or `daily_cap`. (`booking` only in
+    /// state written before pa13b round 2: a request is read from the guest's booking now, F1.)
     reason: String,
     why: String,
     at: DateTime<Utc>,
@@ -630,6 +640,16 @@ impl G {
 /// pa13b: the host's line for a guest's booking request.
 pub fn asks_for_time(name: &str) -> String {
     cut(&format!("{name} asks for a time"), REASON_MAX)
+}
+
+/// desk-inbox-rows-server: a hand-off reason that starts with [`REQUEST_PREFIX`] (any case) is a
+/// yes/no permission request: `(true, the reason without it)`. Anything else is `(false, why)`.
+pub fn split_request(why: &str) -> (bool, String) {
+    let t = why.trim();
+    match t.get(..REQUEST_PREFIX.len()) {
+        Some(head) if head.eq_ignore_ascii_case(REQUEST_PREFIX) => (true, t[REQUEST_PREFIX.len()..].trim().to_string()),
+        _ => (false, t.to_string()),
+    }
 }
 
 fn messages(g: Option<&G>, with_client_ids: bool) -> Vec<Value> {
@@ -1232,6 +1252,18 @@ impl Kit for Desk {
         true
     }
 
+    /// desk-inbox-rows-server: the guests still waiting for the host (a hand-off, a capped
+    /// message or a booking request) are counted once, for the Done row.
+    fn on_end(&self, ctx: &KitCtx, state: &mut Value) -> bool {
+        let mut s = load(state);
+        if s.ended_unanswered.is_some() {
+            return false;
+        }
+        s.ended_unanswered = Some(ctx.players.iter().filter(|p| s.guests.get(&p.id).is_some_and(G::waits)).count() as u64);
+        store(state, &s);
+        true
+    }
+
     fn server_event(&self, ctx: &mut KitCtx, state: &mut Value, name: &str, body: &Value) -> Result<Value, KitError> {
         let mut s = load(state);
         let pid = guest_from(ctx, body)?.id.clone();
@@ -1274,10 +1306,17 @@ impl Kit for Desk {
             }
             "handoff" => {
                 s.spend(body);
-                let why = cut(body.get("why").and_then(Value::as_str).unwrap_or("").trim(), REASON_MAX);
                 let note = if body.get("note").and_then(Value::as_str) == Some(HOST_AWAY) { HOST_AWAY } else { HANDOFF };
+                // desk-inbox-rows-server: the bot's "Request: …" marks a yes/no permission ask;
+                // the host's label never shows the prefix (only the bot's own hand-off can be one)
+                let (request, why) = match body.get("why").and_then(Value::as_str).unwrap_or("") {
+                    w if note == HANDOFF => split_request(w),
+                    w => (false, w.trim().to_string()),
+                };
+                let why = if request && why.is_empty() { format!("{} asked you to reply", bot_label(ctx.spec)) } else { why };
+                let why = cut(&why, REASON_MAX);
                 s.push(&pid, NOTE, String::new(), ctx.now, None, Some(note));
-                s.guests.entry(pid).or_default().waiting = Some(Waiting::new(HANDOFF, why, ctx.now));
+                s.guests.entry(pid).or_default().waiting = Some(Waiting::new(if request { ASK_REQUEST } else { HANDOFF }, why, ctx.now));
                 json!({})
             }
             // The worker couldn't go on (its bot is gone): nothing is running for this guest
@@ -1339,7 +1378,7 @@ pub fn busy_guests(state: &Value) -> Vec<String> {
 }
 
 /// One row of the Needs-you list for a desk pocket.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WaitingGuest {
     pub guest: String,
     /// The reason label shown to the host.
@@ -1351,34 +1390,49 @@ pub struct WaitingGuest {
     pub thread: Option<String>,
     /// pa13b: the slot a booking request is about: `{slot, label, start}`.
     pub booking: Option<Value>,
-    /// pa13b: `booking` for a request, `handoff` for anything else.
+    /// pa13b: `booking` for a booking request. desk-inbox-rows-server: `daily_cap` for a guest
+    /// waiting past the daily cap, `request` for a yes/no permission hand-off, `handoff` for
+    /// anything else (a question, a bot that couldn't answer).
     pub ask: &'static str,
+    /// desk-inbox-rows-server: on a `daily_cap` row, the guest's messages since the cap began
+    /// (at least 1); 0 on every other row.
+    pub waiting: usize,
 }
 
-/// For the Needs-you list: each guest waiting for the host, one item each (its id is the
-/// guest's). F1: a booking request comes from `booking.state == requested`, so a hand-off,
-/// reply or resolve can't hide it; while one is open it is the item (`why` empty: the caller
-/// writes [`asks_for_time`] with the guest's name), and a hand-off next to it shows once the
-/// host confirms or declines. A request's quote is the guest's note (empty without one), never
-/// their chat.
+/// For the Needs-you list: what each guest waits for. F1: a booking request comes from
+/// `booking.state == requested`, so a hand-off, reply or resolve can't hide it (`why` empty: the
+/// caller writes [`asks_for_time`] with the guest's name; the quote is the guest's note, empty
+/// without one, never their chat). desk-inbox-rows-server (m2): a hand-off next to an open
+/// request is its own row, after the request's, so a guest can have two: answering one never
+/// answers the other (confirm/decline end the request, reply/resolve end the hand-off).
 pub fn waiting_guests(spec: &Value, state: &Value) -> Vec<WaitingGuest> {
     let s = load(state);
     let slots = s.slots(spec);
-    s.guests
-        .iter()
-        .filter_map(|(id, g)| {
-            let thread = g.thread_id.clone();
-            if let Some(b) = g.requested() {
-                let slot = slots.iter().find(|x| x.id == b.slot);
-                let booking = json!({ "slot": b.slot, "label": slot.map_or_else(|| b.slot.clone(), Slot::label), "start": slot.map(|x| x.start.clone()) });
-                let quote = b.note.as_deref().map(|q| cut(q, 200)).unwrap_or_default();
-                return Some(WaitingGuest { guest: id.clone(), why: String::new(), quote, at: b.at, thread, booking: Some(booking), ask: WAIT_BOOKING });
-            }
-            let w = g.handoff()?;
-            let quote = g.msgs.iter().rev().find(|m| m.from == GUEST).map(|m| cut(&m.text, 200)).unwrap_or_default();
-            Some(WaitingGuest { guest: id.clone(), why: w.why.clone(), quote, at: w.at, thread, booking: None, ask: HANDOFF })
-        })
-        .collect()
+    let mut out = Vec::new();
+    for (id, g) in &s.guests {
+        let thread = g.thread_id.clone();
+        if let Some(b) = g.requested() {
+            let slot = slots.iter().find(|x| x.id == b.slot);
+            let booking = json!({ "slot": b.slot, "label": slot.map_or_else(|| b.slot.clone(), Slot::label), "start": slot.map(|x| x.start.clone()) });
+            let quote = b.note.as_deref().map(|q| cut(q, 200)).unwrap_or_default();
+            out.push(WaitingGuest { guest: id.clone(), why: String::new(), quote, at: b.at, thread: thread.clone(), booking: Some(booking), ask: WAIT_BOOKING, waiting: 0 });
+        }
+        let Some(w) = g.handoff() else { continue };
+        let quote = g.msgs.iter().rev().find(|m| m.from == GUEST).map(|m| cut(&m.text, 200)).unwrap_or_default();
+        let (ask, waiting) = match w.reason.as_str() {
+            CAPPED => (CAPPED, g.msgs.iter().filter(|m| m.from == GUEST && m.at >= w.at).count().max(1)),
+            ASK_REQUEST => (ASK_REQUEST, 0),
+            _ => (HANDOFF, 0),
+        };
+        out.push(WaitingGuest { guest: id.clone(), why: w.why.clone(), quote, at: w.at, thread, booking: None, ask, waiting });
+    }
+    out
+}
+
+/// desk-inbox-rows-server (m3): how many guests still waited for the host when the desk ended;
+/// 0 for a desk that is open or ended with nobody waiting.
+pub fn ended_unanswered(state: &Value) -> u64 {
+    load(state).ended_unanswered.unwrap_or(0)
 }
 
 /// pa13b: the booking facts for a guest's turn: the open times (labels only, soonest first, at
@@ -1652,7 +1706,10 @@ mod tests {
         assert_eq!(code(act(&mut st, &mut ctx, &ann, "request", json!({ "slot": "s1", "note": "after 5" }))), "ok");
         say(&mut st, &mut ctx, "pl_ann", "can I get a discount?").unwrap();
         Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ann", "why": "Discount" })).unwrap();
-        assert_eq!(item(&st), booking_item, "the hand-off doesn't replace the request");
+        // desk-inbox-rows-server (m2): the request no longer hides the hand-off: two rows
+        let mut both = booking_item.clone();
+        both.push(("pl_ann".to_string(), HANDOFF, None, "can I get a discount?".to_string()));
+        assert_eq!(item(&st), both, "the hand-off doesn't replace the request, nor the request the hand-off");
         assert_eq!(code(act(&mut st, &mut ctx, &Viewer::Host, "resolve", json!({ "guest": "pl_ann" }))), "ok");
         assert_eq!(item(&st), booking_item, "resolve leaves the request");
         Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ann", "why": "Discount" })).unwrap();
@@ -1679,6 +1736,85 @@ mod tests {
         old.guests.get_mut("pl_ben").unwrap().waiting = Some(Waiting::new(WAIT_BOOKING, "ben asks for a time".into(), now));
         store(&mut st, &old);
         assert!(waiting_guests(&spec, &st).is_empty(), "no request: nothing waits");
+    }
+
+    #[test]
+    fn a_capped_guests_row_says_daily_cap_and_how_many_messages_wait() {
+        // desk-inbox-rows-server #4: the host sees the cap, not a plain hand-off
+        let now = Utc::now();
+        let ps = players(now);
+        let spec = json!({ "title": "Flat", "daily_cap": DAILY_CAP_MIN, "bot": { "name": "Bell" } });
+        let mut st = Desk.init(&spec);
+        let cap = DAILY_CAP_MIN as i64;
+        for i in 0..cap {
+            let mut ctx = KitCtx::new(&spec, &ps, now + Duration::minutes(i));
+            say(&mut st, &mut ctx, "pl_ann", &format!("q{i}")).unwrap();
+            Desk.server_event(&mut ctx, &mut st, "take", &json!({ "guest": "pl_ann" })).unwrap();
+        }
+        for i in cap..cap + 3 {
+            say(&mut st, &mut KitCtx::new(&spec, &ps, now + Duration::minutes(i)), "pl_ann", &format!("q{i}")).unwrap();
+        }
+        let w = waiting_guests(&spec, &st);
+        assert_eq!((w.len(), w[0].ask, w[0].waiting, w[0].quote.as_str()), (1, CAPPED, 3, format!("q{}", cap + 2).as_str()));
+        // A hand-off and a request count nothing
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        say(&mut st, &mut ctx, "pl_ben", "hi").unwrap();
+        Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ben", "why": "Parking" })).unwrap();
+        let ben = waiting_guests(&spec, &st).into_iter().find(|w| w.guest == "pl_ben").unwrap();
+        assert_eq!((ben.ask, ben.waiting), (HANDOFF, 0));
+    }
+
+    #[test]
+    fn a_request_label_gives_a_request_row_without_the_prefix() {
+        // desk-inbox-rows-server #3: the bot marks a yes/no permission ask; the server strips it
+        let now = Utc::now();
+        let ps = players(now);
+        let spec = spec();
+        let mut st = Desk.init(&spec);
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        say(&mut st, &mut ctx, "pl_ann", "can we leave at 2?").unwrap();
+        Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ann", "why": "Request: Late check-out: 2 PM" })).unwrap();
+        say(&mut st, &mut ctx, "pl_ben", "may I come at 9?").unwrap();
+        Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ben", "why": "  request:   " })).unwrap();
+        let w = waiting_guests(&spec, &st);
+        let of = |g: &str| w.iter().find(|x| x.guest == g).map(|x| (x.ask, x.why.clone())).unwrap();
+        assert_eq!(of("pl_ann"), (ASK_REQUEST, "Late check-out: 2 PM".to_string()));
+        assert_eq!(of("pl_ben"), (ASK_REQUEST, "Bell asked you to reply".to_string()), "an empty request still has a label");
+        // The guest still sees the plain hand-off note, never the word Request
+        let v = Desk.view(&ctx, &st, &Viewer::Guest("pl_ann".into()));
+        assert!(v["messages"].as_array().unwrap().iter().any(|m| m["note"] == json!(HANDOFF)));
+        assert!(!v.to_string().contains("Request:"));
+        // A label that only mentions a request, and host-away, stay hand-offs
+        assert_eq!(split_request("Requested late check-out"), (false, "Requested late check-out".to_string()));
+        assert_eq!(split_request("REQUEST: Extra guest"), (true, "Extra guest".to_string()));
+        let mut st2 = Desk.init(&spec);
+        say(&mut st2, &mut ctx, "pl_ann", "hi").unwrap();
+        Desk.server_event(&mut ctx, &mut st2, "handoff", &json!({ "guest": "pl_ann", "why": "Request: x", "note": HOST_AWAY })).unwrap();
+        assert_eq!(waiting_guests(&spec, &st2)[0].ask, HANDOFF);
+    }
+
+    #[test]
+    fn end_counts_the_guests_still_waiting_once() {
+        // desk-inbox-rows-server (m3): End keeps how many guests were left unanswered
+        let now = Utc::now();
+        let ps = players(now);
+        let spec = spec();
+        let mut st = Desk.init(&spec);
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        say(&mut st, &mut ctx, "pl_ann", "late check-out?").unwrap();
+        Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ann", "why": "Late check-out" })).unwrap();
+        say(&mut st, &mut ctx, "pl_ben", "hi").unwrap();
+        assert_eq!(ended_unanswered(&st), 0, "an open desk has none");
+        assert!(Desk.on_end(&ctx, &mut st));
+        assert_eq!(ended_unanswered(&st), 1);
+        // A later End (or a guest leaving) never changes it
+        Desk.act(&mut ctx, &mut st, &Viewer::Host, "reply", &json!({ "guest": "pl_ann", "text": "Sure" })).ok();
+        assert!(!Desk.on_end(&ctx, &mut st));
+        assert_eq!(ended_unanswered(&st), 1);
+        // Nobody waiting: 0
+        let mut quiet = Desk.init(&spec);
+        assert!(Desk.on_end(&ctx, &mut quiet));
+        assert_eq!(ended_unanswered(&quiet), 0);
     }
 
     #[test]

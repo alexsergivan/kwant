@@ -261,6 +261,11 @@ pub trait Kit: Send + Sync + 'static {
     fn private_guests(&self) -> bool {
         false
     }
+    /// desk-inbox-rows-server: once, as the pocket ends (under its lock, before the state is
+    /// frozen): the kit may note what the end left behind. `true` when it changed `state`.
+    fn on_end(&self, _ctx: &KitCtx, _state: &mut Value) -> bool {
+        false
+    }
     /// pa13a: `true` when a bot answers guests (the front desk): the core then refuses a spec
     /// without one (400 `needs_bot`) and fills `spec.answer_bot` and `spec.bot` at creation.
     fn answer_bot(&self) -> bool {
