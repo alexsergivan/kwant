@@ -46,6 +46,13 @@ export function at(iso: string): string {
   return `${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} at ${clock(iso)}`;
 }
 
+// "12 coming, incl. 3 plus-ones": coming counts plus-ones (gather.rs), so name them only when there are some.
+// verb: false drops "coming" where the heading already asks it ("Who's coming · 12, incl. 3 plus-ones").
+export function comingLine(c: { yes: number; coming: number }, o: { verb?: boolean } = {}): string {
+  const p = c.coming - c.yes;
+  const n = o.verb === false ? fmt(c.coming) : `${fmt(c.coming)} coming`;
+  return p > 0 ? `${n}, incl. ${fmt(p)} ${p === 1 ? 'plus-one' : 'plus-ones'}` : n;
+}
 const poss = (name: string): string => `${name}'s`;
 /** "A", "A and B", "A, B and C". */
 const and = (xs: string[]): string => (xs.length < 2 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
@@ -1061,7 +1068,7 @@ export class GatherApp {
       who = h(
         'div',
         null,
-        h('div', { class: 'lbl', id: 'lbl-who' }, "Who's coming ", v.counts ? h('small', null, `${fmt(v.counts.coming)} with plus-ones`) : null),
+        h('div', { class: 'lbl', id: 'lbl-who' }, "Who's coming ", v.counts ? h('small', null, comingLine(v.counts, { verb: false })) : null),
         yes.length
           ? h('ul', { class: 'who-grid', 'aria-labelledby': 'lbl-who' }, yes.map((p) => h('li', null, creature(p.avatar, 'sm'), h('div', { class: 'nm' }, p.name))))
           : h('p', { class: 'soft fine' }, 'Nobody has said yes yet.'),
@@ -1071,7 +1078,7 @@ export class GatherApp {
       who = h(
         'div',
         null,
-        h('div', { class: 'lbl' }, 'So far ', h('small', null, `${fmt(v.counts.coming)} coming with plus-ones`)),
+        h('div', { class: 'lbl' }, 'So far ', h('small', null, comingLine(v.counts))),
         h('div', { class: 'facts' }, ([['Yes', v.counts.yes], ['Maybe', v.counts.maybe], ['No', v.counts.no]] as [string, number][]).map(([k, n]) => h('div', { class: 'fact' }, h('small', null, k), h('b', null, fmt(n))))),
       );
     }
