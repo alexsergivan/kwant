@@ -311,11 +311,11 @@ echo KWNT_ALLOWED_ORIGINS=https://kwant.example.com >> .env && docker compose up
 
 ### Render, Railway, CasaOS, Umbrel and Coolify
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/alexsergivan/kwant) [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/kwant-1?utm_medium=integration&utm_source=button&utm_campaign=kwant)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/alexsergivan/kwant) [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/kwant-1?utm_medium=integration&utm_source=button&utm_campaign=kwant) or [Deploy kwant + Laya](https://railway.com/deploy/kwant-laya?utm_medium=integration&utm_source=button&utm_campaign=kwant)
 
 The button reads [`render.yaml`](render.yaml): one web service from the released image with a 1 GB disk on `/data`. **Render keeps files only on a disk, and disks need a paid instance** (Starter or up), so the free plan won't work. Render makes the sign-in token: copy `KWNT_API_TOKEN` from the service's **Environment** page and paste it on the sign-in screen.
 
-The Railway button builds the same `docker/render.Dockerfile` with a volume on `/data`, plus the bots' private browser from `docker/browser.Dockerfile` on Railway's private network. Railway makes the sign-in token: copy `KWNT_API_TOKEN` from the kwant service's **Variables** tab.
+The Railway button builds the same `docker/render.Dockerfile` with a volume on `/data`, plus the bots' private browser from `docker/browser.Dockerfile` on Railway's private network, without Laya: kwant then uses keyword routing. Deploy kwant + Laya also runs the Laya message router from `docker/laya.Dockerfile`, for smarter routing, and uses about 2 GB more RAM. Railway makes the sign-in token: copy `KWNT_API_TOKEN` from the kwant service's **Variables** tab.
 
 For home servers, [`deploy/`](deploy) has a listing for each store, pinned to the release: [CasaOS](deploy/casaos/Kwnt/docker-compose.yml) (sign in with `kwnt token --raw` from the app's **Terminal**), [Umbrel](deploy/umbrel/kwant) (sign in with the password Umbrel shows for kwant) and [Coolify](deploy/coolify/kwnt.yaml) (sign in with `SERVICE_PASSWORD_64_KWNT` from the service's environment variables). Until a store lists kwant, CasaOS can import the file under **Custom Install** and Coolify can run it as a **Docker Compose** resource; Umbrel needs the listing. These run kwnt alone, without Laya or the bots' browser; see [docs/self-host-stores.md](docs/self-host-stores.md).
 
