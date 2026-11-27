@@ -20,6 +20,7 @@ import { MoveToBitwardenFirst, usePasswordStore } from './PasswordStorePanel';
 import { devApi, devStore } from '../devMode';
 import { DevBadge } from './DevModeSwitch';
 import { glyphPx, iconKey, iconTitle, pixelIconFor } from '../spaceIcons';
+import { useRailJust, onRailJustEnd } from '../railJust';
 
 const badge = (n: number) => (n > 99 ? '99+' : String(n));
 
@@ -235,6 +236,8 @@ interface RailProps {
 
 export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, onCreate, onOpenAppSettings }) => {
   useRailDevMode(spaces);
+  // Living avatars: the space whose icon or colour was just saved plays one press + foil sweep (never on switch)
+  const justId = useRailJust();
   return (
   <nav aria-label="Spaces" className="hidden md:flex w-[68px] shrink-0 flex-col items-center gap-2 pt-1.5 pb-3 border-r border-hairline bg-surface-rail select-none">
     {/* The list scrolls, so it clips whatever sticks out of it. pt-1.5/pb-1.5 leave room for the
@@ -259,7 +262,15 @@ export const SpaceRail: React.FC<RailProps> = ({ spaces, currentId, onSwitch, on
               }`}
               style={active ? ({ '--tw-ring-color': spaceColor(s) } as React.CSSProperties) : undefined}
             >
-              <SpaceTile space={s} size={40} dev={devStore.isOn(s.id)} devBehind="var(--kw-surface-rail)" />
+              <SpaceTile
+                space={s}
+                size={40}
+                dev={devStore.isOn(s.id)}
+                devBehind="var(--kw-surface-rail)"
+                foil={justId === s.id}
+                just={justId === s.id}
+                onJustEnd={onRailJustEnd}
+              />
               {unread > 0 && (
                 <span className="absolute -top-1.5 -right-1.5 min-w-[18px] px-1 py-px rounded-full bg-rose-600 text-white text-[10px] font-semibold text-center border-2 border-zinc-950">
                   {badge(unread)}

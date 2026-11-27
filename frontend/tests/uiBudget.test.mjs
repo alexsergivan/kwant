@@ -8,7 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
-import { median, spreadPct, staticImports, htmlAssets, firstLoad, allFiles, check, summaryTable, FRAME_METRICS, BYTE_METRICS } from '../perf/ui_budget.mjs';
+import { median, spreadPct, staticImports, htmlAssets, firstLoad, allFiles, check, summaryTable, FRAME_METRICS, BYTE_METRICS, LIFE_METRICS } from '../perf/ui_budget.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const run = (o = {}) => ({ commitsPerSecond: 30, p95FrameMs: 17, framesOver50: 2, lastWordsShown: true, errors: [], ...o });
@@ -121,6 +121,31 @@ test('the budget file sets a limit for every metric it does not drop, and keeps 
   assert.ok(!('guestInitialGz' in dropped));
   assert.ok(b.bytes.guestInitialGz.max <= 80 * 1024, 'pocket-apps: the guest page is at most 80 KB gzipped');
   for (const [k, why] of Object.entries(dropped)) assert.ok(FRAME_METRICS.includes(k) && String(why).length > 10, `dropped ${k} needs its numbers`);
+});
+
+// Living avatars: the 30-bot life case (perf/stream/life.mjs). Commits and timers are the worst run, p95 the median.
+const lifeRun = (o = {}) => ({ lifeCommits: 0, lifeTimers: 1, lifeP95FrameMs: 17, lifeEvents: 60, errors: [], ...o });
+const lifeBudget = () => budget({ life: { lifeCommits: { max: 0 }, lifeTimers: { max: 1 }, lifeP95FrameMs: { max: 19.4 } } });
+const three = () => [run(), run(), run()];
+
+test('life: within the budget passes; one React commit or a second timer in any run fails', () => {
+  assert.equal(check({ runs: three(), bytes: bytes(), life: [lifeRun(), lifeRun(), lifeRun()] }, lifeBudget()).ok, true);
+  assert.deepEqual(failed(check({ runs: three(), bytes: bytes(), life: [lifeRun(), lifeRun({ lifeCommits: 1 }), lifeRun()] }, lifeBudget())), ['lifeCommits']);
+  assert.deepEqual(failed(check({ runs: three(), bytes: bytes(), life: [lifeRun({ lifeTimers: 2 }), lifeRun(), lifeRun()] }, lifeBudget())), ['lifeTimers']);
+  assert.deepEqual(failed(check({ runs: three(), bytes: bytes(), life: [lifeRun({ lifeP95FrameMs: 30 }), lifeRun({ lifeP95FrameMs: 30 }), lifeRun()] }, lifeBudget())), ['lifeP95FrameMs']);
+});
+
+test('life: no runs, a crashed run, or avatars that never moved fail', () => {
+  assert.ok(failed(check({ runs: three(), bytes: bytes() }, lifeBudget())).includes('lifeEvents'));
+  assert.ok(failed(check({ runs: three(), bytes: bytes(), life: [lifeRun(), { error: 'life.mjs exit 1' }, lifeRun()] }, lifeBudget())).includes('life run 2'));
+  assert.deepEqual(failed(check({ runs: three(), bytes: bytes(), life: [lifeRun(), lifeRun({ lifeEvents: 0 }), lifeRun()] }, lifeBudget())), ['lifeEvents']);
+});
+
+test('the budget file has the life case: 0 commits, 1 timer, a p95 limit', () => {
+  const b = JSON.parse(fs.readFileSync(path.join(root, 'perf', 'ui_budget.json'), 'utf8'));
+  for (const k of LIFE_METRICS) assert.equal(typeof b.life?.[k]?.max, 'number', k);
+  assert.equal(b.life.lifeCommits.max, 0);
+  assert.equal(b.life.lifeTimers.max, 1);
 });
 
 test('CI runs the budget as a blocking step', () => {
