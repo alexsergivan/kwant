@@ -18,7 +18,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInputEle
 
 const m = await loadBundled(`
   export { gatherFrom, screenOf, whoSees, nth, move, FOOD_LABELS } from './guest/src/gather/view';
-  export { GatherApp, avatarFor } from './guest/src/gather/app';
+  export { GatherApp, avatarFor, comingLine } from './guest/src/gather/app';
 `);
 const settle = () => new Promise((r) => setTimeout(r, 0));
 const flush = async () => {
@@ -267,7 +267,7 @@ test('G2 in: summary, paid line only for them, who is coming, change my answer s
   assert.equal(t.screen(), 'in');
   assert.match(t.text(), /You're in, Mia!/);
   assert.match(t.$('[data-paid]').textContent, /Dana marked you as paid · Dec 4 · only you see this/);
-  assert.match(t.text(), /Who's coming 12 with plus-ones/);
+  assert.equal(t.$('#lbl-who small').textContent, '12 coming, incl. 3 plus-ones');
   assert.equal(t.root.querySelectorAll('.who-grid li').length, 4);
   assert.match(t.text(), /Maybe: Ana/);
   assert.equal(holo(t), 0);
@@ -287,6 +287,34 @@ test('G2 without names: counts only', async () => {
   assert.match(t.text(), /Yes\s*9.*Maybe\s*3.*No\s*2/);
   assert.match(t.text(), /Got it, Mia/);
   t.app.stop();
+});
+
+// m8 (signup-coming-count): `coming` already counts plus-ones, so say "<n> coming" and name plus-ones only when there are some.
+for (const [names, name, small] of [
+  [true, 'gather-rsvp-in', '#lbl-who small'],
+  [false, 'gather-rsvp-counts', '.lbl small'],
+]) {
+  for (const [yes, coming, want] of [
+    [1, 1, '1 coming'],
+    [9, 10, '10 coming, incl. 1 plus-one'],
+    [9, 11, '11 coming, incl. 2 plus-ones'],
+    [0, 0, '0 coming'],
+  ]) {
+    test(`G2 names ${names ? 'on' : 'off'}: ${yes} yes, ${coming} coming says "${want}"`, async () => {
+      const t = harness(name);
+      t.box.seat.view.counts = { ...t.box.seat.view.counts, yes, coming };
+      await t.app.start(null);
+      await flush();
+      assert.equal(t.screen(), 'in');
+      assert.equal(t.$(small).textContent, want);
+      assert.doesNotMatch(t.text(), /with plus-ones/);
+      t.app.stop();
+    });
+  }
+}
+test('comingLine: never a negative or zero plus-one count from odd counts', () => {
+  assert.equal(m.comingLine({ yes: 3, coming: 2 }), '2 coming');
+  assert.equal(m.comingLine({ yes: 1200, coming: 1203 }), '1,203 coming, incl. 3 plus-ones');
 });
 
 test('G3 sign-up: slot cards, full one is dashed with the waiting line, button says waiting list', async () => {

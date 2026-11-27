@@ -1159,7 +1159,7 @@ const RsvpRows: React.FC<{ g: GatherInfo; nudges: number }> = ({ g, nudges }) =>
       <ul className="flex flex-col gap-2">
         {r.food && (
           <Row icon={<Utensils size={15} aria-hidden="true" />}>
-            Food needs: <strong className="font-semibold text-zinc-50">{r.food}</strong>
+            Food needs (members): <strong className="font-semibold text-zinc-50">{r.food}</strong>
           </Row>
         )}
         {r.paid && <PaidSummary paid={r.paid} />}
@@ -1328,7 +1328,7 @@ const RsvpResult: React.FC<{ g: GatherInfo }> = ({ g }) => {
         </li>
         {r.food && (
           <Row icon={<Utensils size={15} aria-hidden="true" />}>
-            Tell {g.place ?? 'the place'}: <strong className="font-semibold text-zinc-50">{r.food}</strong>
+            Tell {g.place ?? 'the place'} (members): <strong className="font-semibold text-zinc-50">{r.food}</strong>
           </Row>
         )}
         {r.paid && <PaidSummary paid={r.paid} bar={false} />}

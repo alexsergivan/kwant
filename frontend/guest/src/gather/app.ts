@@ -50,6 +50,11 @@ const poss = (name: string): string => `${name}'s`;
 /** "A", "A and B", "A, B and C". */
 const and = (xs: string[]): string => (xs.length < 2 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 /** A creature for a new guest: the page has no picker (G1), so it follows the name. Not a number anyone sees. */
+// "12 coming, incl. 3 plus-ones": coming counts plus-ones (gather.rs), so name them only when there are some.
+export function comingLine(c: { yes: number; coming: number }): string {
+  const p = c.coming - c.yes;
+  return p > 0 ? `${fmt(c.coming)} coming, incl. ${fmt(p)} ${p === 1 ? 'plus-one' : 'plus-ones'}` : `${fmt(c.coming)} coming`;
+}
 export const avatarFor = (name: string): string => AVATARS[[...name.trim().toLowerCase()].reduce((a, c) => a + c.codePointAt(0)!, 0) % AVATARS.length];
 /** A bar's width in 5% steps (classes, since the page's CSP allows no style attributes). */
 const wclass = (n: number, of: number): string => `w${of > 0 ? Math.max(0, Math.min(20, Math.round((n / of) * 20))) : 0}`;
@@ -1003,7 +1008,7 @@ export class GatherApp {
       who = h(
         'div',
         null,
-        h('div', { class: 'lbl', id: 'lbl-who' }, "Who's coming ", v.counts ? h('small', null, `${fmt(v.counts.coming)} with plus-ones`) : null),
+        h('div', { class: 'lbl', id: 'lbl-who' }, "Who's coming ", v.counts ? h('small', null, comingLine(v.counts)) : null),
         yes.length
           ? h('ul', { class: 'who-grid', 'aria-labelledby': 'lbl-who' }, yes.map((p) => h('li', null, creature(p.avatar, 'sm'), h('div', { class: 'nm' }, p.name))))
           : h('p', { class: 'soft fine' }, 'Nobody has said yes yet.'),
@@ -1013,7 +1018,7 @@ export class GatherApp {
       who = h(
         'div',
         null,
-        h('div', { class: 'lbl' }, 'So far ', h('small', null, `${fmt(v.counts.coming)} coming with plus-ones`)),
+        h('div', { class: 'lbl' }, 'So far ', h('small', null, comingLine(v.counts))),
         h('div', { class: 'facts' }, ([['Yes', v.counts.yes], ['Maybe', v.counts.maybe], ['No', v.counts.no]] as [string, number][]).map(([k, n]) => h('div', { class: 'fact' }, h('small', null, k), h('b', null, fmt(n))))),
       );
     }
