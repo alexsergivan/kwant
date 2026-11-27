@@ -685,10 +685,15 @@ async fn a_vote_closed_before_the_fix_is_unlinked_on_the_next_sweep() {
     ok(&t, &open_code, &k, "vote", json!({ "ranking": [0] })).await;
     let open_before = kit_state(&t, &open_code).await;
     let (rsvp, _) = make(&t, spec(now, "rsvp", json!({}))).await;
+    let (eve, _) = joined(&t, &rsvp, "Eve").await;
     assert_eq!(host_act(&t, &rsvp, "close_now", json!({})).await.status, StatusCode::OK);
     let mut r = kit_state(&t, &rsvp).await;
+    // An older version gave every face a salt. Saved the way the other old states are, so the
+    // sweep reads it as an upgraded server would (a raw write would leave the cached copy, which
+    // has no salt since secret-ballot-open-phase, and the sweep would never see this one)
+    assert_eq!(r["ballot_salt"], "", "a new RSVP has no salt");
     r["ballot_salt"] = json!("0123456789abcdef");
-    t.state.db.pocket_save_state(&rsvp, &r.to_string(), &[], Utc::now()).await.unwrap();
+    save_kit_state(&t, &rsvp, &r, &eve).await;
 
     // F3: the older version also left copies in freed space, which it never zeroed
     leave_freed_copies(&t, "sbu-old-vote-row").await;
