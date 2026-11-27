@@ -156,6 +156,15 @@ export const gatherScenarios = {
   },
   // G9 closed with a winner after three rounds (the one holo).
   'gather-result': { state: seat({ ...voteFacts('ranked', { phase: 'closed', voted: 12 }), me: { voted: true, ballot: [0, 1, 2] }, live: null, result }) },
+  // G9 after a tie for last: two (then three) options drop out in one round (vote-ties-and-members, m9).
+  'gather-result-tie2': { state: seat({ ...voteFacts('ranked', { phase: 'closed', voted: 11 }), me: { voted: true, ballot: [0, 1] }, live: null, result: { outcome: 'winner', winner: { option: 0, name: 'The Old Mill', votes: 6 }, tied: [], ballots: 11, final_round_active: 11, rounds: [
+    { round: 1, counts: [{ option: 0, name: 'The Old Mill', votes: 5 }, { option: 1, name: 'Casa Verde', votes: 4 }, { option: 2, name: 'Sushi Bar Ko', votes: 1 }, { option: 3, name: 'Pizza Nonna', votes: 1 }], exhausted: 0, dropped: [{ option: 2, name: 'Sushi Bar Ko' }, { option: 3, name: 'Pizza Nonna' }] },
+    { round: 2, counts: [{ option: 0, name: 'The Old Mill', votes: 6 }, { option: 1, name: 'Casa Verde', votes: 5 }], exhausted: 0, dropped: [] },
+  ] } }) },
+  'gather-result-tie3': { state: seat({ ...voteFacts('ranked', { phase: 'closed', voted: 11 }), me: { voted: true, ballot: [0, 1] }, live: null, result: { outcome: 'winner', winner: { option: 0, name: 'The Old Mill', votes: 7 }, tied: [], ballots: 11, final_round_active: 7, rounds: [
+    { round: 1, counts: [{ option: 0, name: 'The Old Mill', votes: 5 }, { option: 1, name: 'Casa Verde', votes: 2 }, { option: 2, name: 'Sushi Bar Ko', votes: 2 }, { option: 3, name: 'Pizza Nonna', votes: 2 }], exhausted: 0, dropped: [{ option: 1, name: 'Casa Verde' }, { option: 2, name: 'Sushi Bar Ko' }, { option: 3, name: 'Pizza Nonna' }] },
+    { round: 2, counts: [{ option: 0, name: 'The Old Mill', votes: 7 }], exhausted: 4, dropped: [] },
+  ] } }) },
   // G9 tie, waiting on the host: plain, no holo.
   'gather-tie': { state: seat({ ...voteFacts('one_pick', { phase: 'tie' }), me: { voted: true, ballot: [1] }, live: null, result: { outcome: 'tie', winner: null, tied: [{ option: 0, name: 'The Old Mill', votes: 5 }, { option: 1, name: 'Casa Verde', votes: 5 }], ballots: 10, final_round_active: 10, rounds: [{ round: 1, counts: [{ option: 0, name: 'The Old Mill', votes: 5 }, { option: 1, name: 'Casa Verde', votes: 5 }], exhausted: 0, dropped: [] }] } }) },
   // G10 every rejoin is a wrong PIN with 3 tries left.
