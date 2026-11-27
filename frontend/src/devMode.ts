@@ -4,6 +4,7 @@
 
 import { personFetch } from './auth';
 import { dateText, timeText } from './clock';
+import { memberIdsOfTeam } from './botDelete';
 
 // ---------------------------------------------------------------------------
 // Server shapes
@@ -299,13 +300,13 @@ export interface DevTeamRef {
 
 /** Teams as Dev mode shows them, with the lead and members resolved from the roster. */
 export function devTeamRefs(
-  teams: Array<{ id: string; name: string; lead_kwant_id?: string; member_kwants?: string[] }>,
+  teams: Array<{ id: string; name: string; lead_kwant_id?: string; member_kwants?: unknown }>,
   kwants: Array<{ id: string; name: string; avatar_sprite: string }>,
 ): DevTeamRef[] {
   const byId = new Map(kwants.map((k) => [k.id, { id: k.id, name: k.name, avatar: k.avatar_sprite }]));
   return teams.map((t) => {
     const lead = (t.lead_kwant_id && byId.get(t.lead_kwant_id)) || null;
-    const ids = [...(t.lead_kwant_id ? [t.lead_kwant_id] : []), ...(t.member_kwants ?? []).filter((m) => m !== t.lead_kwant_id)];
+    const ids = [...(t.lead_kwant_id ? [t.lead_kwant_id] : []), ...memberIdsOfTeam(t.member_kwants).filter((m) => m !== t.lead_kwant_id)];
     return { id: t.id, name: t.name, lead, members: ids.map((m) => byId.get(m)).filter((k): k is DevBotRef => !!k) };
   });
 }
