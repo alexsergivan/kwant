@@ -454,7 +454,7 @@ export function restaurantList(g: GatherInfo): string {
   const when = [g.when, g.place].filter(Boolean).join(' · ');
   const head = `${g.title}${when ? ` · ${when}` : ''}\n${num(yes.length + guests)} coming${guests ? ` (${num(yes.length)} + ${num(guests)} ${guests === 1 ? 'guest' : 'guests'})` : ''}`;
   const rows = yes.map((p) => `- ${p.name}${p.plus_ones ? ` +${p.plus_ones}` : ''}${p.food ? `: ${p.food}` : ''}`);
-  const food = g.rsvp?.food ? `\nFood needs: ${g.rsvp.food}` : '';
+  const food = g.rsvp?.food ? `\nFood needs (per name below): ${g.rsvp.food}` : '';
   return `${head}${food}\n\n${rows.join('\n')}`;
 }
 
@@ -1159,7 +1159,7 @@ const RsvpRows: React.FC<{ g: GatherInfo; nudges: number }> = ({ g, nudges }) =>
       <ul className="flex flex-col gap-2">
         {r.food && (
           <Row icon={<Utensils size={15} aria-hidden="true" />}>
-            Food needs: <strong className="font-semibold text-zinc-50">{r.food}</strong>
+            Food needs (per member): <strong className="font-semibold text-zinc-50">{r.food}</strong>
           </Row>
         )}
         {r.paid && <PaidSummary paid={r.paid} />}
@@ -1328,7 +1328,7 @@ const RsvpResult: React.FC<{ g: GatherInfo }> = ({ g }) => {
         </li>
         {r.food && (
           <Row icon={<Utensils size={15} aria-hidden="true" />}>
-            Tell {g.place ?? 'the place'}: <strong className="font-semibold text-zinc-50">{r.food}</strong>
+            Tell {g.place ?? 'the place'} (per member): <strong className="font-semibold text-zinc-50">{r.food}</strong>
           </Row>
         )}
         {r.paid && <PaidSummary paid={r.paid} bar={false} />}
