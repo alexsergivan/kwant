@@ -1878,12 +1878,21 @@ const CapCard: React.FC<{ item: DeskItem; onOpenChat?: (item: DeskItem, link: De
       setBusy(false);
     }
   };
+  // "Daily limit reached ·" then "13 messages wait": on a narrow row the dot stays on the first line, the count together.
   const title = item.waiting ? `${item.text} · ${deskWaitingLine(item.waiting)}` : item.text;
   return (
     <div className="flex flex-col gap-2.5 rounded-xl border border-hairline-strong bg-surface-raised p-3" data-allow="cap" role="group" aria-label={`${item.guest_name}: ${title}`}>
       <h4 className="flex items-center gap-2 text-[15px] font-bold text-zinc-50 sm:text-[13.5px]" data-cap-title>
         <Gauge size={16} className="shrink-0 text-zinc-300" aria-hidden="true" />
-        {title}
+        <span>
+          {item.text}
+          {item.waiting ? (
+            <>
+              {'\u00a0· '}
+              <span className="whitespace-nowrap">{deskWaitingLine(item.waiting)}</span>
+            </>
+          ) : null}
+        </span>
       </h4>
       {item.quote ? (
         <figure className="flex flex-col gap-1">

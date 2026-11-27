@@ -547,7 +547,7 @@ test('desk-cap-row: Yuki’s row reads “Daily limit reached · 13 messages wai
   const v = await capInbox(items);
   const row = v.host.querySelector('[data-desk-item="desk:seaview:g-yuki"]');
   assert.ok(row);
-  assert.equal(row.querySelector('[data-cap-title]').textContent, 'Daily limit reached · 13 messages wait');
+  assert.equal(row.querySelector('[data-cap-title]').textContent.replace(/\u00a0/g, ' '), 'Daily limit reached · 13 messages wait');
   assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 60');
   assert.equal(act(v, 'open-chat').textContent.trim(), 'Answer in Bell’s chat');
   for (const a of ['yes', 'book', 'sorry', 'write']) assert.ok(!act(v, a), `no ${a}`);
@@ -607,12 +607,12 @@ test('desk-cap-row: “Answer in Bell’s chat” opens Bell’s thread', async 
 test('desk-cap-row: waiting 1 → “1 message waits”; no waiting on the wire → no count', async () => {
   stub({ read: capRead(30) });
   let v = await capInbox(capItems({ waiting: 1 }));
-  assert.equal(v.host.querySelector('[data-cap-title]').textContent, 'Daily limit reached · 1 message waits');
+  assert.equal(v.host.querySelector('[data-cap-title]').textContent.replace(/\u00a0/g, ' '), 'Daily limit reached · 1 message waits');
   v.done();
   const items = capItems({ waiting: undefined });
   assert.equal(items[0].waiting, undefined);
   v = await capInbox(items);
-  assert.equal(v.host.querySelector('[data-cap-title]').textContent, 'Daily limit reached');
+  assert.equal(v.host.querySelector('[data-cap-title]').textContent.replace(/\u00a0/g, ' '), 'Daily limit reached');
   assert.ok(!/wait/.test(v.host.querySelector('[data-cap-title]').textContent));
   v.done();
   for (const junk of [0, -2, 1.5, '13', null]) assert.equal(capItems({ waiting: junk })[0].waiting, undefined, `junk ${junk}`);
