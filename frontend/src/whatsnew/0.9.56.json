@@ -1,0 +1,14 @@
+{
+  "version": "0.9.56",
+  "date": "2026-11-27",
+  "highlights": [
+    {
+      "id": "chat-time-every-row",
+      "title": "Every message shows its time",
+      "text": "Your own messages and a reply that is still being written now show their time, in the same spot and format as a finished reply. Older days show the date too.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}
