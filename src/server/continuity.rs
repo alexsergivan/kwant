@@ -628,6 +628,10 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
     if super::quizmaster_tools::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::quizmaster_tools::tools());
+        }
+    }
+    if super::santa_tool::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
             list.push(super::santa_tool::tool());
         }
     }
@@ -660,6 +664,10 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
     if super::quizmaster_tools::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::quizmaster_tools::tools());
+        }
+    }
+    if super::santa_tool::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
             list.push(super::santa_tool::tool());
         }
     }
