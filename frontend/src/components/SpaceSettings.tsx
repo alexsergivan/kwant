@@ -50,6 +50,7 @@ import { PhoneAppCard } from './PhoneAppCard';
 import { editorProps, useEscapeLayer } from '../escape';
 import { devTeamRefs } from '../devMode';
 import type { NotifiedChat } from '../chatTarget';
+import { railJust } from '../railJust';
 
 export type { AppSettingsPage, SettingsScope, SpaceSettingsTab };
 
@@ -516,6 +517,8 @@ const GeneralTab: React.FC<Props> = ({ space, spaces, kwants, teams, onSpaceSave
     try {
       const next = await spacesApi.patch(space.id, { name: name.trim(), icon, color: color || null });
       onSpaceSaved(next);
+      // Living avatars: your new icon or colour lands on the rail with one press + foil sweep
+      if (icon !== space.icon || color !== initialColor) railJust.set(space.id);
       setSaved(true);
       setTimeout(() => setSaved(false), 2000);
     } catch (err) {

@@ -292,6 +292,11 @@ pub struct Pocket {
     /// question's words. Absent on the wire when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub santa: Option<serde_json::Value>,
+    /// desk-create-from-chat: a front desk's card (frontend `validDesk`), on kit `desk` only and
+    /// only there: the kit's host summary, its face and its own `join`. Counts, first names and
+    /// booking times; never a guest's words, a PIN or a key. Absent on the wire when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub desk: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

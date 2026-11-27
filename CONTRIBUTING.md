@@ -75,6 +75,8 @@ CI runs the same commands on every pull request: see [.github/workflows/ci.yml](
 
 A maintainer will review it. Small follow-up commits are fine; we squash or rebase when merging.
 
+Maintainers credit contributors with the [All Contributors](https://allcontributors.org/) bot. Comment `@all-contributors please add @user for bug` (or `code`, `doc`, `ideas`, `test`) on the issue or pull request.
+
 ## License
 
 kwant is licensed under the [GNU Affero General Public License v3.0](LICENSE) and is also offered under commercial licenses. By submitting a contribution, you license it to the kwant maintainer under the Apache License 2.0, and you agree that it may be distributed as part of kwant under the AGPL-3.0 and under commercial licenses. You confirm that you have the right to do so.

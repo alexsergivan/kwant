@@ -1,0 +1,14 @@
+{
+  "version": "0.9.57",
+  "date": "2026-11-27",
+  "highlights": [
+    {
+      "id": "living-avatars",
+      "title": "Your bots come alive",
+      "text": "Bots now blink, glance around and show how they feel. They perk up when you message them and say hello when they join. With reduced motion on, only their faces change.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": []
+}

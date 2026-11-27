@@ -2,11 +2,41 @@
 @tailwind components;
 @tailwind utilities;
 
-/* reply-bubble-bot-tint: a bot reply in its avatar's colour (vars set inline from bubbleTint.ts). */
-.kw-bubble-tint {
-  background-color: var(--kw-bubble-bg);
-  border-color: var(--kw-bubble-line);
+/* bubble-not-alert: a bot reply is text on the page. Identity = avatar + the creature thread (--kw-thread, set
+   inline from replyThread.ts). Filled, outlined hue boxes are for status only. */
+.kw-reply-plain {
+  position: relative;
+  padding-left: 1.5rem;                 /* phone: room for the thread under the 20 px name-line avatar */
 }
+.kw-reply-plain::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--kw-thread, var(--kw-hairline-strong));
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 150ms var(--kw-ease);
+}
+:is(.group\/msg, [data-live-row]):is(:hover, :focus-within) .kw-reply-plain::before { opacity: 0.9; }
+/* The working scene has no gutter avatar (its bot is in the stage tile), so it has no thread: a thread always hangs from a creature. */
+.kw-reply-plain[data-reply-scene]::before { content: none; }
+@media (min-width: 640px) {
+  .kw-reply-plain { padding-left: 0; min-height: 36px; }
+  .kw-reply-plain::before { left: -33px; top: 10px; }  /* centred under the 36 px avatar, 4 px below it */
+}
+@media (prefers-reduced-motion: reduce) {
+  .kw-reply-plain::before { transition: none; }
+}
+.kw-reply-plain :is(p, ul, ol, h1, h2, h3, h4, h5, h6, blockquote) { max-width: 42rem; }
+/* The working scene loses its card: its rows line up with the reply text. The stage tile keeps its own frame. */
+.kw-reply-plain .kw-wa,
+.kw-reply-plain .kw-wa-lead,
+.kw-reply-plain .kw-wa-words { padding-left: 0; padding-right: 0; }
+.kw-reply-plain .kw-wa-card[data-phone] .kw-wa { padding-left: 0; padding-right: 0; }  /* 0,4,0 beats stream.css 0,3,0; keeps 12 px top, 4 px bottom */
 
 /* Design tokens (UI refresh, 0.6.9). Surfaces get lighter as they rise; hairlines are white at low
    alpha so they work on every surface. Tailwind names for these: bg-surface-*, border-hairline,
@@ -82,9 +112,10 @@
 }
 
 /* Working kwant avatars: transform and opacity only, so it stays on the compositor. */
+/* Living avatars: the working bob moves the body one whole cell in two frames (was a 0.9 px glide). */
 @keyframes kw-avatar-bob {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-0.9px); }
+  0% { transform: translateY(0); }
+  50% { transform: translateY(-1px); }
 }
 
 @keyframes kw-avatar-ring {
@@ -95,7 +126,7 @@
 .kw-avatar-working .kw-avatar-body {
   transform-box: fill-box;
   transform-origin: center bottom;
-  animation: kw-avatar-bob 0.9s ease-in-out infinite;
+  animation: kw-avatar-bob 0.9s steps(1, end) infinite;
 }
 
 .kw-avatar-ring {
@@ -634,11 +665,34 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 .kw-mood-finished { animation: kw-mood-out 160ms linear 2840ms 1 forwards; }
 @keyframes kw-avatar-blink { from { opacity: 1; } to { opacity: 0; } }
 .kw-avatar-blink { animation: kw-avatar-blink 1ms linear 160ms 1 both; opacity: 1; }
+/* Living avatars (avatarLife.ts): the shared clock sets data-life (which frame) and data-hop (body up one cell) on the
+   avatar root; the frames are drawn, hidden, by ModernAvatar. A visibility swap of a few cells: no layout, no React. */
+.kw-life { display: none; }
+.kw-avatar[data-life='closed'] .kw-life-closed,
+.kw-avatar[data-life='glanceL'] .kw-life-glanceL,
+.kw-avatar[data-life='glanceR'] .kw-life-glanceR,
+.kw-avatar[data-life='perk'] .kw-life-perk,
+.kw-avatar[data-life='happy'] .kw-life-happy,
+.kw-avatar[data-life='twitch'] .kw-life-twitch { display: inline; }
+.kw-avatar[data-life='closed'] .kw-face-eyes,
+.kw-avatar[data-life='glanceL'] .kw-face-eyes,
+.kw-avatar[data-life='glanceR'] .kw-face-eyes,
+.kw-avatar[data-life='perk'] .kw-face-eyes,
+.kw-avatar[data-life='perk'] .kw-face-mouth,
+.kw-avatar[data-life='happy'] .kw-face-eyes,
+.kw-avatar[data-life='happy'] .kw-face-mouth,
+.kw-avatar[data-life='twitch'] .kw-tw-hide { display: none; }
+.kw-avatar[data-hop] .kw-avatar-body { transform: translateY(-1px); }
+/* A reply that just landed from the live row: one hop (up 120 ms, down), the bot stepping away from the laptop. */
 @media (prefers-reduced-motion: reduce) {
   .kw-mood-dot { animation: none; opacity: 0.8; }
   .kw-mood-finished, .kw-mood-needs_you, .kw-mood-failed,
   .kw-mood-f2, .kw-mood-f3 { animation: none; }
   .kw-avatar-blink { display: none; }
+  /* Nothing moves: no frame ever shows (the clock never starts either), the face stays the mood's still face. */
+  .kw-avatar .kw-life { display: none !important; }
+  .kw-avatar .kw-face-eyes, .kw-avatar .kw-face-mouth, .kw-avatar .kw-tw-hide { display: inline !important; }
+  .kw-avatar[data-hop] .kw-avatar-body { transform: none; }
 }
 
 /* Browser takeover stage (Mira's spec §2, §4, §5): enters with a fade and a slight scale; nothing loops */

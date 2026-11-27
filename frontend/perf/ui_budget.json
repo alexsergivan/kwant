@@ -21,6 +21,28 @@
       "main": 17
     }
   },
+  "life": {
+    "_about": "Living avatars (autonomy/living-avatars/impl.md): perf/stream/life.mjs, 30 bots (28 sidebar rows, a chat header, a 96 px Bot home) on the shared clock for 20 s with motion allowed, once per run. lifeCommits and lifeTimers: the worst run. lifeP95FrameMs: the median. p95 is PROVISIONAL: local 16.7/16.7/16.8 ms on the server (Nov 26) + 15%; set it from 3 CI runs on main after merge (median of medians + 15%).",
+    "args": [
+      "--seconds",
+      "20"
+    ],
+    "lifeCommits": {
+      "max": 0
+    },
+    "lifeTimers": {
+      "max": 1
+    },
+    "lifeP95FrameMs": {
+      "max": 19.4,
+      "provisional": true,
+      "local": [
+        16.8,
+        16.7,
+        16.7
+      ]
+    }
+  },
   "bytes": {
     "appInitialGz": {
       "max": 1269123,
