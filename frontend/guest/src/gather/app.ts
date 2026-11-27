@@ -91,6 +91,8 @@ export class GatherApp {
   private bd: BackDraft = { name: '', pin: '', code: '', newPin: '', reset: false };
   private problem: Problem | null = null;
   private busy = '';
+  /** rsvp-names-switch: what the last "Show my name" tap said, for the rest of this visit. */
+  private namesSaid: { ok: boolean; text: string } | null = null;
   /** The row a rank move just swapped, for the 160 ms slide. */
   private moved: { opt: number; dir: 'up' | 'down' } | null = null;
   /** "Moved up" stays ink New for this page load, after `seen` clears it on the box. */
@@ -295,7 +297,7 @@ export class GatherApp {
   paint(force = false): void {
     const scr = this.screenNow();
     const d = this.jd;
-    const sig = JSON.stringify([scr, this.view, this.problem, this.busy, this.bd.reset, this.letGo, this.freshMove, this.away?.tries, d.answer, d.plus, d.food, d.otherOn, d.slot, d.pick, d.order]);
+    const sig = JSON.stringify([scr, this.view, this.problem, this.busy, this.bd.reset, this.letGo, this.freshMove, this.namesSaid, this.away?.tries, d.answer, d.plus, d.food, d.otherOn, d.slot, d.pick, d.order]);
     if (!force && sig === this.sig) return;
     this.sig = sig;
     const active = document.activeElement as HTMLInputElement | null;
@@ -434,7 +436,58 @@ export class GatherApp {
   }
 
   private whoSeesLine(v: GatherView): HTMLElement {
-    return h('div', { class: 'whosees', 'data-whosees': '' }, gaIcon('eye'), h('span', null, whoSees(v.facts).map(([who, what], i) => [i ? ' ' : '', h('b', null, who), what])));
+    return h('div', { class: 'whosees', 'data-whosees': '' }, gaIcon('eye'), h('span', null, whoSees(v.facts, v.names_notice).map(([who, what], i) => [i ? ' ' : '', h('b', null, who), what])));
+  }
+
+  /**
+   * rsvp-names-switch (Mira, copy-check.md 4): the host turned names on after this guest answered. One quiet line in
+   * the who-sees style with "Show my name", never a warning; after a tap, "Your name shows now." for this visit, or
+   * the server's own words when it didn't work.
+   */
+  private namesNote(v: GatherView): Kid {
+    const said = this.namesSaid;
+    if (v.names_notice) {
+      const busy = this.busy === 'names';
+      const btn = h('button', { type: 'button', class: 'gbtn ghost', 'data-show-name': '', disabled: busy ? true : null, 'aria-busy': busy ? 'true' : null }, busy ? h('span', { class: 'spin', 'aria-hidden': 'true' }) : null, 'Show my name') as HTMLButtonElement;
+      btn.addEventListener('click', () => void this.showMyName());
+      const what = v.facts.face === 'signup' ? 'change your sign-up' : 'answer again';
+      return h(
+        'div',
+        { class: 'whosees namesnote', 'data-names-notice': '' },
+        gaIcon('eye'),
+        h('span', null, `${cap(this.host())} now shows names here. Yours stays hidden until you tap Show my name or ${what}.`, said && !said.ok ? h('span', { class: 'err', role: 'alert', 'data-names-said': '' }, ` ${said.text}`) : null),
+        btn,
+      );
+    }
+    if (!said) return null;
+    return h('p', { class: 'soft fine center', role: 'status', 'aria-live': 'polite', tabindex: '-1', 'data-names-said': '' }, said.text);
+  }
+
+  private async showMyName(): Promise<void> {
+    if (this.busy) return;
+    this.busy = 'names';
+    this.namesSaid = null;
+    this.paint();
+    const r = await this.api.act('show_my_name', {});
+    this.busy = '';
+    if (r.ok) {
+      this.namesSaid = { ok: true, text: 'Your name shows now.' };
+      if (r.view) this.show(r.view);
+      else this.paint(true);
+      this.root.querySelector<HTMLElement>('[data-names-said]')?.focus({ preventScroll: true });
+      return;
+    }
+    if (r.status === 410 || r.error === 'ended') return void this.onGone(410, 'ended');
+    const net = r.status === 0 || r.status >= 500;
+    this.namesSaid = { ok: false, text: net ? `Couldn't reach ${poss(this.host())} computer. Try again.` : (r.message ?? "That didn't work. Try again.") };
+    // The host turned names off before the tap landed (409): the fresh view drops the notice, and the server's
+    // sentence stays in its place.
+    if (r.status === 409) {
+      const s = await this.api.state();
+      if (s.ok && s.view) return void this.show(s.view);
+    }
+    this.paint(true);
+    this.root.querySelector<HTMLElement>('[data-show-name], [data-names-said]')?.focus({ preventScroll: true });
   }
 
   /** The fact tiles of an RSVP (G1): the event's day and time, and the price, as the host typed it. */
@@ -498,6 +551,7 @@ export class GatherApp {
       nameBlock,
       choice,
       this.whoSeesLine(v),
+      seated ? this.namesNote(v) : null,
       pinBlock,
       this.problemBox(),
       btn,
@@ -784,7 +838,8 @@ export class GatherApp {
     const d = this.jd;
     const f = v.facts;
     if (f.face === 'rsvp') {
-      const body: Record<string, unknown> = { answer: d.answer };
+      // Lin S1: the server names a guest after the switch only when the page they answered from showed names.
+      const body: Record<string, unknown> = { answer: d.answer, names: f.show_names };
       if (d.answer === 'yes' && f.max_plus_ones > 0) body.plus_ones = d.plus;
       if (d.answer === 'yes' && f.food_choices.length) {
         body.food = d.food.filter((x) => f.food_choices.includes(x));
@@ -793,7 +848,7 @@ export class GatherApp {
       return ['answer', body];
     }
     if (f.face === 'signup') {
-      const body: Record<string, unknown> = { slot: d.slot };
+      const body: Record<string, unknown> = { slot: d.slot, names: f.show_names };
       if (f.fields.includes('slot_note') && d.note.trim()) body.note = d.note.trim();
       return ['take', body];
     }
@@ -1033,6 +1088,7 @@ export class GatherApp {
         ? h('div', { class: 'notice plain paid', 'data-paid': '' }, icon('tick', 'pi'), h('span', null, `${cap(host)} marked you as `, h('b', null, 'paid'), shortDay(m.paid.at) ? ` · ${shortDay(m.paid.at)}` : '', h('span', { class: 'soft' }, ' · only you see this')))
         : null,
       who,
+      this.namesNote(v),
       this.ghost('Change my answer', () => this.goEdit(), 'change'),
       this.keep(v),
     );
@@ -1118,6 +1174,7 @@ export class GatherApp {
       ),
       this.say('finished', line),
       s.people ? h('div', null, h('div', { class: 'lbl' }, s.name, ' ', h('small', null, `${fmt(s.filled)} of ${fmt(s.cap)}`)), this.glist(s, seat.id)) : null,
+      this.namesNote(v),
       this.ghost('Change my slot', () => this.goEdit(), 'change'),
       this.letGoBlock(s, false),
       this.keep(v),
@@ -1143,6 +1200,7 @@ export class GatherApp {
       ),
       this.say(undefined, `If someone in ${s.name} drops out, you move up on your own and this page tells you. Nothing to do until then.`),
       s.people ? h('div', null, h('div', { class: 'lbl' }, s.name), this.glist(s, v.seat!.id)) : null,
+      this.namesNote(v),
       this.ghost('Pick another slot instead', () => this.goEdit(), 'change'),
       room.length ? h('p', { class: 'soft center fine' }, `${and(room)} still ${room.length === 1 ? 'has' : 'have'} room.`) : null,
       this.letGoBlock(s, true),
@@ -1294,7 +1352,7 @@ export class GatherApp {
       back = this.ghost('See my answer', () => this.goRejoin(), 'to-rejoin');
     }
     const mine = v.mine?.answer ? h('p', { class: 'soft' }, 'Your answer: ', h('b', null, WORD[v.mine.answer])) : null;
-    return this.message(tally(96, 'finished'), title, lead, this.gone_(v), mine, back);
+    return this.message(tally(96, 'finished'), title, lead, this.gone_(v), mine, this.namesNote(v), back);
   }
 
   // ---------- Host asleep (pa10a's G9) ----------
