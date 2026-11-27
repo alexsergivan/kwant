@@ -187,10 +187,8 @@ jobs:
       # 36b (ux-a11y-1124/a11y-audit.md): axe-core against the real rendered app, on the same debug kwnt,
       # across the screens the audit flagged (first run, a sent message, Settings, New bot modal). Fails only
       # on serious/critical violations (the audit's threshold: it alone would have caught every regression
-      # found). Not a required check yet, same continue-on-error precedent as Performance budget below;
-      # remove it once the ranked findings above this threshold are clear.
+      # found). Blocking since a11y-guard-blocks (0.9.55): a new serious or critical violation fails CI.
       - name: Accessibility guard (axe-core, serious+critical)
-        continue-on-error: true
         timeout-minutes: 5
         env:
           PW_CORE: ${{ runner.temp }}/pw/node_modules/playwright-core/index.mjs
@@ -208,13 +206,13 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       # P3: a performance budget on the same debug kwnt (no new build). Cold start, first reply (fake claude), idle memory
-      # and the bot browser launch, each the median of 5 runs against scripts/perf_budget.json. Over a limit fails the step.
-      # Not a required check yet: fresh-machine IS required for a release, so this step has continue-on-error: true. A FAIL stays
-      # visible (the step, the job summary table, perf-results.json) but does not fail the job. Remove continue-on-error when
-      # Ada makes the budget required (after a few days of numbers in the perf-results artifact).
+      # and the bot browser launch, each the median of 5 runs against scripts/perf_budget.json. It blocks (Ada, Nov 26,
+      # perf-idle-memory #1265: with continue-on-error idle memory crept 109 -> 166 MB unseen): a median over its limit in a
+      # measure listed under "blocking" in perf_budget.json fails this step and so the fresh-machine job. A measure that
+      # is not blocking (browser_launch_s, until #1266) shows WARN in the summary and does not fail.
       - name: Performance budget
-        continue-on-error: true
-        timeout-minutes: 10
+        # 3 memory runs also sync Find a tool's copy of a fake 75,000-entry registry (after_search_rss_mb)
+        timeout-minutes: 20
         run: python3 scripts/perf_budget.py --kwnt target/debug/kwnt --browser "$(command -v google-chrome || command -v chromium)" --out "$RUNNER_TEMP/perf-results.json"
       - name: Performance budget results
         if: always()
@@ -222,6 +220,57 @@ jobs:
         with:
           name: perf-results
           path: ${{ runner.temp }}/perf-results.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+  # perf-release-budget (0.9.56): the same performance budget on a release build, the binary people run. The debug
+  # numbers above are inflated by ~40 MB of mapped debug code, so the <=120 MB idle target is judged here. Limits are
+  # perf_budget.json's "release" object (the median of 3 CI runs + 15%); a blocking measure over its limit fails this job.
+  # A release build takes ~10+ minutes, so a pull request runs it only when it touches the release build (src/, Cargo.*,
+  # build.rs, scripts/perf_budget.*, this file: perf_budget.py RELEASE_RUN_PATHS); pushes to main always run it. A
+  # skipped run passes, so the check never blocks a docs or frontend-only PR.
+  perf-release:
+    name: perf-release
+    runs-on: ubuntu-latest
+    needs: frontend
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # A pull request checks out its merge commit: HEAD^1 is the base, so HEAD^1..HEAD is what the PR changes
+          fetch-depth: 2
+      - name: Does this change touch the release build?
+        id: gate
+        run: |
+          if [ "$GITHUB_EVENT_NAME" != pull_request ]; then echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; fi
+          run=$(git diff --name-only HEAD^1 HEAD | python3 scripts/perf_budget.py --needs-release-run)
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" != true ]; then echo "perf-release: skipped, this PR does not touch the release build" | tee -a "$GITHUB_STEP_SUMMARY"; fi
+      - uses: actions/download-artifact@v4
+        if: steps.gate.outputs.run == 'true'
+        with:
+          name: frontend-dist
+          path: frontend/dist
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        if: steps.gate.outputs.run == 'true'
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+        if: steps.gate.outputs.run == 'true'
+        with:
+          key: perf-release
+      - name: Build kwnt (release)
+        if: steps.gate.outputs.run == 'true'
+        run: cargo build --release --locked --bin kwnt
+      - name: Performance budget (release)
+        if: steps.gate.outputs.run == 'true'
+        timeout-minutes: 20
+        run: python3 scripts/perf_budget.py --profile release --kwnt target/release/kwnt --browser "$(command -v google-chrome || command -v chromium)" --out "$RUNNER_TEMP/perf-results-release.json"
+      - name: Performance budget results (release)
+        if: always() && steps.gate.outputs.run == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          # one per attempt, so a re-run (another sample for the limits) keeps the earlier file
+          name: perf-results-release-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/perf-results-release.json
           if-no-files-found: ignore
           retention-days: 30
 

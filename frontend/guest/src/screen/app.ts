@@ -444,21 +444,24 @@ export class ScreenApp {
   private winners(v: ScreenView): Kid {
     const rows = (v.board ?? []).slice(0, 3);
     const tops = rows.filter((r) => r.rank === 1);
-    const names = tops.map((r) => r.name);
+    // Holo means earned: a final where nobody scored has no winners, only scores (ux-pass-0952 Minor e).
+    const names = tops.some((r) => r.score > 0) ? tops.map((r) => r.name) : [];
     const head = !names.length ? 'Final scores' : names.length > 1 ? `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]} win!` : `${names[0] ?? ''} ${v.teams ? 'win!' : 'wins!'}`;
     const order = [rows[1], rows[0], rows[2]];
     const stars = [0, 1, 2, 3, 4].map((i) => icon('star', `pi tvstar s${i}`));
     const sticker = h('span', { class: 'kw-sticker kw-sticker-holo tvsticker' }, svg('0 0 9 9', TROPHY, 'pi'), h('span', null, 'Winners'));
     return [
       this.top([h('b', null, v.title), ' · final scores'], v.players ? plural(v.players, 'player', 'players') : null),
-      h('div', { class: `tvstars${this.still() ? '' : ' twinkle'}`, 'aria-hidden': 'true' }, stars),
-      h('div', { class: 'tvwin' }, h('span', { class: 'bigsticker' }, sticker), h('h1', { class: 'winner' }, head)),
+      // Stars celebrate too, so they follow the sticker: none without a winner (design-check D1).
+      names.length ? h('div', { class: `tvstars${this.still() ? '' : ' twinkle'}`, 'aria-hidden': 'true' }, stars) : null,
+      h('div', { class: 'tvwin' }, names.length ? h('span', { class: 'bigsticker' }, sticker) : null, h('h1', { class: 'winner' }, head)),
       h(
         'ol',
         { class: 'podium', 'aria-label': 'Podium' },
         order.map((r, i) => {
           if (!r) return null;
-          const place = [2, 1, 3][i];
+          // Height from rank, not position: tied winners both stand on the tall block (Minor f).
+          const place = Math.min(3, Math.max(1, r.rank || [2, 1, 3][i]));
           const team = v.teams ? r.name : r.team;
           const c = team ? this.color(team, v.teams ? r.color : undefined) : 7;
           const crew = v.teams ? [...this.roster.entries()].filter(([, p]) => p.team === r.name).map(([n]) => n).slice(0, 4) : [r.name];

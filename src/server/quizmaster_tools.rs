@@ -36,10 +36,10 @@ pub fn handles(name: &str) -> bool {
     TOOLS.contains(&name)
 }
 
-/// Whether pocket apps are on: the Pocket core's own check (pa3 qa F6), so both read the switch
-/// the same way.
+/// Whether the Quiz is on: the Pocket core's own check (pa3 qa F6), so both read the switch the
+/// same way. Since pocket-switch-santa-alone the switch can name kits; these tools need `quiz`.
 pub async fn enabled(state: &AppState) -> bool {
-    crate::pocket::enabled(&state.db).await
+    crate::pocket::enabled_for(&state.db, crate::kits::quiz::KIT_ID).await
 }
 
 /// One lock per quiz draft (pa3 qa F2): every read → check → save of a draft runs under it, so

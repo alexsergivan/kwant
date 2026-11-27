@@ -1321,7 +1321,8 @@ pub fn spawn_background(state: AppState, shutdown: CancellationToken) {
     super::dev::tickets::pickup::spawn(state.clone(), shutdown.clone());
     super::telegram::spawn(state.clone(), shutdown.clone());
     super::telegram::customers::spawn(state.clone(), shutdown.clone());
-    state.mcp_directory.clone().spawn(state.mcp_registry.clone(), shutdown.clone());
+    // Find a tool's registry copy syncs from the first search, not from startup (perf-idle-memory)
+    state.mcp_directory.arm(state.mcp_registry.clone(), shutdown.clone());
     spawn(state, shutdown);
 }
 

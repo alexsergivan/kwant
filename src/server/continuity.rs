@@ -628,6 +628,10 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
     if super::quizmaster_tools::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::quizmaster_tools::tools());
+        }
+    }
+    if super::santa_tool::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
             list.push(super::santa_tool::tool());
         }
     }
@@ -660,6 +664,10 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
     if super::quizmaster_tools::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.extend(super::quizmaster_tools::tools());
+        }
+    }
+    if super::santa_tool::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
             list.push(super::santa_tool::tool());
         }
     }
@@ -948,6 +956,13 @@ async fn call_browser_tool(state: &AppState, scope: &SelfScope, target: &str, na
             }
             let (after, _) = run_browser_tool(state, target, &reader, BROWSER_PAGE, &json!({"full": true})).await;
             return (format!("{note}\n\nThe page now:\n{after}"), false);
+        }
+    }
+    // sign-in-wall-uses-tools C: the page is on a site the bot has tools for (github.com and a
+    // `github` server): say so once per turn and site, before it tries to sign in there
+    if !is_error {
+        if let Some(hint) = Box::pin(super::wall_tools::browser_hint(state, scope, page.as_ref())).await {
+            return (format!("{text}\n\n{hint}"), false);
         }
     }
     (text, is_error)

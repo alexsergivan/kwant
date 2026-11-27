@@ -1,0 +1,33 @@
+{
+  "version": "0.9.55",
+  "date": "2026-11-26",
+  "highlights": [
+    {
+      "id": "sign-in-wall-tools-card",
+      "title": "Fix a tool's secret in one tap",
+      "text": "When a bot's tools need a new secret, its card says \"needs you in Tools\". Open Tools takes you straight to that server's row, so you paste the secret and press Done.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "chat-scroll-holds-place",
+      "title": "The chat stays put while you read",
+      "text": "Scroll up to read and the chat holds your place, even while a reply streams in or earlier messages load. It follows new replies again when you reach the bottom, send, or press jump to latest.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "reply-bubble-bot-tint",
+      "title": "Each bot's replies wear its colour",
+      "text": "A bot's reply bubble now has a dark tint of its avatar's colour, so in a team chat you can tell at a glance who is talking. Text inside stays easy to read.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "A bot that meets a sign-in page for a site its tools cover now uses those tools instead of a browser sign-in.",
+    "kwant idles on less memory: the Find a tool directory now loads on your first search, not at startup.",
+    "Find a tool keeps the whole MCP directory, no longer cut off at 60,000 servers.",
+    "The bot browser no longer stalls about 8 seconds on some starts."
+  ]
+}
