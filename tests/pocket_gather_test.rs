@@ -587,8 +587,9 @@ async fn nobody_sees_a_count_while_a_vote_is_open() {
     assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
     for r in [host_view(&t, &code).await["result"].clone(), view_of(&t, &code, &ana).await["result"].clone()] {
         assert_eq!((r["outcome"].as_str(), r["winner"]["name"].as_str(), r["winner"]["votes"].as_u64()), (Some("winner"), Some("80s disco"), Some(2)), "{r}");
-        let counts: Vec<u64> = r["rounds"][0]["counts"].as_array().unwrap().iter().map(|c| c["votes"].as_u64().unwrap()).collect();
-        assert_eq!(counts, vec![1, 2, 0]);
+        // A round lists the options most votes first (then option order), as before the change
+        let counts: Vec<(&str, u64)> = r["rounds"][0]["counts"].as_array().unwrap().iter().map(|c| (c["name"].as_str().unwrap(), c["votes"].as_u64().unwrap())).collect();
+        assert_eq!(counts, vec![("80s disco", 2), ("Winter wonderland", 1), ("Casino", 0)]);
     }
 }
 
@@ -602,7 +603,9 @@ async fn a_vote_closed_before_the_fix_is_unlinked_on_the_next_sweep() {
     let now = Utc::now();
     let (code, _) = make(&t, spec(now, "vote", json!({}))).await;
     let mut ids = Vec::new();
-    for (n, b) in [("Ana", json!([2, 0])), ("Ben", json!([0, 1])), ("Cleo", json!([1, 0, 3]))] {
+    // A decided vote (The Old Mill, 2 of 3 first choices): a tie waits for the host and never
+    // ends by itself
+    for (n, b) in [("Ana", json!([2, 0])), ("Ben", json!([0, 1])), ("Cleo", json!([0, 1, 3]))] {
         let (id, k) = joined(&t, &code, n).await;
         ok(&t, &code, &k, "vote", json!({ "ranking": b })).await;
         ids.push(id);
