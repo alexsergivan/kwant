@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, Request, StatusCode},
     Router,
 };
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
 use kwnt::{
     broker::PermissionBroker,
     config::Config,
@@ -675,6 +675,41 @@ async fn specs_the_kit_cant_run_are_refused_and_a_pin_is_required() {
     assert_eq!(r.status, StatusCode::OK);
     let text = r.body.to_string();
     assert!(text.contains("\"after_date\"") && text.contains("\"days\":7"), "{text}");
+}
+
+// ---- when-weekday-checked (office party m6) ----
+// Brief: /home/maus/shared/ship-software-safely/autonomy/when-weekday-checked/brief.md
+
+/// The kit itself refuses a `when` naming another weekday than event_at's, so the host API (not
+/// only the gather_create tool) can't make a "Fri, Dec 12" pocket for a Saturday.
+#[tokio::test]
+async fn the_pocket_route_refuses_a_when_naming_the_wrong_weekday() {
+    let t = setup().await;
+    let now = Utc::now();
+    let d = (now + Duration::days(10)).date_naive();
+    let event_at = format!("{d}T18:00:00+00:00");
+    let wrong = d.weekday().succ();
+    let day_name = |d: NaiveDate| d.format("%A").to_string();
+    let wrong_name = day_name(d + Duration::days(1));
+    let said = format!("{}, {}, 6 PM", (d + Duration::days(1)).format("%a"), d.format("%b %-d"));
+    assert!(said.starts_with(&wrong_name[..3]), "{said} names {wrong:?}");
+    let r = send(&t.main, "POST", "/api/pockets", Some(json!({ "kit": "gather", "spec": spec(now, "rsvp", json!({ "when": said, "event_at": event_at })) })), &person()).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.body);
+    assert_eq!(r.body["error"], "bad_spec", "{}", r.body);
+    let sentence = format!(
+        "when says {wrong_name}, but event_at is {actual}, {date}. Do you mean {actual}, {short}, or {other}?",
+        actual = day_name(d),
+        date = d.format("%b %-d, %Y"),
+        short = d.format("%b %-d"),
+        other = (d + Duration::days(1)).format("%A, %b %-d"),
+    );
+    assert!(r.body.to_string().contains(&sentence), "{sentence} / {}", r.body);
+    assert!(!r.body.to_string().contains("Ask the person"), "the kit's words, not the tool's: {}", r.body);
+    assert!(send(&t.main, "GET", "/api/pockets", None, &person()).await.body.to_string().find(&said).is_none(), "nothing was made");
+    // The event's own weekday, no weekday, and "Fri to Sat" are all made.
+    for when in [format!("{}, {}, 6 PM", d.format("%a"), d.format("%b %-d")), format!("{}, 6 PM", d.format("%b %-d")), "Fri to Sat".to_string()] {
+        make(&t, spec(now, "rsvp", json!({ "when": when, "event_at": event_at }))).await;
+    }
 }
 
 // ---- Delete answers now (pa10c) ----
