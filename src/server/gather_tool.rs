@@ -456,6 +456,6 @@ mod tests {
         assert!(t.contains("secret ballot"), "{t}");
         assert!(!t.contains("#remote=") && !t.contains("#screen="), "{t}");
         let none = made_text("AB12CD", "P", &json!({"face": "rsvp"}), None);
-        assert!(none.contains("No guest link works yet") && none.contains("Don't write a link yourself"), "{none}");
+        assert!(none.contains("No guest link works yet") && none.contains("don't write a link yourself"), "{none}");
     }
 }
