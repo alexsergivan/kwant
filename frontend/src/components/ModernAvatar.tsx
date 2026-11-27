@@ -5,6 +5,7 @@ import { badgeUsageFor, modelBadgeFor, modelBadgeSize, type ModelBadge } from '.
 import { badgeBotOf, badgeEngines, badgeProfiles, subscribeBadgeData } from '../modelBadgeData';
 import { EngineMark } from './EngineMark';
 import { AvatarMoodMark, useKwantMood, useKwantNotices } from './AvatarMood';
+import { smallMark } from '../avatarMarks';
 import { moodLabel, restingUntilOf, type Mood } from '../kwantMood';
 import { STATUS_DOT, STATUS_PRIORITY, statusText, type BotStatus } from '../botStatus';
 import { avatarStyleFor, botLooksRev, subscribeBotLooks } from '../botLooks';
@@ -119,6 +120,8 @@ export const AvatarModelBadge: React.FC<{ kwantId: string; size: number }> = ({ 
   const badge = useModelBadge(kwantId);
   const usage = useBadgeUsage(badge);
   const d = modelBadgeSize(size);
+  // small-avatar-badges: under 36 px the badge is 12 px and sits 4 px (5 under 28) past the corner, off the face.
+  const sm = smallMark(size, 'model');
   const [leaving, setLeaving] = useState<ModelBadge | null>(null);
   const shownRef = useRef<ModelBadge | null>(badge);
   const key = badge?.key;
@@ -141,7 +144,8 @@ export const AvatarModelBadge: React.FC<{ kwantId: string; size: number }> = ({ 
   return (
     <span
       className={`kw-model-badge ring-2 ring-zinc-950 ${badge.cantRun ? 'bg-zinc-950' : 'bg-zinc-900'}`}
-      style={{ width: d, height: d }}
+      style={sm ? { width: d, height: d, left: -sm.out, bottom: -sm.out } : { width: d, height: d }}
+      data-small={sm ? '' : undefined}
       role="img"
       aria-label={tip.replace('\n', '. ')}
       title={tip}
@@ -749,8 +753,13 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   const kwantMood = useKwantMood(kwantId);
   const mood: Mood = moodOverride ?? kwantMood;
   const notices = useKwantNotices(kwantId);
-  const moodText = moodTextOverride ?? moodLabel(mood, name, restingUntilOf(kwantId));
-  const label = moodText ?? (shown ? statusText(name, shown) : name ? (working ? `${name} is working…` : name) : undefined);
+  // An older reply row (face="plain") shows no live mood: no plate, no ring, no resting tint, no mood words. Only each
+  // bot's newest reply row carries the mood (Mira, 0.9.57 media: older rows kept the live mood mark).
+  const plain = face === 'plain';
+  const shownMood: Mood = plain ? 'idle' : mood;
+  const ringOn = working && !plain;
+  const moodText = moodTextOverride ?? moodLabel(shownMood, name, restingUntilOf(kwantId));
+  const label = moodText ?? (shown ? statusText(name, shown) : name ? (ringOn ? `${name} is working…` : name) : undefined);
   // Same bot, same look in every place: re-reads when the app's bot list changes.
   useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
   const creature = creatureFor(role, name, kwantId);
@@ -762,7 +771,7 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   // Small framed avatars enlarge the creature so it stays readable
   const compact = framed && size < 48;
   // Living avatars: the face follows the mood (a plain face on the chat's older reply rows); life only from 24 px.
-  const faced = face === 'plain' ? 'idle' : faceMood(mood);
+  const faced = faceMood(shownMood);
   const lifeOn = !!life && framed && size >= 24 && !asleep;
   const rootRef = useRef<HTMLDivElement>(null);
   const quirk = quirkOf(creature);
@@ -793,16 +802,16 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
     <div
       ref={rootRef}
       data-life-zone={lifeOn ? life : undefined}
-      className={`kw-avatar relative inline-flex flex-shrink-0 select-none ${working ? 'kw-avatar-working' : ''} ${mood === 'resting' ? 'kw-avatar-resting' : ''} ${className}`}
+      className={`kw-avatar relative inline-flex flex-shrink-0 select-none ${size < 36 ? 'kw-avatar-sm' : ''} ${ringOn ? 'kw-avatar-working' : ''} ${shownMood === 'resting' ? 'kw-avatar-resting' : ''} ${className}`}
       style={{ width: size, height: size }}
       title={label}
       role={moodTextOverride ? 'img' : undefined}
       aria-label={moodTextOverride}
-      data-working={working || undefined}
+      data-working={ringOn || undefined}
       data-status={shown}
-      data-mood={mood === 'idle' ? undefined : mood}
+      data-mood={shownMood === 'idle' ? undefined : shownMood}
     >
-      {working && <span className="kw-avatar-ring" aria-hidden="true" />}
+      {ringOn && <span className="kw-avatar-ring" aria-hidden="true" />}
       <svg
         viewBox={framed ? '0 0 26 26' : '5 2.5 16 17'}
         className="w-full h-full"
@@ -829,12 +838,13 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
           </g>
         </g>
       </svg>
-      <AvatarMoodMark mood={mood} size={size} />
+      <AvatarMoodMark mood={shownMood} size={size} />
       {hat && <HardHat />}
       {modelBadge && kwantId && modelBadgeSize(size) !== null && <AvatarModelBadge kwantId={kwantId} size={size} />}
+      {/* No status dot under 24 px: no caller passes one today, and on a 20 px face it would cover the mouth. */}
       {shown && (
         <>
-          <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-zinc-950 ${STATUS_DOT[shown]}`} aria-hidden="true" />
+          {size >= 24 && <span className={`absolute rounded-full ring-2 ring-zinc-950 ${smallMark(size, 'status') ? 'w-2 h-2 -bottom-px -right-px' : 'bottom-0 right-0 w-2.5 h-2.5'} ${STATUS_DOT[shown]}`} aria-hidden="true" />}
           <span className="sr-only">{label}</span>
         </>
       )}

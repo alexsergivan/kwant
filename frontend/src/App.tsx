@@ -5,6 +5,7 @@ import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf, realAskCount } from './components/Sidebar';
+import { chatAfterBotDelete, dropBotFromTeams, normalizeTeams } from './botDelete';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import type { MessageTarget } from './components/DoneDetail';
@@ -953,14 +954,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         // The space header counts bots too.
         onSpacesChangedRef.current();
         if (Array.isArray(tRes)) {
-          setTeams(tRes.map((t: any) => ({
-            ...t,
-            member_kwants: Array.isArray(t.member_kwants)
-              ? t.member_kwants
-              : typeof t.member_kwants === 'string'
-              ? JSON.parse(t.member_kwants || '[]')
-              : [],
-          })));
+          setTeams(normalizeTeams<Team>(tRes));
         }
       } catch {
         // The next change or a reload tries again; the list on screen stays as it was.
@@ -1313,14 +1307,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             .catch(() => []),
         ]);
 
-        const normalizedTeams: Team[] = (tRes || []).map((t: any) => ({
-          ...t,
-          member_kwants: Array.isArray(t.member_kwants)
-            ? t.member_kwants
-            : typeof t.member_kwants === 'string'
-            ? JSON.parse(t.member_kwants || '[]')
-            : [],
-        }));
+        const normalizedTeams: Team[] = normalizeTeams<Team>(tRes);
 
         setKwants(kRes);
         if (Array.isArray(kRes)) setRosterFresh(true);
@@ -4228,21 +4215,43 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setDeletingKwant(null);
     setEditingKwant(null);
     setKwants((prev) => prev.filter((k) => k.id !== id));
-    if (!isChannel && selectedId === id) {
+    // #1301: it leaves its teams now; its messages there stay and render without it.
+    setTeams((prev) => dropBotFromTeams(prev, id));
+    const next = chatAfterBotDelete({
+      deletedId: id,
+      selectedId: selectedIdRef.current,
+      isChannel: isChannelRef.current,
+      channels: channelsRef.current,
+      botsLeft: kwants.filter((k) => k.id !== id),
+      generalChannelId: space.general_channel_id,
+    });
+    if (next.kind === 'channel') handleSelectChannel(next.channel);
+    else if (next.kind === 'bot') handleSelectKwant(next.bot);
+    else if (next.kind === 'none') {
       setOpenThreadId(null);
-      if (channels.length > 0) {
-        setSelectedId(channels[0].id);
-        setIsChannel(true);
-      }
+      setSelectedId('');
+      selectedIdRef.current = '';
+      setSelectedTeamId(null);
+      setMessages([]);
     }
+    if (next.kind === 'stay' || next.kind === 'none') playSfx('click');
+    delete messagesCacheRef.current[id];
     try {
       const [cRes, tRes] = await Promise.all([fetch('/api/channels'), fetch('/api/teams')]);
-      if (cRes.ok) setChannels(await cRes.json());
-      if (tRes.ok) setTeams(await tRes.json());
+      if (cRes.ok) {
+        const fresh = await cRes.json();
+        if (Array.isArray(fresh)) {
+          setChannels(fresh);
+          channelsRef.current = fresh;
+        }
+      }
+      // /api/teams sends member_kwants as a JSON string: stored raw, the next render threw and blanked the page.
+      if (tRes.ok) setTeams(normalizeTeams<Team>(await tRes.json()));
     } catch {
       /* the next refresh picks it up */
     }
-    playSfx('click');
+    // The space header counts bots too.
+    onSpacesChangedRef.current();
     pushToast(gone ? `Deleted ${gone.name}.` : 'Bot deleted.');
   };
 

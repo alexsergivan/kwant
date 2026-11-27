@@ -75,6 +75,8 @@ export const deskScenarios = {
   'desk-host': { state: seat({ messages: [...late, H('m6', 'Hi Ana, 2 pm is fine. Leave the key in the box.', 1)] }) },
   // G6 slow down: every say is the 21st this hour.
   'desk-slow': { state: seat({ messages: wifi, limits: limits(1) }), sayError: { status: 429, error: 'slow_down', message: 'Slow down.', retry_at: inMin(14) } },
+  // G6 after a reload (m8): the box says none left this hour; nothing is in the composer any more.
+  'desk-slow-reload': { state: seat({ messages: wifi, limits: limits(0, inMin(14)) }) },
   // G7 the daily cap: kept for the host, no bot.
   'desk-cap': { state: seat({ messages: [...wifi, G('m3', 'Is there a beach towel?', 2), N('m4', 'daily_cap', 2)], waiting_for_host: true }) },
   // G8 too long: the walk types past 1,000 characters.
