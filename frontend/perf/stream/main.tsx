@@ -132,6 +132,7 @@ declare global {
       message: (kind?: 'reply' | 'question') => string;
       approval: () => string;
       withdraw: (id: string) => void;
+      end: () => void;
     };
   }
 }
@@ -139,6 +140,8 @@ let streamed = '';
 // 18f: ?steps=4 gives the turn that many finished tool steps before its words (`tools()`), and ?page=1 makes
 // the first one a browser visit, so the browsed chip shows. The landed reply keeps them in meta.activity.
 const STEPS = Number(q.get('steps') ?? 0);
+// ?routed=1: the landed reply carries Laya's routing ("Sent to Ada"), as an auto-routed channel reply does.
+const ROUTED = q.get('routed') === '1';
 const PAGE = q.get('page') === '1';
 const turnSteps = Array.from({ length: STEPS }, (_, i) => ({
   id: `st${i}`,
@@ -164,7 +167,9 @@ window.__harness = {
   streamed: () => streamed,
   // The reply lands (15a shots): the saved message joins the history and the turn completes.
   finish: () => {
-    const meta = STEPS ? { activity: { steps: turnSteps, dropped: 0 } } : undefined;
+    const activity = STEPS ? { activity: { steps: turnSteps, dropped: 0 } } : undefined;
+    // Saved meta is a JSON string; routing is read with parseRoutingMeta.
+    const meta = ROUTED ? JSON.stringify({ ...activity, routing: { kwant_id: 'k1', kwant_name: 'Ada', basis: 'keywords', reason: 'Laya sent it to Ada' } }) : activity;
     messages.push({ id: 'm-final', sender_role: 'kwant', sender_id: 'Ada', text: streamed, results: null, channel_id: CTX, created_at: at(N), tokens_used: 400, ...(meta ? { meta } : {}) });
     emit({ type: 'TurnComplete', kwant_id: 'k1', context_id: CTX, turn_id: 't1', data: { tokens: 400 } });
   },
@@ -190,6 +195,8 @@ window.__harness = {
     emit({ type: 'ApprovalRequired', kwant_id: 'k1', context_id: CTX, data: { id, tool_name: 'Bash', details: { kwant_id: 'k1', kwant_name: 'Ada', channel_id: CTX, context_id: CTX, command: 'npm run build && npm test', description: 'Build and test the app' } } });
     return id;
   },
+  // The turn ends after its reply landed (living-avatars shots: the live row hands over to the saved reply).
+  end: () => emit({ type: 'turn_ended', kwant_id: 'k1', context_id: CTX, data: { turn_id: 't1', kwant_id: 'k1', context_id: CTX, outcome: 'completed' } }),
   withdraw: (id) => emit({ type: 'ApprovalWithdrawn', kwant_id: 'k1', context_id: CTX, data: { id } }),
   // Sends `count` tokens at `perSecond`, on a timer, the way the server's events arrive.
   stream: (count, perSecond) =>

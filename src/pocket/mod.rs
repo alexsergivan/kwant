@@ -606,6 +606,14 @@ pub async fn end(state: &AppState, code: &str) -> PResult<Arc<Snapshot>> {
     let s = snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
     if s.row.state == OPEN {
         let now = Utc::now();
+        // desk-inbox-rows-server: the kit's last word on the state (the desk counts who still waits)
+        if let Some(kit) = s.kit() {
+            let mut kit_state = s.kit_state.clone();
+            if kit.on_end(&KitCtx::new(&s.spec, &s.players, now), &mut kit_state) {
+                let text = serde_json::to_string(&kit_state).map_err(|_| PocketError::internal())?;
+                state.db.pocket_save_state(code, &text, &[], now).await?;
+            }
+        }
         let expires = s.rules().map_or(Some(now), |r| r.retention.expires_at(&s.spec, Some(now)));
         state.db.pocket_end(code, now, expires).await?;
         changed(state, code).await?;
