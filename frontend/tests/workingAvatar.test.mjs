@@ -98,6 +98,8 @@ test('queued and paused bubbles keep their text; the phone shows the scene, not 
 
 test('motion is CSS keyframes on transform and opacity only, no JS timers, a 2.4 s loop', () => {
   assert.doesNotMatch(tsx, /setTimeout|setInterval|requestAnimationFrame|useEffect|canvas/);
+  // Living avatars: the bot's blinks come from the app's one shared clock (avatarLife.ts, its own budget), never a timer here.
+  assert.match(tsx, /useLife\(stageRef, \{ zone: 'header', mood: 'working'/);
   // 36d: the glyph reuses the scene's keyframes; nothing new moves.
   assert.doesNotMatch(css, /@keyframes kw-wa-(?:cmd|glyph|chev)/);
   const frames = [...css.matchAll(/@keyframes (kw-wa-[\w-]+) \{([\s\S]*?)\n?\}\n/g)];

@@ -1,6 +1,7 @@
-import React, { useId, useState } from 'react';
+import React, { useId, useRef, useState } from 'react';
 import { ChevronDown, ChevronRight, RotateCcw } from 'lucide-react';
-import { useCreatureFor, renderCreature } from './ModernAvatar';
+import { useCreatureFor, renderCreature, quirkOf } from './ModernAvatar';
+import { useLife } from '../avatarLife';
 import { Steps } from './ActivityList';
 import { isOpenStep, retriedSteps, shownStepCount, type LiveActivity } from '../activity';
 import { sceneLine } from '../workingStrip';
@@ -50,6 +51,10 @@ export const WorkingAvatar: React.FC<WorkingAvatarProps> = ({ name, audit, live,
   // Same role and name as the row's avatar, so the bot at the laptop is the bot in the portrait.
   const c = useCreatureFor(name, name);
   const [open, setOpen] = useState(false);
+  // Living avatars (Ada's "one bot on screen while it works"): the bot at the laptop is the row's only bot, so it gets
+  // the working face and the chat header's lighter blink rate on the shared clock. Reduced motion: nothing registers.
+  const stageRef = useRef<HTMLDivElement>(null);
+  useLife(stageRef, { zone: 'header', mood: 'working', quirk: quirkOf(c) });
   const autoId = useId();
   const listId = `${idBase ?? autoId}-steps`;
   const line = sceneLine(name, { live, writing }, audit?.line);
@@ -92,11 +97,11 @@ export const WorkingAvatar: React.FC<WorkingAvatarProps> = ({ name, audit, live,
       {/* One polite region per turn: one sentence per step, never the clock (design §5). */}
       <p className="sr-only" role="status" aria-live="polite" data-scene-said="">{said}</p>
       <div className="kw-wa">
-        <div className="kw-wa-stage">
+        <div ref={stageRef} className="kw-wa-stage kw-avatar" data-life-zone="header">
           <svg className="kw-wa-scene" viewBox="0 0 36 18" width={36 * cell} height={18 * cell} aria-hidden="true" focusable="false" data-glyph={glyph ? 'command' : 'lines'}>
             <rect x={1} y={17} width={35} height={1} fill="var(--kw-wa-ground)" />
             <g transform="translate(-5 -2)">
-              <g className="kw-wa-bob">{renderCreature(c).filter((r) => r.key !== 'shadow')}</g>
+              <g className="kw-wa-bob">{renderCreature(c, { mood: 'working', life: true }).filter((r) => r.key !== 'shadow')}</g>
             </g>
             <rect x={14} y={16} width={22} height={1} fill="var(--kw-wa-edge)" />
             <rect x={15} y={15} width={20} height={1} fill="var(--kw-wa-deck)" />

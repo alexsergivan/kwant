@@ -26,6 +26,7 @@
   <a href="https://github.com/alexsergivan/kwant/actions/workflows/ci.yml"><img src="https://github.com/alexsergivan/kwant/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/alexsergivan/kwant/releases/latest"><img src="https://img.shields.io/github/v/release/alexsergivan/kwant?label=release&color=5c3fd0" alt="Latest release"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="License: AGPL-3.0"></a>
+  <a href="#contributors"><img src="https://img.shields.io/github/all-contributors/alexsergivan/kwant?color=5c3fd0" alt="All Contributors"></a>
   <br>
   <sub>Free and open source. A ⭐ helps others find kwant.</sub>
 </p>
@@ -414,6 +415,30 @@ kwant runs commands and holds API keys and passwords, so please report vulnerabi
 - Email: [contact@kwant.si](mailto:contact@kwant.si), for questions, a commercial license, privacy requests or press.
 - Bugs and ideas: [GitHub issues](https://github.com/alexsergivan/kwant/issues). Questions and setups to share: [GitHub Discussions](https://github.com/alexsergivan/kwant/discussions).
 - Security problems: report them privately, as [SECURITY.md](SECURITY.md) describes.
+
+## Contributors
+
+Thanks to everyone who reports bugs, writes docs and sends code 🙌 Bug reports, ideas, docs and tests all count, not just pull requests.
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/alexsergivan"><img src="https://avatars.githubusercontent.com/u/7488348?v=4&size=80" width="80px" height="80px" alt="Oleksandr Ivanchenko"/><br /><sub><b>Oleksandr Ivanchenko</b></sub></a><br /><a href="https://github.com/alexsergivan/kwant/commits?author=alexsergivan" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/skullsdev"><img src="https://avatars.githubusercontent.com/u/262048839?v=4&size=80" width="80px" height="80px" alt="skullsdev"/><br /><sub><b>skullsdev</b></sub></a><br /><a href="https://github.com/alexsergivan/kwant/commits?author=skullsdev" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/greqone"><img src="https://avatars.githubusercontent.com/u/39676616?v=4&size=80" width="80px" height="80px" alt="Grzegorz Nowosielski"/><br /><sub><b>Grzegorz Nowosielski</b></sub></a><br /><a href="https://github.com/alexsergivan/kwant/commits?author=greqone" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/calintro"><img src="https://avatars.githubusercontent.com/u/2131649?v=4&size=80" width="80px" height="80px" alt="calintro"/><br /><sub><b>calintro</b></sub></a><br /><a href="https://github.com/alexsergivan/kwant/issues?q=author%3Acalintro" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ProbablePrime"><img src="https://avatars.githubusercontent.com/u/8791132?v=4&size=80" width="80px" height="80px" alt="ProbablePrime"/><br /><sub><b>ProbablePrime</b></sub></a><br /><a href="https://github.com/alexsergivan/kwant/issues?q=author%3AProbablePrime" title="Bug reports">🐛</a> <a href="#ideas-ProbablePrime" title="Ideas, Planning, & Feedback">🤔</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
 
 ## License
 
