@@ -100,13 +100,13 @@ export const BotHome: React.FC<BotHomeProps> = ({ home, team = [], prompts, canR
         {bot ? (
           // 96 px with 4 px mood cells (spec.md §2); the mood badge is cut out of the main surface
           <span className="kw-float relative" style={{ '--kw-avatar-cut': 'var(--kw-surface-main, #120e26)' } as React.CSSProperties}>
-            <ModernAvatar role={bot.avatar_sprite} name={bot.name} size={96} kwantId={bot.id} asleep={asleep} className="rounded-2xl shadow-raised" />
+            <ModernAvatar role={bot.avatar_sprite} name={bot.name} size={96} kwantId={bot.id} asleep={asleep} className="rounded-2xl shadow-raised" life="full" />
           </span>
         ) : (
           <span className="relative flex -space-x-5" aria-hidden="true">
             {faces.map((k, i) => (
               <span key={k.id} className={`kw-float rounded-2xl ring-4 ring-[var(--kw-surface-main)] ${i === 1 ? 'z-10 scale-110' : ''}`} style={{ animationDelay: `${i * 300}ms` }}>
-                <ModernAvatar role={k.avatar_sprite} name={k.name} size={72} kwantId={k.id} asleep={asleep} />
+                <ModernAvatar role={k.avatar_sprite} name={k.name} size={72} kwantId={k.id} asleep={asleep} life="full" />
               </span>
             ))}
             {shown.length === 0 && <Sparkles size={56} className="text-sky-200" />}
