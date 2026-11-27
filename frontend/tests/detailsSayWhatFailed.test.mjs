@@ -319,3 +319,25 @@ test('unanswered question: the Details row says "Not answered in time", an appro
   assert.match(html, /aria-label="Not answered in time"/);
   assert.doesNotMatch(html, /Not approved in time/);
 });
+
+// desk-needs-you-buttons m6: a customer's call nobody allowed is the rule holding, not a step that failed.
+const REFUSED = (id, tool = 'mcp__kwnt_tools__search_history') => step(id, 'failed', tool, { detail: "This step needs the person's OK first." });
+
+test('m6: a lone refused customer call reads “nothing ran, as it should” and asks for no check', () => {
+  const out = o.replyOutcome([REFUSED('s1')]);
+  assert.deepEqual(out, { kind: 'refused', stepId: 's1' });
+  assert.equal(o.detailsLabel(out), 'Details · nothing ran, as it should');
+  assert.equal(o.checkLine(out), null);
+  // The same call refused twice, and with a curly apostrophe: still nothing to check.
+  assert.equal(o.replyOutcome([REFUSED('s1'), step('s2', 'failed', 'x', { detail: 'This step needs the person’s OK first.' })]).kind, 'refused');
+  const html = ui.meta({ name: 'Bell', outcome: out, children: 'steps' });
+  assert.match(html, /Details · nothing ran, as it should/);
+  assert.doesNotMatch(html, /a step failed/);
+  assert.doesNotMatch(html, /text-rose-300/, 'not drawn as a failure');
+  assert.equal(ui.line({ outcome: out, onDetails: () => {} }), '');
+});
+
+test('m6: a real failure next to a refused call is still a failure, and Details opens at it', () => {
+  assert.deepEqual(o.replyOutcome([REFUSED('s1'), step('s2', 'failed', 'web_search', { detail: '500' })]), { kind: 'failed', stepId: 's2' });
+  assert.equal(o.replyOutcome([REFUSED('s1'), step('s2', 'unanswered', 'b')]).kind, 'unanswered');
+});
