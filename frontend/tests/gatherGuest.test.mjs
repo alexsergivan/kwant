@@ -267,7 +267,7 @@ test('G2 in: summary, paid line only for them, who is coming, change my answer s
   assert.equal(t.screen(), 'in');
   assert.match(t.text(), /You're in, Mia!/);
   assert.match(t.$('[data-paid]').textContent, /Dana marked you as paid · Dec 4 · only you see this/);
-  assert.match(t.text(), /Who's coming 12 with plus-ones/);
+  assert.equal(t.$('#lbl-who small').textContent, '12, incl. 3 plus-ones', 'the heading already says coming');
   assert.equal(t.root.querySelectorAll('.who-grid li').length, 4);
   assert.match(t.text(), /Maybe: Ana/);
   assert.equal(holo(t), 0);
@@ -289,6 +289,33 @@ test('G2 without names: counts only', async () => {
   t.app.stop();
 });
 
+// m8 (signup-coming-count): `coming` already counts plus-ones, so name plus-ones only when there are some.
+// Names on, the heading "Who's coming" already says the verb, so the count drops it (Mira, copy-check.md 1).
+for (const [names, name, small] of [
+  [true, 'gather-rsvp-in', '#lbl-who small'],
+  [false, 'gather-rsvp-counts', '.lbl small'],
+]) {
+  for (const [yes, coming, want] of [
+    [1, 1, '1 coming'],
+    [9, 10, '10 coming, incl. 1 plus-one'],
+    [9, 11, '11 coming, incl. 2 plus-ones'],
+    [0, 0, '0 coming'],
+    [3, 2, '2 coming'], // odd counts: never "incl. -1"
+    [1200, 1203, '1,203 coming, incl. 3 plus-ones'],
+  ]) {
+    const line = names ? want.replace(' coming', '') : want;
+    test(`G2 names ${names ? 'on' : 'off'}: ${yes} yes, ${coming} coming says "${line}"`, async () => {
+      const t = harness(name);
+      t.box.seat.view.counts = { ...t.box.seat.view.counts, yes, coming };
+      await t.app.start(null);
+      await flush();
+      assert.equal(t.screen(), 'in');
+      assert.equal(t.$(small).textContent, line);
+      assert.doesNotMatch(t.text(), /with plus-ones/);
+      t.app.stop();
+    });
+  }
+}
 test('G3 sign-up: slot cards, full one is dashed with the waiting line, button says waiting list', async () => {
   const t = await open('gather-signup');
   assert.equal(t.screen(), 'join');
