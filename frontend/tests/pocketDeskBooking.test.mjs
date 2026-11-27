@@ -22,7 +22,7 @@ const m = await loadBundled(`
   export { createRoot } from 'react-dom/client';
   export { MarkdownRenderer } from './src/components/MarkdownRenderer';
   export { validPocket, kitLabel } from './src/components/results/Pocket';
-  export { validDeskItems, deskAnswers, deskKey, DeskCard, deskConversationCache } from './src/components/results/PocketDesk';
+  export { validDeskItems, deskAnswers, deskKey, DeskCard, DeskNeedsRow, deskConversationCache } from './src/components/results/PocketDesk';
   export { bookingFeatures } from './src/components/results/PocketDeskBooking';
   export { bookingClock, bookingKey, applyFill, fillWeek, validBooking, withBookingAnswers, requestsOf, bookingChip, nextSlotFor } from './src/components/results/deskBooking';
   export { BOOKING_FIXTURES, BOOKING_CONVERSATIONS, BOOKING_WAITING, BOOKING_OPEN, BOOKING_TODAY, DESK_FIXTURES } from './src/components/results/fixtures';
@@ -338,7 +338,7 @@ test('answering in the Inbox closes the card’s request, and the other way roun
 
 test('the odd request: no plain Yes, Book a time picks an open slot and sends book', async () => {
   stub();
-  const v = await deskCard('odd');
+  const v = await deskCard('oddBook');
   await settle();
   assert.ok(!act(v, 'yes'), 'no plain Yes on an odd request');
   await click(act(v, 'book-for'));
@@ -355,19 +355,19 @@ test('the odd request: no plain Yes, Book a time picks an open slot and sends bo
 
 test('Book a time hides when the server doesn’t know the book action', async () => {
   stub({ action: { error: 'bad_action', message: 'unknown action book' }, status: 400 });
-  const v = await deskCard('odd');
+  const v = await deskCard('oddBook');
   await click(act(v, 'book-for'));
   await click(v.host.querySelector('[data-pick]'));
   await click(act(v, 'book'));
   await settle();
-  assert.equal(m.bookingFeatures.canBook(), false);
-  const v2 = await deskCard('odd');
+  assert.equal(m.bookingFeatures.canBook(['book']), false);
+  const v2 = await deskCard('oddBook');
   assert.ok(!v2.host.querySelector('[data-action="book-for"]'));
 });
 
 test('after a refused book (unknown_action) the same card drops Book a time at once, so it can’t be sent twice', async () => {
   stub({ action: { error: 'unknown_action', message: 'unknown action book' }, status: 400 });
-  const v = await deskCard('odd');
+  const v = await deskCard('oddBook');
   await click(act(v, 'book-for'));
   await click(v.host.querySelector('[data-pick]'));
   await click(act(v, 'book'));
@@ -432,4 +432,81 @@ test('chip words', () => {
   assert.equal(m.bookingChip(0, 0), 'Open · no requests');
   assert.equal(m.bookingChip(2, 0), 'Live · 2 requests');
   assert.equal(m.bookingChip(2, 1), 'Live · 3 for you');
+});
+
+// ------------------------------------------------------------------- desk-needs-you-buttons (part A)
+
+const benItem = (over = {}) => m.validDeskItems({ items: [{ ...structuredClone(m.BOOKING_WAITING.items[1]), ...over }] });
+const row = (items) => mount(h(m.DeskNeedsRow, { item: items[0] }));
+
+test('desk-needs-you-buttons: “Book a time for…” is off until the server lists book', async () => {
+  stub();
+  assert.equal(m.bookingFeatures.canBook(), false, 'off on a fresh page load');
+  assert.equal(m.bookingFeatures.canBook(['reply', 'resolve', 'set_cap', 'confirm', 'decline', 'set_slots']), false);
+  assert.equal(m.bookingFeatures.canBook(['confirm', 'book']), true);
+  // The Inbox row on today's server (no actions): no Book, and the foot line says how to answer instead.
+  const v = await row(benItem());
+  assert.ok(v.host.querySelector('[data-odd-allow="open"]'));
+  assert.ok(!act(v, 'book-for'));
+  assert.match(v.host.textContent, /Write Ben a reply asking them to pick a time/);
+  // The card on today's server: no Book either.
+  const c = await deskCard('odd');
+  assert.ok(c.host.querySelector('[data-odd-allow="open"]'));
+  assert.ok(!act(c, 'book-for'));
+});
+
+test('desk-needs-you-buttons: with book listed, Book shows for a guest who named a time', async () => {
+  stub();
+  const v = await row(benItem({ actions: ['reply', 'book'] }));
+  assert.ok(act(v, 'book-for'));
+  assert.match(act(v, 'book-for').textContent, /Book a time for Ben/);
+});
+
+test('desk-needs-you-buttons: never on a plain question (Luka’s price), nor for a guest already booked', async () => {
+  stub();
+  const luka = await row(benItem({ actions: ['book'], ask_slot_start: undefined, guest_id: 'g-luka', id: 'desk:studio:g-luka', guest_name: 'Luka', text: 'Price question: men’s cut', quote: 'How much is a men’s cut? Can I pay by card?' }));
+  assert.ok(luka.host.querySelector('[data-odd-allow="open"]'));
+  assert.ok(!act(luka, 'book-for'), 'a price question has no time to book');
+  for (const a of ['sorry', 'write', 'resolve']) assert.ok(act(luka, a), a);
+  const booked = await row(benItem({ actions: ['book'], booked: true }));
+  assert.ok(!act(booked, 'book-for'), 'the server says Ben already holds a time');
+  // Booked in this app (the host's Yes went out): not offered again.
+  m.deskAnswers.holdAs(m.bookingKey('studio', 'g-ben', 's-x'), 'studio', 'g-ben', { kind: 'confirm', text: null, slot: 's-x' });
+  const again = await row(benItem({ actions: ['book'] }));
+  assert.ok(!act(again, 'book-for'));
+});
+
+test('desk-needs-you-buttons m4/m5: the booking Yes says “Sending…in 5 s” and quotes the guest’s real line', async () => {
+  stub();
+  m.deskAnswers.reset(400);
+  const items = m.validDeskItems(m.BOOKING_WAITING);
+  const v = await row(items);
+  await click(v.host.querySelector('[data-booking-allow="open"] [data-action="confirm"]'));
+  const line = v.host.querySelector('[data-booking-allow="holding"]').textContent;
+  assert.match(line, /Sending to Emma in 5 s: “Nika confirmed your time: Wed Dec 2, 10 AM\. See you then! To change it, write here\.”/);
+  assert.doesNotMatch(line, /Sent to Emma|Your time is confirmed/);
+  assert.ok(act(v, 'undo'));
+  // Mira F1: a clock, not a ✓, while held.
+  assert.ok(v.host.querySelector('[data-booking-allow="holding"] [data-icon="waiting"]'));
+  assert.ok(!v.host.querySelector('[data-booking-allow="holding"] [data-icon="sent"]'));
+});
+
+test('desk-needs-you-buttons F2: a hand-off with no asked time (Luka’s price) has no “plain Yes” line, only the Guide foot line', async () => {
+  stub();
+  const v = await row(benItem({ ask_slot_start: undefined, guest_id: 'g-luka', id: 'desk:studio:g-luka', guest_name: 'Luka', text: 'Price question: men’s cut', quote: 'How much is a men’s cut? Can I pay by card?' }));
+  assert.ok(v.host.querySelector('[data-odd-allow="open"]'));
+  assert.doesNotMatch(v.host.textContent, /plain “Yes”|pick a time/);
+  assert.match(v.host.textContent, /Your answer goes to Luka as you, marked “host”\. .+ never answers this for you\. “No reply needed” sends nothing\./);
+  // A guest who named a time keeps the booking foot line.
+  const ben = await row(benItem());
+  assert.match(ben.host.textContent, /There’s no plain “Yes” here/);
+});
+
+test('desk-needs-you-buttons m5: without a host name the quote is the guest’s own fallback line', async () => {
+  stub();
+  m.deskAnswers.reset(400);
+  const items = m.validDeskItems({ items: [{ ...structuredClone(m.BOOKING_WAITING.items[0]), host_name: undefined }] });
+  const v = await row(items);
+  await click(v.host.querySelector('[data-booking-allow="open"] [data-action="confirm"]'));
+  assert.match(v.host.textContent, /“The host confirmed your time: Wed Dec 2, 10 AM\. See you then! To change it, write here\.”/);
 });

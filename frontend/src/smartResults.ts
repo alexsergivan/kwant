@@ -522,6 +522,8 @@ export interface DeskGuest {
   delete_on: string | null;
   /** pa13b, a booking desk's hand-off that names a time the host hasn't listed ("2026-12-01T18:00"); else null. */
   ask_slot_start?: string | null;
+  /** desk-needs-you-buttons: "request" (a yes/no ask: Yes fits) or "daily_cap"; absent on a plain hand-off. */
+  ask?: 'request' | 'daily_cap';
 }
 export type DeskFrom = 'guest' | 'bot' | 'host' | 'note';
 /** One message in a guest's conversation (`?view=guest:<id>` → `conversation.messages`). */
@@ -591,6 +593,8 @@ export interface DeskInfo {
   mode?: 'guide' | 'booking';
   /** pa13b: the times, when mode is "booking"; else null. */
   booking?: DeskBooking | null;
+  /** desk-needs-you-buttons: the host actions the server lists (`book` turns on "Book a time for…"); absent: none assumed. */
+  actions?: string[];
 }
 
 /** pa11b queue: one ticket on the host's list (Vega's host view `tickets`: waiting, called, and skipped ones still inside
