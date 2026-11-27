@@ -559,3 +559,16 @@ test('kept line and the quiz and santa cards are untouched', async () => {
   ok(structuredClone(m.POCKET_FIXTURES.ready.results.blocks[0]));
   ok(structuredClone(m.SANTA_FIXTURES.collecting.results.blocks[0]));
 });
+
+test('an ended sign-up card with its names deleted keeps the count from filled (render check, #1333)', async () => {
+  const b = raw('signupResult');
+  b.gather.slots = b.gather.slots.map((sl, i) => ({ ...sl, people: [], waiting_people: [], filled: i === 0 ? 2 : 0 }));
+  const gg = m.validPocket(b).gather;
+  assert.deepEqual(gg.slots.map((sl) => [sl.who.length, sl.filled]).slice(0, 2), [[0, 2], [0, 0]]);
+  const v = await card('signupResult', b);
+  const rows = [...v.host.querySelectorAll('[data-result="signup"] tbody tr')].map((r) => r.textContent.replace(/\s+/g, ' ').trim());
+  assert.match(rows[0], /2 people\s*2 of /, 'names gone, count kept');
+  assert.doesNotMatch(rows[0], /nobody|0 of/);
+  assert.match(m.whoBringsWhat(gg), /\(2 of \d+\): 2 people/);
+  bad(withG('signupOpen', { slots: [{ slot: 0, name: 'Mains', cap: 2, people: [], filled: 3 }] }), 'filled over the cap');
+});

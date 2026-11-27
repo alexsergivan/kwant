@@ -220,6 +220,21 @@ export const earnedPicked = (w: Pick<WallInfo, 'best_set' | 'best_by'>) => w.bes
 
 const NUM = new Intl.NumberFormat('en');
 const num = (n: number) => NUM.format(Math.round(n));
+const ISO_DAY = /^\d{4}-\d{2}-\d{2}$/;
+const ISO_TIME = /^\d{4}-\d{2}-\d{2}T[\d:.]+(Z|[+-]\d{2}:?\d{2})$/;
+/** The host view sends `closes_at` / `delete_on` as ISO ("2026-11-28T13:40:11Z", "2026-12-28"); people read "Sat, Nov 28". Text the server already wrote passes through. */
+export function wallDay(s: string): string {
+  const day = ISO_DAY.test(s);
+  if (!day && !ISO_TIME.test(s)) return s;
+  const d = new Date(day ? `${s}T00:00:00Z` : s);
+  return Number.isNaN(d.getTime()) ? s : d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', ...(day ? { timeZone: 'UTC' } : {}) });
+}
+/** An ISO close still ahead means the host ended the wall early: that date isn't when it closed, so the chip says only "Closed". */
+const closedChip = (at: string | null) => {
+  if (!at) return 'Closed';
+  const t = ISO_TIME.test(at) ? Date.parse(at) : NaN;
+  return Number.isFinite(t) && t > Date.now() ? 'Closed' : `Closed · ${wallDay(at)}`;
+};
 const usd = (n: number) => `$${n < 0.01 && n > 0 ? '0.01' : n.toFixed(2)}`;
 const plural = (n: number, one: string, many = `${one}s`) => `${num(n)} ${n === 1 ? one : many}`;
 const possessive = (name: string) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
@@ -238,7 +253,7 @@ export function wallBudgetLine(b: Pick<PocketBlock, 'budget'>): string {
 
 export function keepLine(w: WallInfo): string {
   return w.delete_on
-    ? `Photos go to you. They leave this box on ${w.delete_on} (${w.keep_days} days after the party): download them before then.`
+    ? `Photos go to you. They leave this box on ${wallDay(w.delete_on)} (${w.keep_days} days after the party): download them before then.`
     : `Photos go to you. They leave this box ${w.keep_days} days after the party: download them before then.`;
 }
 
@@ -316,7 +331,7 @@ const WallChip: React.FC<{ w: WallInfo; stage: WallStage; waiting: number }> = (
       );
     case 'picking':
     case 'closed':
-      return <span className="kw-chip">{w.closes_at ? `Closed · ${w.closes_at}` : 'Closed'}</span>;
+      return <span className="kw-chip">{closedChip(w.closes_at)}</span>;
     default:
       return <span className="kw-chip">Closed</span>;
   }
@@ -1248,7 +1263,7 @@ export function wallDoneText(block: PocketBlock): string {
   const w = block.wall!;
   const base = `${block.name} · ${plural(w.counts.approved, 'photo')} from ${plural(w.counts.senders, 'guest')}`;
   if (w.best_set) return `${base} · best ${num(w.best.length)} shown`;
-  return w.delete_on ? `${base} · leaves this box ${w.delete_on}` : base;
+  return w.delete_on ? `${base} · leaves this box ${wallDay(w.delete_on)}` : base;
 }
 
 export const WallDoneRow: React.FC<{ block: PocketBlock; onOpen?: () => void }> = ({ block, onOpen }) => {

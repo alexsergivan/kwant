@@ -396,6 +396,8 @@ export interface GatherSlot {
   cap: number;
   /** Who's in, with their note ("lentil stew"), in join order. */
   who: Array<{ name: string; avatar: string | null; note: string | null }>;
+  /** How many are in. Can be more than `who` once the names are deleted (an ended card keeps the count). */
+  filled: number;
   /** First names on this slot's FIFO waiting list, first in line first. */
   waiting: string[];
   waiting_count: number;

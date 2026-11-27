@@ -21,7 +21,7 @@ const m = await loadBundled(`
   export { createRoot } from 'react-dom/client';
   export { MarkdownRenderer } from './src/components/MarkdownRenderer';
   export { validPocket, kitLabel } from './src/components/results/Pocket';
-  export { WallCard, WallDoneRow, validWall, validWallView, wallStage, wallNeedsYou, wallDoneText, earnedPicked, SNAP_MOOD, WALL_LATER, WALL_FORBIDDEN, photosLeft, keepLine, meterLine } from './src/components/results/PocketWall';
+  export { WallCard, WallDoneRow, validWall, validWallView, wallStage, wallNeedsYou, wallDoneText, earnedPicked, SNAP_MOOD, WALL_LATER, WALL_FORBIDDEN, photosLeft, keepLine, meterLine, wallDay } from './src/components/results/PocketWall';
   export { WALL_FIXTURES, WALL_HOST_VIEWS, POCKET_FIXTURES, SANTA_FIXTURES } from './src/components/results/fixtures';
   export { wallZipUrl, wallPhotoUrl } from './src/pocketApi';
   export { pickCreature, AVATAR_STYLES } from './src/components/ModernAvatar';
@@ -550,4 +550,11 @@ test('Snap: a picker style "Photo wall", pink with the camera; no other style ho
 test('space left reads in tens past 10', () => {
   const w = m.validPocket(raw('space')).wall;
   assert.equal(m.photosLeft(w), 20);
+});
+
+test('wall dates: ISO from the host view reads as a day, server text passes through (render check, #1333)', () => {
+  assert.equal(m.wallDay('2026-12-28'), 'Mon, Dec 28');
+  assert.match(m.wallDay('2026-11-28T13:40:11Z'), /^Sat, Nov 28$/);
+  assert.equal(m.wallDay('Sat 12 PM'), 'Sat 12 PM');
+  assert.doesNotMatch(m.keepLine({ delete_on: '2026-12-28', keep_days: 30 }), /2026-12-28/);
 });
