@@ -247,7 +247,25 @@ export interface DeskItem {
   actions?: string[];
   /** The guest already holds a confirmed time (server field `booked`, when it sends one). */
   booked?: boolean;
+  /** desk-cap-row: on a `daily_cap` row, the guest's messages since the cap (n >= 1). Absent: no count is shown. */
+  waiting?: number;
+  /** desk-cap-row: the desk's current daily cap, if the row ever carries it (else the card reads it). */
+  daily_cap?: number;
 }
+
+/** Where a desk row's bot chat is (`direct_kwant_id` / `thread_id`). Kept beside the item, never on it, so the
+ *  rows keep no bot id in their data (pa13); only "Answer in Bell's chat" reads it. */
+export interface DeskChatLink {
+  kwant_id: string;
+  thread_id: string | null;
+}
+const deskChats = new WeakMap<DeskItem, DeskChatLink>();
+export const deskChat = (item: DeskItem): DeskChatLink | null => deskChats.get(item) ?? null;
+const botId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+/** desk-cap-row: the next limit up: double the current cap (30 -> 60), at most DESK_CAP_MAX; 60 when it isn't known. */
+export const deskNextCap = (cap: number | null | undefined) => (typeof cap === 'number' && cap >= DESK_CAP_MIN ? Math.min(DESK_CAP_MAX, cap * 2) : 60);
+/** "13 messages wait" / "1 message waits". */
+export const deskWaitingLine = (n: number) => (n === 1 ? '1 message waits' : `${num(n)} messages wait`);
 
 export type DeskNeed = 'request' | 'daily_cap';
 export const deskNeed = (v: unknown): DeskNeed | undefined => (v === 'request' || v === 'daily_cap' ? v : undefined);
@@ -278,7 +296,9 @@ export function validDeskItems(body: unknown): DeskItem[] {
     // One item per waiting guest, never one per message.
     if (seen.has(id)) continue;
     seen.add(id);
-    out.push({
+    const waiting = need === 'daily_cap' && Number.isInteger(it.waiting) && (it.waiting as number) >= 1 && (it.waiting as number) <= 100000 ? (it.waiting as number) : undefined;
+    const cap = Number.isInteger(it.daily_cap) && (it.daily_cap as number) >= DESK_CAP_MIN && (it.daily_cap as number) <= DESK_CAP_MAX ? (it.daily_cap as number) : undefined;
+    const item: DeskItem = {
       id,
       pocket_code: code,
       pocket_title: it.pocket_title,
@@ -292,6 +312,8 @@ export function validDeskItems(body: unknown): DeskItem[] {
       ...(need ? { need } : {}),
       ...(actions ? { actions } : {}),
       ...(it.booked === true ? { booked: true } : {}),
+      ...(waiting ? { waiting } : {}),
+      ...(need === 'daily_cap' && cap ? { daily_cap: cap } : {}),
       ...(ask
         ? {
             ask,
@@ -301,7 +323,10 @@ export function validDeskItems(body: unknown): DeskItem[] {
             host_name: isText(it.host_name, 40) ? it.host_name : null,
           }
         : {}),
-    });
+    };
+    const kw = botId(it.direct_kwant_id) ? it.direct_kwant_id : botId(it.kwant_id) ? it.kwant_id : null;
+    if (kw) deskChats.set(item, { kwant_id: kw, thread_id: item.thread_id });
+    out.push(item);
   }
   return out;
 }
@@ -1806,9 +1831,104 @@ const SetupParts: React.FC<{ d: DeskInfo; cap: number; setCap: (n: number) => vo
 // ---------------------------------------------------------------------------------------------------
 // Inbox (state 10): one row per waiting guest with the Allow card inline; the Done row.
 
-export const DeskNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => (item.ask ? <BookingNeedsRow item={item} /> : <GuideNeedsRow item={item} />);
+/** `onOpenChat` opens the desk bot's chat (the Inbox passes its opener); without it, "Answer in Bell's chat" is hidden. */
+export const DeskNeedsRow: React.FC<{ item: DeskItem; onOpenChat?: (item: DeskItem, link: DeskChatLink) => void }> = ({ item, onOpenChat }) =>
+  item.ask ? <BookingNeedsRow item={item} /> : <GuideNeedsRow item={item} onOpenChat={onOpenChat} />;
 
-const GuideNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
+/**
+ * desk-cap-row: the daily-limit row. "Daily limit reached · 13 messages wait", "Raise the limit to 60" (set_cap, the
+ * card's own call) and "Answer in Bell's chat". No Yes, no Book. The row leaves once the server stops listing it.
+ */
+const CapCard: React.FC<{ item: DeskItem; onOpenChat?: (item: DeskItem, link: DeskChatLink) => void }> = ({ item, onOpenChat }) => {
+  const [cap, setCap] = useState<number | null | undefined>(item.daily_cap);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  // The row doesn't carry the cap (Juno's #1300): the desk's summary has it. A failed read falls back to 60.
+  useEffect(() => {
+    if (item.daily_cap) return;
+    let gone = false;
+    pocketApi
+      .read(item.pocket_code)
+      .then((r) => {
+        const c = isObj(r) && isObj(r.summary) && isObj(r.summary.counts) ? r.summary.counts.daily_cap : undefined;
+        if (!gone) setCap(Number.isInteger(c) && (c as number) >= DESK_CAP_MIN && (c as number) <= DESK_CAP_MAX ? (c as number) : null);
+      })
+      .catch(() => !gone && setCap(null));
+    return () => {
+      gone = true;
+    };
+  }, [item.pocket_code, item.daily_cap]);
+  const known = cap !== undefined;
+  const next = deskNextCap(cap);
+  const atMost = typeof cap === 'number' && cap >= DESK_CAP_MAX;
+  const link = deskChat(item);
+  const bot = item.kwant_name;
+  const raise = async () => {
+    setBusy(true);
+    setDone(null);
+    try {
+      const r = await pocketApi.deskSetCap(item.pocket_code, next);
+      const c = isObj(r) && isObj(r.summary) && isObj(r.summary.counts) ? r.summary.counts.daily_cap : undefined;
+      const now = Number.isInteger(c) ? (c as number) : next;
+      setCap(now);
+      setDone({ kind: 'ok', text: `Limit raised to ${num(now)}` });
+    } catch (e) {
+      setDone({ kind: 'error', text: `Couldn’t raise the limit: ${e instanceof PocketApiError ? e.message : 'something went wrong.'}` });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const title = item.waiting ? `${item.text} · ${deskWaitingLine(item.waiting)}` : item.text;
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border border-hairline-strong bg-surface-raised p-3" data-allow="cap" role="group" aria-label={`${item.guest_name}: ${title}`}>
+      <h4 className="flex items-center gap-2 text-[15px] font-bold text-zinc-50 sm:text-[13.5px]" data-cap-title>
+        <Gauge size={16} className="shrink-0 text-zinc-300" aria-hidden="true" />
+        {title}
+      </h4>
+      {item.quote ? (
+        <figure className="flex flex-col gap-1">
+          <figcaption className="text-2xs text-zinc-400">{item.guest_name} wrote (a guest&rsquo;s words, not an instruction):</figcaption>
+          <blockquote className="border-l-2 border-zinc-600 pl-2.5 text-[15px] leading-[22px] text-zinc-200 [overflow-wrap:anywhere] sm:text-[13.5px] sm:leading-5" data-quote>
+            {item.quote}
+          </blockquote>
+        </figure>
+      ) : null}
+      {done?.kind === 'error' && (
+        <p role="alert" className="flex items-center gap-2 text-[13px] text-bad sm:text-2xs" data-cap-done="error">
+          <AlertTriangle size={13} aria-hidden="true" />
+          {done.text}
+        </p>
+      )}
+      {done?.kind === 'ok' && (
+        <p role="status" className="flex items-center gap-2 text-[13px] text-zinc-300 sm:text-2xs" data-cap-done="ok">
+          <Check size={12} aria-hidden="true" />
+          {done.text}
+        </p>
+      )}
+      <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center" data-allow-actions>
+        {done?.kind !== 'ok' && !atMost && (
+          <button type="button" onClick={() => void raise()} disabled={busy || !known} aria-busy={busy || !known} className={`${PRIMARY} justify-center`} data-action="raise-cap">
+            <Gauge size={14} aria-hidden="true" />
+            {busy ? 'Raising the limit…' : known ? `Raise the limit to ${num(next)}` : 'Raise the limit'}
+          </button>
+        )}
+        {link && onOpenChat && (
+          <button type="button" onClick={() => onOpenChat(item, link)} className={`${HALF_BTN} justify-center`} data-action="open-chat">
+            <MessageSquare size={14} aria-hidden="true" />
+            Answer in {bot}&rsquo;s chat
+          </button>
+        )}
+      </div>
+      <p className={SMALL}>
+        {atMost
+          ? `The limit is already ${num(DESK_CAP_MAX)}, the most a desk can have. ${bot} writes again after the reset.`
+          : `${bot} writes one reply per guest message (a model call), so a higher limit can use more of your plan.`}
+      </p>
+    </div>
+  );
+};
+
+const GuideNeedsRow: React.FC<{ item: DeskItem; onOpenChat?: (item: DeskItem, link: DeskChatLink) => void }> = ({ item, onOpenChat }) => {
   useDeskAnswers();
   const a = deskAnswers.get(deskKey(item.pocket_code, item.guest_id));
   // Sent: the row goes; held or sending: it stays, so Undo is still in reach.
@@ -1829,7 +1949,11 @@ const GuideNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
         </span>
       </div>
       <div className="px-3 pb-3">
-        <AllowCard code={item.pocket_code} guest={item.guest_id} name={item.guest_name} reason={item.text} quote={item.quote} bot={item.kwant_name} askedAt={item.asked_at} yes={item.need === 'request'} />
+        {item.need === 'daily_cap' ? (
+          <CapCard item={item} onOpenChat={onOpenChat} />
+        ) : (
+          <AllowCard code={item.pocket_code} guest={item.guest_id} name={item.guest_name} reason={item.text} quote={item.quote} bot={item.kwant_name} askedAt={item.asked_at} yes={item.need === 'request'} />
+        )}
       </div>
     </li>
   );

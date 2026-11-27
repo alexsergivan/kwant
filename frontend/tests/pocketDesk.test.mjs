@@ -22,8 +22,8 @@ const m = await loadBundled(`
   export { createRoot } from 'react-dom/client';
   export { MarkdownRenderer } from './src/components/MarkdownRenderer';
   export { validPocket, kitLabel } from './src/components/results/Pocket';
-  export { validDesk, validDeskItems, validConversation, deskStage, deskMood, deskAnswers, deskKey, withAnswers, DeskCard, DeskNeedsRow, DeskDoneRow, deskDoneLine, deskConversationCache, DESK_YES, DESK_SORRY, DESK_FAILED, DESK_LATER } from './src/components/results/PocketDesk';
-  export { DESK_FIXTURES, DESK_CONVERSATIONS, DESK_WAITING, DESK_OPEN } from './src/components/results/fixtures';
+  export { validDesk, validDeskItems, validConversation, deskStage, deskMood, deskAnswers, deskKey, withAnswers, DeskCard, DeskNeedsRow, DeskDoneRow, deskDoneLine, deskConversationCache, DESK_YES, DESK_SORRY, DESK_FAILED, DESK_LATER, deskNextCap } from './src/components/results/PocketDesk';
+  export { DESK_FIXTURES, DESK_CONVERSATIONS, DESK_WAITING, DESK_CAP_WAITING, DESK_OPEN } from './src/components/results/fixtures';
   export { InboxNew } from './src/components/InboxNew';
   export { inboxStore } from './src/inboxStore';
 `);
@@ -510,7 +510,7 @@ test('desk-needs-you-buttons: the daily-cap row (ask “daily_cap”) never has 
   assert.equal(items[0].need, 'daily_cap');
   const v = await inbox(items);
   assert.ok(!act(v, 'yes'));
-  assert.ok(act(v, 'write'));
+  assert.ok(act(v, 'raise-cap'), 'desk-cap-row: the cap row gets its own actions');
 });
 
 test('desk-needs-you-buttons: in the card, Yes shows for a request guest only', async () => {
@@ -523,4 +523,110 @@ test('desk-needs-you-buttons: in the card, Yes shows for a request guest only', 
   const v2 = await mount(h(m.DeskCard, { block: p, ask: () => {}, openGuest: 'g-emma' }));
   assert.ok(v2.host.querySelector('[data-allow="open"]'));
   assert.ok(!act(v2, 'yes'), 'no ask on the wire: no Yes');
+});
+
+// ------------------------------------------------------------------- desk-cap-row (part B)
+
+const capItems = (over = {}) => m.validDeskItems({ items: [{ ...structuredClone(m.DESK_CAP_WAITING.items[0]), ...over }] });
+/** The desk's summary on GET, with this cap (Mira's example: 30 → 60). */
+const capRead = (cap) => {
+  const s = structuredClone(raw('cap').desk);
+  s.counts = { ...s.counts, daily_cap: cap, replies_today: cap };
+  return { pocket: { state: 'live' }, summary: s, join: null };
+};
+const capInbox = (items, onOpen = () => {}) => {
+  m.inboxStore.patch({ data: { items: [], counts: { waiting_on_you: 0 }, since: new Date().toISOString(), now: new Date().toISOString() }, loading: false, error: null });
+  return mount(h(m.InboxNew, { onOpen, noLoad: true, wide: false, deskItems: items }));
+};
+
+test('desk-cap-row: Yuki’s row reads “Daily limit reached · 13 messages wait” with Raise the limit to 60 and Bell’s chat, no Yes, no Book', async () => {
+  stub({ read: capRead(30) });
+  const items = capItems();
+  assert.equal(items[0].waiting, 13);
+  assert.ok(!JSON.stringify(items).includes('kw-never-shown-01'), 'the row data keeps no bot id');
+  const v = await capInbox(items);
+  const row = v.host.querySelector('[data-desk-item="desk:seaview:g-yuki"]');
+  assert.ok(row);
+  assert.equal(row.querySelector('[data-cap-title]').textContent, 'Daily limit reached · 13 messages wait');
+  assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 60');
+  assert.equal(act(v, 'open-chat').textContent.trim(), 'Answer in Bell’s chat');
+  for (const a of ['yes', 'book', 'sorry', 'write']) assert.ok(!act(v, a), `no ${a}`);
+  assert.ok(!/Book a time/.test(v.host.textContent));
+});
+
+test('desk-cap-row: Raise the limit sends set_cap with 60, then says “Limit raised to 60”', async () => {
+  stub({ read: capRead(30) });
+  const v = await capInbox(capItems());
+  await click(act(v, 'raise-cap'));
+  await settle();
+  const post = calls.find(([meth]) => meth === 'POST');
+  assert.equal(post[1], '/api/pockets/seaview/action');
+  assert.deepEqual(post[2], { name: 'set_cap', body: { cap: 60 } });
+  assert.equal(v.host.querySelector('[data-cap-done="ok"]').textContent, 'Limit raised to 60');
+  assert.ok(!act(v, 'raise-cap'), 'raised once; the row leaves when the server stops listing it');
+  assert.ok(v.host.querySelector('[data-desk-item="desk:seaview:g-yuki"]'), 'the row stays until the server drops it');
+});
+
+test('desk-cap-row: the next step doubles the current cap; the row’s own cap wins; no cap known → 60; at 200 no Raise', async () => {
+  assert.equal(m.deskNextCap(30), 60);
+  assert.equal(m.deskNextCap(50), 100);
+  assert.equal(m.deskNextCap(150), 200);
+  assert.equal(m.deskNextCap(null), 60);
+  stub({ read: capRead(50) });
+  let v = await capInbox(capItems());
+  assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 100');
+  v.done();
+  stub();
+  v = await capInbox(capItems({ daily_cap: 30 }));
+  assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 60', 'a cap on the row needs no read');
+  assert.ok(!calls.some(([meth, u]) => meth === 'GET' && u.startsWith('/api/pockets/')));
+  v.done();
+  stub(); // the read fails (503)
+  v = await capInbox(capItems());
+  assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 60');
+  v.done();
+  stub({ read: capRead(200) });
+  v = await capInbox(capItems());
+  assert.ok(!act(v, 'raise-cap'));
+  assert.match(v.host.textContent, /The limit is already 200/);
+});
+
+test('desk-cap-row: “Answer in Bell’s chat” opens Bell’s thread', async () => {
+  stub({ read: capRead(30) });
+  const opened = [];
+  const v = await capInbox(capItems(), (i) => opened.push(i));
+  await click(act(v, 'open-chat'));
+  assert.equal(opened.length, 1);
+  assert.equal(opened[0].kwant_id, 'kw-never-shown-01');
+  assert.deepEqual(opened[0].link, { thread_id: 't-desk', channel_id: null, direct_kwant_id: 'kw-never-shown-01' });
+  const none = capItems({ kwant_id: null, direct_kwant_id: null });
+  const v2 = await capInbox(none);
+  assert.ok(!v2.host.querySelector('[data-action="open-chat"]'), 'no bot id: no chat button');
+});
+
+test('desk-cap-row: waiting 1 → “1 message waits”; no waiting on the wire → no count', async () => {
+  stub({ read: capRead(30) });
+  let v = await capInbox(capItems({ waiting: 1 }));
+  assert.equal(v.host.querySelector('[data-cap-title]').textContent, 'Daily limit reached · 1 message waits');
+  v.done();
+  const items = capItems({ waiting: undefined });
+  assert.equal(items[0].waiting, undefined);
+  v = await capInbox(items);
+  assert.equal(v.host.querySelector('[data-cap-title]').textContent, 'Daily limit reached');
+  assert.ok(!/wait/.test(v.host.querySelector('[data-cap-title]').textContent));
+  v.done();
+  for (const junk of [0, -2, 1.5, '13', null]) assert.equal(capItems({ waiting: junk })[0].waiting, undefined, `junk ${junk}`);
+  assert.equal(m.validDeskItems({ items: [{ ...m.DESK_WAITING.items[0], waiting: 4 }] })[0].waiting, undefined, 'a count only on a cap row');
+});
+
+test('desk-cap-row: a failed set_cap keeps the row and says why in the server’s words', async () => {
+  stub({ read: capRead(30), action: 'fail' });
+  const v = await capInbox(capItems());
+  await click(act(v, 'raise-cap'));
+  await settle();
+  assert.ok(v.host.querySelector('[data-desk-item="desk:seaview:g-yuki"]'));
+  const err = v.host.querySelector('[data-cap-done="error"]');
+  assert.equal(err.getAttribute('role'), 'alert');
+  assert.equal(err.textContent, 'Couldn’t raise the limit: No such guest');
+  assert.equal(act(v, 'raise-cap').textContent.trim(), 'Raise the limit to 60', 'Raise stays, so the host can try again');
 });
