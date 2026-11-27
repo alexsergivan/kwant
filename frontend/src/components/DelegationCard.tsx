@@ -49,7 +49,9 @@ export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, mess
   const status: DelegationStatus = live?.status ?? meta.status;
   const isResult = meta.kind === 'delegation_result';
   const running = isOpenDelegation({ status });
-  const waitingOn = status === 'running' && waiting ? waiting : null;
+  // A finished turn can't hold a live approval, but its question can still be open in Needs you:
+  // then the card says one answer is all it needs, not "finished".
+  const waitingOn = (status === 'running' && waiting) || (status === 'completed' && waiting === 'question') ? waiting : null;
   const t = waitingOn ? waitingTone : tone[status] ?? tone.queued;
   const line = delegationStatusLine(status, meta.specialist_name, { queuePos, error: live?.error, waiting: waitingOn, action: waitingAction });
   const headingId = `dlg-${messageId}`;
