@@ -191,6 +191,13 @@ pub trait Kit: Send + Sync + 'static {
     fn ticks_unwatched(&self) -> bool {
         false
     }
+    /// Brings a stored state up to a privacy rule that came after it was saved (secret-ballot-
+    /// unlinkable: a vote closed by an older version still keeps its ballots' salt). The sweeper
+    /// calls it once a minute for each pocket of a kit in [`super::SCRUBS`], open or ended, and
+    /// saves the state when it returns `true`. Nothing by default.
+    fn scrub(&self, _state: &mut Value) -> bool {
+        false
+    }
     /// `true` when guests come back over days or weeks, so the link must keep working: such a
     /// pocket is never offered a quick tunnel (a new address per start), only own https, Funnel
     /// or Same Wi-Fi (pa6).

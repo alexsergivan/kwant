@@ -286,6 +286,38 @@ async fn every_route(t: &T, code: &str, host_key: &str, a_key: &str) -> Vec<(Str
     out
 }
 
+/// Swaps two stored ballots that differ, whatever their keys (after the close no key leads to
+/// a person), and reloads the pocket.
+async fn swap_any_two(t: &T, code: &str, any_player: &str) {
+    let mut st = kit_state(t, code).await;
+    let b = st["ballots"].as_object().unwrap().clone();
+    let (kx, bx) = b.iter().next().unwrap();
+    let (ky, by) = b.iter().find(|(_, v)| *v != bx).unwrap();
+    st["ballots"][kx] = by.clone();
+    st["ballots"][ky] = bx.clone();
+    save_kit_state(t, code, &st, any_player).await;
+}
+
+/// The stored ballots as a sorted list of orders (who cast them can't matter).
+fn orders(st: &Value) -> Vec<Value> {
+    let mut v: Vec<Value> = st["ballots"].as_object().unwrap().values().cloned().collect();
+    v.sort_by_key(|x| x.to_string());
+    v
+}
+
+/// Proves a stored state can't be paired with names: no ballot key is the salted hash of any
+/// player id under any salt that was ever stored (or none), and no salt is left.
+fn unpairable(st: &Value, salts: &[&str], ids: &[String]) {
+    assert_eq!(st["ballot_salt"], "", "the salt is cleared: {st}");
+    let keys: Vec<&String> = st["ballots"].as_object().unwrap().keys().collect();
+    for salt in salts.iter().copied().chain([""]) {
+        for id in ids {
+            let k = ballot_key(salt, id);
+            assert!(!keys.contains(&&k), "{id}'s ballot is still under its salted key {k}");
+        }
+    }
+}
+
 /// Swaps two players' stored ballots (everything else kept) and reloads the pocket.
 async fn swap_ballots(t: &T, code: &str, x: &str, y: &str, any_player: &str) {
     let mut st = kit_state(t, code).await;
@@ -329,10 +361,10 @@ async fn no_route_pairs_a_person_with_a_ballot() {
         ok(&t, &code, k, "vote", json!({ "ranking": b })).await;
     }
     let a_key = p[0].1.clone();
-    // A sees their own ballot and the live 1st-choice bars (they voted)
+    // A sees their own ballot (to change it), and no count while voting is open
     let a = view_of(&t, &code, &a_key).await;
     assert_eq!(a["me"], json!({ "voted": true, "ballot": [2, 0, 1] }));
-    assert_eq!(a["live"].as_array().unwrap().len(), 4);
+    assert_eq!(a["live"], Value::Null);
     // The host: who voted (to nudge), totals, never an order
     let h = host_view(&t, &code).await;
     assert_eq!(h["voters"].as_array().unwrap().len(), 5);
@@ -361,12 +393,14 @@ async fn no_route_pairs_a_person_with_a_ballot() {
     assert_eq!(result["outcome"], "winner", "{result}");
     assert!(!result["rounds"].as_array().unwrap().is_empty());
     assert_eq!(result["ballots_counted"], 5, "a count, named so no view carries a \"ballots\" key");
+    // Closed: A no longer gets an order back either (nothing links A to one now)
+    assert_eq!(view_of(&t, &code, &a_key).await["me"], json!({ "voted": true, "ballot": null }));
     let before = every_route(&t, &code, &host_key, &a_key).await;
     for (route, status, body) in &before {
         let text = body.to_string();
         assert!(!text.contains("ballot_salt") && !text.contains("\"ballots\""), "{route} ({status}): {text}");
     }
-    swap_ballots(&t, &code, &p[1].0, &p[2].0, &p[0].0).await;
+    swap_any_two(&t, &code, &p[0].0).await;
     same(&before, &every_route(&t, &code, &host_key, &a_key).await, "closed");
 
     // The event log: no row per vote, and no row names a person
@@ -446,6 +480,158 @@ async fn a_ranked_vote_counts_in_rounds_and_a_tie_waits_for_the_host() {
     let h = host_view(&t, &code).await;
     assert_eq!((h["phase"].as_str(), h["result"]["outcome"].as_str(), h["result"]["winner"]["name"].as_str()), (Some("closed"), Some("picked"), Some("Sat")));
     assert_eq!(kit_state(&t, &code).await["done"], true);
+}
+
+// ---- secret-ballot-unlinkable (part A) ----
+
+/// What is stored after the close can't be paired with names, for a winner and for a tie: the
+/// salt is gone and every ballot sits under a new random key, so recomputing
+/// `sha256(salt:player_id)` with the salt stored before the close (or none) finds nothing. The
+/// orders and the count are the same, and a tie's "vote again" and "pick" still work.
+#[tokio::test]
+async fn a_closed_vote_keeps_nothing_that_pairs_a_ballot_with_a_name() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let mut ids = Vec::new();
+    for (n, b) in [("Ana", json!([2, 0, 1])), ("Ben", json!([0, 1])), ("Cleo", json!([1, 0, 3])), ("Dev", json!([0, 2])), ("Eli", json!([3, 1]))] {
+        let (id, k) = joined(&t, &code, n).await;
+        ok(&t, &code, &k, "vote", json!({ "ranking": b })).await;
+        ids.push((id, k));
+    }
+    let open = kit_state(&t, &code).await;
+    let salt = open["ballot_salt"].as_str().unwrap().to_string();
+    assert!(!salt.is_empty());
+    let pid: Vec<String> = ids.iter().map(|x| x.0.clone()).collect();
+    // While open the salted key is how a voter finds their own ballot (part B moves it)
+    assert!(pid.iter().all(|id| open["ballots"].get(ballot_key(&salt, id)).is_some()));
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    let closed = kit_state(&t, &code).await;
+    unpairable(&closed, &[&salt], &pid);
+    let old_keys: Vec<&String> = open["ballots"].as_object().unwrap().keys().collect();
+    assert!(closed["ballots"].as_object().unwrap().keys().all(|k| !old_keys.contains(&k)), "no key survives the close");
+    assert_eq!(orders(&closed), orders(&open), "the same ballots, only re-keyed");
+    assert_eq!(closed["voted"].as_object().unwrap().len(), 5, "who voted stays (for the card), apart");
+    let r = &host_view(&t, &code).await["result"];
+    assert_eq!((r["outcome"].as_str(), r["ballots_counted"].as_u64()), (Some("winner"), Some(5)), "{r}");
+    for (_, k) in &ids {
+        assert_eq!(view_of(&t, &code, k).await["me"], json!({ "voted": true, "ballot": null }));
+    }
+
+    // A tie unlinks too; "vote again" starts with a new salt, and the next close unlinks again
+    let (code, _) = make(&t, spec(now, "vote", json!({ "ballot": { "kind": "one_pick", "options": ["Fri", "Sat", "Sun"] } }))).await;
+    let mut ids = Vec::new();
+    for (n, pick) in [("Ana", 0), ("Ben", 0), ("Cleo", 1), ("Dev", 1)] {
+        let (id, k) = joined(&t, &code, n).await;
+        ok(&t, &code, &k, "vote", json!({ "ranking": [pick] })).await;
+        ids.push((id, k));
+    }
+    let pid: Vec<String> = ids.iter().map(|x| x.0.clone()).collect();
+    let salt1 = kit_state(&t, &code).await["ballot_salt"].as_str().unwrap().to_string();
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    let tie = kit_state(&t, &code).await;
+    assert_eq!(tie["phase"], "tie");
+    unpairable(&tie, &[&salt1], &pid);
+    assert_eq!(host_act(&t, &code, "revote_24h", json!({})).await.status, StatusCode::OK);
+    let again = kit_state(&t, &code).await;
+    let salt2 = again["ballot_salt"].as_str().unwrap().to_string();
+    assert!(!salt2.is_empty() && salt2 != salt1 && again["ballots"] == json!({}), "{again}");
+    for (i, (_, k)) in ids.iter().enumerate() {
+        ok(&t, &code, k, "vote", json!({ "ranking": [i % 2] })).await;
+    }
+    pocket::sweep(&t.state, Utc::now() + Duration::hours(24) + Duration::minutes(1)).await;
+    let tie2 = kit_state(&t, &code).await;
+    assert_eq!(tie2["phase"], "tie");
+    unpairable(&tie2, &[&salt1, &salt2], &pid);
+    assert_eq!(host_act(&t, &code, "pick", json!({ "option": 1 })).await.status, StatusCode::OK);
+    assert_eq!(host_view(&t, &code).await["result"]["winner"]["name"], "Sat");
+}
+
+/// No count while a vote is open, for the host or a guest, whatever `show_live_count` says: two
+/// host reads around Ben's vote show Ben in `voters` and no tally either time, and Ben (the
+/// 2nd voter, with the live count on) can't learn Ana's pick. At the close the totals are the
+/// same as before the change.
+#[tokio::test]
+async fn nobody_sees_a_count_while_a_vote_is_open() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "vote", json!({ "show_live_count": true, "ballot": { "kind": "one_pick", "options": ["Winter wonderland", "80s disco", "Casino"] } }))).await;
+    let (_, ana) = joined(&t, &code, "Ana").await;
+    let (_, ben) = joined(&t, &code, "Ben").await;
+    ok(&t, &code, &ana, "vote", json!({ "ranking": [0] })).await;
+    let h1 = host_view(&t, &code).await;
+    ok(&t, &code, &ben, "vote", json!({ "ranking": [1] })).await;
+    let h2 = host_view(&t, &code).await;
+    let names = |h: &Value| h["voters"].as_array().unwrap().iter().map(|v| v["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!((names(&h1), names(&h2)), (vec!["Ana".to_string()], vec!["Ana".to_string(), "Ben".to_string()]), "who voted stays, to nudge");
+    assert_eq!((h1["live"].clone(), h2["live"].clone()), (Value::Null, Value::Null));
+    assert_eq!((h1["result"].clone(), h2["result"].clone()), (Value::Null, Value::Null));
+    for k in [&ana, &ben] {
+        let v = view_of(&t, &code, k).await;
+        assert_eq!(v["show_live_count"], true, "the flag is still accepted and shown");
+        assert_eq!((v["live"].clone(), v["result"].clone()), (Value::Null, Value::Null), "{v}");
+    }
+    // A 3rd vote, then the close: totals for everyone, as before
+    let (_, cleo) = joined(&t, &code, "Cleo").await;
+    ok(&t, &code, &cleo, "vote", json!({ "ranking": [1] })).await;
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    for r in [host_view(&t, &code).await["result"].clone(), view_of(&t, &code, &ana).await["result"].clone()] {
+        assert_eq!((r["outcome"].as_str(), r["winner"]["name"].as_str(), r["winner"]["votes"].as_u64()), (Some("winner"), Some("80s disco"), Some(2)), "{r}");
+        let counts: Vec<u64> = r["rounds"][0]["counts"].as_array().unwrap().iter().map(|c| c["votes"].as_u64().unwrap()).collect();
+        assert_eq!(counts, vec![1, 2, 0]);
+    }
+}
+
+/// A vote closed by an older version (salt still beside the ballots) is unlinked by the next
+/// sweep, also after the pocket ended and while the switch is off. An open vote keeps its salt
+/// (a voter still changes their own ballot), and an RSVP's unused salt goes too.
+#[tokio::test]
+async fn a_vote_closed_before_the_fix_is_unlinked_on_the_next_sweep() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let mut ids = Vec::new();
+    for (n, b) in [("Ana", json!([2, 0])), ("Ben", json!([0, 1])), ("Cleo", json!([1, 0, 3]))] {
+        let (id, k) = joined(&t, &code, n).await;
+        ok(&t, &code, &k, "vote", json!({ "ranking": b })).await;
+        ids.push(id);
+    }
+    let open = kit_state(&t, &code).await;
+    let salt = open["ballot_salt"].as_str().unwrap().to_string();
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    pocket::schedule::run_once(&t.state, Utc::now()).await;
+    assert_eq!(before_state(&t, &code).await, "ended");
+    let result = host_view(&t, &code).await["result"].clone();
+    // What an older version stored at the close: the salted keys and the salt
+    let mut old = kit_state(&t, &code).await;
+    old["ballots"] = open["ballots"].clone();
+    old["ballot_salt"] = json!(salt);
+    save_kit_state(&t, &code, &old, &ids[0]).await;
+    assert!(ids.iter().all(|id| old["ballots"].get(ballot_key(&salt, id)).is_some()), "pairable before the sweep");
+    // An open vote and a closed RSVP next to it
+    let (open_code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let (_, k) = joined(&t, &open_code, "Dev").await;
+    ok(&t, &open_code, &k, "vote", json!({ "ranking": [0] })).await;
+    let open_before = kit_state(&t, &open_code).await;
+    let (rsvp, _) = make(&t, spec(now, "rsvp", json!({}))).await;
+    assert_eq!(host_act(&t, &rsvp, "close_now", json!({})).await.status, StatusCode::OK);
+    let mut r = kit_state(&t, &rsvp).await;
+    r["ballot_salt"] = json!("0123456789abcdef");
+    t.state.db.pocket_save_state(&rsvp, &r.to_string(), &[], Utc::now()).await.unwrap();
+
+    t.state.db.set_setting(pocket::SETTING, "off").await.unwrap();
+    pocket::sweep(&t.state, Utc::now()).await;
+    let st = kit_state(&t, &code).await;
+    unpairable(&st, &[&salt], &ids);
+    assert_eq!(orders(&st), orders(&open));
+    assert_eq!(kit_state(&t, &rsvp).await["ballot_salt"], "", "an unused salt goes too");
+    assert_eq!(kit_state(&t, &open_code).await, open_before, "an open vote is left as it is");
+    t.state.db.set_setting(pocket::SETTING, "on").await.unwrap();
+    assert_eq!(host_view(&t, &code).await["result"], result, "the same result");
+    // Once is enough: a second sweep has nothing to change
+    let v = t.state.db.pocket_get(&code).await.unwrap().unwrap().version;
+    pocket::sweep(&t.state, Utc::now()).await;
+    assert_eq!(t.state.db.pocket_get(&code).await.unwrap().unwrap().version, v);
 }
 
 // ---- RSVP ----

@@ -1227,6 +1227,31 @@ async fn tick_one(state: &AppState, code: &str, now: DateTime<Utc>, only_unwatch
     }
 }
 
+/// Kits whose stored states [`Kit::scrub`] may bring up to date.
+pub const SCRUBS: &[&str] = &[gather::ID];
+
+/// secret-ballot-unlinkable: every pocket of a kit in [`SCRUBS`], open or ended (a decided vote
+/// ends at once and keeps its data until the deletion date), gets the kit's scrub; a change is
+/// saved like any other (no event). So an upgrade fixes data an older version stored.
+async fn scrub_stored(state: &AppState) {
+    for kit_id in SCRUBS {
+        for code in state.db.pocket_codes_of_kit(kit_id).await.unwrap_or_default() {
+            let lock = state.pocket.lock_for(&code);
+            let _g = lock.lock().await;
+            let Ok(Some(s)) = snapshot(state, &code).await else { continue };
+            let Some(kit) = s.kit() else { continue };
+            let mut kit_state = s.kit_state.clone();
+            if kit.scrub(&mut kit_state) {
+                let ctx = KitCtx::new(&s.spec, &s.players, Utc::now());
+                match save(state, &code, &kit_state, ctx, Utc::now()).await {
+                    Ok(()) => tracing::info!(code = %code, "pocket apps: unlinked a closed vote's ballots"),
+                    Err(e) => tracing::warn!(code = %code, "pocket apps: couldn't unlink a closed vote's ballots: {}", e.code),
+                }
+            }
+        }
+    }
+}
+
 /// What one sweep did.
 #[derive(Debug, Default, PartialEq)]
 pub struct Swept {
@@ -1235,9 +1260,12 @@ pub struct Swept {
 }
 
 /// Runs unwatched kit timers, ends pockets past their closing time and deletes pockets whose
-/// data has expired. Does nothing while the switch is off.
+/// data has expired. Only the scrub of stored states ([`Kit::scrub`]) runs while the switch is
+/// off.
 pub async fn sweep(state: &AppState, now: DateTime<Utc>) -> Swept {
     let mut out = Swept::default();
+    // A privacy fix to stored data doesn't wait for the switch
+    scrub_stored(state).await;
     if !enabled(&state.db).await {
         return out;
     }
