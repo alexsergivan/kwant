@@ -8,6 +8,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.56] - 2026-11-27
+
+kwant 0.9.56: a time on every chat row.
+
+### Changed
+- Your own messages and the reply that is still being written now show their time too, in the same place and format as a finished reply's (#1281)
+
+## [Mac 0.9.55] - 2026-11-26
+
+kwant 0.9.55: bots use their tools at a sign-in page, Open Tools on a step that needs a fix, less memory at idle, the full tool directory, no browser start stall, the chat holds your place while you read and reply bubbles in each bot's colour.
+
+### Changed
+- A step that needs a fix in Tools says "needs you in Tools" on its card, the strip, the Inbox and the sidebar, and its Open Tools button opens that server's row in Tools (#1264)
+- Each bot's reply bubble now has a dark tint of its avatar's colour, so in a team chat you can tell at a glance which bot is talking (#1273)
+
+### Fixed
+- When a bot hits a sign-in page for a site its tools already cover, it uses those tools instead of asking you to sign in in the browser; if the secret saved for those tools is rejected, kwant asks you to fix it in Tools (#1262)
+- kwant no longer loads the Find a tool directory at startup; it syncs on your first search, so the app idles on less memory (#1265)
+- Find a tool keeps its copy of the MCP directory on disk instead of in memory, so it is no longer cut off at 60,000 servers (#1268)
+- The bot browser no longer stalls about 8 seconds on some starts; a reply from a page that already closed is dropped instead of waited for (#1266)
+- While you scroll up to read, the chat no longer jumps: only your own scrolling or a jump you press moves it, and it follows new replies again once you reach the bottom, send, or press jump to latest (#1270)
+
 ## [Mac 0.9.54] - 2026-11-26
 
 kwant 0.9.54: your first bot opens #general, Get started names your real starter bots, one hello for a hello, the README names the real starter bots, 24 space icons with a holo pick and no dead "From this reply" label.

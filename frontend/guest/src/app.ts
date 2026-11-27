@@ -6,18 +6,18 @@ import type { Answer, BoardRow, GuestView, Question, Reveal } from './view';
 
 const TOAST_MS = 4000;
 
-/** Plain-words date: "Fri, Dec 4". Dates are calendar days (YYYY-MM-DD), so they are read in UTC. */
+/** Plain-words date in the phone's own locale: "Fri, Dec 4" (en-US), "Fri 4 Dec" (en-GB). Dates are calendar days (YYYY-MM-DD), so they are read in UTC. */
 export function day(iso: string): string {
   const d = new Date(`${iso.slice(0, 10)}T12:00:00Z`);
   if (Number.isNaN(d.getTime())) return iso;
-  return d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
-/** "8:00 PM" in the phone's own time zone. */
+/** "8:00 PM" (or "20:00") in the phone's own time zone and locale. */
 export function clock(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' });
+  return d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
 }
 
 const DAY_MS = 86_400_000;

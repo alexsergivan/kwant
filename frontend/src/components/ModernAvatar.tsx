@@ -692,6 +692,11 @@ function renderCreatureBase(c: Creature) {
 /** The bot's creature, resolved exactly as ModernAvatar resolves it, for scenes that draw the bot outside its frame. */
 export function useCreatureFor(role: string | undefined, name: string, kwantId?: string): Creature {
   useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
+  return creatureFor(role, name, kwantId);
+}
+
+/** The same creature without the hook, so a list can resolve it per row (the reply bubble's tint). */
+export function creatureFor(role: string | undefined, name: string, kwantId?: string): Creature {
   return pickCreature(avatarStyleFor(role, kwantId, name, isStyleId) ?? 'default', name);
 }
 export { renderCreature, pickCreature };
@@ -700,6 +705,8 @@ export { renderCreature, pickCreature };
 export const TEAM_PALETTES = ['cyan', 'coral', 'mint', 'yellow', 'blue', 'green', 'red', 'violet'] as const;
 export const isPalette = (name: string): boolean => Object.prototype.hasOwnProperty.call(PALETTES, name);
 /** A plain guest creature (no accessory) in one of the avatar palettes; an unknown name gets cyan. */
+/** Every palette name an avatar can wear. */
+export const PALETTE_NAMES: readonly string[] = Object.keys(PALETTES);
 export const paletteCreature = (name: string): Creature => ({ ...(PALETTES[name] ?? PALETTES.cyan), accessory: 'none' });
 /** The 8 creatures a guest picks on the pocket page (pa5 guest/src/dom.ts AVATARS), by id. */
 export const GUEST_CREATURES: Record<string, [string, Accessory]> = {
@@ -746,7 +753,7 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   const label = moodText ?? (shown ? statusText(name, shown) : name ? (working ? `${name} is working…` : name) : undefined);
   // Same bot, same look in every place: re-reads when the app's bot list changes.
   useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
-  const creature = pickCreature(avatarStyleFor(role, kwantId, name, isStyleId) ?? 'default', name);
+  const creature = creatureFor(role, name, kwantId);
   // Dev mode: every bot avatar of 28 px and up wears the hard hat (top-left, clear of the status dot).
   const devOn = useDevModeOn();
   const hat = devOn && !!kwantId && size >= 28;

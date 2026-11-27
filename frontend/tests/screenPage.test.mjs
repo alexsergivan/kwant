@@ -2,6 +2,7 @@
 // real QuizView shapes), the screen never calling a host write, the link's token wiped before the first request,
 // the phone's backoff while the box is away, reduced motion, and no text under 32 px at 1920.
 // The live half (the built page in Chrome under pa1's CSP, at 1920x1080) is guest/e2e/csp.mjs.
+import './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';

@@ -35,6 +35,7 @@ import {
   UserMinus,
   Users,
   Wifi,
+  WifiOff,
   X,
   Zap,
 } from 'lucide-react';
@@ -44,7 +45,7 @@ import { Sticker } from '../Sticker';
 import { guestCreature, renderCreature } from '../ModernAvatar';
 import { pocketApi, PocketApiError, type ResetCode } from '../../pocketApi';
 import { useFocusAfterRender } from '../../focusAfterRender';
-import { BTN, Bar, Callout, GHOST, HALF, ICON, LATER_CLS, LaterButton, LinkField, PRIMARY, Qr, Row, STOP } from './pocketParts';
+import { BTN, Bar, Callout, GHOST, HALF, ICON, LATER_CLS, LaterButton, LinkField, PRIMARY, Qr, Row, SANTA_STAYS_LINE, STOP, THIS_COMPUTER_ONLY, THIS_COMPUTER_WIFI_LINE } from './pocketParts';
 
 // ---------------------------------------------------------------------------------------------------
 // Validator
@@ -110,7 +111,9 @@ export function validSantaJoin(v: unknown): SantaInfo['join'] | undefined {
   if (v.quick_tunnel === true || quick(anywhere_url) || quick(wifi_url)) return undefined;
   // "From anywhere" needs an address that stays: an own https one or a Funnel one.
   if (v.mode === 'anywhere' && (!anywhere_url || !kind)) return undefined;
-  return { mode: v.mode, anywhere_kind: kind, anywhere_url, wifi_url };
+  // Kept only when it's the one note the card words (a 127.0.0.1 box); anything else reads as no note.
+  const wifi_note = !wifi_url && v.wifi_note === THIS_COMPUTER_ONLY ? THIS_COMPUTER_ONLY : null;
+  return { mode: v.mode, anywhere_kind: kind, anywhere_url, wifi_url, ...(wifi_note ? { wifi_note } : {}) };
 }
 
 /**
@@ -214,6 +217,7 @@ function joinFromRead(v: unknown): SantaInfo['join'] | undefined {
     anywhere_url: stays ? v.anywhere_url ?? null : null,
     anywhere_kind: stays ? v.anywhere_kind : null,
     wifi_url: wifi,
+    wifi_note: v.wifi_note,
   });
 }
 
@@ -431,8 +435,8 @@ export const howToSteps = (port: string | null, bot = 'Santa', chat = 'the famil
   { text: `Send that link to ${chat}. It keeps working whenever this Mac is on.` },
 ];
 
-export const HowTo: React.FC<{ port: string | null; bot?: string; chat?: string }> = ({ port, bot, chat }) => {
-  const [open, setOpen] = useState(false);
+export const HowTo: React.FC<{ port: string | null; bot?: string; chat?: string; defaultOpen?: boolean }> = ({ port, bot, chat, defaultOpen = false }) => {
+  const [open, setOpen] = useState(defaultOpen);
   const id = useId();
   return (
     <div className="flex flex-col gap-2.5">
@@ -467,6 +471,9 @@ const SantaJoinBox: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s
   const radios = useRef<Array<HTMLButtonElement | null>>([]);
   const labelId = useId();
   const url = !join ? null : mode === 'anywhere' && anywhere ? join.anywhere_url : join.wifi_url;
+  // A box bound to 127.0.0.1 (the Mac default): no phone reaches it on Wi-Fi, and Santa never takes a quick link.
+  const onlyHere = !!join && !join.wifi_url && join.wifi_note === THIS_COMPUTER_ONLY;
+  const port = useGuestPort(join?.wifi_url ?? null, onlyHere && !anywhere);
   const modes: JoinMode[] = ['anywhere', 'wifi'];
   const onKey = (e: React.KeyboardEvent) => {
     if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
@@ -516,11 +523,15 @@ const SantaJoinBox: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s
                 {join?.anywhere_kind === 'https' ? 'Uses your own https address.' : "Uses your Mac's Tailscale Funnel address."} It stays the same, so the link can sit in the family chat for
                 weeks. No app, no account.
               </p>
+            ) : onlyHere ? (
+              <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body" data-no-link="this-computer-only">
+                {THIS_COMPUTER_WIFI_LINE} Send the From anywhere link instead: it works on Wi-Fi too.
+              </p>
             ) : (
               <p className="text-[15px] leading-[22px] text-zinc-100 sm:text-body">People on your Wi-Fi open the page; anyone else can't reach it. Pick From anywhere for the family chat.</p>
             )}
             <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">Works while this Mac is on. When it sleeps, the page says so and tries again by itself; nothing is lost.</p>
-            {url ? <LinkField url={url} /> : <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">Your box hasn't said its Wi-Fi address yet.</p>}
+            {url ? <LinkField url={url} /> : onlyHere ? null : <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta">Your box hasn't said its Wi-Fi address yet.</p>}
           </>
         ) : (
           <>
@@ -529,6 +540,13 @@ const SantaJoinBox: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s
                 <Wifi size={15} className={`${ICON} text-sky-300`} aria-hidden="true" />
                 <span>
                   <strong className="font-semibold text-zinc-50">Same Wi-Fi only, for now.</strong> People on your Wi-Fi open the page; anyone else can't reach it.
+                </span>
+              </p>
+            ) : onlyHere ? (
+              <p className="flex items-start gap-2 text-[15px] leading-[22px] text-zinc-200 sm:text-[13px] sm:leading-5" data-no-link="this-computer-only">
+                <WifiOff size={15} className={`${ICON} text-zinc-500`} aria-hidden="true" />
+                <span>
+                  <strong className="font-semibold text-zinc-50">Only this Mac can open the page right now.</strong> {THIS_COMPUTER_WIFI_LINE}
                 </span>
               </p>
             ) : (
@@ -542,9 +560,13 @@ const SantaJoinBox: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s
             <div className="flex flex-col gap-2.5 rounded-xl border border-hairline bg-surface-rail/60 p-3" data-callout="no-stable-address">
               <p className="flex items-start gap-2 text-[15px] leading-[22px] text-zinc-200 sm:text-[13px] sm:leading-5">
                 <Info size={15} className={`${ICON} text-zinc-400`} aria-hidden="true" />
-                <span>No address that stays the same is set up on this Mac. To let people join from anywhere for weeks, turn on Tailscale Funnel: free, about 5 minutes.</span>
+                {onlyHere ? (
+                  <span data-stays-line>{SANTA_STAYS_LINE} Funnel is free and takes about 5 minutes.</span>
+                ) : (
+                  <span>No address that stays the same is set up on this Mac. To let people join from anywhere for weeks, turn on Tailscale Funnel: free, about 5 minutes.</span>
+                )}
               </p>
-              <HowTo port={portOf(join?.wifi_url ?? null)} />
+              <HowTo key={onlyHere ? "local" : "wifi"} port={port} defaultOpen={onlyHere} />
               <NoQuickLink />
             </div>
             {url && <LinkField url={url} />}
@@ -554,6 +576,29 @@ const SantaJoinBox: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s
     </div>
   );
 };
+
+/**
+ * The guest port for the Funnel how-to. It's in the Wi-Fi link when there is one; a 127.0.0.1 box has none, so
+ * the port comes from the pocket list (GET /api/pockets `pocket_port`), read once. Until then the step says where.
+ */
+function useGuestPort(wifiUrl: string | null, ask: boolean): string | null {
+  const fromLink = portOf(wifiUrl);
+  const [listed, setListed] = useState<string | null>(null);
+  useEffect(() => {
+    if (fromLink || !ask) return;
+    let live = true;
+    pocketApi
+      .list()
+      .then((l) => {
+        if (live && typeof l?.pocket_port === 'number' && l.pocket_port > 0) setListed(String(l.pocket_port));
+      })
+      .catch(() => {});
+    return () => {
+      live = false;
+    };
+  }, [fromLink, ask]);
+  return fromLink ?? listed;
+}
 
 /** After the draw: a smaller code; the link lasts the month. */
 const SantaCompactJoin: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s }) => {

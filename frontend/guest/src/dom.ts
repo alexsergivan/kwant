@@ -89,4 +89,4 @@ export function quizmaster(size: 28 | 36 | 48 | 64 | 96, mood?: Mood): HTMLEleme
   return el;
 }
 
-export const fmt = (n: number): string => n.toLocaleString('en-US');
+export const fmt = (n: number): string => n.toLocaleString(undefined);

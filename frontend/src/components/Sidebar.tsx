@@ -131,6 +131,8 @@ export interface SidebarProps {
   botStatus?: Record<string, BotStatus>;
   /** Open browser steps per bot ("Needs you" pill). */
   needsYou?: Record<string, number>;
+  /** 0.9.55 (#1262): of those, the steps fixed in Tools › MCP servers; a bot with only these says "in Tools". */
+  needsYouTools?: Record<string, number>;
   /** Phone Chats tab: bots waiting on you, one row each, first in the list. */
   needsYouRows?: NeedsYouRow[];
   /** W1: chats whose browser is active, by owner (team, channel, or bot for its direct chat). */
@@ -376,6 +378,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   doneKwants = {},
   botStatus = {},
   needsYou = {},
+  needsYouTools = {},
   browsingOwners = {},
   browsingBots = {},
   onWatchBrowser,
@@ -636,7 +639,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
     const actionRoom = !phone && hasRowActions ? ' group-hover/fleet:pr-9 group-focus-within/fleet:pr-9' : '';
     // An open browser step: the status line says so in words while it is open (the name line only has the hand)
     const needs = needsYou[k.id] ?? 0;
-    const needsTip = `${k.name} needs you in the browser`;
+    // 0.9.55: every open step is a Tools fix (its tools can't connect): the words say Tools, not the browser
+    const inTools = needs > 0 && (needsYouTools[k.id] ?? 0) >= needs;
+    const needsWhere = inTools ? 'Needs you in Tools' : 'Needs you in the browser';
+    const needsTip = `${k.name} ${inTools ? 'needs you in Tools' : 'needs you in the browser'}`;
     // 0.9.5: a bot paused at its monthly budget says so where its status goes; at 80% a small amber meter
     const budget = budgetsByBot[k.id];
     const budgetPaused = budget?.state === 'paused';
@@ -645,8 +651,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
       ? asked.line
       : attLine
         ? attLine
-      : needs > 0 && !busyKwants[k.id]?.startsWith('Needs you in the browser')
-        ? 'Needs you in the browser'
+      : needs > 0 && !busyKwants[k.id]?.startsWith(needsWhere)
+        ? needsWhere
         : budgetPaused && !busyKwants[k.id]
           ? PAUSED_ROW_LINE
           : busyKwants[k.id];
@@ -669,7 +675,9 @@ export const Sidebar: React.FC<SidebarProps> = ({
             : att.rank === 2
               ? 'Failed'
               : needs > 0
-                ? 'Browser step'
+                ? inTools
+                  ? 'Tools step'
+                  : 'Browser step'
                 : undefined;
     const tipHead = fullLine ? [k.name, tipKind, rowItem ? localClock(rowItem.timestamp) : null].filter(Boolean).join(' · ') : undefined;
     const tipId = fullLine ? `pin-tip-${k.id}` : undefined;
@@ -963,12 +971,18 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }}
               aria-expanded={expanded}
               aria-label={expanded ? `Hide @${t.name} members` : `Show @${t.name} members`}
-              // The visible box stays p-0.5 (pixel-identical to today); the >=24x24px hit area (Finding 2)
-              // is an invisible pseudo-element halo, out of flow, so it can't push the row's own height
-              // or its siblings (an earlier p-1.5 did, cascading a few px down through every row below).
-              className="relative p-0.5 rounded text-zinc-500 hover:text-zinc-200 hover:bg-zinc-700/60 before:absolute before:-inset-1.5 before:content-['']"
+              // WCAG 2.2 target-size (axe, a11y-guard-blocks): the button's own box is 24x24 (p-1 around a 16px
+              // chip), because axe measures the element, not a ::before halo. -m-1 hands the extra 4px per side
+              // back, so it still takes 16x16 in the row and nothing moves. It looks as before: the hover fill
+              // is the inner 16px chip, and the browser's own focus ring is pulled in 4px (rounded-lg minus 4px
+              // keeps the old 4px corners) so it hugs the chip. Touch phones: the global 44px icon-button rule
+              // (modern.css) only matches a direct svg child, so its 44px box, centring and zero margin are
+              // restated here, with the fill and ring on the 44px button exactly as before.
+              className="group/toggle relative -m-1 p-1 rounded-lg outline-offset-[-4px] text-zinc-500 hover:text-zinc-200 [@media(max-width:767px)_and_(pointer:coarse)]:m-0 [@media(max-width:767px)_and_(pointer:coarse)]:min-w-11 [@media(max-width:767px)_and_(pointer:coarse)]:inline-flex [@media(max-width:767px)_and_(pointer:coarse)]:items-center [@media(max-width:767px)_and_(pointer:coarse)]:justify-center [@media(max-width:767px)_and_(pointer:coarse)]:rounded [@media(max-width:767px)_and_(pointer:coarse)]:outline-offset-0 [@media(max-width:767px)_and_(pointer:coarse)]:hover:bg-zinc-700/60"
             >
-              <ChevronDown size={12} className={`transition-transform duration-150 ${expanded ? '' : '-rotate-90'}`} />
+              <span className="block p-0.5 rounded group-hover/toggle:bg-zinc-700/60 [@media(max-width:767px)_and_(pointer:coarse)]:group-hover/toggle:bg-transparent">
+                <ChevronDown size={12} className={`block transition-transform duration-150 motion-reduce:transition-none ${expanded ? '' : '-rotate-90'}`} />
+              </span>
             </button>
           )}
           <Users size={14} className={active ? 'text-sky-400' : 'text-zinc-500 group-hover:text-zinc-400'} aria-hidden="true" />

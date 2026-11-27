@@ -1,6 +1,7 @@
 // pa10a Secret Santa guest page (autonomy/pocket-apps/pa10a/guest-brief.md): the view mapping from Lin's santa API,
 // the screen for each phase, the PIN boxes and their copy, and the G1-G11 flows against the fake santa box
 // (guest/fake/santa.mjs). The browser half (G1-G11 in Chrome under pa1's CSP, shots) is guest/e2e/csp.mjs.
+import { withLocale } from './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -18,7 +19,9 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInputEle
 const m = await loadBundled(`
   export { santaFrom, screenOf, kitOf } from './guest/src/santa/view';
   export { PinInput, pinCopy, clean } from './guest/src/santa/pin';
-  export { SantaApp, daysLeft, shortDay } from './guest/src/santa/app';
+  export { SantaApp, daysLeft, shortDay, when } from './guest/src/santa/app';
+  export { day, clock } from './guest/src/app';
+  export { fmt } from './guest/src/dom';
 `);
 const settle = () => new Promise((r) => setTimeout(r, 0));
 const flush = async () => {
@@ -138,6 +141,7 @@ test('pin: wrong-PIN copy counts down from the server tries_left', () => {
   assert.equal(c({ error: 'wrong_pin' }).title, "That name and PIN don't match.");
   assert.match(c({ error: 'locked', status: 423 }).sub, /ask Dana for a reset code/);
   assert.equal(c({ error: 'hard_locked', status: 423 }).title, 'This name is locked.');
+  assert.equal(c({ error: 'hard_locked', status: 423 }).sub, 'Ask Dana for a reset code, then type it here with a new PIN.');
   assert.equal(c({ error: 'reset_pending', status: 409 }).title, 'Dana made you a reset code.');
   assert.equal(c({ error: 'whatever', status: 400, message: 'Plain server words.' }).title, 'Plain server words.');
   assert.match(m.pinCopy({ ok: false, status: 409, error: 'name_taken' }, 'Dana', true).sub, /I've joined before/);
@@ -410,7 +414,6 @@ test('G10 late: drawn before typing, and 409 not_now with the server reason', as
   const t = await open('santa-late');
   assert.equal(t.screen(), 'late');
   assert.ok(t.$('[data-to-rejoin]'));
-  assert.match(t.$('[data-to-rejoin]').textContent, /I've joined before: open my page/);
   await click(t.$('[data-join-late]'));
   assert.equal(t.screen(), 'join');
   await type(t.$('#s-name'), 'Zoe');
@@ -456,4 +459,162 @@ test('css: lid and card motion as specified, static under reduced motion; sticke
   assert.equal(v('sticker-edge'), sticker.match(/border: 2px solid (#[0-9a-f]+)/)[1]);
   assert.equal(v('sticker-text'), sticker.match(/color: (#[0-9a-f]+)/)[1]);
   assert.equal(v('sticker-ink'), modern.match(/\.kw-sticker-ink \{ background: (#[0-9a-f]+); \}/)[1]);
+});
+
+// ---------- santa-rejoin-first (Mira's ux-pass-santa fix #3 and minors a, b, c, d, g) ----------
+
+test('late: "Names are drawn", Open my page first as a primary button, the late joiner line below', async () => {
+  const t = await open('santa-late');
+  assert.equal(t.screen(), 'late');
+  assert.equal(t.$('h2').textContent, 'Names are drawn');
+  assert.equal(t.$('.lead').textContent, 'Joined already? Open your page with your name and PIN.');
+  assert.doesNotMatch(t.text(), /If you should be in it/);
+  const openBtn = t.$('[data-to-rejoin]');
+  assert.equal(openBtn.textContent, 'Open my page');
+  assert.ok(openBtn.classList.contains('gbtn') && !openBtn.classList.contains('ghost'), 'primary, not ghost');
+  const below = t.$('[data-new-here]');
+  assert.equal(below.textContent, 'New here? Ask Dana to add you, then Dana added me: join now');
+  assert.ok(openBtn.compareDocumentPosition(below) & dom.window.Node.DOCUMENT_POSITION_FOLLOWING, 'open comes first');
+  await click(openBtn);
+  assert.equal(t.screen(), 'rejoin');
+  assert.match(t.text(), /Welcome back/);
+  t.app.stop();
+});
+
+test('seat flag: a device that held a seat for this code opens rejoin, not late (g40/g48 after a PIN reset)', async () => {
+  const store = new Map();
+  const a = await open('santa-waiting', { store });
+  assert.equal(a.screen(), 'waiting');
+  assert.equal(store.get('kp-santa-seat:t'), '1', 'the seat is remembered per code');
+  a.app.stop();
+  // The PIN was reset: the old phone's seat is refused on load (401 signed_out) and the names are drawn.
+  const b = await open('santa-late', { store });
+  assert.equal(b.screen(), 'rejoin');
+  assert.match(b.text(), /Welcome back/);
+  assert.doesNotMatch(b.text(), /If you should be in it|already drawn/);
+  // A new person on that device still has a way in.
+  assert.ok(b.$('[data-new-here]'));
+  await click(b.$('[data-join-late]'));
+  assert.equal(b.screen(), 'join');
+  b.app.stop();
+  // Another code on the same device is not affected.
+  const c = harness('santa-late', { store, boxOpts: {} });
+  store.delete('kp-santa-seat:t');
+  store.set('kp-santa-seat:other', '1');
+  await c.app.start(null);
+  await flush();
+  assert.equal(c.screen(), 'late');
+  c.app.stop();
+});
+
+test('seat flag: a sign-out (401 signed_out) on a page that did not see the seat itself opens rejoin', async () => {
+  const store = new Map();
+  const t = await open('santa-late', { store });
+  assert.equal(t.screen(), 'late');
+  // Another tab on this phone held the seat; then this page is told it is signed out.
+  store.set('kp-santa-seat:t', '1');
+  await t.app.onGone(401, 'signed_out');
+  await flush();
+  assert.equal(t.screen(), 'rejoin');
+  t.app.stop();
+});
+
+test('seat flag: a browser that refuses storage still draws late', async () => {
+  const t = harness('santa-late');
+  t.app.env.store = { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); } };
+  await t.app.start(null);
+  await flush();
+  assert.equal(t.screen(), 'late');
+  t.app.stop();
+});
+
+test('hard_locked opens the reset-code form, like reset_pending (g45)', async () => {
+  const t = await open('santa-hardlocked');
+  await click(t.$('[data-to-rejoin]'));
+  await type(t.$('#s-bname'), 'Sam');
+  await type(t.$('#s-bpin'), '1234');
+  await submit(t.$('form'));
+  assert.equal(t.screen(), 'rejoin');
+  assert.ok(t.$('#s-code'), 'reset code box');
+  assert.ok(t.$('#s-newpin'), 'new PIN box');
+  assert.equal(t.$('#s-bpin'), null, 'the PIN boxes are gone');
+  assert.match(t.$('[data-problem]').textContent, /This name is locked\./);
+  assert.equal(t.$('#s-code').getAttribute('aria-invalid'), 'true');
+  assert.equal(t.$('#s-bname').value, 'Sam', 'the name is kept');
+  t.app.stop();
+});
+
+test('reset form: no "New here? join now" (a locked name is not new); the PIN form keeps it; plain hard_locked line', async () => {
+  const t = await open('santa-hardlocked');
+  await click(t.$('[data-to-rejoin]'));
+  assert.ok(t.$('[data-new-here]'), 'the PIN form keeps "New here?" after the draw');
+  await type(t.$('#s-bname'), 'Sam');
+  await type(t.$('#s-bpin'), '1234');
+  await submit(t.$('form'));
+  assert.ok(t.$('#s-code'), 'on the reset form');
+  assert.equal(t.$('[data-new-here]'), null, 'no join-now invite next to a reset code');
+  assert.match(t.$('[data-problem]').textContent, /Ask Dana for a reset code, then type it here with a new PIN\./);
+  await click(t.$('[data-use-pin]'));
+  assert.ok(t.$('#s-bpin'), 'back on the PIN form');
+  assert.ok(t.$('[data-new-here]'), '"New here?" comes back with the PIN form');
+  t.app.stop();
+});
+
+test('host as the match: "Dana only sees how many gifts are ready, not whose." (g32)', async () => {
+  const store = new Map([['kp-santa-open:t:p1', '1']]);
+  const t = await open('santa-hostmatch', { store });
+  assert.equal(t.screen(), 'match');
+  assert.equal(t.$('[data-ready-why]').textContent, 'Dana only sees how many gifts are ready, not whose.');
+  t.app.stop();
+  const o = await open('santa-unwrap', { store: new Map([['kp-santa-open:t:p1', '1']]) });
+  assert.equal(o.screen(), 'match');
+  assert.equal(o.$('[data-ready-why]').textContent, "Jonas won't know. It only tells Dana how many gifts are ready.");
+  o.app.stop();
+});
+
+test('links: the ask counter says they are taken out before the match sees it; answer box has a placeholder', async () => {
+  const store = new Map([['kp-santa-open:t:p1', '1']]);
+  const t = await open('santa-unwrap', { store });
+  assert.equal(t.screen(), 'match');
+  await type(t.$('#s-ask'), 'Socks like these?');
+  assert.match(t.$('#ask-count').textContent, /^17 of 200/);
+  for (const link of ['www.example.com/socks', 'https://x.io', 'amazon.com/dp/1', 'shop.si']) {
+    await type(t.$('#s-ask'), `Like these ${link}`);
+    assert.equal(t.$('#ask-count').textContent, 'Links are taken out before Jonas sees it.', link);
+  }
+  for (const plain of ['size 8.5', 'e.g. wool', 'Mr. Fox']) {
+    await type(t.$('#s-ask'), plain);
+    assert.doesNotMatch(t.$('#ask-count').textContent, /Links/, plain);
+  }
+  assert.equal(t.$('form.reply input').getAttribute('placeholder'), 'Type your answer…');
+  await click(t.$('[data-edit-wish]'));
+  assert.equal(t.$('#mywish-why').textContent, 'You can change it until the gift day. Links are removed.');
+  await type(t.$('#s-mywish'), 'Socks www.example.com/socks');
+  assert.equal(t.$('#mywish-why').textContent, 'You can change it until the gift day. Links are taken out before your Santa sees it.');
+  t.app.stop();
+});
+
+test("locale: dates, times and numbers use the phone's own locale, not a hard-coded en-US", () => {
+  const seen = [];
+  const P = { d: Date.prototype.toLocaleDateString, t: Date.prototype.toLocaleTimeString, n: Number.prototype.toLocaleString };
+  Date.prototype.toLocaleDateString = function (loc, o) { seen.push(['date', loc]); return P.d.call(this, loc, o); };
+  Date.prototype.toLocaleTimeString = function (loc, o) { seen.push(['time', loc]); return P.t.call(this, loc, o); };
+  Number.prototype.toLocaleString = function (loc, o) { seen.push(['num', loc]); return P.n.call(this, loc, o); };
+  try {
+    m.shortDay('2026-12-18');
+    m.when('2026-12-01T10:00:00Z', Date.UTC(2026, 11, 4, 12));
+    m.when('2026-12-04T10:00:00Z', Date.UTC(2026, 11, 4, 12));
+    m.day('2026-12-05');
+    m.clock('2026-12-05T12:00:00Z');
+    m.fmt(1234);
+  } finally {
+    Object.assign(Date.prototype, { toLocaleDateString: P.d, toLocaleTimeString: P.t });
+    Number.prototype.toLocaleString = P.n;
+  }
+  assert.ok(seen.length >= 6);
+  for (const [k, loc] of seen) assert.equal(loc, undefined, `${k} formatted with ${loc}`);
+  // The phone's locale decides the order and the clock; the machine running the test does not.
+  assert.equal(withLocale('en-US', () => m.day('2026-12-05')), 'Sat, Dec 5');
+  assert.equal(withLocale('en-GB', () => m.day('2026-12-05')), 'Sat 5 Dec');
+  assert.equal(withLocale('en-GB', () => m.clock('2026-12-05T20:00:00Z')).length > 0, true);
 });

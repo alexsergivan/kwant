@@ -32,7 +32,7 @@ import { StarAsk } from './components/StarAsk';
 import { starAskStore } from './starAsk';
 import { LiveActivity, appendThinking, applyActivity, parseStep, seedActivity } from './activity';
 import { liveNamingOrder, namesToFill } from './workingStrip';
-import { doneLines } from './waitingState';
+import { doneLines, stepWaitFlags } from './waitingState';
 import { botOf } from './sharedFiles';
 import {
   HumanStep,
@@ -45,6 +45,7 @@ import {
   openStepFor,
   openStepsByKwant,
   turnsAwaitingStep,
+  withToolsFix,
 } from './humanSteps';
 import { noteTitle, notifyBrowserPages, pageTeam, stepPage } from './browserPages';
 import { AUTO_CLOSE_DELAY_MS, PANE_EXIT_MS, PHONE_PANE_QUERY, type PaneOpener, shouldAutoClose, shouldAutoOpen } from './browserPanel';
@@ -184,6 +185,7 @@ import { claudeNeedsSignIn } from './claudeLogin';
 import { PersonCancelledError, personFetch } from './auth';
 import { ContinueError, continueChatApi, continueErrorLine, continuedLine, forkOf } from './continueChat';
 import { OPEN_ADD_TOOL_EVENT, type OpenAddTool, signInToServer } from './mcp';
+import type { McpServerFocus } from './components/McpServersModal';
 import { teamChannelOf, teamOfChannel } from './teamChannel';
 import { PromptContext, suggestedPrompts } from './suggestedPrompts';
 import { isNotificationOpen, placeOfNotification, showDeviceNotification } from './push';
@@ -560,6 +562,15 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const [mcpStartAdding, setMcpStartAdding] = useState(false);
   // Add a tool opened from Apps & accounts' Find a tool, straight on that tool's form.
   const [mcpStartWith, setMcpStartWith] = useState<OpenAddTool | null>(null);
+  // 0.9.55 (#1262): a Tools step's "Open Tools" opens Tools › MCP servers on that server's row (34h's row light).
+  const [mcpFocus, setMcpFocus] = useState<McpServerFocus | null>(null);
+  const openToolsAt = (serverId: string | null, serverName: string | null) => {
+    playSfx('click');
+    setMcpStartAdding(false);
+    setMcpStartWith(null);
+    setMcpFocus(serverId || serverName ? { id: serverId, name: serverName, seq: Date.now() } : null);
+    setIsMcpOpen(true);
+  };
   useEffect(() => {
     const open = (e: Event) => {
       setMcpStartWith((e as CustomEvent<OpenAddTool>).detail ?? null);
@@ -701,7 +712,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // 22i: items the person just resolved from the strip go from the row and the strip at once; an id
   // leaves this set once the server's list no longer has it.
   const [clearedAsks, setClearedAsks] = useState<ReadonlySet<string>>(() => new Set());
-  const awayItems = useMemo(() => (clearedAsks.size ? awayList.filter((i) => !clearedAsks.has(i.id)) : awayList), [awayList, clearedAsks]);
+  const awayItemsRaw = useMemo(() => (clearedAsks.size ? awayList.filter((i) => !clearedAsks.has(i.id)) : awayList), [awayList, clearedAsks]);
   // Rank-2 failed rows, minus any just cleared (a failed hand-off's "Done, clear it").
   const awayFailed = useMemo(() => (awayDone?.failed ?? []).filter((i) => !clearedAsks.has(i.id)), [awayDone, clearedAsks]);
   useEffect(() => {
@@ -1211,6 +1222,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Steps bots asked the person to do in the browser: open ones from the server, plus every human_step_updated.
   const [humanSteps, setHumanSteps] = useState<Record<string, HumanStep>>({});
   const humanStepsRef = useRef(humanSteps);
+  // 0.9.55 (#1262): a Needs-you item for a Tools step says "Tools" like its card, from the step's own record when the item lacks the marker.
+  const awayItems = useMemo(() => withToolsFix(awayItemsRaw, humanSteps), [awayItemsRaw, humanSteps]);
   humanStepsRef.current = humanSteps;
   // Bots' tool suggestions by id (from the list and mcp_suggestion_updated), and installed
   // servers that still need the person to sign in.
@@ -2896,6 +2909,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           playSfx('click');
         }}
+        onOpenTools={openToolsAt}
         onDone={(id) => answerHumanStep(id, 'done')}
         onSkip={(id) => answerHumanStep(id, 'decline')}
         flash={flash}
@@ -3878,10 +3892,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const decidingHere = deciding[openCtx] ?? null;
   const openTurns = turnsIn(turns, openCtx);
   // Turns paused on a question wait for the person; they don't make the bot "busy".
-  const browserTurns = turnsAwaitingStep(humanSteps);
-  const awaitingTurns = new Set([...turnsAwaitingAnswer(questions), ...browserTurns]);
-  const awaitingHere = openTurns.some((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) && !openTurns.some((t) => t.state === 'running' && !awaitingTurns.has(t.turn_id));
-  const awaitingBrowserHere = awaitingHere && openTurns.some((t) => t.state === 'running' && browserTurns.has(t.turn_id));
+  // 0.9.55 (#1262): a step fixed in Tools isn't a browser step: its turns say "in Tools"
+  const browserTurns = turnsAwaitingStep(humanSteps, false);
+  const toolsTurns = turnsAwaitingStep(humanSteps, true);
+  const awaitingTurns = new Set([...turnsAwaitingAnswer(questions), ...browserTurns, ...toolsTurns]);
+  // A Tools step is a step wait too (never the question layout); awaitingToolsHere only changes its words (Rigel F1).
+  const { answer: awaitingHere, step: awaitingBrowserHere, tools: awaitingToolsHere } = stepWaitFlags(openTurns, awaitingTurns, browserTurns, toolsTurns);
   // The bot whose question the chat waits on, for the waiting banner (UX audit #2).
   const awaitingTurnHere = awaitingHere ? openTurns.find((t) => t.state === 'running' && awaitingTurns.has(t.turn_id)) : undefined;
   const awaitingBotHere = awaitingTurnHere ? { id: awaitingTurnHere.kwant_id, name: kwants.find((k) => k.id === awaitingTurnHere.kwant_id)?.name ?? '' } : null;
@@ -3908,6 +3924,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     [auditHere?.audit_id, auditHere?.stage, auditHere?.task_title, kwantNames, missionBoard],
   );
   const needsYouByKwant = openStepsByKwant(humanSteps);
+  const needsYouToolsByKwant = openStepsByKwant(humanSteps, true);
   const chatQueue = queuedInChat(turns, openCtx);
   const asQueued = (t: TrackedTurn): QueuedState => ({
     position: queuePosition(turns, t.turn_id),
@@ -3967,7 +3984,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         )}
         <span className="truncate">
           {elsewhere[0].audit && elsewhere[0].state === 'running' && !browserTurns.has(elsewhere[0].turn_id) && !awaitingTurns.has(elsewhere[0].turn_id) ? auditShortLine(elsewhere[0].audit, kwantNames) : <>
-          {elsewhere[0].state === 'queued' ? 'Waiting to work on ' : browserTurns.has(elsewhere[0].turn_id) ? 'Needs you in the browser in ' : awaitingTurns.has(elsewhere[0].turn_id) ? 'Asked you a question in ' : 'Working on '}
+          {elsewhere[0].state === 'queued' ? 'Waiting to work on ' : browserTurns.has(elsewhere[0].turn_id) ? 'Needs you in the browser in ' : toolsTurns.has(elsewhere[0].turn_id) ? 'Needs you in Tools in ' : awaitingTurns.has(elsewhere[0].turn_id) ? 'Asked you a question in ' : 'Working on '}
           {describeContext(elsewhere[0].context_id, elsewhere[0].kwant_id)}
           </>}
         </span>
@@ -4109,7 +4126,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   // Sidebar: what busy bots are doing, "here" for the open chat.
   const busyTitles: Record<string, string> = {};
-  const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, describe: describeContext, names: kwantNames, titles: busyTitles });
+  const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, tools: toolsTurns, describe: describeContext, names: kwantNames, titles: busyTitles });
   // A team turn waiting on one bot's question: its teammates that already replied read "Done" (UX audit #2).
   const doneKwants = doneLines(messages, awaitingBotHere, isChannel, (id) => botOf(id, kwants));
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
@@ -4383,7 +4400,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const attention = awayDone
     ? attentionRows({
         kwants,
-        needs: needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))),
+        needs: needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id)), needsYouToolsByKwant),
         failed: awayFailed,
         finished: awayDone.finished,
         busy: busyKwants,
@@ -4450,7 +4467,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onWatchBrowser={watchOwner}
       botStatus={botStatus}
       needsYou={needsYouByKwant}
-      needsYouRows={isPhone && section === 'chats' ? needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id))) : undefined}
+      needsYouTools={needsYouToolsByKwant}
+      needsYouRows={isPhone && section === 'chats' ? needsYouRows(awayItems, needsYouByKwant, new Set(kwants.map((k) => k.id)), needsYouToolsByKwant) : undefined}
       attention={attention}
       onOpenNeedsYou={(row) => {
         // A question or approval opens its chat (or thread) on the card; a browser step, the bot's chat.
@@ -4542,6 +4560,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const runAsk = async (item: AwayItem, action: AskAction) => {
     playSfx('click');
     if (action === 'answer' || action === 'decide') return findAsk(item);
+    if (action === 'tools') return openToolsAt(item.tools_server_id ?? null, item.tools_server ?? null);
     if (action === 'browser') {
       const st = item.human_step_id ? humanStepsRef.current[item.human_step_id] : undefined;
       if (!st) return findAsk(item);
@@ -4589,7 +4608,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       } catch (e) {
         if (!(e instanceof AwayError)) throw e;
         // 409: it has its own answer, which tells the bot; the strip switches to that button.
-        const use = e.status === 409 ? switchFor(e.code) : null;
+        const use = e.status === 409 ? switchFor(e.code, item) : null;
         if (use) return { use };
         if (e.code === 'person_only') throw new Error('only you can clear it, from your own sign-in');
         if (e.code === 'not_found') {
@@ -4625,6 +4644,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       onCounts={setAwayCount}
       onApprovalResolved={dropApproval}
       onOpenConnections={openConnections}
+      onOpenTools={openToolsAt}
+      steps={humanSteps}
       onCrumb={(c) => showPage(c === 'board' ? 'board' : 'dev')}
       onOpenMessage={openRunResult}
       onEditRoutine={(id) => handleOpenRoutine(id, 'edit')}
@@ -4921,6 +4942,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           onSendToOtherBot={openThreadId ? undefined : handleSendToOtherBot}
           awaitingAnswer={awaitingHere}
           awaitingBrowser={awaitingBrowserHere}
+          awaitingTools={awaitingToolsHere}
           awaitingBot={awaitingBotHere}
           liveActivity={isCurrentContextStreaming ? activityHere : null}
           liveAudit={liveAudit}
@@ -5287,7 +5309,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           isOpen={isMcpOpen}
           startAdding={mcpStartAdding}
           startWith={mcpStartWith}
-          onClose={() => { setIsMcpOpen(false); setMcpStartAdding(false); setMcpStartWith(null); }}
+          focusServer={mcpFocus}
+          onFocusShown={() => setMcpFocus(null)}
+          onClose={() => { setIsMcpOpen(false); setMcpStartAdding(false); setMcpStartWith(null); setMcpFocus(null); }}
           kwants={kwants}
           onOpenConnections={() => {
             setIsMcpOpen(false);

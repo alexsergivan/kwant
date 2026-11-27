@@ -70,6 +70,10 @@ export const santaScenarios = {
   'santa-late': { state: 401, info: drawn, joinError: { status: 409, error: 'not_now', message: 'The names are already drawn. Ask Dana to let you in.' } },
   // G11 ended.
   'santa-ended': { state: 401, info: revealed, ended: true },
+  // g45: after the draw, the name is locked (pa1's hard lock, 423): the page opens the reset-code form.
+  'santa-hardlocked': { state: 401, info: drawn, rejoinError: { status: 423, error: 'hard_locked', message: 'Too many wrong PINs. Ask the host for a reset code.', tries_left: 0 } },
+  // g32: the match is the host (Dana joined her own Santa).
+  'santa-hostmatch': { state: seat({ ...drawn, opened: true, match: { id: 'p8', name: 'Dana', avatar: 'visor', wish: 'Good coffee beans\nA plant that is hard to kill' }, asks: matchAsks }) },
 };
 
 /** pa1's v1 envelope around a santa view. `me` absent: the public facts only (info, boot). */

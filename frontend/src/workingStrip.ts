@@ -7,6 +7,8 @@ export interface WorkingState {
   queued?: boolean;
   awaitingAnswer?: boolean;
   awaitingBrowser?: boolean;
+  /** 0.9.55: the step it waits on is fixed in Tools, not the browser (comes with awaitingBrowser, which keeps it a step wait). */
+  awaitingTools?: boolean;
   /** The reply's first words have started streaming. */
   writing?: boolean;
 }
@@ -16,7 +18,7 @@ const lower = (t: string) => (t ? t.charAt(0).toLowerCase() + t.slice(1) : t);
 /** What the bot is doing right now, in a few lowercase words that follow "<Bot> is". */
 export function workingLabel(s: WorkingState): string {
   if (s.queued) return 'waiting in line';
-  if (s.awaitingAnswer) return s.awaitingBrowser ? 'waiting for you in the browser' : 'waiting for your answer';
+  if (s.awaitingAnswer) return s.awaitingBrowser ? (s.awaitingTools ? 'waiting for you in Tools' : 'waiting for you in the browser') : 'waiting for your answer';
   const open: ActivityStep | undefined = [...(s.live?.steps ?? [])].reverse().find(isOpenStep);
   // An approval: the card says what it is for; the strip only says whose move it is.
   if (open?.kind === 'approval' && open.status === 'waiting') return 'waiting for your OK';
@@ -92,6 +94,14 @@ export function turnStart(live: LiveActivity | null | undefined, mountedAt: numb
     if (Number.isFinite(t) && t < start) start = t;
   }
   return start;
+}
+
+/** #1278: the live row's start time. `shownAt` is when the row started working; a step only moves it back when it
+ *  began at least 30 s earlier (the chat was opened mid-turn), so a few seconds of clock drift between the server
+ *  and this device never flips the minute while the person watches. */
+export function liveTurnStart(live: LiveActivity | null | undefined, shownAt: number): number {
+  const first = turnStart(live, shownAt);
+  return shownAt - first >= 30_000 ? first : shownAt;
 }
 
 /**

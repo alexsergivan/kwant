@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import { CheckCircle2, Clock, Globe, Hand, Loader2, MinusCircle, MonitorPlay, Paperclip, Puzzle } from 'lucide-react';
+import { CheckCircle2, Clock, Globe, Hand, Loader2, MessageSquare, MinusCircle, MonitorPlay, Plug, Puzzle } from 'lucide-react';
 import { ModernAvatar } from './ModernAvatar';
-import { HumanStep, HumanStepMeta, KIND_TEXT, domainOf, humanStepView } from '../humanSteps';
+import { HumanStep, HumanStepMeta, domainOf, humanStepView, stepText, toolsHeading } from '../humanSteps';
 
 export interface HumanStepCardProps {
   meta: HumanStepMeta;
@@ -15,6 +15,8 @@ export interface HumanStepCardProps {
   /** Shows the bot's browser panel; `solve` takes control and, on a phone, opens it full screen. */
   /** `page`: the step's own browser page (0.9.3), else its team page. */
   onOpenBrowser?: (sandboxTarget: string | null, solve?: boolean, page?: string | null) => void;
+  /** 0.9.55: a Tools step's "Open Tools": Tools › MCP servers on that server's row (by id, else by name). */
+  onOpenTools?: (serverId: string | null, serverName: string | null) => void;
   /** Resolve to an error message on failure. */
   onDone: (id: string) => Promise<string | void>;
   onSkip: (id: string) => Promise<string | void>;
@@ -23,9 +25,10 @@ export interface HumanStepCardProps {
 
 /**
  * A bot asks the person to do one step in its browser: sign in, solve a CAPTCHA or enter a code.
+ * 0.9.55: or, when it has tools for the site that can't connect, to fix them in Tools › MCP servers.
  * Only the site's domain is shown. Done and Skip answer it; a closed card keeps the outcome.
  */
-export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, kwantName, kwantId, live, waiting, onOpenBrowser, onDone, onSkip, flash }) => {
+export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, kwantName, kwantId, live, waiting, onOpenBrowser, onOpenTools, onDone, onSkip, flash }) => {
   const view = humanStepView(meta, live);
   const [busy, setBusy] = useState<'done' | 'skip' | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -34,7 +37,11 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
 
   const status = sent && view.status === 'open' ? sent : view.status;
   const open = status === 'open';
-  const text = KIND_TEXT[view.step_kind];
+  const text = stepText(view);
+  // 0.9.55 (#1262): the bot has tools for this site but they can't connect, so the fix is in Tools, not the browser
+  const tools = view.tools;
+  // The card's main button: Open Tools for a Tools step, else the browser's
+  const hasMain = tools ? !!onOpenTools : !!onOpenBrowser;
   const domain = domainOf(view.url);
   const headingId = `hs-${messageId}`;
   const captcha = view.step_kind === 'captcha';
@@ -67,9 +74,10 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
         <MinusCircle size={13} className="shrink-0" aria-hidden="true" /> Skipped. {kwantName} continues without it.
       </span>
     ) : status === 'left_for_message' ? (
-      // 22m: closed because the person sent a file, not because the step was done
+      // 22m: closed because the person wrote or sent a file, not because the step was done.
+      // 0.9.55 (Mira D5): typed text closes kwnt's own sign-in cards too, so it doesn't say "file".
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
-        <Paperclip size={13} className="shrink-0" aria-hidden="true" /> Closed: {kwantName} is reading the file you sent.
+        <MessageSquare size={13} className="shrink-0" aria-hidden="true" /> Closed: {kwantName} picks it up from your message.
       </span>
     ) : status === 'cancelled' ? (
       <span className="inline-flex items-center gap-1.5 text-zinc-400">
@@ -112,12 +120,12 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
           <p data-hs-meta="" className={`text-[11px] font-medium leading-snug break-words ${open ? 'text-zinc-400' : 'text-zinc-500'}`}>
             <Hand size={12} className={`shrink-0 inline-block align-[-2px] mr-1.5 ${open ? 'text-amber-300' : 'text-zinc-500'}`} aria-hidden="true" />
             <span className={open ? 'text-zinc-200' : 'text-zinc-400'}>{kwantName}</span>
-            {open ? ' needs you in the browser' : ' asked for you in the browser'}
-            {view.source === 'auto' && ' · spotted automatically'}
+            {tools ? (open ? ' needs you in Tools' : ' asked for you in Tools') : open ? ' needs you in the browser' : ' asked for you in the browser'}
+            {view.source === 'auto' && !tools && ' · spotted automatically'}
           </p>
           {/* Closed: the step's name, quieter, so it reads (and is announced) as done, not as an ask (22v). */}
           <h3 id={headingId} className={`text-sm font-semibold ${open ? 'text-zinc-100' : 'text-zinc-300'}`}>
-            {open ? text.heading : text.closedHeading}
+            {open ? (tools ? toolsHeading(kwantName) : text.heading) : text.closedHeading}
           </h3>
           {view.reason && <p className="text-sm text-zinc-300 whitespace-pre-wrap break-words leading-snug">{view.reason}</p>}
           {domain && (
@@ -139,7 +147,17 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
                 <Puzzle size={16} className="shrink-0" aria-hidden="true" /> Solve it
               </button>
             )}
-            {onOpenBrowser && !captcha && (
+            {onOpenTools && tools && (
+              <button
+                type="button"
+                data-open-tools=""
+                onClick={() => onOpenTools(tools.serverId, tools.server)}
+                className={`inline-flex items-center justify-center gap-2 min-h-[48px] sm:min-h-[38px] px-4 py-2 rounded-xl text-base sm:text-sm font-semibold bg-amber-400 text-zinc-950 hover:bg-amber-300 ${focusRing}`}
+              >
+                <Plug size={16} className="shrink-0" aria-hidden="true" /> Open Tools
+              </button>
+            )}
+            {onOpenBrowser && !captcha && !tools && (
               <button
                 type="button"
                 onClick={() => onOpenBrowser(view.sandbox_target, true, view.page_key ?? view.sandbox_target)}
@@ -153,7 +171,7 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
               onClick={() => answer('done')}
               disabled={busy !== null}
               className={`inline-flex items-center justify-center gap-1.5 min-h-[40px] sm:min-h-[34px] px-3 py-1.5 rounded-xl text-sm disabled:opacity-60 ${focusRing} ${
-                onOpenBrowser
+                hasMain
                   ? 'border bg-zinc-800/80 border-zinc-700 text-zinc-100 hover:bg-zinc-700 hover:border-zinc-600'
                   : 'font-semibold bg-amber-400 text-zinc-950 hover:bg-amber-300'
               }`}
@@ -179,7 +197,7 @@ export const HumanStepCard: React.FC<HumanStepCardProps> = ({ meta, messageId, k
           {open && captcha && waiting && (
             <p className="basis-full text-zinc-400">Solve the puzzle and {kwantName} continues by itself. Nothing you do there is passed to {kwantName}.</p>
           )}
-          {open && !captcha && <p className="basis-full text-zinc-400">Open the browser and do it there, then press Done. What you type into fields there isn’t passed to {kwantName}.</p>}
+          {open && !captcha && !tools && <p className="basis-full text-zinc-400">Open the browser and do it there, then press Done. What you type into fields there isn’t passed to {kwantName}.</p>}
           {error && (
             <span role="alert" className="basis-full text-rose-300">
               {error}

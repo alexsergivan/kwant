@@ -10,7 +10,8 @@
 mod quizmaster_support;
 
 use chrono::{Datelike, NaiveDate, Utc};
-use kwnt::db::models::{Kwant, Message, MessageExtra, NewMessage};
+use kwnt::db::models::{Kwant, Message, MessageExtra, NewChannel, NewKwant, NewMessage};
+use kwnt::db::spaces::{NewSpace, SpaceId};
 use kwnt::mcp::SELF_SERVER_NAME;
 use kwnt::server::continuity::TurnOrigin;
 use quizmaster_support::{pockets_on, setup, tool, tool_names, turn, turn_in, Env};
@@ -294,4 +295,135 @@ async fn pockets_off_refuses_and_no_card_is_attached() {
     assert!(err, "{t}");
     let m = reply_as(&e, &e.bot, &e.bot.id, vec![call("santa_create", json!({"spec": mira_spec()}), "ok", &text)]).await;
     assert_eq!(pocket(&m), None);
+}
+
+/// A call as the Claude CLI engine records it: let through ("allowed"), with no `result` (the CLI
+/// keeps the tool's answer to itself).
+fn claude_call(args: Value) -> Value {
+    json!({"id": "toolu-santa_create", "name": format!("mcp__{SELF_SERVER_NAME}__santa_create"), "server": SELF_SERVER_NAME,
+           "tool": "santa_create", "arguments": args, "status": "allowed"})
+}
+
+/// The person's message in a chat (a bot's direct chat, or a channel): the ask a turn answers.
+async fn ask_in(e: &Env, direct: Option<&str>, channel: Option<&str>) {
+    let msg = NewMessage {
+        channel_id: channel.map(Into::into),
+        direct_kwant_id: direct.map(Into::into),
+        sender_role: "user".into(),
+        sender_id: "user".into(),
+        text: "Make us an office Secret Santa".into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    };
+    e.state.db.insert_message_with(&msg, &MessageExtra::default()).await.unwrap();
+}
+
+/// This bot's Claude-engine reply in a channel, made under its name, with the card's `meta`.
+async fn channel_reply(e: &Env, channel: &str, meta: Option<Value>) -> Message {
+    let msg = NewMessage {
+        channel_id: Some(channel.into()),
+        direct_kwant_id: None,
+        sender_role: "kwant".into(),
+        sender_id: e.bot.name.clone(),
+        text: "Your Secret Santa is open.".into(),
+        reasoning_content: None,
+        tool_calls: Some(Value::Array(vec![claude_call(json!({"spec": mira_spec()}))])),
+        tokens_used: 0,
+    };
+    e.state.db.insert_message_with(&msg, &MessageExtra { meta, ..Default::default() }).await.unwrap()
+}
+
+/// santa-create-claude-engine-card: on the Claude CLI engine `santa_create` is recorded as
+/// "allowed" with no answer, so the reply used to get no card. It now gets the Santa this bot made
+/// since the person's ask.
+#[tokio::test]
+async fn a_claude_engine_reply_gets_the_santa_it_made_this_turn() {
+    let e = setup(true).await;
+    ask_in(&e, Some(&e.bot.id), None).await;
+    let (code, _) = make(&e).await;
+    let m = reply_as(&e, &e.bot, &e.bot.id, vec![claude_call(json!({"spec": mira_spec()}))]).await;
+    let b = pocket(&m).unwrap_or_else(|| panic!("the Santa card under a Claude reply: {:?}", m.results));
+    assert_valid_santa_block(&b);
+    assert_eq!((b["code"].clone(), b["name"].clone(), b["state"].clone()), (json!(code), json!("Team Secret Santa"), json!("live")), "{b}");
+    assert_eq!(b["santa"]["expected"], json!(6), "{b}");
+
+    // The rules (no spec, or a null one) and a denied call made nothing
+    for args in [json!({}), json!({"spec": null})] {
+        assert_eq!(pocket(&reply_as(&e, &e.bot, &e.bot.id, vec![claude_call(args.clone())]).await), None, "{args}");
+    }
+    let mut denied = claude_call(json!({"spec": mira_spec()}));
+    denied["status"] = json!("denied");
+    assert_eq!(pocket(&reply_as(&e, &e.bot, &e.bot.id, vec![denied]).await), None, "denied");
+
+    // A Santa made before the newest ask isn't this turn's (message times keep whole seconds)
+    tokio::time::sleep(std::time::Duration::from_millis(1100)).await;
+    ask_in(&e, Some(&e.bot.id), None).await;
+    let m = reply_as(&e, &e.bot, &e.bot.id, vec![claude_call(json!({"spec": mira_spec()}))]).await;
+    assert_eq!(pocket(&m), None, "a Santa made before the ask: {:?}", m.results);
+    // With its answer kept it is still named by code, as on the other engines
+    let text = format!("Pocket app · Secret Santa [{code}] \"Team Secret Santa\" is open.");
+    let m = reply_as(&e, &e.bot, &e.bot.id, vec![call("santa_create", json!({"spec": mira_spec()}), "ok", &text)]).await;
+    assert_eq!(pocket(&m).expect("named by code")["code"], json!(code));
+}
+
+/// Without an answer the call names only the reply's own bot's Santa, in the reply's space.
+#[tokio::test]
+async fn a_claude_engine_reply_never_gets_another_bots_or_spaces_santa() {
+    let e = setup(true).await;
+    person_in_london(&e).await;
+    // The other bot makes a Santa in its own chat, after the person asked this bot
+    ask_in(&e, Some(&e.bot.id), None).await;
+    let origin = TurnOrigin { direct_kwant_id: Some(e.other.id.clone()), ..Default::default() };
+    let token = turn_in(&e, &e.other, "t-other", origin).await;
+    let (text, err) = tool(&e, &token, "santa_create", json!({"spec": mira_spec()})).await;
+    assert!(!err, "{text}");
+    let theirs = code_of(&text);
+    let m = reply_as(&e, &e.bot, &e.bot.id, vec![claude_call(json!({"spec": mira_spec()}))]).await;
+    assert_eq!(pocket(&m), None, "another bot's Santa: {:?}", m.results);
+    // ...and it is still the other bot's own card in its own chat
+    ask_in(&e, Some(&e.other.id), None).await;
+    let other = e.other.clone();
+    let m = reply_as(&e, &other, &other.id, vec![claude_call(json!({"spec": mira_spec()}))]).await;
+    assert_eq!(pocket(&m).expect("its own Santa")["code"], json!(theirs));
+
+    // This bot's Santa, then a reply under its name in a channel of another space
+    let (mine, _) = make(&e).await;
+    let side = e.state.db.create_space(&NewSpace { name: "Side".into(), icon: "S".into(), color: None, this_machine_enabled: true }).await.unwrap();
+    let side_id = SpaceId::new(side.id.clone());
+    // A bot of the same name lives there
+    let twin = e
+        .state
+        .db
+        .create_kwant(
+            &side_id,
+            &NewKwant {
+                name: e.bot.name.clone(),
+                title: "Twin".into(),
+                persona_prompt: String::new(),
+                soul: String::new(),
+                avatar_sprite: String::new(),
+                driver_type: e.bot.driver_type.clone(),
+                preferred_model: e.bot.preferred_model.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let channel = e
+        .state
+        .db
+        .create_channel(
+            &side_id,
+            &NewChannel { name: "elves".into(), description: None, lead_kwant_id: twin.id.clone(), member_kwants: vec![twin.id.clone()], routing_mode: "lead".into() },
+        )
+        .await
+        .unwrap();
+    ask_in(&e, None, Some(&channel.id)).await;
+    // The name finds the twin there, which made no Santa
+    let m = channel_reply(&e, &channel.id, None).await;
+    assert_eq!(pocket(&m), None, "the twin made none: {:?}", m.results);
+    // Naming this bot finds its Santa, which isn't in this space
+    let m = channel_reply(&e, &channel.id, Some(json!({"kwant_id": e.bot.id}))).await;
+    assert_eq!(pocket(&m), None, "another space's Santa: {:?}", m.results);
+    assert!(!serde_json::to_string(&m.results).unwrap().contains(&mine));
 }

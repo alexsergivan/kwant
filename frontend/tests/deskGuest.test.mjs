@@ -2,6 +2,7 @@
 // (pa13/impl.md), the copy for notes and refusals, the outbox (client_id swap, network retry, 429 keeps the text,
 // 410 gives G12) and the chat flows against the fake desk box (guest/fake/desk.mjs). The browser half (G1-G12 in
 // Chrome under pa1's CSP, shots) is guest/e2e/csp.mjs.
+import './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
