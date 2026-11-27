@@ -706,6 +706,7 @@ pub fn compute(b: &BotInput, now: DateTime<Utc>) -> Status {
         .collect();
     out.held = b.held.clone();
     out.last_finished_at = b.marks.last_finished_at;
+    out.last_outcome = b.marks.last_outcome;
     out
 }
 

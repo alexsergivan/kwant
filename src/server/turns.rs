@@ -307,7 +307,7 @@ impl TurnRegistry {
             if t.state == "running" {
                 let marks = inner.board.marks.entry(t.kwant_id.clone()).or_default();
                 marks.last_finished_at = Some(chrono::Utc::now());
-                let _ = outcome; // red: the outcome isn't kept yet
+                marks.last_outcome = outcome;
             }
             inner.board.nudge(&t.kwant_id);
         }
