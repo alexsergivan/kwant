@@ -72,7 +72,8 @@ export interface Facts {
   slots: Slot[];
   // vote
   show_live_count: boolean;
-  ballot?: { kind: 'one_pick' | 'ranked'; options: Option[]; in_play: number[] };
+  /** `revotes`: how many times the host chose "vote again", so a phone knows its kept order is from an earlier round. */
+  ballot?: { kind: 'one_pick' | 'ranked'; options: Option[]; in_play: number[]; revotes: number };
   voted?: number;
 }
 
@@ -249,7 +250,7 @@ export function factsFrom(x: unknown): Facts | undefined {
     show_live_count: f?.show_live_count === true,
     ballot:
       face === 'vote' && (kind === 'one_pick' || kind === 'ranked') && options.length
-        ? { kind, options, in_play: list(b?.in_play).filter((o): o is number => count(o) !== undefined && options.some((x) => x.option === o)) }
+        ? { kind, options, in_play: list(b?.in_play).filter((o): o is number => count(o) !== undefined && options.some((x) => x.option === o)), revotes: count(b?.revotes) ?? 0 }
         : undefined,
     voted: count(f?.voted),
   };

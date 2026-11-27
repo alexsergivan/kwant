@@ -12,6 +12,10 @@
 //!   ballot. The host sees who voted (to nudge) and, once voting closes, the totals; never
 //!   anyone's order. Nobody sees a count while voting is open (two reads around one vote would
 //!   give that vote away), and at the close the ballots lose their link to a person for good.
+//!   While open, a ballot sits under `sha256(token)`, where the token is made and kept by the
+//!   voter's own phone and never stored here: nothing beside the ballots leads to a person
+//!   (secret-ballot-open-phase). A vote opened by an older version keeps its salted keys until
+//!   it closes.
 //!
 //! Host-only: paid ticks, each person's food needs and plus-ones. Guests get names and
 //! Yes / Maybe / No only when `show_names` is on, their own record, and their own paid tick once
@@ -61,6 +65,11 @@ pub const FOOD: &[&str] = &["vegetarian", "vegan", "gluten_free", "dairy_free", 
 pub const NUDGES: &[&str] = &["maybe", "not_paid", "moved_up", "not_answered"];
 /// Where the card puts the join link it already shows (the kit doesn't know the address).
 pub const LINK: &str = "{link}";
+
+/// secret-ballot-open-phase: a vote from a page that doesn't send a ballot token (an old cached copy).
+pub const UPDATE_THE_PAGE: &str = "Reload this page to vote.";
+/// secret-ballot-open-phase: someone who voted asks to change it from a phone without that ballot's token.
+pub const VOTED_ON_ANOTHER_PHONE: &str = "You already voted on another phone. Your vote is secret, so only that phone can change it.";
 
 const DATE_FIELDS: &[&str] = &["event_at", "closes_at"];
 const RETENTION_DAYS: i64 = 7;
@@ -196,12 +205,18 @@ struct St {
     /// in now" and the card drafts a note.
     moved: BTreeMap<String, Moved>,
     // Vote. Who voted and the ballots are kept apart: `voted` has people and times, `ballots`
-    // has orders under a key that is not a player id (salted hash), in key order, not time order.
-    // While open the salt lets a voter see and change their own ballot; at the close every
-    // ballot gets a random key and the salt is cleared, so no stored value pairs the two.
+    // has orders under a key that is not a player id, in key order, not time order.
+    // secret-ballot-open-phase: the key is `sha256(token)[..12]` (hex), the token made and kept
+    // by the voter's phone, so nothing stored here leads from a person to their ballot; the
+    // phone shows and changes its own. A vote an older version opened still has a salt
+    // (`sha256(salt:player_id)` keys) until it closes. At the close every ballot gets a random
+    // key and any salt is cleared.
     ballot_salt: String,
     voted: BTreeMap<String, DateTime<Utc>>,
     ballots: BTreeMap<String, Vec<usize>>,
+    /// How many times the host chose "vote again": a phone keeps its copy of its ballot per
+    /// round, so it doesn't show an order from an earlier round.
+    revotes: u32,
     /// Options still in after a tie's "vote again" (empty: all).
     only: Vec<usize>,
     tally: Option<Tally>,
@@ -286,6 +301,17 @@ fn random_hex(n: usize) -> String {
     let mut b = vec![0u8; n];
     let _ = ring::rand::SystemRandom::new().fill(&mut b);
     b.iter().map(|x| format!("{x:02x}")).collect()
+}
+
+/// secret-ballot-open-phase: a phone's ballot token is 32 lowercase hex characters (16 random bytes).
+fn ballot_token(v: &Value) -> Option<&str> {
+    v.as_str().filter(|t| t.len() == 32 && t.bytes().all(|c| matches!(c, b'0'..=b'9' | b'a'..=b'f')))
+}
+
+/// Where a token's ballot is stored: `sha256(token)`, 12 bytes in hex (the length of every
+/// other ballot key).
+fn token_key(token: &str) -> String {
+    ring::digest::digest(&ring::digest::SHA256, token.as_bytes()).as_ref()[..12].iter().map(|x| format!("{x:02x}")).collect()
 }
 
 fn not_now(m: impl Into<String>) -> KitError {
@@ -419,6 +445,11 @@ impl St {
         self.phase == OPEN && self.closes(spec).is_none_or(|c| now < c)
     }
 
+    /// A vote an older version opened: ballots under `sha256(salt:player_id)` until it closes.
+    fn salted(&self) -> bool {
+        !self.ballot_salt.is_empty()
+    }
+
     fn ballot_key(&self, player_id: &str) -> String {
         let d = ring::digest::digest(&ring::digest::SHA256, format!("{}:{player_id}", self.ballot_salt).as_bytes());
         d.as_ref()[..12].iter().map(|x| format!("{x:02x}")).collect()
@@ -452,6 +483,13 @@ impl St {
         if self.ballot_salt.is_empty() {
             return false;
         }
+        self.rekey();
+        self.ballot_salt.clear();
+        true
+    }
+
+    /// Every ballot gets a new random key; the orders stay.
+    fn rekey(&mut self) {
         let orders: Vec<Vec<usize>> = std::mem::take(&mut self.ballots).into_values().collect();
         for (i, order) in orders.into_iter().enumerate() {
             // 12 random bytes don't collide; if the system's randomness failed (all zeros),
@@ -462,8 +500,6 @@ impl St {
             }
             self.ballots.insert(k, order);
         }
-        self.ballot_salt.clear();
-        true
     }
 
     /// A vote closed before secret-ballot-unlinkable still has its salt beside the ballots:
@@ -511,9 +547,17 @@ impl St {
             self.done = !tie;
             ctx.event(None, if tie { "tie" } else { "closed" }, json!({ "ballots_counted": self.ballots.len() }));
             self.tally = Some(tally);
-            // A tie too: "vote again" starts over with no ballots and a new salt, and "pick"
-            // reads the tally
-            ctx.forgot |= self.unlink_ballots();
+            // A tie too: "vote again" starts over with no ballots, and "pick" reads the tally.
+            // secret-ballot-open-phase: token keys get random ones as well, so a phone's token
+            // no longer finds its ballot. Whenever there were ballots the old row versions go
+            // (`forgot`): each saved version while open had `voted` and `ballots` change
+            // together, so the database history pairs a person with a key until then.
+            let cast = !self.ballots.is_empty() || !self.voted.is_empty();
+            if !self.salted() {
+                self.rekey();
+            }
+            let unlinked = self.unlink_ballots();
+            ctx.forgot |= unlinked || cast;
         } else {
             self.phase = CLOSED.into();
             ctx.event(None, "closed", json!({ "answers": self.answered_count(ctx) }));
@@ -729,6 +773,7 @@ impl Gather {
                     "kind": ballot_kind(spec),
                     "options": options(spec).iter().enumerate().map(|(i, n)| json!({ "option": i, "name": n })).collect::<Vec<_>>(),
                     "in_play": s.in_play(spec),
+                    "revotes": s.revotes,
                 });
                 v["voted"] = json!(s.ballots_counted());
             }
@@ -814,8 +859,9 @@ impl Gather {
                 });
             }
             _ => {
-                // Their own order while open (to change it); after the close there's no link left
-                let mine = (s.phase == OPEN && s.voted.contains_key(me)).then(|| s.ballots.get(&s.ballot_key(me)).cloned()).flatten();
+                // An older version's open vote: their own order (to change it). A token vote's
+                // order is only on the phone that cast it; after the close there's no link left
+                let mine = (s.phase == OPEN && s.salted() && s.voted.contains_key(me)).then(|| s.ballots.get(&s.ballot_key(me)).cloned()).flatten();
                 v["me"] = json!({ "voted": s.voted.contains_key(me), "ballot": mine });
                 // secret-ballot-unlinkable: no count while open, whatever `show_live_count` says
                 // (the 2nd voter would learn the 1st's pick); the totals are `result` at the close
@@ -1159,7 +1205,7 @@ impl Kit for Gather {
             v: 1,
             phase: OPEN.into(),
             slots: vec![Slot::default(); slot_specs(spec).len()],
-            ballot_salt: random_hex(16),
+            // secret-ballot-open-phase: no salt; a ballot's key comes from its phone's token
             ..St::default()
         };
         serde_json::to_value(&s).unwrap_or(Value::Null)
@@ -1187,7 +1233,9 @@ impl Kit for Gather {
             }
             s.moved.remove(player_id);
         }
-        if s.voted.remove(player_id).is_some() && s.phase == OPEN {
+        // A token ballot stays in the box: without that phone's token nothing here says which
+        // ballot was theirs. An older version's open vote still finds and drops it.
+        if s.voted.remove(player_id).is_some() && s.phase == OPEN && s.salted() {
             let k = s.ballot_key(player_id);
             s.ballots.remove(&k);
         }
@@ -1322,7 +1370,21 @@ impl Kit for Gather {
                 if ballot_kind(spec) == ONE_PICK && ranking.len() != 1 {
                     return Err(bad("This vote takes one pick."));
                 }
-                let k = s.ballot_key(me);
+                let k = if s.salted() {
+                    // An older version's open vote: its salted keys until it closes
+                    s.ballot_key(me)
+                } else {
+                    // secret-ballot-open-phase: the key is the phone's token's hash; the token
+                    // itself is never stored, logged or sent back
+                    let k = body.get("token").and_then(ballot_token).map(token_key).ok_or_else(|| bad(UPDATE_THE_PAGE))?;
+                    match (s.voted.contains_key(me), s.ballots.contains_key(&k)) {
+                        // A 2nd phone (or a cleared one) would add a 2nd ballot
+                        (true, false) => return Err(bad(VOTED_ON_ANOTHER_PHONE)),
+                        // Someone else's ballot: never replaced
+                        (false, true) => return Err(bad(UPDATE_THE_PAGE)),
+                        _ => k,
+                    }
+                };
                 s.ballots.insert(k, ranking);
                 s.voted.insert(me.clone(), now);
                 // No event: an event row next to a ballot change would pair the two
@@ -1387,7 +1449,9 @@ impl Kit for Gather {
                 s.only = tied;
                 s.ballots.clear();
                 s.voted.clear();
-                s.ballot_salt = random_hex(16);
+                // A new round under phone tokens, also for a vote an older version opened
+                s.ballot_salt.clear();
+                s.revotes += 1;
                 s.tally = None;
                 s.phase = OPEN.into();
                 s.closed_at = None;
@@ -1582,6 +1646,22 @@ mod tests {
         }
         assert!(s.ballots.keys().all(|k| k.len() == 24 && k.bytes().all(|c| c.is_ascii_hexdigit())));
         assert!(!s.scrub(), "once");
+    }
+
+    /// secret-ballot-open-phase: only a phone's 32 lowercase hex characters count as a token,
+    /// and its key is `sha256(token)` in 24 hex characters, never the token itself.
+    #[test]
+    fn a_ballot_token_is_32_lowercase_hex_and_keyed_by_its_hash() {
+        let t = "0123456789abcdef0123456789abcdef";
+        assert_eq!(ballot_token(&json!(t)), Some(t));
+        for bad in [json!(""), json!(t.to_uppercase()), json!(&t[..31]), json!(format!("{t}0")), json!("0123456789abcdeg0123456789abcdef"), json!(7), Value::Null] {
+            assert_eq!(ballot_token(&bad), None, "{bad}");
+        }
+        let k = token_key(t);
+        assert_eq!(k.len(), 24);
+        assert!(k.bytes().all(|c| c.is_ascii_hexdigit()) && !t.contains(&k) && !k.contains(&t[..12]));
+        assert_eq!(k, token_key(t), "the same token finds the same ballot");
+        assert_ne!(k, token_key("0123456789abcdef0123456789abcdee"));
     }
 
     #[test]

@@ -94,7 +94,7 @@ async function main(): Promise<void> {
       app = new WallApp(root, { ...env, XHR: w.XMLHttpRequest, blobs }, code);
     } else if (k === 'gather') {
       const { GatherApp } = await import('./gather/app');
-      app = new GatherApp(root, env, code);
+      app = new GatherApp(root, { ...env, store: store(), random: (b: Uint8Array) => w.crypto.getRandomValues(b) }, code);
     } else if (k === 'desk') {
       const { DeskApp } = await import('./desk/desk');
       app = new DeskApp(root, { ...env, store: store() }, code);

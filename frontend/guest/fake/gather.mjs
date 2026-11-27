@@ -145,14 +145,28 @@ export const gatherScenarios = {
   'gather-vote': { info: { ...voteFacts('one_pick'), me: undefined }, join: seat({ ...voteFacts('one_pick'), me: { voted: false, ballot: null }, live: null, result: null }, P('p8', 'Mia', 'visor')) },
   // G7 ranked.
   'gather-ranked': { info: { ...voteFacts('ranked'), me: undefined }, join: seat({ ...voteFacts('ranked'), me: { voted: false, ballot: null }, live: null, result: null }, P('p8', 'Mia', 'visor')) },
-  // G8 voted, with the live count of 1st choices.
+  // G8 voted, with the live count of 1st choices. A vote an older version opened (salted): the box still shows the
+  // order back. A new vote keys it by this phone's token and never does (secret-ballot-open-phase).
   'gather-voted': {
+    salted: true,
     state: seat({
       ...voteFacts('ranked'),
       me: { voted: true, ballot: [0, 1, 2] },
       live: [{ option: 0, votes: 5 }, { option: 1, votes: 4 }, { option: 2, votes: 2 }, { option: 3, votes: 0 }],
       result: null,
     }),
+  },
+  // secret-ballot-open-phase: voted on another phone. The box shows no order; only that phone's token changes it.
+  'gather-voted-secret': {
+    token: 'a'.repeat(32),
+    state: seat({ ...voteFacts('ranked'), me: { voted: true, ballot: null }, live: null, result: null }),
+  },
+  // This page still shows the form, but the guest has since voted on another phone: Send is refused in the box's words.
+  'gather-vote-elsewhere': {
+    token: 'a'.repeat(32),
+    elsewhere: true,
+    info: { ...voteFacts('ranked'), me: undefined },
+    join: seat({ ...voteFacts('ranked'), me: { voted: false, ballot: null }, live: null, result: null }, P('p8', 'Mia', 'visor')),
   },
   // G9 closed with a winner after three rounds (the one holo).
   'gather-result': { state: seat({ ...voteFacts('ranked', { phase: 'closed', voted: 12 }), me: { voted: true, ballot: [0, 1, 2] }, live: null, result }) },
@@ -281,8 +295,16 @@ export class GatherBox {
         case 'vote': {
           const r = b.ranking;
           if (!Array.isArray(r) || !r.length || (v.ballot.kind === 'one_pick' && r.length !== 1)) return err(400, 'bad_action', { message: 'Pick one option.' });
+          // Like gather.rs: an older (salted) vote ignores the token and shows the order back; a new one needs this
+          // phone's token, refuses another phone's, and never shows the order.
+          if (!this.s.salted) {
+            if (typeof b.token !== 'string' || !/^[0-9a-f]{32}$/.test(b.token)) return err(400, 'bad_action', { message: 'Reload this page to vote.' });
+            const kept = this.token ?? this.s.token;
+            if ((v.me?.voted || this.s.elsewhere) && kept !== b.token) return err(400, 'bad_action', { message: 'You already voted on another phone. Your vote is secret, so only that phone can change it.' });
+            this.token = b.token;
+          }
           if (!v.me?.voted) v.voted = (v.voted ?? 0) + 1;
-          v.me = { voted: true, ballot: r };
+          v.me = { voted: true, ballot: this.s.salted ? r : null };
           v.live = v.show_live_count ? [{ option: 0, votes: 5 }, { option: 1, votes: 4 }, { option: 2, votes: 2 }, { option: 3, votes: 0 }] : null;
           break;
         }

@@ -572,6 +572,49 @@ for (const name of order) {
     if (n !== (code === 'gather-result' ? 1 : 0)) problems.push(`${file}: ${n} holo stickers`);
     await ctx.close();
   }
+  // secret-ballot-open-phase, at 390 and 1440: the done page on the phone that voted (its own order, from that
+  // phone), on another phone (secret, no order, no Change), and Send refused after voting on another phone.
+  for (const wide of [false, true]) {
+    const w = wide ? '-1440' : '';
+    const open = async (code, screen) => {
+      const p = await newPage({ wide });
+      if (typeof gatherScenarios[code]?.state === 'object') {
+        await p.ctx.addCookies([{ name: `kp_${code}`, value: 'fake', domain: '127.0.0.1', path: `/api/pocket/${code}`, httpOnly: true, sameSite: 'Strict' }]);
+      }
+      await p.page.goto(`${origin}/p/${code}`);
+      await p.page.waitForSelector(`main.ga[data-screen="${screen}"]`, { timeout: 20000 });
+      return p;
+    };
+    {
+      const { ctx, page, log } = await open('gather-ranked', 'join');
+      for (const o of [2, 0]) await page.click(`[data-k="add-${o}"]`);
+      await page.fill('#g-name', 'Ana');
+      await page.fill('#g-pin', '1234');
+      await page.click('button[data-send]');
+      await page.waitForSelector('main.ga[data-screen="voted"] [data-ballot]', { timeout: 10000 });
+      const kept = await page.evaluate(() => Object.keys(localStorage).filter((k) => k.startsWith('kp-ballot:')).length);
+      if (kept !== 1) problems.push(`gather-sbo: ${kept} ballot copies kept on the phone`);
+      await gaShot(page, log, `gather-sbo-this-phone${w}`);
+      await ctx.close();
+    }
+    {
+      const { ctx, page, log } = await open('gather-voted-secret', 'voted');
+      if (!(await page.$('[data-secret]')) || (await page.$('[data-change]'))) problems.push('gather-sbo: another phone shows Change or no secret line');
+      await gaShot(page, log, `gather-sbo-other-phone${w}`);
+      await ctx.close();
+    }
+    {
+      const { ctx, page, log } = await open('gather-vote-elsewhere', 'join');
+      await page.click('[data-k="add-1"]');
+      await page.fill('#g-name', 'Mia');
+      await page.fill('#g-pin', '1234');
+      await page.click('button[data-send]');
+      await page.waitForSelector('[data-problem]', { timeout: 10000 });
+      await page.evaluate(() => document.querySelector('[data-problem]')?.scrollIntoView({ block: 'center' }));
+      await gaShot(page, log, `gather-sbo-refused${w}`);
+      await ctx.close();
+    }
+  }
   // G10 rejoin with a wrong PIN
   {
     const { ctx, page, log } = await go('gather-wrongpin', 'join');
