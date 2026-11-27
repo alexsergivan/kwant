@@ -1334,10 +1334,10 @@ impl Kit for Gather {
             }
             (Viewer::Guest(me), "show_my_name") => {
                 if f == VOTE {
-                    return Err(bad("A vote never shows who voted."));
+                    return Err(bad("A vote never shows who picked what."));
                 }
                 if !names_on(spec, &s) {
-                    return Err(not_now("Names are hidden here, so only the host sees who answered."));
+                    return Err(not_now("Names are hidden now, so only the host sees who answered."));
                 }
                 s.unnamed.remove(me);
             }
@@ -1387,7 +1387,7 @@ impl Kit for Gather {
             }
             (Viewer::Host, "set_show_names") => {
                 if f == VOTE {
-                    return Err(bad("A vote never shows who voted."));
+                    return Err(bad("A vote never shows who picked what."));
                 }
                 let on = body.get("on").and_then(Value::as_bool).ok_or_else(|| bad("on is true or false"))?;
                 if on && !names_on(spec, &s) {
