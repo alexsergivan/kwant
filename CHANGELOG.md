@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.56] - 2026-11-27
+
+kwant 0.9.56: a time on every chat row.
+
+### Changed
+- Your own messages and the reply that is still being written now show their time too, in the same place and format as a finished reply's (#1281)
+
 ## [Mac 0.9.55] - 2026-11-26
 
 kwant 0.9.55: bots use their tools at a sign-in page, Open Tools on a step that needs a fix, less memory at idle, the full tool directory, no browser start stall, the chat holds your place while you read and reply bubbles in each bot's colour.
