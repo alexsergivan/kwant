@@ -2,6 +2,7 @@
 // API, the upload queue (one at a time, retry, 429, closed, away), the error copy, G1-G8 against the fake wall box
 // (guest/fake/wall.mjs), the TV's slideshow rules, and the two CSS files' token and size rules. The browser half
 // (G1-G8 at 390 px and TV1-TV4 at 1920 under pa1's CSP, with shots) is guest/e2e/csp.mjs.
+import './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';

@@ -1,6 +1,7 @@
 // pa10b gather guest page (autonomy/pocket-apps/pa10b/guest-brief.md): the view mapping from Lin's gather API
 // (names-so-far, guest-impl.md), the screen for each face and phase, and the G1-G11 flows against the fake gather box
 // (guest/fake/gather.mjs). The browser half (G1-G11 in Chrome under pa1's CSP, 390 px shots) is guest/e2e/csp.mjs.
+import { withLocale } from './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -517,4 +518,36 @@ test('css: gather motion as specified and static under reduced motion; bar bucke
   const stops = [...foil.slice(0, foil.indexOf('}')).matchAll(/#[0-9a-f]{6}/g)].map((x) => x[0]).slice(0, 5);
   const v = (k) => css.match(new RegExp(`--${k}:\\s*([^;]+);`))[1].trim();
   assert.deepEqual([1, 2, 3, 4, 5].map((i) => v(`holo-${i}`)), stops);
+});
+
+test("locale: Gather, Desk and Queue date helpers use the phone's own locale; en-US reads as before", async () => {
+  const L = await loadBundled(`
+    export { shortDay, closesShort, at } from './guest/src/gather/app';
+    export { dayLabel } from './guest/src/desk/app';
+    export { hm } from './guest/src/queue/tv';
+  `);
+  const seen = [];
+  const P = { d: Date.prototype.toLocaleDateString, t: Date.prototype.toLocaleTimeString };
+  Date.prototype.toLocaleDateString = function (loc, o) { seen.push(['date', loc]); return P.d.call(this, loc, o); };
+  Date.prototype.toLocaleTimeString = function (loc, o) { seen.push(['time', loc]); return P.t.call(this, loc, o); };
+  const iso = '2026-12-10T12:00:00Z';
+  const now = Date.UTC(2026, 11, 4, 12);
+  try {
+    L.shortDay(iso);
+    L.closesShort(iso);
+    L.at(iso);
+    L.dayLabel(iso, now);
+    L.hm(iso);
+  } finally {
+    Object.assign(Date.prototype, { toLocaleDateString: P.d, toLocaleTimeString: P.t });
+  }
+  assert.ok(seen.length >= 5);
+  for (const [k, loc] of seen) assert.equal(loc, undefined, `${k} formatted with ${loc}`);
+  // en-US is byte-for-byte what it was with the hard-coded 'en-US'.
+  assert.equal(withLocale('en-US', () => L.shortDay(iso)), 'Dec 10');
+  assert.equal(withLocale('en-US', () => L.at(iso)), `${new Date(iso).toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${new Date(iso).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })}`);
+  // An en-GB phone gets one format, not "Thu, Dec 10 at 20:00".
+  assert.equal(withLocale('en-GB', () => L.shortDay(iso)), '10 Dec');
+  assert.match(withLocale('en-GB', () => L.at(iso)), /^Thu 10 Dec at \d{2}:\d{2}$/);
+  assert.doesNotMatch(withLocale('en-GB', () => L.dayLabel(iso, now)), /Dec 10/);
 });

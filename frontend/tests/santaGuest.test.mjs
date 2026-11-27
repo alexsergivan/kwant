@@ -1,6 +1,7 @@
 // pa10a Secret Santa guest page (autonomy/pocket-apps/pa10a/guest-brief.md): the view mapping from Lin's santa API,
 // the screen for each phase, the PIN boxes and their copy, and the G1-G11 flows against the fake santa box
 // (guest/fake/santa.mjs). The browser half (G1-G11 in Chrome under pa1's CSP, shots) is guest/e2e/csp.mjs.
+import { withLocale } from './pinLocale.mjs'; // en-US default, whatever the machine's locale
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { JSDOM } from 'jsdom';
@@ -140,6 +141,7 @@ test('pin: wrong-PIN copy counts down from the server tries_left', () => {
   assert.equal(c({ error: 'wrong_pin' }).title, "That name and PIN don't match.");
   assert.match(c({ error: 'locked', status: 423 }).sub, /ask Dana for a reset code/);
   assert.equal(c({ error: 'hard_locked', status: 423 }).title, 'This name is locked.');
+  assert.equal(c({ error: 'hard_locked', status: 423 }).sub, 'Ask Dana for a reset code, then type it here with a new PIN.');
   assert.equal(c({ error: 'reset_pending', status: 409 }).title, 'Dana made you a reset code.');
   assert.equal(c({ error: 'whatever', status: 400, message: 'Plain server words.' }).title, 'Plain server words.');
   assert.match(m.pinCopy({ ok: false, status: 409, error: 'name_taken' }, 'Dana', true).sub, /I've joined before/);
@@ -542,6 +544,22 @@ test('hard_locked opens the reset-code form, like reset_pending (g45)', async ()
   t.app.stop();
 });
 
+test('reset form: no "New here? join now" (a locked name is not new); the PIN form keeps it; plain hard_locked line', async () => {
+  const t = await open('santa-hardlocked');
+  await click(t.$('[data-to-rejoin]'));
+  assert.ok(t.$('[data-new-here]'), 'the PIN form keeps "New here?" after the draw');
+  await type(t.$('#s-bname'), 'Sam');
+  await type(t.$('#s-bpin'), '1234');
+  await submit(t.$('form'));
+  assert.ok(t.$('#s-code'), 'on the reset form');
+  assert.equal(t.$('[data-new-here]'), null, 'no join-now invite next to a reset code');
+  assert.match(t.$('[data-problem]').textContent, /Ask Dana for a reset code, then type it here with a new PIN\./);
+  await click(t.$('[data-use-pin]'));
+  assert.ok(t.$('#s-bpin'), 'back on the PIN form');
+  assert.ok(t.$('[data-new-here]'), '"New here?" comes back with the PIN form');
+  t.app.stop();
+});
+
 test('host as the match: "Dana only sees how many gifts are ready, not whose." (g32)', async () => {
   const store = new Map([['kp-santa-open:t:p1', '1']]);
   const t = await open('santa-hostmatch', { store });
@@ -595,7 +613,8 @@ test("locale: dates, times and numbers use the phone's own locale, not a hard-co
   }
   assert.ok(seen.length >= 6);
   for (const [k, loc] of seen) assert.equal(loc, undefined, `${k} formatted with ${loc}`);
-  // Weekday and short month stay.
-  assert.match(m.day('2026-12-05'), /Sat/);
-  assert.match(m.day('2026-12-05'), /Dec/);
+  // The phone's locale decides the order and the clock; the machine running the test does not.
+  assert.equal(withLocale('en-US', () => m.day('2026-12-05')), 'Sat, Dec 5');
+  assert.equal(withLocale('en-GB', () => m.day('2026-12-05')), 'Sat 5 Dec');
+  assert.equal(withLocale('en-GB', () => m.clock('2026-12-05T20:00:00Z')).length > 0, true);
 });

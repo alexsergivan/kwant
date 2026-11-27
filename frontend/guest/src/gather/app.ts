@@ -24,26 +24,26 @@ export type GatherEnv = Env & {
   clearInterval: (id: number) => void;
 };
 
-/** "Dec 4" (a calendar day in UTC, like ../app.ts `day`). */
+/** "Dec 4" (en-US), "4 Dec" (en-GB): a calendar day in UTC, in the phone's locale, like ../app.ts `day`. */
 export function shortDay(iso: string): string {
   const d = new Date(`${iso.slice(0, 10)}T12:00:00Z`);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
 /** "Thu 8 PM": a moment in this phone's time zone, for the bar. */
 export function closesShort(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  const wd = d.toLocaleDateString('en-US', { weekday: 'short' });
+  const wd = d.toLocaleDateString(undefined, { weekday: 'short' });
   return `${wd} ${clock(iso).replace(':00 ', ' ')}`;
 }
 
-/** "Thu, Dec 10 at 8:00 PM" in this phone's time zone. */
+/** "Thu, Dec 10 at 8:00 PM" (en-US), "Thu 10 Dec at 20:00" (en-GB): this phone's time zone and locale. */
 export function at(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return `${d.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })} at ${clock(iso)}`;
+  return `${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} at ${clock(iso)}`;
 }
 
 const poss = (name: string): string => `${name}'s`;
@@ -443,7 +443,7 @@ export class GatherApp {
     const tiles: [string, string][] = [];
     const ev = f.event_at ? new Date(f.event_at) : null;
     if (ev && !Number.isNaN(ev.getTime())) {
-      tiles.push([ev.toLocaleDateString('en-US', { weekday: 'long' }), ev.toLocaleDateString('en-US', { month: 'short', day: 'numeric' })]);
+      tiles.push([ev.toLocaleDateString(undefined, { weekday: 'long' }), ev.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })]);
       tiles.push(['Time', clock(f.event_at!)]);
     } else if (f.when) tiles.push(['When', f.when]);
     if (f.price) tiles.push(['Each', f.price]);
