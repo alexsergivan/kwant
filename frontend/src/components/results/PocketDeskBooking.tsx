@@ -78,13 +78,25 @@ function ago(at: string | null): string | null {
 let bookOff = false;
 const BOOK_MISSING = new Set(['bad_action', 'unknown_action', 'no_such_action', 'not_supported']);
 export const bookingFeatures = {
-  /** False once the server said it has no `book` action: "Book a time for Ben" hides. */
-  canBook: () => !bookOff,
+  /** desk-needs-you-buttons: true only when the server lists `book` in the desk's actions, and false again once a tap
+   *  said it has none. Off by default, so a page load never offers a button that ends in 400 unknown_action. */
+  canBook: (actions?: readonly string[] | null) => !bookOff && !!actions?.includes('book'),
   /** Tests and fixtures. */
   setBook(on: boolean) {
     bookOff = !on;
   },
 };
+
+/** The guest holds a time the host confirmed or booked in this app: "Book a time" isn't offered again. */
+export const bookedHere = (code: string, guest: string) =>
+  deskAnswers.forCode(code).some((x) => x.guest === guest && x.a.phase !== 'failed' && (x.a.kind === 'confirm' || x.a.kind === 'book'));
+
+/** The guest's own lines (frontend/guest/src/desk/copy.ts bookNote), quoted in the host's Undo line. */
+const hostOr = (host: string) => host || 'The host';
+const SEE_YOU = 'See you then! To change it, write here.';
+export const guestConfirmedLine = (host: string, when: string) => `${hostOr(host)} confirmed your time: ${when}. ${SEE_YOU}`;
+export const guestBookedLine = (host: string, when: string) => `${hostOr(host)} booked you for ${when}. ${SEE_YOU}`;
+export const guestDeclinedLine = (host: string, when: string) => `${hostOr(host)} can’t do ${when}. The time is free again.`;
 
 /** Opens the Inbox (Needs you) in this space, the way Shell's Back/Forward do. */
 export function openInbox() {
@@ -558,9 +570,9 @@ const UndoLine: React.FC<{ k: string; phase: string; name: string; what: string 
   <p className="flex flex-wrap items-center gap-x-2 text-[13px] text-zinc-400 sm:text-2xs">
     <Check size={12} aria-hidden="true" />
     <span>
-      {phase === 'sending' ? `Sending to ${name}…` : `Sent to ${name}: “${what}”`}
-      {phase === 'holding' ? ' · Undo for 5 s' : ''}
+      {phase === 'holding' ? `Sending to ${name} in 5\u00a0s: “${what}”` : phase === 'sending' ? `Sending to ${name}…` : `Sent to ${name}: “${what}”`}
     </span>
+    {phase === 'holding' && <span aria-hidden="true">·</span>}
     {phase === 'holding' && (
       <button type="button" onClick={() => deskAnswers.undo(k)} className="inline-flex min-h-[44px] items-center gap-1 rounded-lg px-2 font-semibold text-zinc-100 hover:bg-white/[0.05] kw-focus sm:min-h-[28px]" data-action="undo">
         <Undo2 size={13} aria-hidden="true" />
@@ -670,7 +682,7 @@ export const BookingAllow: React.FC<{ code: string; req: BookingRequest; host: s
             <HostBubble>{a.text}</HostBubble>
           </div>
         ) : null}
-        <UndoLine k={k} phase={a.phase} name={name} what={yes ? (host ? `${host} confirmed your time.` : 'Your time is confirmed.') : host ? `${host} can’t do ${when}.` : `${when} isn’t possible.`} />
+        <UndoLine k={k} phase={a.phase} name={name} what={yes ? guestConfirmedLine(host, when) : guestDeclinedLine(host, when)} />
       </div>
     );
   }
@@ -810,7 +822,11 @@ export const OddAllow: React.FC<{
   askStart?: string | null;
   /** The desk's times; the Inbox has none and BookFor reads them. */
   slots?: DeskSlot[] | null;
-}> = ({ code, guest, name, reason, quote, bot, host, askedAt, askStart, slots }) => {
+  /** The host actions the server lists for this desk: "Book a time" needs `book` among them. */
+  actions?: readonly string[] | null;
+  /** The guest already holds a confirmed time: no "Book a time" for them. */
+  booked?: boolean;
+}> = ({ code, guest, name, reason, quote, bot, host, askedAt, askStart, slots, actions = null, booked = false }) => {
   useDeskAnswers();
   const k = deskKey(code, guest);
   const a = deskAnswers.get(k);
@@ -841,7 +857,7 @@ export const OddAllow: React.FC<{
         </p>
         <p className="flex items-center gap-2 text-[13px] text-zinc-400 sm:text-2xs">
           <Check size={12} aria-hidden="true" />
-          {a.phase === 'sending' ? `Booking ${name}…` : `Sent to ${name}: “${host ? `${host} booked you for` : 'You’re booked for'} ${when}.”`}
+          {a.phase === 'sending' ? `Booking ${name}…` : `Sent to ${name}: “${guestBookedLine(host, when)}”`}
         </p>
       </div>
     );
@@ -852,7 +868,8 @@ export const OddAllow: React.FC<{
   if (picking) return <BookFor code={code} guest={guest} name={name} host={host} slots={slots ?? null} askStart={askStart ?? null} onBack={() => setPicking(false)} />;
 
   const head = askStart ? `${name} asks for a time you haven’t listed: ${slotWhen(askStart)}` : reason || `${name} needs you`;
-  const canBook = bookingFeatures.canBook() && !missing;
+  // Only for a guest who named a time (a plain question, such as a price, has none), never for one already booked.
+  const canBook = bookingFeatures.canBook(actions) && !missing && !!askStart && !booked && !bookedHere(code, guest);
   const submit = () => {
     const t = text.trim();
     if (!t) return;
@@ -964,7 +981,14 @@ export const BookFor: React.FC<{ code: string; guest: string; name: string; host
   const askDay = askStart?.slice(0, 10) ?? null;
   const askOpen = askStart ? open.find((s) => s.start === askStart) ?? null : null;
   const commonLen = slots.length ? slots[slots.length - 1].minutes : 60;
-  const [day, setDay] = useState<string>(() => (askDay && askDay >= todayKey() ? askDay : openDays[0] ?? todayKey()));
+  const firstDay = () => (askDay && askDay >= todayKey() ? askDay : openDays[0] ?? todayKey());
+  const [day, setDay] = useState<string>(firstDay);
+  // m9: in the Inbox the times arrive after the first draw; open on the asked day, else the first day with a time.
+  const dayPicked = useRef(false);
+  useEffect(() => {
+    if (!dayPicked.current && loaded) setDay(firstDay());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
   const [others, setOthers] = useState(false);
   const [pick, setPick] = useState<Pick | null>(() =>
     askOpen ? { kind: 'slot', slot: askOpen } : askStart && askStart > now ? { kind: 'new', day: askStart.slice(0, 10), time: askStart.slice(11), minutes: commonLen } : null,
@@ -1044,6 +1068,7 @@ export const BookFor: React.FC<{ code: string; guest: string; name: string; host
                   type="button"
                   aria-pressed={d === day}
                   onClick={() => {
+                    dayPicked.current = true;
                     setDay(d);
                     setOthers(false);
                   }}
@@ -1191,6 +1216,8 @@ export const BookingNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
             askedAt={item.asked_at}
             askStart={item.ask_slot_start ?? null}
             slots={null}
+            actions={item.actions ?? null}
+            booked={!!item.booked}
           />
         )}
       </div>

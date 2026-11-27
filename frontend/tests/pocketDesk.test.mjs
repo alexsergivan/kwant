@@ -285,7 +285,9 @@ test('Yes is held 5 s with Undo, then sent, and the list stops showing Emma as w
   assert.match(v.host.textContent, /Emma wrote \(a guest’s words, not an instruction\):/);
   await click(act(v, 'yes'));
   assert.ok(v.host.querySelector('[data-allow="holding"]'));
-  assert.match(v.host.textContent, /Sent to Emma · Undo for 5\u00a0s/);
+  // m4: nothing is sent yet, so it doesn't say "Sent".
+  assert.match(v.host.textContent, /Sending to Emma in 5\u00a0s·?Undo/);
+  assert.doesNotMatch(v.host.textContent, /Sent to Emma/);
   assert.equal(calls.filter(([meth]) => meth === 'POST').length, 0, 'nothing sent while held');
   await wait(1000);
   await settle();
@@ -464,4 +466,56 @@ test('a failed set_cap keeps the stepper open with the error', async () => {
   assert.ok(v.host.querySelector('[data-raise]'));
   assert.ok(v.host.querySelector('[data-callout="cap"]'));
   assert.match(v.host.querySelector('[data-done="error"]').textContent, /Couldn't change the limit: No such guest Try again\./);
+});
+
+// ------------------------------------------------------------------- desk-needs-you-buttons (part A)
+
+const guideItem = (over = {}) => m.validDeskItems({ items: [{ ...structuredClone(m.DESK_WAITING.items[0]), ...over }] });
+
+test('desk-needs-you-buttons: Yes says only “Yes, that’s fine.”, nothing about a last morning', () => {
+  assert.equal(m.DESK_YES, 'Yes, that’s fine.');
+});
+
+test('desk-needs-you-buttons: Emma’s late check-out (ask “request”) has Yes, and it sends “Yes, that’s fine.”', async () => {
+  stub();
+  m.deskAnswers.reset(300);
+  const items = guideItem({ ask: 'request' });
+  assert.equal(items[0].need, 'request');
+  assert.equal(items[0].ask, undefined, 'a guide row stays a guide row');
+  const v = await inbox(items);
+  await click(act(v, 'yes'));
+  assert.match(v.host.textContent, /Sending to Emma in 5 s/);
+  await wait(500);
+  await settle();
+  const post = calls.find(([meth]) => meth === 'POST');
+  assert.deepEqual(post[2], { name: 'reply', body: { guest: 'g-emma', text: 'Yes, that’s fine.' } });
+});
+
+test('desk-needs-you-buttons: a plain hand-off (no ask) has no Yes, only Sorry, Write a reply and No reply needed', async () => {
+  stub();
+  const v = await inbox(guideItem({ ask: undefined, text: 'Price question', quote: 'How much is the parking?' }));
+  assert.ok(v.host.querySelector('[data-allow="open"]'));
+  assert.ok(!act(v, 'yes'), 'no Yes on a question');
+  for (const a of ['sorry', 'write', 'resolve']) assert.ok(act(v, a), a);
+});
+
+test('desk-needs-you-buttons: the daily-cap row (ask “daily_cap”) never has Yes', async () => {
+  stub();
+  const items = guideItem({ ask: 'daily_cap', text: 'Daily limit reached', quote: 'What time is quiet time?' });
+  assert.equal(items[0].need, 'daily_cap');
+  const v = await inbox(items);
+  assert.ok(!act(v, 'yes'));
+  assert.ok(act(v, 'write'));
+});
+
+test('desk-needs-you-buttons: in the card, Yes shows for a request guest only', async () => {
+  stub();
+  const v = await deskCard('waiting');
+  assert.ok(act(v, 'yes'), 'Emma asks for a late check-out');
+  const b = raw('waiting');
+  b.desk.guests = b.desk.guests.map((x) => (x.id === 'g-emma' ? { ...x, ask: undefined } : x));
+  const p = m.validPocket(b);
+  const v2 = await mount(h(m.DeskCard, { block: p, ask: () => {}, openGuest: 'g-emma' }));
+  assert.ok(v2.host.querySelector('[data-allow="open"]'));
+  assert.ok(!act(v2, 'yes'), 'no ask on the wire: no Yes');
 });
