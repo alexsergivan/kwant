@@ -22,6 +22,7 @@ use chrono::Utc;
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -265,6 +266,30 @@ pub fn fill_boot(index: &str, boot: &Value) -> String {
         }
         None => index.to_string(),
     }
+}
+
+// RED PROOF ONLY (never merges): main's behaviour behind the new tests' names. No manifest is read
+// and the page is fill_boot's, so the Santa page names no chunk.
+#[allow(dead_code)]
+const PAGE_MANIFEST: &str = "manifest.json";
+#[allow(dead_code)]
+const KIT_CHUNKS: [(&str, &str); 5] =
+    [("santa", "src/santa/app.ts"), ("wall", "src/wall/wall.ts"), ("gather", "src/gather/app.ts"), ("desk", "src/desk/desk.ts"), ("queue", "src/queue/queue.ts")];
+#[allow(dead_code)]
+pub fn kit_preload_links(_manifest: &Value, _index: &str, _src: &str) -> String {
+    String::new()
+}
+#[allow(dead_code)]
+pub fn kit_preloads_from(_manifest: Option<&[u8]>, _index: &str) -> HashMap<&'static str, String> {
+    HashMap::new()
+}
+#[allow(dead_code)]
+fn kit_preloads() -> HashMap<&'static str, String> {
+    HashMap::new()
+}
+#[allow(dead_code)]
+pub fn live_page(index: &str, _links: &str, boot: &Value) -> String {
+    fill_boot(index, boot)
 }
 
 fn html_response(status: StatusCode, body: String) -> Response {
@@ -863,5 +888,128 @@ mod tests {
         assert_eq!(out.matches("</script>").count(), 2);
         // No slot: the page goes out as built
         assert_eq!(fill_boot("<html></html>", &evil), "<html></html>");
+    }
+    // santa-first-screen-preload: the shape of the guest build's page and manifest (vite 6, from a real build).
+    const INDEX: &str = r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Join the quiz</title>
+    <script type="module" crossorigin src="/p/_a/g-CLOlplx-.js"></script>
+    <link rel="stylesheet" crossorigin href="/p/_a/g-C217eN2_.css">
+  </head>
+  <body>
+    <div id="app"></div>
+    <script type="application/json" id="pocket-boot">null</script>
+  </body>
+</html>
+"#;
+    const MANIFEST: &str = r#"{
+      "_g-BelQZJRj.js": { "file": "g-BelQZJRj.js", "name": "view", "imports": ["index.html"] },
+      "_g-Bsx4iv6B.js": { "file": "g-Bsx4iv6B.js", "name": "pin", "imports": ["index.html"] },
+      "_g-screen-CiV1uodV.js": { "file": "g-screen-CiV1uodV.js", "name": "screen-kit", "css": ["g-screen-DDnNgybH.css"] },
+      "index.html": { "file": "g-CLOlplx-.js", "name": "index", "src": "index.html", "isEntry": true,
+        "dynamicImports": ["src/wall/screen-wall.ts", "src/screen/screen.ts", "src/remote/remote.ts", "src/santa/app.ts", "src/wall/wall.ts"],
+        "css": ["g-C217eN2_.css"], "assets": ["inter-guest-7Mrhzw1r.woff2"] },
+      "src/santa/app.ts": { "file": "g-BaJmXTTC.js", "name": "app", "src": "src/santa/app.ts", "isDynamicEntry": true,
+        "imports": ["index.html", "_g-Bsx4iv6B.js"] },
+      "src/wall/wall.ts": { "file": "g-DlP3H-VQ.js", "name": "wall", "src": "src/wall/wall.ts", "isDynamicEntry": true,
+        "imports": ["index.html", "_g-Bsx4iv6B.js", "_g-BelQZJRj.js"], "css": ["g-CPZ3uKF4.css"], "dynamicImports": ["src/wall/screen-wall.ts"] },
+      "src/wall/screen-wall.ts": { "file": "g-screen-ClYKpdd6.js", "isDynamicEntry": true, "imports": ["_g-screen-CiV1uodV.js", "index.html"] },
+      "src/remote/remote.ts": { "file": "g-remote-alofVdEF.js", "isDynamicEntry": true, "imports": ["index.html"], "css": ["g-remote-CWpfJJ_H.css"] }
+    }"#;
+    const SANTA_LINKS: &str = r#"<link rel="modulepreload" crossorigin href="/p/_a/g-BaJmXTTC.js"><link rel="modulepreload" crossorigin href="/p/_a/g-Bsx4iv6B.js">"#;
+
+    fn santa_boot(title: &str) -> Value {
+        json!({ "api": 1, "pocket": { "code": "k7m2q9", "kit": "santa", "title": title }, "view": null })
+    }
+
+    #[test]
+    fn a_santa_page_names_its_chunks_before_the_entry_asks() {
+        let links = kit_preloads_from(Some(MANIFEST.as_bytes()), INDEX);
+        // The Santa chunk and the chunk it imports; not the entry (already in the page) or anything lazy
+        assert_eq!(links["santa"], SANTA_LINKS);
+        let page = live_page(INDEX, &links["santa"], &santa_boot("Office Santa"));
+        let head = &page[..page.find("</head>").unwrap()];
+        assert!(head.ends_with(&format!("<link rel=\"stylesheet\" crossorigin href=\"/p/_a/g-C217eN2_.css\">\n  {SANTA_LINKS}")), "{page}");
+        // Otherwise today's page, byte for byte
+        assert_eq!(page.replacen(SANTA_LINKS, "", 1), fill_boot(INDEX, &santa_boot("Office Santa")));
+    }
+
+    #[test]
+    fn a_kit_chunk_brings_its_imports_and_css_but_not_its_lazy_imports() {
+        let links = kit_preloads_from(Some(MANIFEST.as_bytes()), INDEX);
+        assert_eq!(
+            links["wall"],
+            concat!(
+                r#"<link rel="modulepreload" crossorigin href="/p/_a/g-DlP3H-VQ.js">"#,
+                r#"<link rel="modulepreload" crossorigin href="/p/_a/g-Bsx4iv6B.js">"#,
+                r#"<link rel="modulepreload" crossorigin href="/p/_a/g-BelQZJRj.js">"#,
+                r#"<link rel="preload" as="style" crossorigin href="/p/_a/g-CPZ3uKF4.css">"#,
+            )
+        );
+        // The manifest has no gather, desk or queue chunk here: no links for them, and none for the quiz
+        assert_eq!(links.len(), 2, "{links:?}");
+        assert!(!links.values().any(|l| l.contains("g-screen-") || l.contains("g-remote-") || l.contains("g-CLOlplx-")));
+    }
+
+    #[tokio::test]
+    async fn a_quiz_a_gone_page_and_a_build_without_the_manifest_are_unchanged() {
+        let links = kit_preloads_from(Some(MANIFEST.as_bytes()), INDEX);
+        let quiz = json!({ "api": 1, "pocket": { "code": "k7m2q9", "kit": "quiz", "title": "Pub quiz" }, "view": null });
+        let quiz_links = links.get("quiz").map_or("", String::as_str);
+        assert_eq!(live_page(INDEX, quiz_links, &quiz), fill_boot(INDEX, &quiz));
+        // No manifest, or one that isn't JSON: no links for any kit, the page as today
+        for manifest in [None, Some(&b"not json"[..]), Some(&b"{}"[..]), Some(&b"[]"[..])] {
+            assert!(kit_preloads_from(manifest, INDEX).is_empty(), "{manifest:?}");
+        }
+        assert_eq!(live_page(INDEX, "", &santa_boot("Office Santa")), fill_boot(INDEX, &santa_boot("Office Santa")));
+        // A page without a </head> goes out as fill_boot makes it
+        assert_eq!(live_page("<body></body>", SANTA_LINKS, &santa_boot("x")), fill_boot("<body></body>", &santa_boot("x")));
+        // The gone page is the bundle with the gone boot and nothing else
+        let gone = gone_response(Some(Cow::Borrowed(INDEX.as_bytes())));
+        assert_eq!(gone.status(), StatusCode::NOT_FOUND);
+        let body = to_bytes(gone.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(String::from_utf8(body.to_vec()).unwrap(), fill_boot(INDEX, &gone_boot()));
+    }
+
+    #[test]
+    fn a_hostile_title_or_manifest_name_cannot_add_a_link() {
+        let links = kit_preloads_from(Some(MANIFEST.as_bytes()), INDEX);
+        let evil = r#"</head><link rel="modulepreload" href="//evil.example/x.js"></script><script>alert(1)</script>"#;
+        let page = live_page(INDEX, &links["santa"], &santa_boot(evil));
+        assert_eq!(page.matches("<link").count(), 3, "the entry's CSS and the two Santa links: {page}");
+        assert_eq!(page.matches("</head>").count(), 1);
+        assert!(!page.contains("evil.example/x.js\""), "{page}");
+        // Only plain file names from the manifest become links
+        let bad = json!({
+            "src/santa/app.ts": { "file": "g-ok1.js", "imports": ["a", "b", "c", "d", "e", "f"], "css": ["x\" onload=\"alert(1).css", "g-ok2.css"] },
+            "a": { "file": "//evil.example/x.js" }, "b": { "file": "../x.js" }, "c": { "file": "x y.js" },
+            "d": { "file": "index.html" }, "e": { "file": "javascript:alert(1)" }, "f": { "file": 7 }
+        });
+        assert_eq!(
+            kit_preload_links(&bad, INDEX, "src/santa/app.ts"),
+            r#"<link rel="modulepreload" crossorigin href="/p/_a/g-ok1.js"><link rel="preload" as="style" crossorigin href="/p/_a/g-ok2.css">"#
+        );
+        // An import loop ends
+        let looped = json!({ "src/santa/app.ts": { "file": "g-a.js", "imports": ["_b"] }, "_b": { "file": "g-b.js", "imports": ["src/santa/app.ts", "_b"] } });
+        assert_eq!(kit_preload_links(&looped, INDEX, "src/santa/app.ts").matches("<link").count(), 2);
+    }
+
+    #[test]
+    fn this_build_names_a_chunk_for_every_kit_or_none_without_a_page() {
+        // CI embeds the real guest build: a renamed kit file, or a build without its manifest, fails here instead of
+        // quietly dropping the preload. A build with no guest page has nothing to preload.
+        let links = kit_preloads();
+        if has_page() {
+            assert!(page_asset(PAGE_MANIFEST).is_some(), "the guest build writes manifest.json");
+            for (kit, _) in KIT_CHUNKS {
+                assert!(links.get(kit).is_some_and(|l| l.starts_with(r#"<link rel="modulepreload" crossorigin href="/p/_a/g-"#)), "{kit}: {links:?}");
+            }
+            // The manifest itself is never a page file
+            assert_eq!(page_file_response(PAGE_MANIFEST, page_asset).status(), StatusCode::NOT_FOUND);
+        } else {
+            assert!(links.is_empty());
+        }
     }
 }
