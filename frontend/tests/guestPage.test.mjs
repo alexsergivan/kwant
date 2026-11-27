@@ -973,7 +973,9 @@ const built = existsSync(new URL('index.html', dist));
 const needBuild = { skip: !built && !process.env.CI ? 'dist/pocket not built here (npm run build:guest)' : false };
 
 test('built: phone files at most 80 KB gzipped (JS + CSS + HTML + font); the big screen and the host remote chunks at most 40 KB each', needBuild, () => {
-  const files = readdirSync(dist).filter((f) => statSync(new URL(f, dist)).isFile());
+  // santa-first-screen-preload: manifest.json is read by the server (it names a kit's chunk in the page), never fetched by a phone.
+  const files = readdirSync(dist).filter((f) => f !== 'manifest.json' && statSync(new URL(f, dist)).isFile());
+  assert.ok(existsSync(new URL('manifest.json', dist)), 'the guest build writes manifest.json for the server');
   let phone = 0;
   let screen = 0;
   let remote = 0;
