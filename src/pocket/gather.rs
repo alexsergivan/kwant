@@ -23,7 +23,7 @@
 
 use super::kits::{spec_date, Kit, KitCtx, KitError, KitRules, Player, Retention, Viewer, DEFAULT_MAX_PLAYERS};
 use super::words;
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc, Weekday};
 use ring::rand::SecureRandom;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
@@ -963,6 +963,91 @@ fn check_bool(spec: &Value, f: &str) -> Result<(), String> {
     }
 }
 
+/// The one weekday a `when` line names (Fri, Friday, fri.), or `None` when it names none or more
+/// than one ("Fri night to Sat"). Whole words only: "Saturnalia" names none.
+pub(crate) fn weekday_in(line: &str) -> Option<Weekday> {
+    const DAYS: [(Weekday, &str, &[&str]); 7] = [
+        (Weekday::Mon, "monday", &["mon"]),
+        (Weekday::Tue, "tuesday", &["tue", "tues"]),
+        (Weekday::Wed, "wednesday", &["wed"]),
+        (Weekday::Thu, "thursday", &["thu", "thur", "thurs"]),
+        (Weekday::Fri, "friday", &["fri"]),
+        (Weekday::Sat, "saturday", &["sat"]),
+        (Weekday::Sun, "sunday", &["sun"]),
+    ];
+    let mut found: Option<Weekday> = None;
+    for w in line.split(|c: char| !c.is_alphabetic()).filter(|w| !w.is_empty()) {
+        let w = w.to_lowercase();
+        if let Some((d, _, _)) = DAYS.iter().find(|(_, full, short)| w == *full || short.contains(&w.as_str())) {
+            match found {
+                Some(f) if f != *d => return None,
+                _ => found = Some(*d),
+            }
+        }
+    }
+    found
+}
+
+/// `event_at`'s own calendar day (in its own offset; a YYYY-MM-DD is that date), or `None` when
+/// it isn't a date.
+fn event_day(v: &Value) -> Option<NaiveDate> {
+    let s = v.as_str()?.trim();
+    DateTime::parse_from_rfc3339(s).map(|t| t.date_naive()).ok().or_else(|| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
+}
+
+pub(crate) fn day_name(d: Weekday) -> &'static str {
+    match d {
+        Weekday::Mon => "Monday",
+        Weekday::Tue => "Tuesday",
+        Weekday::Wed => "Wednesday",
+        Weekday::Thu => "Thursday",
+        Weekday::Fri => "Friday",
+        Weekday::Sat => "Saturday",
+        Weekday::Sun => "Sunday",
+    }
+}
+
+/// A `when` line naming one weekday that isn't `event_at`'s own day ("Fri, Dec 12" for a Saturday).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct WrongWeekday {
+    /// The weekday the line names.
+    pub said: Weekday,
+    /// `event_at`'s day.
+    pub day: NaiveDate,
+    /// The nearest day with the weekday the line names (within 3 days either way), so both dates
+    /// can be offered without anyone counting days.
+    pub other: NaiveDate,
+}
+
+impl WrongWeekday {
+    /// The kit's refusal: "when says Friday, but event_at is Saturday, Dec 12, 2026. Do you mean
+    /// Saturday, Dec 12, or Friday, Dec 11?"
+    pub(crate) fn sentence(&self) -> String {
+        let actual = day_name(self.day.weekday());
+        format!(
+            "when says {said}, but event_at is {actual}, {date}. Do you mean {actual}, {short}, or {other}?",
+            said = day_name(self.said),
+            date = self.day.format("%b %-d, %Y"),
+            short = self.day.format("%b %-d"),
+            other = self.other.format("%A, %b %-d"),
+        )
+    }
+}
+
+/// The one rule for `when` against `event_at` (the kit's validate and the gather_create tool both
+/// use it): `Some` when the line names exactly one weekday and it isn't event_at's day. No
+/// weekday, two weekdays, or no event_at: not checked.
+pub(crate) fn wrong_weekday(spec: &Value) -> Option<WrongWeekday> {
+    let said = weekday_in(spec.get("when")?.as_str()?)?;
+    let day = event_day(spec.get("event_at")?)?;
+    if said == day.weekday() {
+        return None;
+    }
+    let d = (said.num_days_from_monday() as i64 - day.weekday().num_days_from_monday() as i64).rem_euclid(7);
+    let other = day + Duration::days(if d > 3 { d - 7 } else { d });
+    Some(WrongWeekday { said, day, other })
+}
+
 fn validate(spec: &Value, now: DateTime<Utc>) -> Result<(), String> {
     let obj: &Map<String, Value> = spec.as_object().ok_or("The spec must be a JSON object.")?;
     if let Some(k) = obj.keys().find(|k| !SPEC_KEYS.contains(&k.as_str())) {
@@ -1000,6 +1085,9 @@ fn validate(spec: &Value, now: DateTime<Utc>) -> Result<(), String> {
     if let Some(e) = date("event_at")? {
         if e < closes {
             return Err("event_at is before closes_at. Answers close on or before the event.".into());
+        }
+        if let Some(w) = wrong_weekday(spec) {
+            return Err(w.sentence());
         }
     }
     for b in ["show_names", "show_live_count", "waiting_list"] {
@@ -1669,6 +1757,40 @@ mod tests {
         let signup = json!({ "face": "signup", "title": "Potluck", "closes_at": close, "slots": [{ "name": "Mains", "cap": 3 }, { "name": "mains", "cap": 1 }] });
         assert!(validate(&signup, now).unwrap_err().contains("Two slots"));
         assert!(validate(&json!({ "face": "signup", "title": "P", "closes_at": close, "slots": [{ "name": "Mains", "cap": 0 }] }), now).unwrap_err().contains("cap"));
+    }
+
+    /// when-weekday-checked (office party m6): the kit refuses a `when` naming another weekday
+    /// than event_at's own day, whichever way the pocket is made.
+    #[test]
+    fn when_must_name_event_ats_own_weekday() {
+        let now: DateTime<Utc> = "2026-11-20T09:00:00Z".parse().unwrap();
+        let s = |when: Option<&str>, event_at: Option<&str>| {
+            let mut v = json!({ "face": "rsvp", "title": "Office party", "closes_at": "2026-12-10T18:00:00+01:00" });
+            if let Some(w) = when {
+                v["when"] = json!(w);
+            }
+            if let Some(e) = event_at {
+                v["event_at"] = json!(e);
+            }
+            validate(&v, now)
+        };
+        let sat = "2026-12-12T18:00:00+01:00";
+        assert_eq!(
+            s(Some("Fri, Dec 12, 6 PM"), Some(sat)).unwrap_err(),
+            "when says Friday, but event_at is Saturday, Dec 12, 2026. Do you mean Saturday, Dec 12, or Friday, Dec 11?"
+        );
+        assert_eq!(s(Some("Sat, Dec 12, 6 PM"), Some(sat)), Ok(()));
+        assert_eq!(s(Some("Dec 12, 6 PM"), Some(sat)), Ok(()), "no weekday: not checked");
+        assert_eq!(s(Some("Fri to Sat"), Some(sat)), Ok(()), "two weekdays: not checked");
+        assert_eq!(s(Some("Saturnalia at Monaco"), Some(sat)), Ok(()), "whole words only");
+        // 23:30 in Los Angeles is Saturday there (Sunday in UTC): event_at's own offset decides.
+        assert_eq!(s(Some("Sat late"), Some("2026-12-12T23:30:00-08:00")), Ok(()));
+        assert!(s(Some("Sun"), Some("2026-12-12T23:30:00-08:00")).unwrap_err().starts_with("when says Sunday, but event_at is Saturday"));
+        // A YYYY-MM-DD event_at is that date.
+        assert_eq!(s(Some("Sat"), Some("2026-12-12")), Ok(()));
+        assert!(s(Some("Wed"), Some("2026-12-12")).unwrap_err().ends_with("or Wednesday, Dec 9?"), "the nearest Wednesday is 3 days before");
+        // No event_at: not checked.
+        assert_eq!(s(Some("Fri, Dec 12"), None), Ok(()));
     }
 
     #[test]
