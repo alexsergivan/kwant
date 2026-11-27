@@ -327,8 +327,9 @@ test('v1: boot JSON draws at once; a seated one skips the first round trip, a pu
   assert.deepEqual(j.calls.map((c) => c.what), ['state'], 'the seat cookie is not sent with the page, so ask once');
   assert.equal(j.sockets.length, 0);
   // A phone that does have a seat gets it back even though the page came with the public info.
+  // The page and `state` read the same pocket row, so the page's version is never newer than the box's (here 1).
   const k = harness('rejoin', { ws: true });
-  await k.app.start(envelope(clone(scenarios.join.info), { code: 't', version: 3 }));
+  await k.app.start(envelope(clone(scenarios.join.info), { code: 't', version: 1 }));
   await flush();
   assert.equal(k.screen(), 'question');
   assert.match(document.querySelector('.toast').textContent, /^You're back, Mia\./);
@@ -627,6 +628,46 @@ test('3a: first tap counts; later taps are ignored; then locked in', async () =>
   await flush();
   assert.ok(t.text().includes('Locked in'));
   assert.ok(t.text().includes('Waiting for 5 more players. Eyes on the TV!'));
+  t.app.stop();
+});
+
+test('F-Q1: an answer reply that lands after a newer push does not take the phone back', async () => {
+  const t = await open('choice', { ws: true });
+  let release;
+  t.box.actionReply = () => new Promise((r) => (release = () => r({ ok: true, status: 200, json: async () => envelope(clone(scenarios.choice.action), { code: 't', version: 50 }) })));
+  t.sockets[0].onmessage(frame(scenarios.choice.state, 49));
+  click(t.root.querySelector('button[data-answer="B"]'));
+  await flush();
+  assert.equal(t.calls.filter((c) => c.what === 'action').length, 1);
+  // The slow phone's own reply (version 50) is still on the way when the box locks and reveals (version 51).
+  t.sockets[0].onmessage(frame(scenarios.right.state, 51));
+  await flush();
+  assert.equal(t.screen(), 'reveal');
+  release();
+  await flush();
+  assert.equal(t.screen(), 'reveal', 'the older reply is not drawn over the reveal');
+  assert.ok(t.text().includes('Right!'));
+  assert.equal(t.app.api.version, 51, 'the version does not go back either');
+  // The answer still counts: nothing is sent again, and no "Couldn't send" shows.
+  await t.advance(30000);
+  assert.equal(t.calls.filter((c) => c.what === 'action').length, 1);
+  assert.ok(!t.text().includes("Couldn't send"));
+  assert.equal(t.screen(), 'reveal');
+  t.app.stop();
+});
+
+test('F-Q1: an answer reply newer than the last push is still drawn', async () => {
+  const t = await open('choice', { ws: true });
+  t.box.actionReply = async () => ({ ok: true, status: 200, json: async () => envelope(clone(scenarios.choice.action), { code: 't', version: 50 }) });
+  t.sockets[0].onmessage(frame(scenarios.choice.state, 49));
+  click(t.root.querySelector('button[data-answer="B"]'));
+  await flush();
+  assert.ok(t.text().includes('Locked in'));
+  assert.equal(t.app.api.version, 50);
+  // A push with the same version as the one taken is the same state and is drawn as well.
+  t.sockets[0].onmessage(frame(scenarios.right.state, 50));
+  await flush();
+  assert.equal(t.screen(), 'reveal');
   t.app.stop();
 });
 
