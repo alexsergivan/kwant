@@ -507,6 +507,83 @@ async fn the_cards_set_cap_cost_line_and_inbox_item() {
     assert!(!inbox["items"].as_array().unwrap().iter().any(|i| i["kind"] == "pocket_desk"), "{inbox}");
 }
 
+// ---- desk-inbox-rows-server: row kinds and the End row ----
+
+#[tokio::test]
+async fn a_request_row_a_cap_row_and_one_ended_with_n_unanswered_done_row() {
+    let d = setup().await;
+    let (code, _host) = desk(&d, json!({ "daily_cap": 10 })).await;
+    // Ann's yes/no ask: the bot's "Request:" label becomes ask "request", without the prefix
+    let (ann, ann_key) = joined(&d, &code, "Ann").await;
+    let r = say(&d, &code, &ann_key, &format!("Can we leave at 2? REPLYTEXT:{}", b64("[[person]] Request: Late check-out: 2 PM"))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    common::wait_for("Ann waits", || async { desk_items(&d).await.len() == 1 }).await;
+    let item = desk_items(&d).await.remove(0);
+    assert_eq!((item["ask"].as_str(), item["text"].as_str(), item["waiting"].as_u64()), (Some("request"), Some("Late check-out: 2 PM"), Some(0)), "{item}");
+    assert_eq!(item["id"], format!("desk:{code}:{ann}").as_str());
+    assert!(!state_of(&d, &code, &ann_key).await.to_string().contains("Request:"), "the guest never sees the label");
+
+    // Ben goes over the cap: ask "daily_cap" and how many of his messages wait. The cap is
+    // the whole desk's: Ann's turn took 1 of the 10 replies, so Ben gets 9.
+    let (ben, ben_key) = joined(&d, &code, "Ben").await;
+    for i in 0..9 {
+        let r = say(&d, &code, &ben_key, &format!("Question {i} REPLYTAG:rows13n{i}")).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+        wait_msg(&d, &code, &ben_key, "bot", &format!("answer rows13n{i}")).await;
+        wait_idle(&d, &code, &ben_key).await;
+    }
+    let (_, read) = call(&d.env.app, "GET", &format!("/api/pockets/{code}"), None).await;
+    assert_eq!((read["summary"]["counts"]["replies_today"].as_u64(), read["summary"]["counts"]["daily_cap"].as_u64()), (Some(10), Some(10)), "{read}");
+    assert!(desk_items(&d).await.iter().all(|i| i["guest_id"] != ben.as_str()), "Ben doesn't wait before the cap");
+    for text in ["Can I check out at 2?", "Hello?"] {
+        let r = say(&d, &code, &ben_key, text).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+        tokio::time::sleep(StdDuration::from_millis(20)).await;
+    }
+    let item = desk_items(&d).await.into_iter().find(|i| i["guest_id"] == ben.as_str()).expect("Ben's row");
+    assert_eq!((item["ask"].as_str(), item["waiting"].as_u64(), item["text"].as_str()), (Some("daily_cap"), Some(2), Some("Daily limit reached")), "{item}");
+    assert_eq!(item["id"], format!("desk:{code}:{ben}").as_str());
+
+    // End with both still waiting: their rows go, and one Done row says how many were left
+    let (s, v) = call(&d.env.app, "POST", &format!("/api/pockets/{code}/end"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    pocket::schedule::run_once(&d.env.state, Utc::now()).await;
+    assert!(desk_items(&d).await.is_empty(), "an ended desk has no Needs-you rows");
+    let (s, inbox) = call(&d.env.app, "GET", "/api/inbox", None).await;
+    assert_eq!(s, StatusCode::OK, "{inbox}");
+    let all = inbox["items"].as_array().unwrap();
+    assert!(!all.iter().any(|i| i["kind"] == "pocket_desk"), "{inbox}");
+    let done: Vec<&Value> = all.iter().filter(|i| i["kind"] == "pocket" && i["id"] == json!(format!("pocket:{code}"))).collect();
+    assert_eq!(done.len(), 1, "one row per desk: {inbox}");
+    assert_eq!(done[0]["title"], "Sea-view flat: Ended with 2 unanswered", "{}", done[0]);
+    assert_eq!(done[0]["ended_unanswered"], 2);
+    assert_eq!(done[0]["group"], "finished");
+    assert_eq!((done[0]["kwant_id"].as_str(), done[0]["link"]["direct_kwant_id"].as_str()), (Some(d.env.a.as_str()), Some(d.env.a.as_str())), "it opens the desk's bot chat");
+    // A second End changes nothing
+    call(&d.env.app, "POST", &format!("/api/pockets/{code}/end"), None).await;
+    let (_, inbox) = call(&d.env.app, "GET", "/api/inbox", None).await;
+    let titles: Vec<&str> = inbox["items"].as_array().unwrap().iter().filter(|i| i["id"] == json!(format!("pocket:{code}"))).filter_map(|i| i["title"].as_str()).collect();
+    assert_eq!(titles, vec!["Sea-view flat: Ended with 2 unanswered"]);
+}
+
+#[tokio::test]
+async fn a_desk_ended_with_nobody_waiting_keeps_its_plain_done_row() {
+    let d = setup().await;
+    let (code, _host) = desk(&d, json!({})).await;
+    let (_, key) = joined(&d, &code, "Ann").await;
+    say(&d, &code, &key, "Hi REPLYTAG:quiet13").await;
+    wait_msg(&d, &code, &key, "bot", "answer quiet13").await;
+    wait_idle(&d, &code, &key).await;
+    let (s, v) = call(&d.env.app, "POST", &format!("/api/pockets/{code}/end"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    pocket::schedule::run_once(&d.env.state, Utc::now()).await;
+    let (_, inbox) = call(&d.env.app, "GET", "/api/inbox", None).await;
+    let done: Vec<&Value> = inbox["items"].as_array().unwrap().iter().filter(|i| i["id"] == json!(format!("pocket:{code}"))).collect();
+    assert_eq!(done.len(), 1, "{inbox}");
+    assert_eq!(done[0]["title"], "Sea-view flat has ended");
+    assert!(done[0].get("ended_unanswered").is_none());
+}
+
 // ---- Hand-off ----
 
 #[tokio::test]
