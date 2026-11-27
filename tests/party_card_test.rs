@@ -516,7 +516,9 @@ async fn the_done_row_is_the_results_post_even_with_a_reply_card_noted_first() {
     let reply = e.state.db.insert_message_as(Some("0-reply-card"), &msg, &MessageExtra::default()).await.unwrap();
     assert!(pocket_block(&reply).is_some(), "the reply carries the vote's card: {:?}", reply.results);
     assert_eq!(e.state.db.pocket_result_post_of(&code).await.unwrap(), None, "a reply card alone is no results post");
-    let closes = pocket::snapshot(&e.state, &code).await.unwrap().unwrap().row.closes_at.expect("the vote closes");
+    // A vote made from chat closes at its spec's closes_at (the kit reads it, gather.rs `closes`);
+    // the pocket row's own closes_at stays None for it, so the test reads the spec too
+    let closes = chrono::DateTime::parse_from_rfc3339(args["closes_at"].as_str().unwrap()).expect("the vote closes").with_timezone(&Utc);
     pocket::sweep(&e.state, closes + Duration::minutes(1)).await;
     schedule::run_once(&e.state, closes + Duration::minutes(2)).await;
     let mut list = e.state.db.list_messages(&e.bot.id, 100).await.unwrap();
