@@ -948,6 +948,32 @@ export const DESK_WAITING = {
   ],
 };
 
+/** desk-cap-row: Yuki's row once Bell hit the daily limit (Juno's #1300 row JSON: ask "daily_cap", waiting n). */
+export const DESK_CAP_WAITING = {
+  follow_up_hours: 24,
+  items: [
+    {
+      kind: 'pocket_desk',
+      id: 'desk:seaview:g-yuki',
+      ask: 'daily_cap',
+      waiting: 13,
+      mode: 'guide',
+      pocket_code: 'seaview',
+      pocket_title: 'Sea-view flat',
+      guest_id: 'g-yuki',
+      guest_name: 'Yuki',
+      text: 'Daily limit reached',
+      quote: 'Is there a hair dryer somewhere? And what time is quiet time?',
+      asked_at: deskAt(21, 40),
+      kwant_id: 'kw-never-shown-01',
+      kwant_name: 'Bell',
+      channel_id: null,
+      direct_kwant_id: 'kw-never-shown-01',
+      thread_id: 't-desk',
+    },
+  ],
+};
+
 // Booking Desk (pa13b): Studio Nika's haircuts in Ljubljana, after Mira's pa13b-design.md sample. "Today" is
 // Tue Dec 1 2026, 11:40 AM (the shots and tests set bookingClock to it). Names, notes and times are made up.
 export const BOOKING_TODAY = new Date(2026, 11, 1, 11, 40);
