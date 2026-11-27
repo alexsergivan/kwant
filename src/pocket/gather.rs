@@ -341,6 +341,14 @@ fn members(spec: &Value) -> Vec<String> {
         .unwrap_or_default()
 }
 
+/// vote-ties-and-members (m10): a vote with a members list takes ballots only from the people on
+/// it (the same name match as "never answered"); without one, anyone with the link votes.
+fn may_vote(spec: &Value, name: &str) -> bool {
+    let listed = members(spec);
+    let k = key(name);
+    listed.is_empty() || listed.iter().any(|m| key(m) == k)
+}
+
 fn template<'a>(spec: &'a Value, kind: &str) -> Option<&'a str> {
     spec.get("templates").and_then(|t| t.get(kind)).and_then(Value::as_str).map(str::trim).filter(|s| !s.is_empty())
 }
@@ -816,7 +824,9 @@ impl Gather {
             _ => {
                 // Their own order while open (to change it); after the close there's no link left
                 let mine = (s.phase == OPEN && s.voted.contains_key(me)).then(|| s.ballots.get(&s.ballot_key(me)).cloned()).flatten();
-                v["me"] = json!({ "voted": s.voted.contains_key(me), "ballot": mine });
+                // m10: the page can say it before they rank; the vote action refuses it either way
+                let can_vote = may_vote(spec, ctx.player(me).map_or("", |p| p.name.as_str()));
+                v["me"] = json!({ "voted": s.voted.contains_key(me), "ballot": mine, "can_vote": can_vote });
                 // secret-ballot-unlinkable: no count while open, whatever `show_live_count` says
                 // (the 2nd voter would learn the 1st's pick); the totals are `result` at the close
                 v["live"] = Value::Null;
@@ -1304,6 +1314,11 @@ impl Kit for Gather {
             (Viewer::Guest(me), "vote") => {
                 if f != VOTE {
                     return Err(wrong_face(VOTE));
+                }
+                // m10: refused before anything is read or stored, so no ballot and no `voted` row
+                if !may_vote(spec, ctx.player(me).map_or("", |p| p.name.as_str())) {
+                    let host = spec_str(spec, "host_name").unwrap_or("the host");
+                    return Err(bad(format!("Only the people {host} listed can vote. Ask {host} to add you.")));
                 }
                 let in_play = s.in_play(spec);
                 let ranking: Vec<usize> = body

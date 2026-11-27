@@ -1263,7 +1263,8 @@ export class GatherApp {
                   'li',
                   null,
                   `Round ${x.round}: ${x.counts.map((c) => `${c.name} ${fmt(c.votes)}`).join(' · ')}.`,
-                  drop.length ? ` ${and(drop)} ${drop.length === 1 ? 'drops' : 'drop'} out.` : '',
+                  // vote-ties-and-members (m9): 2+ out in one round only happens on a tie for last
+                  drop.length ? ` ${and(drop)} ${drop.length === 1 ? 'drops out' : `tied for last, so ${drop.length === 2 ? 'both' : 'all'} drop out`}.` : '',
                   x.exhausted ? ` ${fmt(x.exhausted)} ${x.exhausted === 1 ? 'ballot had' : 'ballots had'} no choice left.` : '',
                 );
               }),

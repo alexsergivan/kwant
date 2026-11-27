@@ -391,7 +391,7 @@ async fn no_route_pairs_a_person_with_a_ballot() {
     let a_key = p[0].1.clone();
     // A sees their own ballot (to change it), and no count while voting is open
     let a = view_of(&t, &code, &a_key).await;
-    assert_eq!(a["me"], json!({ "voted": true, "ballot": [2, 0, 1] }));
+    assert_eq!(a["me"], json!({ "voted": true, "ballot": [2, 0, 1], "can_vote": true }));
     assert_eq!(a["live"], Value::Null);
     // The host: who voted (to nudge), totals, never an order
     let h = host_view(&t, &code).await;
@@ -422,7 +422,7 @@ async fn no_route_pairs_a_person_with_a_ballot() {
     assert!(!result["rounds"].as_array().unwrap().is_empty());
     assert_eq!(result["ballots_counted"], 5, "a count, named so no view carries a \"ballots\" key");
     // Closed: A no longer gets an order back either (nothing links A to one now)
-    assert_eq!(view_of(&t, &code, &a_key).await["me"], json!({ "voted": true, "ballot": null }));
+    assert_eq!(view_of(&t, &code, &a_key).await["me"], json!({ "voted": true, "ballot": null, "can_vote": true }));
     let before = every_route(&t, &code, &host_key, &a_key).await;
     for (route, status, body) in &before {
         let text = body.to_string();
@@ -543,7 +543,7 @@ async fn a_closed_vote_keeps_nothing_that_pairs_a_ballot_with_a_name() {
     let r = &host_view(&t, &code).await["result"];
     assert_eq!((r["outcome"].as_str(), r["ballots_counted"].as_u64()), (Some("winner"), Some(5)), "{r}");
     for (_, k) in &ids {
-        assert_eq!(view_of(&t, &code, k).await["me"], json!({ "voted": true, "ballot": null }));
+        assert_eq!(view_of(&t, &code, k).await["me"], json!({ "voted": true, "ballot": null, "can_vote": true }));
     }
 
     // A tie unlinks too; "vote again" starts with a new salt, and the next close unlinks again
@@ -609,6 +609,63 @@ async fn nobody_sees_a_count_while_a_vote_is_open() {
         let counts: Vec<(&str, u64)> = r["rounds"][0]["counts"].as_array().unwrap().iter().map(|c| (c["name"].as_str().unwrap(), c["votes"].as_u64().unwrap())).collect();
         assert_eq!(counts, vec![("80s disco", 2), ("Winter wonderland", 1), ("Casino", 0)]);
     }
+}
+
+/// vote-ties-and-members (m10): with a members list, only the people on it vote. Anyone else
+/// with the link is refused with the host's name, and nothing is stored: no ballot, no `voted`
+/// row, the count unchanged. The name match is the never-answered one (case, spaces).
+#[tokio::test]
+async fn a_vote_with_members_refuses_names_outside_the_list() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "vote", json!({ "host_name": "Nina", "members": ["Ana", "Ben"] }))).await;
+    let (_, ana) = joined(&t, &code, "Ana").await;
+    // Typed differently from the list: still Ben
+    let (_, ben) = joined(&t, &code, "  bEN ").await;
+    let (_, zed) = joined(&t, &code, "Zed").await;
+    ok(&t, &code, &ana, "vote", json!({ "ranking": [1, 0] })).await;
+    ok(&t, &code, &ben, "vote", json!({ "ranking": [0] })).await;
+    let before = kit_state(&t, &code).await;
+    let r = act(&t, &code, &zed, "vote", json!({ "ranking": [2] })).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.body);
+    assert_eq!(r.body["message"], "Only the people Nina listed can vote. Ask Nina to add you.", "{}", r.body);
+    let after = kit_state(&t, &code).await;
+    assert_eq!(after, before, "a refused vote stores nothing");
+    assert_eq!(after["ballots"].as_object().unwrap().len(), 2);
+    let h = host_view(&t, &code).await;
+    assert_eq!(h["voted"], 2, "{h}");
+    let voters: Vec<&str> = h["voters"].as_array().unwrap().iter().map(|v| v["name"].as_str().unwrap()).collect();
+    assert!(!voters.contains(&"Zed"), "{voters:?}");
+    // The page can say it before they rank
+    assert_eq!(view_of(&t, &code, &zed).await["me"]["can_vote"], false);
+    assert_eq!(view_of(&t, &code, &ana).await["me"]["can_vote"], true);
+    assert_eq!(view_of(&t, &code, &ben).await["me"]["can_vote"], true);
+    // Refused whatever the ranking says (the gate comes first), and the close counts only members
+    assert_eq!(act(&t, &code, &zed, "vote", json!({ "ranking": [] })).await.body["message"], "Only the people Nina listed can vote. Ask Nina to add you.");
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    let res = host_view(&t, &code).await["result"].clone();
+    assert_eq!(res["ballots_counted"], 2, "{res}");
+}
+
+/// Without a host name the line names "the host"; a vote without `members` (every pocket made
+/// before the change) still lets anyone with the link vote.
+#[tokio::test]
+async fn a_vote_without_members_lets_anyone_vote_and_the_line_falls_back_to_the_host() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (open_code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    for n in ["Ana", "Zed"] {
+        let (_, k) = joined(&t, &open_code, n).await;
+        ok(&t, &open_code, &k, "vote", json!({ "ranking": [0] })).await;
+        assert_eq!(view_of(&t, &open_code, &k).await["me"]["can_vote"], true);
+    }
+    assert_eq!(host_view(&t, &open_code).await["voted"], 2);
+    let mut s = spec(now, "vote", json!({ "members": ["Ana"] }));
+    s.as_object_mut().unwrap().remove("host_name");
+    let (code, _) = make(&t, s).await;
+    let (_, zed) = joined(&t, &code, "Zed").await;
+    let r = act(&t, &code, &zed, "vote", json!({ "ranking": [0] })).await;
+    assert_eq!((r.status, r.body["message"].as_str()), (StatusCode::BAD_REQUEST, Some("Only the people the host listed can vote. Ask the host to add you.")), "{}", r.body);
 }
 
 /// A vote closed by an older version (salt still beside the ballots) is unlinked by the next
