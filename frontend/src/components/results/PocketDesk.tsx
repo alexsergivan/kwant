@@ -31,6 +31,7 @@ import {
   Trash2,
   Undo2,
   Wifi,
+  WifiOff,
   X,
   Zap,
 } from 'lucide-react';
@@ -588,7 +589,7 @@ const GRID = 'grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center';
 const FULL = 'col-span-2 sm:col-span-1';
 const HALF_BTN = `kw-btn-ghost ${HALF}`;
 
-const DeskChip: React.FC<{ stage: DeskStage; d: DeskInfo; editing?: boolean; requests?: number }> = ({ stage, d, editing = false, requests }) => {
+const DeskChip: React.FC<{ stage: DeskStage; d: DeskInfo; editing?: boolean; requests?: number; handoffs?: number }> = ({ stage, d, editing = false, requests, handoffs: shownHandoffs }) => {
   if (d.mode === 'booking' && d.booking) {
     if (editing)
       return (
@@ -598,7 +599,8 @@ const DeskChip: React.FC<{ stage: DeskStage; d: DeskInfo; editing?: boolean; req
         </span>
       );
     if (stage === 'live' || stage === 'ready') {
-      const handoffs = d.guests.filter((g) => g.waiting).length;
+      // Hand-offs only: a guest asking for a listed time is already a request (from the answered bk.slots).
+      const handoffs = shownHandoffs ?? d.guests.filter((g) => g.waiting).length;
       // The answered view (a held Yes is no longer a request), so the chip agrees with the tiles.
       const text = bookingChip(requests ?? d.booking.requests, handoffs);
       return (
@@ -830,21 +832,30 @@ export const DeskCompactJoin: React.FC<{ d: DeskInfo }> = ({ d }) => {
   const url = joinUrl(d);
   if (!url)
     return (
-      <p className={`flex items-start gap-2 ${SMALL}`} data-join="none">
-        <Wifi size={14} className={`${ICON} text-zinc-500`} aria-hidden="true" />
-        <span>{DESK_LATER.noAddress} Turn on Tailscale Funnel or set your own https address, and the link and QR show here.</span>
-      </p>
+      <Callout tone="warn">
+        <p className="flex items-start gap-2" data-join="none">
+          <WifiOff size={15} className={`${ICON} text-warn`} aria-hidden="true" />
+          <span>{DESK_LATER.noAddress} Turn on Tailscale Funnel or set your own https address. Then the link and QR show here.</span>
+        </p>
+      </Callout>
     );
   const anywhere = !!d.join?.anywhere_url;
   const Icon = anywhere ? Globe : Wifi;
   return (
-    <div className="flex items-center gap-3.5 rounded-2xl border border-sky-800/70 bg-surface-rail/40 p-3.5" data-join="compact" data-join-mode={anywhere ? 'anywhere' : 'wifi'}>
-      <Qr url={url} size="compact" name={d.title} />
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <p className="flex items-start gap-1.5 text-[13px] leading-5 text-zinc-300 sm:text-meta">
-          <Icon size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
-          {anywhere ? 'The same link for every guest. Print the QR or send the link.' : 'Same Wi-Fi only: guests must be on the flat Wi-Fi to open it.'}
-        </p>
+    <div
+      className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-2xl border border-sky-800/70 bg-surface-rail/40 p-3.5 sm:gap-x-3.5 sm:gap-y-2"
+      data-join="compact"
+      data-join-mode={anywhere ? 'anywhere' : 'wifi'}
+    >
+      {/* Phone: QR + caption, then the link on its own full-width row so the host is readable. Desktop: QR spans both rows. */}
+      <div className="sm:row-span-2">
+        <Qr url={url} size="compact" name={d.title} />
+      </div>
+      <p className="flex items-start gap-1.5 text-[13px] leading-5 text-zinc-300 sm:self-end sm:text-meta">
+        <Icon size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
+        {anywhere ? 'The same link for every guest. Print the QR or send the link.' : 'Same Wi-Fi only: guests must be on the flat Wi-Fi to open it.'}
+      </p>
+      <div className="col-span-2 min-w-0 sm:col-span-1 sm:col-start-2 sm:self-start" data-join-link>
         <LinkField url={url} />
       </div>
     </div>
@@ -1311,6 +1322,10 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
   // pa13b: a booking desk. The host's answers lie over the times at once; the request cards read the times as sent.
   const bkBase = d.mode === 'booking' && d.booking ? d.booking : null;
   const bk = useMemo(() => (bkBase ? withBookingAnswers(block.code, bkBase, deskAnswers.get) : null), [block.code, bkBase, deskAnswers.version()]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A guest asking for a listed time has its own Allow card; the chip, the guest list and the tile count only hand-offs.
+  // From the answered view (bk.slots), so a local Yes doesn't put that guest back in as a hand-off until the next read.
+  const asking = new Set(bk ? bk.slots.flatMap((x) => x.requested.map((r) => r.guest)) : []);
+  const handoffs = d.guests.filter((g) => g.waiting && !asking.has(g.id));
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<DeskSlot[]>(() => bkBase?.slots ?? []);
   const [monday, setMonday] = useState(() => weekOf(bkBase?.slots.find((x) => x.start.slice(0, 10) >= todayKey())?.start.slice(0, 10) ?? todayKey()));
@@ -1524,9 +1539,6 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
     );
   } else if (bk && stage !== 'stopped') {
     const full = stage === 'cap';
-    // A guest asking for a listed time has its own Allow card above; the guest list and the tile count only hand-offs.
-    const asking = new Set(bk.slots.flatMap((x) => x.requested.map((r) => r.guest)));
-    const handoffs = d.guests.filter((g) => g.waiting && !asking.has(g.id));
     body = editing ? (
       <TimesEditor draft={draft} setDraft={setDraft} monday={monday} setMonday={setMonday} rule={rule} setRule={setRule} quickFill={false} refusal={refusal} setRefusal={setRefusal} />
     ) : (
@@ -1739,11 +1751,11 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
           <h3 className="text-[20px] font-bold leading-[26px] text-zinc-50 sm:text-[19px]">{d.title}</h3>
           <p className="text-[15px] text-zinc-300 sm:text-[13px]">{where}</p>
           <span className="mt-1.5 block sm:hidden">
-            <DeskChip stage={stage} d={d} editing={editing} requests={bk?.requests} />
+            <DeskChip stage={stage} d={d} editing={editing} requests={bk?.requests} handoffs={bk ? handoffs.length : undefined} />
           </span>
         </div>
         <span className="hidden shrink-0 sm:block">
-          <DeskChip stage={stage} d={d} editing={editing} requests={bk?.requests} />
+          <DeskChip stage={stage} d={d} editing={editing} requests={bk?.requests} handoffs={bk ? handoffs.length : undefined} />
         </span>
       </header>
       <div className="relative flex flex-col gap-4">

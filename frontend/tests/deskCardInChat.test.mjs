@@ -164,6 +164,8 @@ test('live guide card keeps a compact QR and the one link; no PIN anywhere', asy
   assert.equal(j.getAttribute('data-join-mode'), 'anywhere');
   assert.match(j.textContent, /The same link for every guest/);
   assert.ok(j.querySelector('svg, img, canvas'), 'a QR is drawn');
+  const row = j.querySelector('[data-join-link]');
+  assert.ok(row && row.className.includes('col-span-2') && row.className.includes('sm:col-span-1'), 'the link has its own full-width row on phone');
   assert.ok(j.textContent.includes('https://frontdesk.example.net/p/abc123') || j.querySelector('input')?.value === 'https://frontdesk.example.net/p/abc123', 'the link is shown');
   assert.ok(!/\bpin\b/i.test(text(v)), 'no PIN word on the card');
 });
@@ -175,6 +177,9 @@ test('a live desk with no reachable address says why, and Share link / Try as a 
   const n = v.host.querySelector('[data-join="none"]');
   assert.ok(n);
   assert.match(n.textContent, /Phones can’t reach this desk yet/);
+  assert.match(n.textContent, /https address\. Then the link and QR show here\./);
+  assert.ok(n.parentElement.className.includes('border-amber-300/35'), 'a warn Callout, not small grey text');
+  assert.ok(n.querySelector('svg.text-warn'), 'WifiOff in warn');
   assert.equal(v.host.querySelector('[data-join="compact"]'), null);
   const later = [...v.host.querySelectorAll('[aria-disabled="true"]')].map((e) => e.getAttribute('title'));
   assert.ok(later.length >= 1);
@@ -193,6 +198,21 @@ test('booking card: a guest who asked for a listed time is counted once, not aga
   assert.equal(rows.length, 0, 'no Needs-you guest rows for guests whose request already has its Allow card');
   assert.ok(v.host.querySelector('[data-booking-allow="open"]'), 'their Allow card is there');
   assert.ok(v.host.querySelector('[data-join]'), 'the booking card has the join line too');
+});
+
+test('booking chip counts a requesting guest once, the same number as the Requests tile', async () => {
+  stub();
+  const b = raw('requests');
+  const asking = new Set(b.desk.slots.flatMap((x) => x.requested.map((r) => r.guest)));
+  const requests = b.desk.slots.reduce((n, x) => n + x.requested.length, 0);
+  assert.ok(requests > 0);
+  const extra = { ...b.desk.guests[0], id: 'g-luka', name: 'Luka', waiting: true, handoff_reason: 'beard trim' };
+  b.desk.guests = [...b.desk.guests.map((x) => (asking.has(x.id) ? { ...x, waiting: true, handoff_reason: 'Asked for a time' } : x)), extra];
+  b.desk.counts = { ...b.desk.counts, waiting: asking.size + 1 };
+  const v = await mount(h(m.DeskCard, { block: m.validPocket(b), ask: () => {}, openGuest: null }));
+  const chips = [...v.host.querySelectorAll('[data-chip="live"]')].map((c) => c.textContent);
+  assert.ok(chips.length >= 1);
+  for (const c of chips) assert.equal(c, `Live · ${requests + 1} for you`, 'requests plus the one hand-off, not the asker again');
 });
 
 const slotAt = (start, over = {}) => ({ id: start, start, minutes: 30, seats: 1, open_seats: 1, label: null, past: false, requested: [], confirmed: [], ...over });
