@@ -6,6 +6,7 @@ import { Api, Env, Fail, Live } from '../api';
 import { AVATARS, creature, fmt, h, icon, Kid } from '../dom';
 import { clock, day } from '../app';
 import { cap, PinInput, pinCopy, Problem } from '../santa/pin';
+import { Ballots, Store } from './ballot';
 import { gaIcon, tally } from './look';
 import { Answer, FOOD_LABELS, gatherFrom, GatherView, move, nth, Screen, screenOf, Slot, Votes, whoSees } from './view';
 
@@ -22,6 +23,10 @@ export type GatherEnv = Env & {
   now: () => number;
   setInterval: (f: () => void, ms: number) => number;
   clearInterval: (id: number) => void;
+  /** localStorage when the browser allows it: this phone's ballot token and the order it sent (secret-ballot-open-phase). */
+  store?: Store | null;
+  /** crypto.getRandomValues, for the ballot token. */
+  random?: (b: Uint8Array) => Uint8Array;
 };
 
 /** "Dec 4" (en-US), "4 Dec" (en-GB): a calendar day in UTC, in the phone's locale, like ../app.ts `day`. */
@@ -97,9 +102,11 @@ export class GatherApp {
   private freshMove = false;
   private seenSent = false;
   private noticesSeen = false;
+  private ballots: Ballots;
 
   constructor(root: HTMLElement, private env: GatherEnv, readonly code: string) {
     this.root = root;
+    this.ballots = new Ballots(env.store, code, env.random ?? ((b) => globalThis.crypto.getRandomValues(b)));
     this.api = new Api<GatherView>(env, code, gatherFrom);
     this.live = new Live<GatherView>(env, this.api, {
       view: (v) => this.show(v),
@@ -174,10 +181,20 @@ export class GatherApp {
     const s = m.slot ?? m.waiting?.slot;
     if (s !== undefined) d.slot = s;
     d.note = m.note ?? '';
-    if (m.ballot) {
-      d.order = m.ballot.slice();
-      d.pick = m.ballot[0];
+    const order = this.myOrder(v);
+    if (order) {
+      d.order = order.slice();
+      d.pick = order[0];
     }
+  }
+
+  /** The order this guest sent: an older vote's box still shows it back; a new one is on the phone that sent it only. */
+  private myOrder(v: GatherView): number[] | undefined {
+    const b = v.facts.ballot;
+    if (v.mine?.ballot) return v.mine.ballot;
+    if (!v.seat || !b || !v.mine?.voted) return undefined;
+    const order = this.ballots.mine(v.seat.id, b.revotes)?.filter((o) => b.options.some((x) => x.option === o));
+    return order?.length ? order : undefined;
   }
 
   private afterShow(v: GatherView): void {
@@ -797,7 +814,8 @@ export class GatherApp {
       if (f.fields.includes('slot_note') && d.note.trim()) body.note = d.note.trim();
       return ['take', body];
     }
-    return ['vote', { ranking: f.ballot?.kind === 'ranked' ? d.order : [d.pick] }];
+    // The token keys the ballot on the box; only this phone has it (secret-ballot-open-phase).
+    return ['vote', { ranking: f.ballot?.kind === 'ranked' ? d.order.slice() : [d.pick], token: this.ballots.token(v.seat?.id ?? '') }];
   }
 
   async submit(): Promise<void> {
@@ -833,6 +851,8 @@ export class GatherApp {
     const a = await this.api.act(name, body);
     this.busy = '';
     if (a.ok) {
+      const seat = this.view?.seat?.id;
+      if (name === 'vote' && seat) this.ballots.sent(seat, this.view!.facts.ballot?.revotes ?? 0, body.ranking as number[]);
       this.edit = false;
       this.filled = '';
       if (a.view) this.show(a.view);
@@ -1176,11 +1196,10 @@ export class GatherApp {
   }
 
   private voted(v: GatherView): HTMLElement {
-    const m = v.mine!;
     const f = v.facts;
     const ranked = f.ballot?.kind === 'ranked';
     const name = (o: number) => f.ballot?.options.find((x) => x.option === o)?.name ?? '';
-    const mine = m.ballot ?? [];
+    const mine = this.myOrder(v) ?? [];
     const live = v.live && v.live.length ? v.live : null;
     return h(
       'div',
@@ -1189,7 +1208,10 @@ export class GatherApp {
         'div',
         { class: 'panel' },
         h('h2', null, `Your vote is in, ${v.seat!.name}`),
-        mine.length ? h('div', { class: 'soft sum', 'data-ballot': '' }, ranked ? mine.map((o, i) => `${i + 1} ${name(o)}`).join(' · ') : name(mine[0])) : null,
+        mine.length
+          ? h('div', { class: 'soft sum', 'data-ballot': '' }, ranked ? mine.map((o, i) => `${i + 1} ${name(o)}`).join(' · ') : name(mine[0]))
+          : // Voted on another phone (or this one forgot): the box can't show it, so nobody else can either.
+            h('div', { class: 'soft sum', 'data-secret': '' }, "Your vote is in. It's secret, so only the phone you voted on can show or change it."),
       ),
       live
         ? h(
@@ -1206,7 +1228,7 @@ export class GatherApp {
           : 'The count is final when voting closes.',
       ),
       f.closes_at ? h('div', { class: 'closes' }, h('div', { class: 'lbl' }, 'Closes ', h('small', null, at(f.closes_at)))) : null,
-      this.ghost('Change my vote', () => this.goEdit(), 'change'),
+      mine.length ? this.ghost('Change my vote', () => this.goEdit(), 'change') : null,
       this.keep(v),
     );
   }

@@ -19,6 +19,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInputEle
 const m = await loadBundled(`
   export { gatherFrom, screenOf, whoSees, nth, move, FOOD_LABELS } from './guest/src/gather/view';
   export { GatherApp, avatarFor } from './guest/src/gather/app';
+  export { Ballots, newToken } from './guest/src/gather/ballot';
 `);
 const settle = () => new Promise((r) => setTimeout(r, 0));
 const flush = async () => {
@@ -130,7 +131,21 @@ test('view: whoSees follows the fields and show_names; nth and move', () => {
 
 // ---------- the app against the fake gather box ----------
 
-function harness(name) {
+/** A phone's localStorage. */
+const phoneStore = () => {
+  const m = new Map();
+  return { m, getItem: (k) => (m.has(k) ? m.get(k) : null), setItem: (k, v) => void m.set(k, String(v)) };
+};
+const TOKEN = /^[0-9a-f]{32}$/;
+/** The action bodies with the token checked and taken out (it is random per phone). */
+const sentVotes = (t) =>
+  t.acts().map((b) => {
+    const { token, ...rest } = b.body;
+    assert.match(token, TOKEN, 'every vote carries this phone token');
+    return { name: b.name, body: rest };
+  });
+
+function harness(name, { store } = {}) {
   const calls = [];
   let now = Date.parse('2026-12-02T12:00:00Z');
   let timers = [];
@@ -160,6 +175,7 @@ function harness(name) {
     clearInterval: (id) => (timers = timers.filter((t) => t.id !== id)),
     now: () => now,
     location: { pathname: '/p/t', protocol: 'http:', host: 'localhost' },
+    store,
   };
   const root = document.getElementById('app');
   root.replaceChildren();
@@ -183,8 +199,8 @@ function harness(name) {
   const $ = (s) => root.querySelector(s);
   return { app, root, box, calls, advance, $, screen: () => $('[data-screen]')?.getAttribute('data-screen'), text: () => root.textContent.replace(/\s+/g, ' '), actions: () => calls.filter((c) => c.path === 'action').map((c) => c.body.name), acts: () => calls.filter((c) => c.path === 'action').map((c) => c.body) };
 }
-async function open(name) {
-  const t = harness(name);
+async function open(name, o) {
+  const t = harness(name, o);
   await t.app.start(null);
   await flush();
   return t;
@@ -366,8 +382,12 @@ test('G6 one pick: radio rows, sends one', async () => {
   await pick(t.$('input[name="pick"][value="1"]'));
   assert.ok(t.$('.ans.pick .radio'));
   await submit(t.$('form'));
-  assert.deepEqual(t.acts(), [{ name: 'vote', body: { ranking: [1] } }]);
+  assert.deepEqual(sentVotes(t), [{ name: 'vote', body: { ranking: [1] } }]);
   assert.equal(t.screen(), 'voted');
+  // The box shows no order back (secret-ballot-open-phase): "your pick" is this phone's copy
+  assert.equal(t.box.seat.view.me.ballot, null);
+  assert.equal(t.$('[data-ballot]').textContent, 'Casa Verde');
+  assert.ok(t.$('[data-change]'));
   t.app.stop();
 });
 
@@ -402,9 +422,111 @@ test('G7 ranked: add, move with focus staying on the row, leave the last out', a
   await type(t.$('#g-name'), 'Ana');
   await type(t.$('#g-pin'), '1234');
   await submit(t.$('form'));
-  assert.deepEqual(t.acts(), [{ name: 'vote', body: { ranking: [1, 0] } }]);
+  assert.deepEqual(sentVotes(t), [{ name: 'vote', body: { ranking: [1, 0] } }]);
   assert.equal(t.screen(), 'voted');
   t.app.stop();
+});
+
+// ---------- secret-ballot-open-phase: the order lives on the phone that voted ----------
+
+test('ballot token: same seat keeps its token, a new seat or pocket gets a new one; 32 lowercase hex', () => {
+  const store = phoneStore();
+  let n = 0;
+  const random = (b) => b.fill(++n);
+  const a = new m.Ballots(store, 'XK4P', random);
+  const t1 = a.token('p1');
+  assert.match(t1, TOKEN);
+  assert.equal(t1, '01'.repeat(16));
+  assert.equal(a.token('p1'), t1, 'same seat, same token');
+  assert.equal(new m.Ballots(store, 'XK4P', random).token('p1'), t1, 'after a reload too');
+  const t2 = a.token('p2');
+  assert.notEqual(t2, t1, 'a new seat, a new token');
+  assert.notEqual(new m.Ballots(store, 'OTHER', random).token('p1'), t1, 'another pocket, another token');
+  assert.match(m.newToken((b) => b.fill(255)), /^f{32}$/);
+  // The order is kept per round: "vote again" makes the round-0 order old
+  a.sent('p1', 0, [2, 0]);
+  assert.deepEqual(a.mine('p1', 0), [2, 0]);
+  assert.equal(a.mine('p1', 1), undefined);
+  assert.equal(a.token('p1'), t1, 'sending keeps the token');
+  assert.deepEqual(JSON.parse(store.m.get('kp-ballot:XK4P:p1')), { token: t1, revotes: 0, ranking: [2, 0] });
+  // A broken copy is ignored; no store (private mode) still works for this page load
+  store.setItem('kp-ballot:XK4P:p3', '{"token":"NOT-HEX","ranking":[1]}');
+  assert.equal(a.mine('p3', 0), undefined);
+  assert.match(a.token('p3'), TOKEN);
+  const throwing = { getItem: () => { throw new Error('denied'); }, setItem: () => { throw new Error('denied'); } };
+  const p = new m.Ballots(throwing, 'XK4P', random);
+  const tp = p.token('p1');
+  p.sent('p1', 0, [1]);
+  assert.equal(p.token('p1'), tp);
+  assert.deepEqual(p.mine('p1', 0), [1]);
+});
+
+test('done page on the phone that voted: its own order and Change my vote, from the copy, after a reload too', async () => {
+  const store = phoneStore();
+  const t = await open('gather-ranked', { store });
+  for (const o of [2, 0]) await click(t.$(`[data-k="add-${o}"]`));
+  await type(t.$('#g-name'), 'Ana');
+  await type(t.$('#g-pin'), '1234');
+  await submit(t.$('form'));
+  assert.equal(t.screen(), 'voted');
+  assert.equal(t.$('[data-ballot]').textContent, '1 Sushi Bar Ko · 2 The Old Mill');
+  assert.equal(t.$('[data-secret]'), null);
+  const token = t.acts()[0].body.token;
+  assert.equal(JSON.parse(store.m.get('kp-ballot:t:p8')).token, token);
+  // Change my vote starts from this phone's order and sends the same token
+  await click(t.$('[data-change]'));
+  assert.deepEqual([...t.root.querySelectorAll('.ranks .rk[data-opt]')].map((r) => Number(r.dataset.opt)), [2, 0]);
+  await click(t.$('[data-k="add-1"]'));
+  await submit(t.$('form'));
+  assert.deepEqual(t.acts().map((b) => b.body), [{ ranking: [2, 0], token }, { ranking: [2, 0, 1], token }]);
+  assert.equal(t.$('[data-ballot]').textContent, '1 Sushi Bar Ko · 2 The Old Mill · 3 Casa Verde');
+  t.app.stop();
+  // The same phone opens the page again: the box shows nothing back, the copy does
+  const again = harness('gather-ranked', { store });
+  again.box.seat = t.box.seat;
+  again.box.token = t.box.token;
+  await again.app.start(null);
+  await flush();
+  assert.equal(again.screen(), 'voted');
+  assert.equal(again.$('[data-ballot]').textContent, '1 Sushi Bar Ko · 2 The Old Mill · 3 Casa Verde');
+  again.app.stop();
+});
+
+test('done page on another phone: secret, no order, no Change my vote', async () => {
+  const t = await open('gather-voted-secret', { store: phoneStore() });
+  assert.equal(t.screen(), 'voted');
+  assert.equal(t.$('[data-secret]').textContent, "Your vote is in. It's secret, so only the phone you voted on can show or change it.");
+  assert.equal(t.$('[data-ballot]'), null);
+  assert.equal(t.$('[data-change]'), null);
+  t.app.stop();
+});
+
+test('a vote this page sends after the guest voted on another phone: the box refusal shows as is, by Send', async () => {
+  const t = await open('gather-vote-elsewhere', { store: phoneStore() });
+  await click(t.$('[data-k="add-1"]'));
+  await type(t.$('#g-name'), 'Mia');
+  await type(t.$('#g-pin'), '1234');
+  await submit(t.$('form'));
+  assert.equal(t.screen(), 'join', 'the form stays, with what was picked');
+  assert.equal(t.$('[data-problem]').textContent.trim(), 'You already voted on another phone. Your vote is secret, so only that phone can change it.');
+  // Right by Send, where every refusal on this page goes (the RSVP and sign-up forms share the spot)
+  assert.equal(t.$('[data-problem]').nextElementSibling, t.$('button[data-send]'));
+  t.app.stop();
+});
+
+test('an older (salted) vote still shows the order the box sends back, and a stale round on the phone is ignored', async () => {
+  const t = await open('gather-voted', { store: phoneStore() });
+  assert.match(t.$('[data-ballot]').textContent, /1 The Old Mill · 2 Casa Verde · 3 Sushi Bar Ko/);
+  t.app.stop();
+  const store = phoneStore();
+  store.setItem('kp-ballot:t:p1', JSON.stringify({ token: 'b'.repeat(32), revotes: 0, ranking: [3] }));
+  const v = harness('gather-voted-secret', { store });
+  v.box.seat.view.ballot.revotes = 1;
+  await v.app.start(null);
+  await flush();
+  assert.equal(v.$('[data-ballot]'), null, 'an order from before "vote again" is not this round');
+  assert.ok(v.$('[data-secret]'));
+  v.app.stop();
 });
 
 test('G8 voted: own order, live bars from the server counts as width classes, no holo', async () => {
