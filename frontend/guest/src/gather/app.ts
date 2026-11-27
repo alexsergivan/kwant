@@ -297,7 +297,7 @@ export class GatherApp {
   paint(force = false): void {
     const scr = this.screenNow();
     const d = this.jd;
-    const sig = JSON.stringify([scr, this.view, this.problem, this.busy, this.bd.reset, this.letGo, this.freshMove, this.namesSaid, this.away?.tries, d.answer, d.plus, d.food, d.otherOn, d.slot, d.pick, d.order]);
+    const sig = JSON.stringify([scr, this.view, this.problem, this.busy, this.bd.reset, this.letGo, this.freshMove, this.away?.tries, d.answer, d.plus, d.food, d.otherOn, d.slot, d.pick, d.order]);
     if (!force && sig === this.sig) return;
     this.sig = sig;
     const active = document.activeElement as HTMLInputElement | null;
@@ -467,13 +467,14 @@ export class GatherApp {
     if (this.busy) return;
     this.busy = 'names';
     this.namesSaid = null;
-    this.paint();
+    this.paint(true);
     const r = await this.api.act('show_my_name', {});
     this.busy = '';
     if (r.ok) {
       this.namesSaid = { ok: true, text: 'Your name shows now.' };
+      // namesSaid is not in paint's signature, so the redraw is forced.
       if (r.view) this.show(r.view);
-      else this.paint(true);
+      this.paint(true);
       this.root.querySelector<HTMLElement>('[data-names-said]')?.focus({ preventScroll: true });
       return;
     }
@@ -484,7 +485,7 @@ export class GatherApp {
     // sentence stays in its place.
     if (r.status === 409) {
       const s = await this.api.state();
-      if (s.ok && s.view) return void this.show(s.view);
+      if (s.ok && s.view) this.show(s.view);
     }
     this.paint(true);
     this.root.querySelector<HTMLElement>('[data-show-name], [data-names-said]')?.focus({ preventScroll: true });
