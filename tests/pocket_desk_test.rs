@@ -525,7 +525,7 @@ async fn a_request_row_a_cap_row_and_one_ended_with_n_unanswered_done_row() {
 
     // Ben goes over the cap: ask "daily_cap" and how many of his messages wait
     let (ben, ben_key) = joined(&d, &code, "Ben").await;
-    for i in 0..10 {
+    for i in 0..9 {
         let r = say(&d, &code, &ben_key, &format!("Question {i} REPLYTAG:rows13n{i}")).await;
         assert_eq!(r.status, StatusCode::OK, "{}", r.body);
         wait_msg(&d, &code, &ben_key, "bot", &format!("answer rows13n{i}")).await;

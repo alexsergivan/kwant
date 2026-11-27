@@ -217,6 +217,7 @@ fn msgs(state: &Value) -> Vec<Value> {
         .unwrap_or_default()
 }
 
+#[allow(dead_code)]
 /// The guest's slot `id` in their own view.
 fn slot<'a>(state: &'a Value, id: &str) -> Option<&'a Value> {
     state["view"]["slots"]
@@ -225,10 +226,12 @@ fn slot<'a>(state: &'a Value, id: &str) -> Option<&'a Value> {
         .find(|s| s["id"] == id)
 }
 
+#[allow(dead_code)]
 fn open(state: &Value, id: &str) -> bool {
     slot(state, id).is_some_and(|s| s["open"] == true)
 }
 
+#[allow(dead_code)]
 /// The host's slot `id`.
 async fn host_slot(d: &D, code: &str, host: &str, id: &str) -> Value {
     let h = host_get(d, code, host, "").await;
