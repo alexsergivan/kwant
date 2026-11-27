@@ -9,7 +9,15 @@ export type ReplyOutcome =
   /** A step failed and no later step of the same tool worked. */
   | { kind: 'failed'; stepId: string }
   /** Every failed step was followed by a step of the same tool that worked; `count` failed steps. */
-  | { kind: 'recovered'; count: number; stepId: string };
+  | { kind: 'recovered'; count: number; stepId: string }
+  /** desk-needs-you-buttons m6: the only failed steps are a customer's calls nobody allowed. Nothing ran, as it
+   *  should: the reply is right, so there is nothing to check. */
+  | { kind: 'refused'; stepId: string };
+
+/** The server's words for a customer-turn call nobody allowed (mcp_runtime.rs EVERY_CALL_REFUSED), kept as the
+ *  failed step's detail. */
+export const CUSTOMER_REFUSED_DETAIL = "This step needs the person's OK first.";
+const refusedCall = (s: ActivityStep) => s.status === 'failed' && !!s.detail && s.detail.replace(/’/g, "'").startsWith(CUSTOMER_REFUSED_DETAIL);
 
 // Only a tool step that worked is a retry that worked. An approval step names its tool too and settles ok/done
 // when the person says yes, but that is permission, not the call succeeding (Rigel's D1).
@@ -25,8 +33,11 @@ export function replyOutcome(steps: readonly ActivityStep[] | null | undefined):
   if (!steps?.length) return null;
   const unanswered = steps.find((s) => s.status === 'unanswered');
   if (unanswered) return { kind: 'unanswered', stepId: unanswered.id };
-  const failed = steps.map((s, i) => [s, i] as const).filter(([s]) => s.status === 'failed');
-  if (!failed.length) return null;
+  const failed = steps.map((s, i) => [s, i] as const).filter(([s]) => s.status === 'failed' && !refusedCall(s));
+  if (!failed.length) {
+    const refused = steps.find(refusedCall);
+    return refused ? { kind: 'refused', stepId: refused.id } : null;
+  }
   const stuck = failed.find(([s, i]) => !s.tool || !steps.slice(i + 1).some((t) => t.tool === s.tool && worked(t)));
   if (stuck) return { kind: 'failed', stepId: stuck[0].id };
   return { kind: 'recovered', count: failed.length, stepId: failed[0][0].id };
@@ -37,6 +48,7 @@ export function detailsLabel(o: ReplyOutcome | null): string {
   if (!o) return 'Details';
   if (o.kind === 'unanswered') return 'Details · a step didn’t run (no answer)';
   if (o.kind === 'failed') return 'Details · a step failed';
+  if (o.kind === 'refused') return 'Details · nothing ran, as it should';
   return `Details · ${o.count} ${o.count === 1 ? 'step' : 'steps'} failed, then worked`;
 }
 

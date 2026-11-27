@@ -11,6 +11,7 @@ import {
   BellRing,
   Check,
   ChevronLeft,
+  Clock3,
   ConciergeBell,
   Eye,
   FileText,
@@ -40,7 +41,7 @@ import type { Mood } from '../../kwantMood';
 import { pocketApi, PocketApiError, type PocketRead } from '../../pocketApi';
 import { Bar, Callout, GHOST, HALF, ICON, LATER_CLS, LaterButton, LinkField, PRIMARY, Qr, Row, STOP } from './pocketParts';
 import { GuestCreature, HowTo, NoQuickLink, portOf, validSantaJoin } from './PocketSanta';
-import { bookingChip, bookingKey, FILL_DEFAULT, isSlotStart, requestsOf, slotsWire, slotWhen, todayKey, validBooking, weekOf, withBookingAnswers, type FillRule } from './deskBooking';
+import { bookingChip, bookingKey, FILL_DEFAULT, holdingOf, isSlotStart, requestsOf, slotsWire, slotWhen, todayKey, validBooking, weekOf, withBookingAnswers, type FillRule } from './deskBooking';
 import {
   BOOKING_CAP_LINE,
   BookingAllow,
@@ -98,6 +99,9 @@ export function validDeskGuest(v: unknown): DeskGuest | undefined {
   const g: DeskGuest = { id: v.id, name: v.name, creature: c!, waiting: v.waiting, handoff_reason: v.waiting ? reason! : null, last: last!, unread: unread!, msgs: msgs!, delete_on: del! };
   // pa13b: a hand-off naming a time the host hasn't listed. A malformed time is dropped, not the guest.
   if (v.waiting && isSlotStart(v.ask_slot_start)) g.ask_slot_start = v.ask_slot_start;
+  // desk-needs-you-buttons: what the wait is (Juno's desk-inbox-rows-server). Only a yes/no request gets a Yes.
+  const need = deskNeed(v.ask);
+  if (v.waiting && need) g.ask = need;
   return g;
 }
 
@@ -183,6 +187,7 @@ export function validDesk(v: unknown, fallbackTitle?: string): DeskInfo | undefi
     join: join!,
     needs_address: !!startError && START_ERRORS.has(startError),
     ended: ended!,
+    ...(deskActions(v.actions) ? { actions: deskActions(v.actions) } : {}),
   };
 }
 
@@ -205,6 +210,7 @@ const prevWire = (d: DeskInfo) => ({
   guide_preview: d.guide_preview,
   join: d.join,
   ended: d.ended,
+  ...(d.actions ? { actions: d.actions } : {}),
   ...(d.mode === 'booking' ? { mode: 'booking', slots: d.booking?.slots.map((x) => ({ ...x })) } : {}),
 });
 
@@ -234,7 +240,20 @@ export interface DeskItem {
   ask_slot_start?: string | null;
   /** The host's name, for "Nika confirmed your time." */
   host_name?: string | null;
+  /** desk-needs-you-buttons: "request" (a yes/no ask only the host can allow, e.g. a late check-out) or "daily_cap"
+   *  (the bot hit its daily limit). Absent on a plain hand-off and until the server sends it: then there is no Yes. */
+  need?: DeskNeed;
+  /** The host actions the server says this desk has (`book` turns on "Book a time for…"). Absent: none assumed. */
+  actions?: string[];
+  /** The guest already holds a confirmed time (server field `booked`, when it sends one). */
+  booked?: boolean;
 }
+
+export type DeskNeed = 'request' | 'daily_cap';
+export const deskNeed = (v: unknown): DeskNeed | undefined => (v === 'request' || v === 'daily_cap' ? v : undefined);
+/** A server `actions` list: short action names only; anything else is dropped. */
+export const deskActions = (v: unknown): string[] | undefined =>
+  Array.isArray(v) ? v.filter((a): a is string => typeof a === 'string' && /^[a-z_]{1,32}$/.test(a)).slice(0, 32) : undefined;
 
 export function validDeskItems(body: unknown): DeskItem[] {
   const items = isObj(body) && Array.isArray(body.items) ? body.items : [];
@@ -249,6 +268,8 @@ export function validDeskItems(body: unknown): DeskItem[] {
     // Vega sends `ask` with `mode`; a guide desk's item stays a guide item even if it ever carries `ask`.
     const bookingItem = it.mode === undefined || it.mode === null ? it.ask === 'booking' || it.ask === 'handoff' : it.mode === 'booking';
     const ask = bookingItem ? (it.ask === 'booking' ? 'booking' : 'handoff') : undefined;
+    const need = deskNeed(it.ask);
+    const actions = deskActions(it.actions);
     const nested = isObj(it.booking) ? it.booking : {};
     const slotStart = isSlotStart(it.slot_start) ? it.slot_start : isSlotStart(nested.start) ? nested.start : null;
     const slotId = typeof it.slot === 'string' ? it.slot : typeof nested.slot === 'string' ? nested.slot : null;
@@ -268,6 +289,9 @@ export function validDeskItems(body: unknown): DeskItem[] {
       asked_at: it.asked_at,
       kwant_name: it.kwant_name,
       thread_id: typeof it.thread_id === 'string' && it.thread_id ? it.thread_id : null,
+      ...(need ? { need } : {}),
+      ...(actions ? { actions } : {}),
+      ...(it.booked === true ? { booked: true } : {}),
       ...(ask
         ? {
             ask,
@@ -287,7 +311,8 @@ export function validDeskItems(body: unknown): DeskItem[] {
 // for 5 s with Undo, then sent; leaving the screen sends at once. Every answer is optimistic and rolls back on failure.
 
 export const DESK_UNDO_MS = 5000;
-export const DESK_YES = 'Yes, that’s fine. Enjoy your last morning!';
+/** The plain Yes, only on a yes/no request (desk-needs-you-buttons): it fits any request, so it says nothing more. */
+export const DESK_YES = 'Yes, that’s fine.';
 export const DESK_SORRY = 'Sorry, that’s not possible this time.';
 export const DESK_FAILED = 'Couldn’t reach the box. Try again';
 
@@ -879,7 +904,9 @@ export const AllowCard: React.FC<{
   bot: string;
   /** Hand-off time (RFC 3339): an answer older than this one doesn't count. */
   askedAt?: string | null;
-}> = ({ code, guest, name, reason, quote, bot, askedAt }) => {
+  /** desk-needs-you-buttons: offer "Yes, that's fine" (only for a yes/no request; never a question or the cap). */
+  yes?: boolean;
+}> = ({ code, guest, name, reason, quote, bot, askedAt, yes = false }) => {
   useDeskAnswers();
   const k = deskKey(code, guest);
   const a = deskAnswers.get(k);
@@ -901,14 +928,15 @@ export const AllowCard: React.FC<{
           </div>
         ) : null}
         <p className="flex items-center gap-2 text-[13px] text-zinc-400 sm:text-2xs">
-          <Check size={12} aria-hidden="true" />
+          {a.phase === 'sent' || a.kind === 'resolve' ? <Check size={12} aria-hidden="true" data-icon="sent" /> : <Clock3 size={12} aria-hidden="true" data-icon="waiting" />}
           {a.kind === 'resolve'
             ? `Closed. Nothing went to ${name}.`
             : a.phase === 'holding'
-              ? `Sent to ${name} · Undo for 5\u00a0s`
+              ? `Sending to ${name} in 5\u00a0s`
               : a.phase === 'sending'
                 ? `Sending to ${name}…`
                 : `Sent to ${name}`}
+          {a.phase === 'holding' && <span aria-hidden="true">·</span>}
           {a.phase === 'holding' && (
             <button type="button" onClick={() => deskAnswers.undo(k)} className="inline-flex min-h-[44px] items-center gap-1 rounded-lg px-2 font-semibold text-zinc-100 hover:bg-white/[0.05] kw-focus sm:min-h-[28px]" data-action="undo">
               <Undo2 size={13} aria-hidden="true" />
@@ -975,10 +1003,12 @@ export const AllowCard: React.FC<{
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center" data-allow-actions>
-          <button type="button" onClick={() => deskAnswers.hold(code, guest, DESK_YES)} className={`kw-btn-ghost ${HALF} justify-center border-teal-400/40 text-ok`} data-action="yes">
-            <Check size={14} aria-hidden="true" />
-            Yes, that&rsquo;s fine
-          </button>
+          {yes && (
+            <button type="button" onClick={() => deskAnswers.hold(code, guest, DESK_YES)} className={`kw-btn-ghost ${HALF} justify-center border-teal-400/40 text-ok`} data-action="yes">
+              <Check size={14} aria-hidden="true" />
+              Yes, that&rsquo;s fine
+            </button>
+          )}
           <button type="button" onClick={() => deskAnswers.hold(code, guest, DESK_SORRY)} className={`${HALF_BTN} justify-center`} data-action="sorry">
             <X size={14} aria-hidden="true" />
             Sorry, not this time
@@ -1141,9 +1171,11 @@ const Conversation: React.FC<{ code: string; d: DeskInfo; guestId: string; onBac
             askedAt={handoffAt}
             askStart={fromList?.ask_slot_start ?? null}
             slots={booking.slots}
+            actions={d.actions ?? null}
+            booked={holdingOf(booking.slots, guestId)?.state === 'confirmed'}
           />
         ) : guest && (waiting || (a && a.phase !== 'sent' && isAnswered(a))) ? (
-          <AllowCard code={code} guest={guestId} name={guest.name} reason={guest.handoff_reason ?? `${d.bot.name} asked you to reply`} quote={lastGuestWords(conv)} bot={d.bot.name} askedAt={handoffAt} />
+          <AllowCard code={code} guest={guestId} name={guest.name} reason={guest.handoff_reason ?? `${d.bot.name} asked you to reply`} quote={lastGuestWords(conv)} bot={d.bot.name} askedAt={handoffAt} yes={fromList?.ask === 'request'} />
         ) : guest && a?.phase === 'sent' && a.text ? (
           <AllowCard code={code} guest={guestId} name={guest.name} reason="" quote={null} bot={d.bot.name} />
         ) : guest && writing ? (
@@ -1797,7 +1829,7 @@ const GuideNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
         </span>
       </div>
       <div className="px-3 pb-3">
-        <AllowCard code={item.pocket_code} guest={item.guest_id} name={item.guest_name} reason={item.text} quote={item.quote} bot={item.kwant_name} askedAt={item.asked_at} />
+        <AllowCard code={item.pocket_code} guest={item.guest_id} name={item.guest_name} reason={item.text} quote={item.quote} bot={item.kwant_name} askedAt={item.asked_at} yes={item.need === 'request'} />
       </div>
     </li>
   );

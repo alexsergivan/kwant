@@ -2,11 +2,41 @@
 @tailwind components;
 @tailwind utilities;
 
-/* reply-bubble-bot-tint: a bot reply in its avatar's colour (vars set inline from bubbleTint.ts). */
-.kw-bubble-tint {
-  background-color: var(--kw-bubble-bg);
-  border-color: var(--kw-bubble-line);
+/* bubble-not-alert: a bot reply is text on the page. Identity = avatar + the creature thread (--kw-thread, set
+   inline from replyThread.ts). Filled, outlined hue boxes are for status only. */
+.kw-reply-plain {
+  position: relative;
+  padding-left: 1.5rem;                 /* phone: room for the thread under the 20 px name-line avatar */
 }
+.kw-reply-plain::before {
+  content: '';
+  position: absolute;
+  left: 9px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  border-radius: 1px;
+  background: var(--kw-thread, var(--kw-hairline-strong));
+  opacity: 0.5;
+  pointer-events: none;
+  transition: opacity 150ms var(--kw-ease);
+}
+:is(.group\/msg, [data-live-row]):is(:hover, :focus-within) .kw-reply-plain::before { opacity: 0.9; }
+/* The working scene has no gutter avatar (its bot is in the stage tile), so it has no thread: a thread always hangs from a creature. */
+.kw-reply-plain[data-reply-scene]::before { content: none; }
+@media (min-width: 640px) {
+  .kw-reply-plain { padding-left: 0; min-height: 36px; }
+  .kw-reply-plain::before { left: -33px; top: 10px; }  /* centred under the 36 px avatar, 4 px below it */
+}
+@media (prefers-reduced-motion: reduce) {
+  .kw-reply-plain::before { transition: none; }
+}
+.kw-reply-plain :is(p, ul, ol, h1, h2, h3, h4, h5, h6, blockquote) { max-width: 42rem; }
+/* The working scene loses its card: its rows line up with the reply text. The stage tile keeps its own frame. */
+.kw-reply-plain .kw-wa,
+.kw-reply-plain .kw-wa-lead,
+.kw-reply-plain .kw-wa-words { padding-left: 0; padding-right: 0; }
+.kw-reply-plain .kw-wa-card[data-phone] .kw-wa { padding-left: 0; padding-right: 0; }  /* 0,4,0 beats stream.css 0,3,0; keeps 12 px top, 4 px bottom */
 
 /* Design tokens (UI refresh, 0.6.9). Surfaces get lighter as they rise; hairlines are white at low
    alpha so they work on every surface. Tailwind names for these: bg-surface-*, border-hairline,

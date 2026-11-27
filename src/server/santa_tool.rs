@@ -196,7 +196,8 @@ fn joins() -> &'static Joins {
 
 const JOIN_KEEP: Duration = Duration::from_secs(600);
 
-fn remember_join(code: &str, join: Option<Value>) {
+/// Kept by code for the reply that carries the call (`desk_tool` keeps its desk's here too).
+pub(crate) fn remember_join(code: &str, join: Option<Value>) {
     let mut m = joins().lock().unwrap_or_else(|e| e.into_inner());
     m.retain(|_, (at, _)| at.elapsed() < JOIN_KEEP);
     m.insert(code.to_string(), (Instant::now(), join));
