@@ -554,6 +554,19 @@ impl St {
         names_on(spec, self) && !self.unnamed.contains(id)
     }
 
+    /// An answer or slot change from this guest (Lin's review S1). Once the host has turned names
+    /// on, it names them only when the page they answered from showed names on (`"names": true` in
+    /// the body). A page painted while names were hidden, or an older guest page that doesn't send
+    /// the key, keeps them unnamed with the notice, so nobody is listed under a page that promised
+    /// they wouldn't be. Before any switch nothing changes.
+    fn answered_from(&mut self, id: &str, body: &Value) {
+        if self.names_on_at.is_some() && body.get("names").and_then(Value::as_bool) != Some(true) {
+            self.unnamed.insert(id.to_string());
+        } else {
+            self.unnamed.remove(id);
+        }
+    }
+
     /// Answered while names were hidden and not shown yet (the host's `names_hidden`).
     fn names_hidden(&self, spec: &Value) -> usize {
         if !names_on(spec, self) {
@@ -1282,8 +1295,7 @@ impl Kit for Gather {
                 if !coming {
                     s.paid.remove(me);
                 }
-                // Answering again with names on is seeing them: named from now on
-                s.unnamed.remove(me);
+                s.answered_from(me, body);
             }
             (Viewer::Guest(me), "take") => {
                 if f != SIGNUP {
@@ -1314,7 +1326,7 @@ impl Kit for Gather {
                         s.slots[i].taken.push(Taken { id: me.clone(), note, at: Some(now) });
                     }
                 }
-                s.unnamed.remove(me);
+                s.answered_from(me, body);
             }
             (Viewer::Guest(me), "leave" | "let_go") => {
                 if f != SIGNUP {
