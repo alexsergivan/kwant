@@ -518,6 +518,8 @@ test('closed vote: Share the result copies one line; Delete ballots now says why
   assert.equal(button(v, 'Delete ballots now').getAttribute('title'), m.GATHER_LATER.deleteBallots);
   assert.match(v.host.textContent, /Ballots are deleted on Wed, Dec 9\. The result stays in Done\./);
   assert.equal(v.host.querySelector('[data-mood]').dataset.mood, 'finished');
+  // party-card-and-results, Mira's fix 1: a party theme vote ends on this card too, so no "dinner"
+  assert.equal(v.host.querySelector('[data-action="make-rsvp"]').textContent.trim(), 'Make the RSVP');
 });
 
 test('Done rows: Tally on each, one sticker at most, holo only on the vote', async () => {

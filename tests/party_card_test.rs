@@ -384,6 +384,109 @@ async fn an_ended_rsvp_says_how_many_people_came_and_its_card_is_closed() {
     }
 }
 
+/// Rigel's QA finding 2: an ended sign-up's card keeps its slots and counts and loses who took
+/// them and what they wrote.
+#[tokio::test]
+async fn an_ended_signup_card_keeps_its_counts_and_no_name_or_note() {
+    let t = setup().await;
+    let k = bot(&t, "Party").await;
+    let now = Utc::now();
+    let spec = json!({"face": "signup", "title": "Party potluck", "host_name": "Nina", "event_at": (now + Duration::days(7)).to_rfc3339(),
+                      "slots": [{"name": "Mains", "cap": 1}, {"name": "Desserts", "cap": 4}], "fields": ["slot_note"], "waiting_list": true});
+    let code = create(&t, "gather", spec, &k).await;
+    for (name, slot, note) in [("Ana", 0, "Lasagne from Zofia"), ("Ben", 1, "Lemon tart"), ("Cleo", 0, "Quiche")] {
+        let id = join(&t, &code, name).await;
+        pocket::act(&t.state, &code, &Viewer::Guest(id), "take", &json!({ "slot": slot, "note": note })).await.unwrap();
+    }
+    pocket::end(&t.state, &code).await.unwrap();
+    schedule::run_once(&t.state, now + Duration::minutes(1)).await;
+    let post = results_post(&t, &k, &code).await;
+    assert_eq!(post.text, "Party potluck has ended. 3 people took part.");
+    let b = pocket_block(&post).expect("the ended card");
+    common_card(&b, "gather", "ended");
+    let g = gather_card(&b, "signup", "closed");
+    let slots = g["slots"].as_array().unwrap();
+    let shape: Vec<(&str, u64, u64)> = slots.iter().map(|s| (s["name"].as_str().unwrap(), s["filled"].as_u64().unwrap(), s["waiting"].as_u64().unwrap())).collect();
+    assert_eq!(shape, [("Mains", 1, 1), ("Desserts", 1, 0)], "the counts stay: {g}");
+    for s in slots {
+        assert_eq!((&s["people"], &s["waiting_people"]), (&json!([]), &json!([])), "{s}");
+    }
+    for gone in ["Ana", "Ben", "Cleo", "Lasagne", "Zofia", "Lemon tart", "Quiche"] {
+        assert!(!b.to_string().contains(gone), "{gone} in the posted card: {b}");
+    }
+}
+
+/// The message as the chat loads it, with its stored card.
+async fn served(db: &Database, id: &str) -> Message {
+    let mut v = vec![db.get_message(id).await.unwrap().unwrap()];
+    db.attach_results(&mut v).await;
+    v.remove(0)
+}
+
+/// Rigel's QA finding 1: the RSVP, sign-up or vote card under the bot's reply is the host's view
+/// as of the reply, guest names and words included. The host keeps seeing them until the
+/// pocket's "Names and answers are deleted on …" date; once that passes, the stored card (and
+/// the chat's live copy) holds no guest name, voter, unpaid list or note.
+#[tokio::test]
+async fn a_reply_card_loses_its_guests_names_and_notes_when_the_pocket_expires() {
+    let e = chat_setup(true).await;
+    e.state.db.set_setting(pocket::address::PUBLIC_URL_SETTING, GUEST_BASE).await.unwrap();
+    for (face, args) in [("rsvp", rsvp()), ("signup", potluck()), ("vote", theme_vote())] {
+        let (code, text) = make(&e, "gather_create", args.clone()).await;
+        for (name, words) in [("Ana", "Zofia's lemon tart"), ("Ben", "Quiche for Marek")] {
+            let (g, _) = pocket::join(&e.state, &code, JoinRequest { name: name.into(), avatar: None, team: None, pin: Some(PIN.into()) }).await.unwrap();
+            let (action, body) = match face {
+                "rsvp" => ("answer", json!({ "answer": "yes", "food_other": words })),
+                "signup" => ("take", json!({ "slot": 0, "note": words })),
+                _ => ("vote", json!({ "ranking": [0] })),
+            };
+            pocket::act(&e.state, &code, &Viewer::Guest(g.id), action, &body).await.unwrap_or_else(|err| panic!("{face} {action}: {err:?}"));
+        }
+        let m = reply(&e, "gather_create", args, &text).await;
+        let names: &[&str] = match face {
+            "vote" => &["Ana", "Ben", "Cleo"],
+            _ => &["Ana", "Ben", "Zofia", "Marek"],
+        };
+        let before = pocket_block(&m).unwrap_or_else(|| panic!("{face}: no card in {:?}", m.results));
+        assert!(before.to_string().contains("Ana"), "{face}: the host sees names until the date: {before}");
+        let expires = pocket::snapshot(&e.state, &code).await.unwrap().unwrap().row.expires_at.unwrap_or_else(|| panic!("{face}: a deletion date"));
+        // A run before the date keeps them
+        schedule::run_once(&e.state, expires - Duration::minutes(5)).await;
+        let kept = pocket_block(&served(&e.state.db, &m.id).await).expect("still drawn");
+        assert!(kept.to_string().contains("Ana"), "{face}: names stay before the date: {kept}");
+        // The run past the date blanks the stored card and tells the open chat
+        let mut rx = e.state.event_sender.subscribe();
+        let ran = schedule::run_once(&e.state, expires + Duration::minutes(1)).await;
+        assert!(ran.names_deleted >= 1, "{face}: {ran:?}");
+        let after = served(&e.state.db, &m.id).await;
+        let b = pocket_block(&after).unwrap_or_else(|| panic!("{face}: the card still draws, without names: {:?}", after.results));
+        common_card(&b, "gather", "live");
+        let g = gather_card(&b, face, "open");
+        for k in ["people", "voters", "not_answered", "drafts", "moved_up"] {
+            assert!(g.get(k).is_none_or(|v| v.is_null() || v == &json!([])), "{face}: {k} in {g}");
+        }
+        assert!(g["paid"].get("not_yet").is_none_or(|v| v == &json!([])), "{face}: {g}");
+        for name in names {
+            assert!(!b.to_string().contains(name), "{face}: {name} in the stored reply card: {b}");
+        }
+        let mut live = None;
+        while let Ok(ev) = rx.try_recv() {
+            if let kwnt::drivers::events::RuntimeEvent::MessageAdded { message } = ev {
+                if message["id"] == json!(m.id) {
+                    live = Some(message);
+                }
+            }
+        }
+        let live = live.unwrap_or_else(|| panic!("{face}: the open chat hears of it"));
+        for name in names {
+            assert!(!live["results"].to_string().contains(name), "{face}: {name} in the chat's copy: {live}");
+        }
+        // Once: a later run finds nothing left to clear for this message
+        let again = schedule::run_once(&e.state, expires + Duration::minutes(2)).await;
+        assert_eq!(again.names_deleted, 0, "{face}: {again:?}");
+    }
+}
+
 /// A JPEG header with no metadata, enough for the wall to take it.
 fn jpeg() -> Vec<u8> {
     let seg = |marker: u8, payload: &[u8]| {
@@ -419,7 +522,7 @@ async fn waiting_photos_are_one_needs_you_row_that_approve_and_hide_clear() {
     let rows = of_kind(&body, "pocket_wall");
     assert_eq!(rows.len(), 1, "{body}");
     let row = &rows[0];
-    assert_eq!(row["title"], "Office holiday party wall · 1 photo waits for you");
+    assert_eq!(row["title"], "1 photo waiting on Office holiday party");
     assert_eq!((row["group"].as_str(), row["kwant_id"].as_str(), row["pocket_code"].as_str()), (Some("waiting_on_you"), Some(k.id.as_str()), Some(code.as_str())), "{row}");
     assert_eq!(row["next_photo"], json!({"id": first, "by_name": "Cleo Marsh"}));
     assert_eq!(row["link"]["direct_kwant_id"], json!(k.id), "the row opens the chat with the card");
@@ -435,13 +538,13 @@ async fn waiting_photos_are_one_needs_you_row_that_approve_and_hide_clear() {
     let c = add_photo(&t, &code, &dev).await;
     let rows = of_kind(&inbox(&t).await, "pocket_wall");
     assert_eq!(rows.len(), 1, "{rows:?}");
-    assert_eq!(rows[0]["title"], "Office holiday party wall · 3 photos wait for you");
+    assert_eq!(rows[0]["title"], "3 photos waiting on Office holiday party");
     assert_eq!(rows[0]["next_photo"]["id"], json!(a));
     // Hide takes it off the list too; the next one comes up
     let (status, out) = send(&t.main, "POST", &format!("/api/pockets/{code}/action"), Some(json!({"name": "hide", "body": {"ids": [a]}}))).await;
     assert_eq!(status, StatusCode::OK, "{out}");
     let rows = of_kind(&inbox(&t).await, "pocket_wall");
-    assert_eq!(rows[0]["title"], "Office holiday party wall · 2 photos wait for you");
+    assert_eq!(rows[0]["title"], "2 photos waiting on Office holiday party");
     assert_eq!(rows[0]["next_photo"]["id"], json!(b));
     let (status, _) = send(&t.main, "POST", &format!("/api/pockets/{code}/action"), Some(json!({"name": "approve", "body": {"ids": [b, c]}}))).await;
     assert_eq!(status, StatusCode::OK);
@@ -485,6 +588,6 @@ async fn another_spaces_wall_is_not_this_spaces_row() {
     let g = join(&t, &code, "Zora").await;
     add_photo(&t, &code, &g).await;
     assert!(of_kind(&inbox(&t).await, "pocket_wall").is_empty(), "the default space's Inbox");
-    // Red proof: the "its own space's row" half needs inbox_pockets::wall_needs_you, which 520cea45 lacks.
-    let _ = space;
+    let rows = kwnt::server::inbox_pockets::wall_needs_you(&t.state, &space).await.unwrap();
+    assert_eq!(rows.len(), 1, "its own space's");
 }
