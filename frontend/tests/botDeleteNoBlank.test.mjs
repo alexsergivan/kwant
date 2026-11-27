@@ -91,9 +91,9 @@ test('#1301: a render crash shows one line and Reload, not a blank page; a new s
     export { React };
     export { createRoot } from 'react-dom/client';
     export { flushSync } from 'react-dom';
-    export { AppErrorBoundary, APP_CRASH_LINE } from './src/components/AppErrorBoundary';
+    export { AppErrorBoundary, APP_CRASH_LINE, APP_CRASH_NOTE } from './src/components/AppErrorBoundary';
   `);
-  const { React, createRoot, flushSync, AppErrorBoundary, APP_CRASH_LINE } = m;
+  const { React, createRoot, flushSync, AppErrorBoundary, APP_CRASH_LINE, APP_CRASH_NOTE } = m;
   const host = document.createElement('div');
   document.body.appendChild(host);
   const root = createRoot(host);
@@ -109,6 +109,16 @@ test('#1301: a render crash shows one line and Reload, not a blank page; a new s
     assert.ok(panel, 'the panel shows');
     assert.equal(panel.getAttribute('role'), 'alert');
     assert.match(panel.textContent, new RegExp(APP_CRASH_LINE.replace('.', '\\.')));
+    // Mira's check: say nothing was lost, under the line, in a quieter size.
+    assert.equal(APP_CRASH_LINE, 'This page hit an error and stopped.');
+    assert.equal(APP_CRASH_NOTE, 'Your bots and chats are saved. Reload to open it again.');
+    const ps = [...panel.querySelectorAll('p')];
+    assert.equal(ps.length, 2, 'the line and the note');
+    assert.equal(ps[0].textContent.trim(), APP_CRASH_LINE);
+    assert.match(ps[0].className, /\btext-sm\b/);
+    assert.equal(ps[1].textContent.trim(), APP_CRASH_NOTE);
+    assert.match(ps[1].className, /\btext-xs\b.*\btext-zinc-400\b|\btext-zinc-400\b.*\btext-xs\b/);
+    assert.doesNotMatch(panel.className, /\btext-xs\b/, 'the wrapper sets no 12 px default');
     const buttons = [...panel.querySelectorAll('button')];
     assert.deepEqual(buttons.map((b) => b.textContent.trim()), ['Reload']);
     assert.equal(buttons[0].getAttribute('type'), 'button');

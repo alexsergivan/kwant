@@ -4,7 +4,9 @@
 import React from 'react';
 import { AlertTriangle, RotateCw } from 'lucide-react';
 
-export const APP_CRASH_LINE = 'Something went wrong on this page.';
+export const APP_CRASH_LINE = 'This page hit an error and stopped.';
+// Says nothing was lost, without promising unsent composer text survives the reload.
+export const APP_CRASH_NOTE = 'Your bots and chats are saved. Reload to open it again.';
 
 interface Props {
   children: React.ReactNode;
@@ -34,13 +36,16 @@ export class AppErrorBoundary extends React.Component<Props, { failed: boolean; 
       <div
         role="alert"
         data-app-crash
-        className={`${this.props.full ? 'fixed inset-0' : 'flex-1 min-w-0 h-full'} flex items-center justify-center bg-zinc-950 p-6 text-xs text-zinc-300`}
+        className={`${this.props.full ? 'fixed inset-0' : 'flex-1 min-w-0 h-full'} flex items-center justify-center bg-zinc-950 p-6`}
       >
         <div className="flex flex-col items-center gap-3 text-center">
-          <p className="flex items-center gap-2">
-            <AlertTriangle size={14} className="shrink-0 text-amber-300" aria-hidden="true" />
-            {APP_CRASH_LINE}
-          </p>
+          <div className="flex flex-col items-center">
+            <p className="flex items-center gap-2 text-sm text-zinc-200">
+              <AlertTriangle size={14} className="shrink-0 text-amber-300" aria-hidden="true" />
+              {APP_CRASH_LINE}
+            </p>
+            <p className="mt-1 max-w-[18rem] text-xs text-zinc-400">{APP_CRASH_NOTE}</p>
+          </div>
           <button
             type="button"
             onClick={() => window.location.reload()}
