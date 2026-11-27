@@ -801,6 +801,9 @@ export const GATHER_FIXTURES = {
   }),
   rsvpResult: gatherFixture('Your dinner RSVP is closed. 19 are coming; the list for The Old Mill is ready to copy.', 'Dinner RSVP', 'ended', rsvpClosed),
   signupResult: gatherFixture('Your potluck sign-up is closed. Every slot is full except Washing-up crew.', 'Potluck sign-up', 'ended', signupClosed),
+  // rsvp-names-card-switch: the host's "Show names to guests" switch, off and on with 2 still unnamed.
+  rsvpNamesOff: gatherFixture('Your dinner RSVP is open. Guests see the totals only.', 'Dinner RSVP', 'live', { ...rsvpOpen, show_names: false, names_hidden: 0 }),
+  rsvpNamesHidden: gatherFixture('Names are on. 2 people who answered earlier stay unnamed until they choose.', 'Dinner RSVP', 'live', { ...rsvpOpen, show_names: true, names_hidden: 2, names_on_at: at(9, '10:00') }),
 } satisfies Record<string, Fixture>;
 
 // Front desk (pa13): Marta's sea-view flat in Piran, answered by Bell. Guests, words, times and costs are made up,

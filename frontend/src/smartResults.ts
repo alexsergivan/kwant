@@ -457,6 +457,8 @@ export interface GatherInfo {
   host_name: string | null;
   /** Members see names and Yes / Maybe / No (RSVP) or the live count after voting (vote). */
   show_names: boolean;
+  /** RSVP / sign-up host view: people who answered before the host turned names on and are still unnamed to guests (#1324). 0 when missing. */
+  names_hidden: number;
   /** Members on the host's list; null without a list. */
   members: number | null;
   /** Listed members who haven't answered or voted. */
