@@ -558,6 +558,90 @@ fn check_pocket(p: &super::Pocket) -> Result<(), String> {
     if let Some(s) = &p.santa {
         check_santa(p, s)?;
     }
+    // desk-create-from-chat: kit `desk` carries `desk` and nothing else does
+    if (p.kit == crate::pocket::desk::ID) != p.desk.is_some() {
+        return Err("a pocket's desk part".into());
+    }
+    if let Some(d) = &p.desk {
+        check_desk(p, d)?;
+    }
+    Ok(())
+}
+
+/// Keys that would put a secret on a front desk's card: a guest's PIN or a key, at any depth.
+const DESK_SECRET_KEYS: [&str; 7] = ["pin", "pin_hash", "key", "host_key", "name_key", "guest_key", "reset_code"];
+
+fn find_key(v: &serde_json::Value, keys: &[&str], depth: usize) -> Option<String> {
+    use serde_json::Value;
+    if depth > 8 {
+        return None;
+    }
+    match v {
+        Value::Array(a) => a.iter().find_map(|x| find_key(x, keys, depth + 1)),
+        Value::Object(o) => o.iter().find_map(|(k, x)| if keys.contains(&k.to_lowercase().as_str()) { Some(k.clone()) } else { find_key(x, keys, depth + 1) }),
+        _ => None,
+    }
+}
+
+/// A front desk's card (frontend `validDesk` and `validPocket`'s desk rules): writing, live or
+/// ended; its join rides inside it (never at the top, never a quick tunnel); counts are counts
+/// and the cap is 10 to 200; guests and slots are within the client's limits; no PIN or key.
+fn check_desk(p: &super::Pocket, d: &serde_json::Value) -> Result<(), String> {
+    use serde_json::Value;
+    if !matches!(p.state.as_str(), "writing" | "live" | "ended") {
+        return Err(format!("a desk pocket {:?}", p.state));
+    }
+    if p.join.is_some() || p.santa.is_some() || p.results.is_some() {
+        return Err("a desk pocket with another kit's part".into());
+    }
+    let Some(o) = d.as_object() else { return Err("a desk part that isn't an object".into()) };
+    if let Some(k) = find_key(d, &DESK_SECRET_KEYS, 0) {
+        return Err(format!("a desk part carrying {k}"));
+    }
+    match o.get("title") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(t)) => check_text(t, 80, "desk title")?,
+        Some(_) => return Err("desk title".into()),
+    }
+    opt_pocket_text(o.get("place"), 80, "desk place")?;
+    opt_pocket_text(o.get("host_name"), 40, "desk host")?;
+    let counts = o.get("counts").filter(|c| !c.is_null());
+    if let Some(c) = counts {
+        let Some(c) = c.as_object() else { return Err("desk counts".into()) };
+        for (k, v) in c {
+            if !v.is_null() && v.as_u64().is_none_or(|n| n > 1_000_000) {
+                return Err(format!("desk count {k}"));
+            }
+        }
+        if c.get("daily_cap").and_then(Value::as_u64).is_some_and(|n| !(crate::pocket::desk::DAILY_CAP_MIN..=crate::pocket::desk::DAILY_CAP_MAX).contains(&n)) {
+            return Err("desk daily cap".into());
+        }
+    }
+    let bot = o.get("answer_bot").ok_or("desk bot")?;
+    check_text(bot["name"].as_str().ok_or("desk bot name")?, 40, "desk bot name")?;
+    let guests = o.get("guests").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+    if guests.len() > 60 {
+        return Err("desk guests".into());
+    }
+    for g in guests {
+        if !g["id"].as_str().is_some_and(|id| id_like(id, 64)) || !g["waiting"].is_boolean() {
+            return Err("desk guest".into());
+        }
+        check_text(g["name"].as_str().ok_or("desk guest name")?, 40, "desk guest name")?;
+    }
+    let slots = o.get("slots").and_then(Value::as_array).map(Vec::as_slice).unwrap_or(&[]);
+    if slots.len() > crate::pocket::desk::MAX_SLOTS {
+        return Err("desk slots".into());
+    }
+    for x in slots {
+        let start = x["start"].as_str().unwrap_or("");
+        if chrono::NaiveDateTime::parse_from_str(start, crate::pocket::desk::SLOT_START_FORMAT).is_err() || start.len() != 16 {
+            return Err("desk slot start".into());
+        }
+    }
+    if let Some(j) = o.get("join").filter(|j| !j.is_null()) {
+        check_stable_join(j, "desk")?;
+    }
     Ok(())
 }
 
@@ -676,33 +760,41 @@ fn check_santa(p: &super::Pocket, s: &serde_json::Value) -> Result<(), String> {
         return Err("santa can_draw".into());
     }
     if let Some(j) = o.get("join").filter(|j| !j.is_null()) {
-        let mode = j["mode"].as_str().filter(|m| matches!(*m, "anywhere" | "wifi" | "none")).ok_or("santa join mode")?;
-        let url = |k: &str| -> Result<Option<&str>, String> {
-            match &j[k] {
-                Value::Null => Ok(None),
-                Value::String(u) if u.len() <= 2048 && (u.starts_with("https://") || u.starts_with("http://")) => {
-                    let host = u.split('/').nth(2).unwrap_or("");
-                    if host.contains('@') || host.split(':').next().unwrap_or("").to_ascii_lowercase().ends_with(".trycloudflare.com") {
-                        return Err("a santa join that offers a quick tunnel".into());
-                    }
-                    Ok(Some(u))
+        check_stable_join(j, "santa")?;
+    }
+    Ok(())
+}
+
+/// A join a long-lived pocket's card carries (Santa, front desk): never a quick tunnel, and
+/// "anywhere" only with its address and kind. `what` names the kit in the refusal.
+fn check_stable_join(j: &serde_json::Value, what: &str) -> Result<(), String> {
+    use serde_json::Value;
+    let mode = j["mode"].as_str().filter(|m| matches!(*m, "anywhere" | "wifi" | "none")).ok_or_else(|| format!("{what} join mode"))?;
+    let url = |k: &str| -> Result<Option<&str>, String> {
+        match &j[k] {
+            Value::Null => Ok(None),
+            Value::String(u) if u.len() <= 2048 && (u.starts_with("https://") || u.starts_with("http://")) => {
+                let host = u.split('/').nth(2).unwrap_or("");
+                if host.contains('@') || host.split(':').next().unwrap_or("").to_ascii_lowercase().ends_with(".trycloudflare.com") {
+                    return Err(format!("a {what} join that offers a quick tunnel"));
                 }
-                _ => Err(format!("santa join {k}")),
+                Ok(Some(u))
             }
-        };
-        let anywhere = url("anywhere_url")?;
-        url("wifi_url")?;
-        let kind = match &j["anywhere_kind"] {
-            Value::Null => None,
-            Value::String(k) if k == "https" || k == "funnel" => Some(k),
-            _ => return Err("santa join kind".into()),
-        };
-        if j["quick_tunnel"] == Value::Bool(true) {
-            return Err("a santa join that offers a quick tunnel".into());
+            _ => Err(format!("{what} join {k}")),
         }
-        if mode == "anywhere" && (anywhere.is_none() || kind.is_none()) {
-            return Err("a santa join from anywhere without its address".into());
-        }
+    };
+    let anywhere = url("anywhere_url")?;
+    url("wifi_url")?;
+    let kind = match &j["anywhere_kind"] {
+        Value::Null => None,
+        Value::String(k) if k == "https" || k == "funnel" => Some(k),
+        _ => return Err(format!("{what} join kind")),
+    };
+    if j["quick_tunnel"] == Value::Bool(true) {
+        return Err(format!("a {what} join that offers a quick tunnel"));
+    }
+    if mode == "anywhere" && (anywhere.is_none() || kind.is_none()) {
+        return Err(format!("a {what} join from anywhere without its address"));
     }
     Ok(())
 }
