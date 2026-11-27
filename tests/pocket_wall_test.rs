@@ -985,3 +985,39 @@ async fn a_walls_when_is_the_line_people_read_as_in_gather() {
     assert_eq!((stored.get("when"), &stored["event_at"]), (None, &json!("2026-12-12")));
     assert_eq!(card_of(&t, &code).await["host_view"]["when"], "2026-12-12T23:59:59Z");
 }
+
+// ---- wall-dates-followups (2, 3): Rigel's follow-ups on wall-dates-agree ----
+// Brief: /home/maus/shared/ship-software-safely/autonomy/wall-dates-followups/brief.md
+
+#[tokio::test]
+async fn zip_names_use_a_fixed_offset_walls_own_clock() {
+    let t = setup().await;
+    // An older bot's `when` with an offset and no TIMEZONE_SETTING: the schedule zone is +13:00
+    // (past, so the wall is open now). delete_on reads that offset; the zip must too.
+    let (code, _) = make(&t, spec(json!({ "when": "2026-01-10T19:00:00+13:00" }))).await;
+    let plus13 = pocket::schedule::Zone::parse("+13:00");
+    let (_, a) = joined(&t, &code, "Ana").await;
+    let (names, at) = zip_names_and_times(&t, &code, &a).await;
+    assert_eq!(names, [format!("001-ana-{}.jpg", plus13.local(at[0]).format("%H%M"))], "+13:00 time, not the box's ({})", at[0]);
+    // A setting made later doesn't move the wall's own clock
+    set_zone(&t, "Europe/Ljubljana").await;
+    let r = send(&t.main, "GET", &format!("/api/pockets/{code}/wall.zip"), B::None, &person()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(unzip(&r.bytes).into_iter().map(|e| e.0).collect::<Vec<_>>(), names);
+}
+
+#[tokio::test]
+async fn a_bare_date_when_with_event_at_is_the_line_people_read() {
+    let t = setup().await;
+    let (code, _) = make(&t, spec(json!({ "when": "2026-12-12", "event_at": "2026-12-12T19:30:00+01:00" }))).await;
+    let stored: Value = serde_json::from_str(&t.state.db.pocket_get(&code).await.unwrap().unwrap().spec).unwrap();
+    assert_eq!((&stored["when"], &stored["event_at"]), (&json!("2026-12-12"), &json!("2026-12-12T19:30:00+01:00")));
+    let v = &card_of(&t, &code).await["host_view"];
+    assert_eq!(v["when_line"], "2026-12-12", "the person's text shows: {v}");
+    assert_eq!(v["when"], "2026-12-12T18:30:00Z", "the event's time is event_at");
+    let (_, a) = joined(&t, &code, "Ana").await;
+    assert_eq!(view_of(&t, &code, &a).await["view"]["when_line"], "2026-12-12", "a guest's view");
+    // Without event_at the date is the event's time, as before: no line
+    let (code, _) = make(&t, spec(json!({ "when": "2026-12-12" }))).await;
+    assert_eq!(card_of(&t, &code).await["host_view"]["when_line"], Value::Null);
+}
