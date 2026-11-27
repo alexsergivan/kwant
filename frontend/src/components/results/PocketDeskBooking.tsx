@@ -6,7 +6,7 @@
 // Only Tailwind classes and --kw-* tokens; never a hex. No pronouns for a guest or the host: the name repeats.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BellRing, CalendarClock, CalendarPlus, Check, ChevronLeft, ChevronRight, Clock, LayoutGrid, List, Lock, Minus, Pencil, Plus, Reply, Send, Undo2, X, Zap } from 'lucide-react';
+import { AlertTriangle, BellRing, CalendarClock, CalendarPlus, Check, ChevronLeft, ChevronRight, Clock, Clock3, LayoutGrid, List, Lock, Minus, Pencil, Plus, Reply, Send, Undo2, X, Zap } from 'lucide-react';
 import type { DeskBooking, DeskInfo, DeskSlot } from '../../smartResults';
 import { ModernAvatar } from '../ModernAvatar';
 import { pocketApi } from '../../pocketApi';
@@ -567,18 +567,18 @@ const HostBubble: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 const UndoLine: React.FC<{ k: string; phase: string; name: string; what: string }> = ({ k, phase, name, what }) => (
-  <p className="flex flex-wrap items-center gap-x-2 text-[13px] text-zinc-400 sm:text-2xs">
-    <Check size={12} aria-hidden="true" />
-    <span>
-      {phase === 'holding' ? `Sending to ${name} in 5\u00a0s: “${what}”` : phase === 'sending' ? `Sending to ${name}…` : `Sent to ${name}: “${what}”`}
+  // The icon keeps its own column, so a long quote wraps under the words, and Undo follows the quote.
+  <p className="grid grid-cols-[12px_minmax(0,1fr)] items-start gap-x-2 text-[13px] text-zinc-400 sm:text-2xs">
+    {phase === 'sent' ? <Check size={12} className="mt-[3px]" aria-hidden="true" data-icon="sent" /> : <Clock3 size={12} className="mt-[3px]" aria-hidden="true" data-icon="waiting" />}
+    <span className="flex flex-wrap items-center gap-x-2">
+      <span>{phase === 'holding' ? `Sending to ${name} in 5\u00a0s: “${what}”` : phase === 'sending' ? `Sending to ${name}…` : `Sent to ${name}: “${what}”`}</span>
+      {phase === 'holding' && (
+        <button type="button" onClick={() => deskAnswers.undo(k)} className="inline-flex min-h-[44px] items-center gap-1 -ml-2 rounded-lg px-2 font-semibold text-zinc-100 hover:bg-white/[0.05] kw-focus sm:min-h-[28px]" data-action="undo">
+          <Undo2 size={13} aria-hidden="true" />
+          Undo
+        </button>
+      )}
     </span>
-    {phase === 'holding' && <span aria-hidden="true">·</span>}
-    {phase === 'holding' && (
-      <button type="button" onClick={() => deskAnswers.undo(k)} className="inline-flex min-h-[44px] items-center gap-1 rounded-lg px-2 font-semibold text-zinc-100 hover:bg-white/[0.05] kw-focus sm:min-h-[28px]" data-action="undo">
-        <Undo2 size={13} aria-hidden="true" />
-        Undo
-      </button>
-    )}
   </p>
 );
 
@@ -856,7 +856,7 @@ export const OddAllow: React.FC<{
           </span>
         </p>
         <p className="flex items-center gap-2 text-[13px] text-zinc-400 sm:text-2xs">
-          <Check size={12} aria-hidden="true" />
+          {a.phase === 'sent' ? <Check size={12} aria-hidden="true" data-icon="sent" /> : <Clock3 size={12} aria-hidden="true" data-icon="waiting" />}
           {a.phase === 'sending' ? `Booking ${name}…` : `Sent to ${name}: “${guestBookedLine(host, when)}”`}
         </p>
       </div>
@@ -934,9 +934,11 @@ export const OddAllow: React.FC<{
         </div>
       )}
       <p className={SMALL}>
-        {canBook
-          ? `There’s no plain “Yes” here: a yes to a time is a booking. “Book a time” lets you pick an open time or add one, and ${name} is told it’s booked.`
-          : `There’s no plain “Yes” here: a yes to a time is a booking. Write ${name} a reply asking them to pick a time, or add the time in Edit times first.`}
+        {!askStart
+          ? `Your answer goes to ${name} as you, marked “host”. ${bot} never answers this for you. “No reply needed” sends nothing.`
+          : canBook
+            ? `There’s no plain “Yes” here: a yes to a time is a booking. “Book a time” lets you pick an open time or add one, and ${name} is told it’s booked.`
+            : `There’s no plain “Yes” here: a yes to a time is a booking. Write ${name} a reply asking them to pick a time, or add the time in Edit times first.`}
       </p>
     </div>
   );

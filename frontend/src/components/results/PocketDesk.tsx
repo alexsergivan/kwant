@@ -11,6 +11,7 @@ import {
   BellRing,
   Check,
   ChevronLeft,
+  Clock3,
   ConciergeBell,
   Eye,
   FileText,
@@ -927,7 +928,7 @@ export const AllowCard: React.FC<{
           </div>
         ) : null}
         <p className="flex items-center gap-2 text-[13px] text-zinc-400 sm:text-2xs">
-          <Check size={12} aria-hidden="true" />
+          {a.phase === 'sent' || a.kind === 'resolve' ? <Check size={12} aria-hidden="true" data-icon="sent" /> : <Clock3 size={12} aria-hidden="true" data-icon="waiting" />}
           {a.kind === 'resolve'
             ? `Closed. Nothing went to ${name}.`
             : a.phase === 'holding'

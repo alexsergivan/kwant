@@ -486,6 +486,20 @@ test('desk-needs-you-buttons m4/m5: the booking Yes says “Sending…in 5 s” 
   assert.match(line, /Sending to Emma in 5 s: “Nika confirmed your time: Wed Dec 2, 10 AM\. See you then! To change it, write here\.”/);
   assert.doesNotMatch(line, /Sent to Emma|Your time is confirmed/);
   assert.ok(act(v, 'undo'));
+  // Mira F1: a clock, not a ✓, while held.
+  assert.ok(v.host.querySelector('[data-booking-allow="holding"] [data-icon="waiting"]'));
+  assert.ok(!v.host.querySelector('[data-booking-allow="holding"] [data-icon="sent"]'));
+});
+
+test('desk-needs-you-buttons F2: a hand-off with no asked time (Luka’s price) has no “plain Yes” line, only the Guide foot line', async () => {
+  stub();
+  const v = await row(benItem({ ask_slot_start: undefined, guest_id: 'g-luka', id: 'desk:studio:g-luka', guest_name: 'Luka', text: 'Price question: men’s cut', quote: 'How much is a men’s cut? Can I pay by card?' }));
+  assert.ok(v.host.querySelector('[data-odd-allow="open"]'));
+  assert.doesNotMatch(v.host.textContent, /plain “Yes”|pick a time/);
+  assert.match(v.host.textContent, /Your answer goes to Luka as you, marked “host”\. .+ never answers this for you\. “No reply needed” sends nothing\./);
+  // A guest who named a time keeps the booking foot line.
+  const ben = await row(benItem());
+  assert.match(ben.host.textContent, /There’s no plain “Yes” here/);
 });
 
 test('desk-needs-you-buttons m5: without a host name the quote is the guest’s own fallback line', async () => {

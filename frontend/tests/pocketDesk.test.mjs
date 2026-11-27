@@ -288,12 +288,17 @@ test('Yes is held 5 s with Undo, then sent, and the list stops showing Emma as w
   // m4: nothing is sent yet, so it doesn't say "Sent".
   assert.match(v.host.textContent, /Sending to Emma in 5\u00a0s·?Undo/);
   assert.doesNotMatch(v.host.textContent, /Sent to Emma/);
+  // Mira F1: no ✓ until it is really sent; a clock while held.
+  assert.ok(v.host.querySelector('[data-allow="holding"] [data-icon="waiting"]'));
+  assert.ok(!v.host.querySelector('[data-allow="holding"] [data-icon="sent"]'));
   assert.equal(calls.filter(([meth]) => meth === 'POST').length, 0, 'nothing sent while held');
   await wait(1000);
   await settle();
   const post = calls.find(([meth]) => meth === 'POST');
   assert.deepEqual(post[2], { name: 'reply', body: { guest: 'g-emma', text: m.DESK_YES } });
   assert.match(v.host.textContent, /Sent to Emma/);
+  assert.ok(v.host.querySelector('[data-allow="sent"] [data-icon="sent"]'));
+  assert.ok(!v.host.querySelector('[data-allow="sent"] [data-icon="waiting"]'));
   await click(act(v, 'back'));
   assert.ok(!v.host.querySelector('[data-guest="g-emma"][data-waiting]'));
 });
