@@ -445,7 +445,10 @@ pub async fn run_once(state: &AppState, now: DateTime<Utc>) -> Ran {
         Err(e) => tracing::warn!("pocket apps: couldn't list ended pockets: {e}"),
     }
     // pa14b: the Wall's best 30, the morning after it closed (ended walls keep their photos)
-    ran.picks = super::wall_pick::run_due(state, now).await;
+    // pocket-switch-santa-alone: the pick is a bot turn, so it needs `wall` itself on
+    if super::enabled_for(&state.db, super::wall::ID).await {
+        ran.picks = super::wall_pick::run_due(state, now).await;
+    }
     ran
 }
 

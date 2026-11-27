@@ -114,7 +114,8 @@ pub fn card(s: &Snapshot) -> Value {
 }
 
 async fn list(State(state): State<AppState>) -> PResult<Json<Value>> {
-    let enabled = super::enabled(&state.db).await;
+    let switch = super::switch(&state.db).await;
+    let enabled = switch.any();
     let mut pockets = Vec::new();
     if enabled {
         for row in state.db.pocket_list().await? {
@@ -126,13 +127,18 @@ async fn list(State(state): State<AppState>) -> PResult<Json<Value>> {
     Ok(Json(json!({
         "enabled": enabled,
         "pocket_port": if enabled { super::pocket_port(&state.config) } else { None },
-        "kits": if enabled { super::kits::kit_ids() } else { Vec::new() },
+        "kits": switch.kits(),
         "pockets": pockets,
     })))
 }
 
 async fn create(State(state): State<AppState>, Json(req): Json<super::CreateRequest>) -> PResult<Response> {
     on(&state).await?;
+    // pocket-switch-santa-alone: a kit the switch doesn't name makes nothing (an unknown kit
+    // still answers `unknown_kit` from the core)
+    if super::kits::kit(&req.kit).is_some() && !super::enabled_for(&state.db, &req.kit).await {
+        return Err(off());
+    }
     let (s, host_key) = super::create(&state, req).await?;
     Ok((StatusCode::CREATED, Json(json!({ "pocket": card(&s), "host_key": host_key }))).into_response())
 }
