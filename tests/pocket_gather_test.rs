@@ -317,6 +317,24 @@ fn files_holding(t: &T, needle: &str) -> Vec<&'static str> {
         .collect()
 }
 
+/// F3: what an older version, which ran without `secure_delete`, left in the file's free space:
+/// rows holding `marker`, written and dropped, one per page over enough pages that the few
+/// saves a sweep makes can't reuse them all.
+async fn leave_freed_copies(t: &T, marker: &str) {
+    use sqlx::Connection;
+    let url = format!("sqlite://{}", t.state.config.data_dir.join("kwnt.db").display());
+    let mut c = sqlx::SqliteConnection::connect(&url).await.unwrap();
+    sqlx::query("PRAGMA secure_delete = OFF").execute(&mut c).await.unwrap();
+    sqlx::query("CREATE TABLE sbu_old (x TEXT)").execute(&mut c).await.unwrap();
+    for _ in 0..40 {
+        sqlx::query("INSERT INTO sbu_old (x) VALUES (?)").bind(format!("{marker}{}", " ".repeat(3000))).execute(&mut c).await.unwrap();
+    }
+    sqlx::query("DROP TABLE sbu_old").execute(&mut c).await.unwrap();
+    sqlx::query("PRAGMA wal_checkpoint(TRUNCATE)").execute(&mut c).await.unwrap();
+    c.close().await.unwrap();
+    assert_eq!(files_holding(t, marker), vec!["kwnt.db"], "the old copies sit in the file's free space");
+}
+
 fn unpairable(st: &Value, salts: &[&str], ids: &[String]) {
     assert_eq!(st["ballot_salt"], "", "the salt is cleared: {st}");
     let keys: Vec<&String> = st["ballots"].as_object().unwrap().keys().collect();
@@ -633,6 +651,9 @@ async fn a_vote_closed_before_the_fix_is_unlinked_on_the_next_sweep() {
     r["ballot_salt"] = json!("0123456789abcdef");
     t.state.db.pocket_save_state(&rsvp, &r.to_string(), &[], Utc::now()).await.unwrap();
 
+    // F3: the older version also left copies in freed space, which it never zeroed
+    leave_freed_copies(&t, "sbu-old-vote-row").await;
+
     // Through the supervisor's own sweep period, with the switch read the way it reads it
     t.state.db.set_setting(pocket::SETTING, "off").await.unwrap();
     assert!(!pocket::listener::reconcile(&t.state).await);
@@ -640,6 +661,8 @@ async fn a_vote_closed_before_the_fix_is_unlinked_on_the_next_sweep() {
     let st = kit_state(&t, &code).await;
     unpairable(&st, &[&salt], &ids);
     assert_eq!(files_holding(&t, &salt), Vec::<&str>::new(), "the sweep wiped the old copies too (F2)");
+    assert_eq!(files_holding(&t, "sbu-old-vote-row"), Vec::<&str>::new(), "the one rewrite took the older version's freed copies (F3)");
+    assert_eq!(t.state.db.get_setting(pocket::REWRITE_DUE).await.unwrap().as_deref(), Some(""), "the rewrite is done, not due again");
     assert_eq!(orders(&st), orders(&open));
     assert_eq!(kit_state(&t, &rsvp).await["ballot_salt"], "", "an unused salt goes too");
     assert_eq!(kit_state(&t, &open_code).await, open_before, "an open vote is left as it is");
@@ -671,8 +694,12 @@ async fn a_closed_votes_salt_leaves_the_database_files_too() {
     unpairable(&kit_state(&t, &code).await, &[&salt], &ids);
     // The close asked for the wipe; the next sweep waits for it (and would run it if the
     // background one had been held up). The sweep scrubs nothing here: the close unlinked it
+    leave_freed_copies(&t, "sbu-unrelated-row").await;
     pocket::sweep(&t.state, Utc::now()).await;
     assert_eq!(files_holding(&t, &salt), Vec::<&str>::new(), "no old copy of the salt in the files");
+    // F3's rewrite of the whole file is only for votes an older version stored
+    assert_eq!(files_holding(&t, "sbu-unrelated-row"), vec!["kwnt.db"], "a database with no old vote isn't rewritten");
+    assert_eq!(t.state.db.get_setting(pocket::REWRITE_DUE).await.unwrap(), None);
     // A save that forgets nothing doesn't wipe: the next vote's salt stays while it is open
     let (open_code, _) = make(&t, spec(now, "vote", json!({}))).await;
     let (_, k) = joined(&t, &open_code, "Dev").await;

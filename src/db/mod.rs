@@ -353,6 +353,23 @@ impl Database {
         Ok(busy == 0)
     }
 
+    /// secret-ballot-unlinkable F3: rewrites the whole database file (`VACUUM`), so bytes an
+    /// older version freed before `secure_delete` was on (a vote it closed still had its ballot
+    /// salt and voter ids) leave it, then empties the log ([`Self::wipe_old_rows`]). Writers wait
+    /// for the rewrite (at most the busy timeout) and it needs about the file's size in free
+    /// disk, so a file over `max_bytes` is left as it is: false.
+    pub async fn rewrite_file(&self, max_bytes: i64) -> Result<bool, DbError> {
+        let (pages,): (i64,) = sqlx::query_as("PRAGMA page_count").fetch_one(&self.pool).await?;
+        let (page_size,): (i64,) = sqlx::query_as("PRAGMA page_size").fetch_one(&self.pool).await?;
+        if pages.saturating_mul(page_size) > max_bytes {
+            return Ok(false);
+        }
+        sqlx::query("VACUUM").execute(&self.pool).await?;
+        // The log now holds the new pages only; a reader that keeps it leaves no old bytes
+        self.wipe_old_rows().await?;
+        Ok(true)
+    }
+
     /// A transaction that holds SQLite's write lock from the start, for one that reads before it
     /// writes. A plain `pool.begin()` only asks for the lock at its first write, and SQLite fails
     /// that write at once with "database is locked" when another connection is writing: the busy
