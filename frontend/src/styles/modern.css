@@ -22,6 +22,8 @@
   transition: opacity 150ms var(--kw-ease);
 }
 :is(.group\/msg, [data-live-row]):is(:hover, :focus-within) .kw-reply-plain::before { opacity: 0.9; }
+/* The working scene has no gutter avatar (its bot is in the stage tile), so it has no thread: a thread always hangs from a creature. */
+.kw-reply-plain[data-reply-scene]::before { content: none; }
 @media (min-width: 640px) {
   .kw-reply-plain { padding-left: 0; min-height: 36px; }
   .kw-reply-plain::before { left: -33px; top: 10px; }  /* centred under the 36 px avatar, 4 px below it */
@@ -34,6 +36,7 @@
 .kw-reply-plain .kw-wa,
 .kw-reply-plain .kw-wa-lead,
 .kw-reply-plain .kw-wa-words { padding-left: 0; padding-right: 0; }
+.kw-reply-plain .kw-wa-card[data-phone] .kw-wa { padding-left: 0; padding-right: 0; }  /* 0,4,0 beats stream.css 0,3,0; keeps 12 px top, 4 px bottom */
 
 /* Design tokens (UI refresh, 0.6.9). Surfaces get lighter as they rise; hairlines are white at low
    alpha so they work on every surface. Tailwind names for these: bg-surface-*, border-hairline,

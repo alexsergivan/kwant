@@ -3336,7 +3336,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {/* 36d: the scene is the one working status, on a phone too. On a phone the strip still says "waiting" (with Answer ↑), so no "Paused on…" bubble there. */}
               {sceneShown ? (
-                <div className={`${REPLY_PLAIN} kw-live-in`} style={liveThread} data-live-bubble-body="">
+                <div className={`${REPLY_PLAIN} kw-live-in`} style={liveThread} data-live-bubble-body="" data-reply-scene="">
                   <WorkingAvatar
                     name={
                       discussionState?.inProgress && discussionState.currentSpeaker

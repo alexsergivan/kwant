@@ -76,7 +76,7 @@ test('the live row and the finished row share one geometry', () => {
   assert.match(chat, /const REPLY_PLAIN = 'kw-reply-plain text-sm leading-relaxed text-zinc-200 w-full';/);
   assert.match(chat, /className=\{`\$\{REPLY_PLAIN\} min-h-\[3\.5rem\] kw-live-in`\} style=\{liveThread\} data-live-bubble-body=""/);
   // 36d: while the bot works the scene is the reply; same plain body and thread.
-  assert.match(chat, /className=\{`\$\{REPLY_PLAIN\} kw-live-in`\} style=\{liveThread\} data-live-bubble-body=""/);
+  assert.match(chat, /className=\{`\$\{REPLY_PLAIN\} kw-live-in`\} style=\{liveThread\} data-live-bubble-body="" data-reply-scene=""/);
   assert.doesNotMatch(liveRow, /size=\{34\}|p-4 sm:p-5/);
   // The finished row uses the same strings.
   assert.match(chat, /size=\{REPLY_AVATAR\}\s+kwantId=\{replyKwantId\}/);

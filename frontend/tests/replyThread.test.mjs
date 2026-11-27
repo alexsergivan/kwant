@@ -66,5 +66,8 @@ test('modern.css: the plain reply and its thread, as design.md specifies', () =>
   assert.match(css, /:is\(\.group\\\/msg, \[data-live-row\]\):is\(:hover, :focus-within\) \.kw-reply-plain::before \{ opacity: 0\.9; \}/);
   assert.match(css, /@media \(min-width: 640px\) \{\s+\.kw-reply-plain \{ padding-left: 0; min-height: 36px; \}\s+\.kw-reply-plain::before \{ left: -33px; top: 10px; \}/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{\s+\.kw-reply-plain::before \{ transition: none; \}/);
+  // Mira's design check: the scene has no gutter avatar, so no thread; the phone scene shares the text's left edge.
+  assert.match(css, /\.kw-reply-plain\[data-reply-scene\]::before \{ content: none; \}/);
+  assert.match(css, /\.kw-reply-plain \.kw-wa-card\[data-phone\] \.kw-wa \{ padding-left: 0; padding-right: 0; \}/);
   assert.match(css, /\.kw-reply-plain :is\(p, ul, ol, h1, h2, h3, h4, h5, h6, blockquote\) \{ max-width: 42rem; \}/);
 });
