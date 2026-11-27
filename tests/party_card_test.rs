@@ -488,6 +488,53 @@ async fn a_reply_card_loses_its_guests_names_and_notes_when_the_pocket_expires()
     }
 }
 
+/// Rigel's QA F5: a pocket made from chat has two noted messages, the reply that carries its
+/// card and the results post. The Inbox's Done row is the results post's, whichever id sorts
+/// first (the reply's id here sorts before any other, as about half of real ones do).
+#[tokio::test]
+async fn the_done_row_is_the_results_post_even_with_a_reply_card_noted_first() {
+    let e = chat_setup(true).await;
+    e.state.db.set_setting(pocket::address::PUBLIC_URL_SETTING, GUEST_BASE).await.unwrap();
+    let args = theme_vote();
+    let (code, text) = make(&e, "gather_create", args.clone()).await;
+    for (name, ranking) in [("Ana", json!([0])), ("Ben", json!([0, 1])), ("Cleo", json!([1]))] {
+        let (g, _) = pocket::join(&e.state, &code, JoinRequest { name: name.into(), avatar: None, team: None, pin: Some(PIN.into()) }).await.unwrap();
+        pocket::act(&e.state, &code, &Viewer::Guest(g.id), "vote", &json!({ "ranking": ranking })).await.unwrap();
+    }
+    let call = json!({"id": "call-gather_create", "name": format!("{SELF_SERVER_NAME}__gather_create"), "server": SELF_SERVER_NAME,
+                      "tool": "gather_create", "arguments": args, "status": "ok", "result": text});
+    let msg = NewMessage {
+        channel_id: None,
+        direct_kwant_id: Some(e.bot.id.clone()),
+        sender_role: "kwant".into(),
+        sender_id: e.bot.name.clone(),
+        text: "Here is the vote card: send the link to everyone.".into(),
+        reasoning_content: None,
+        tool_calls: Some(json!([call])),
+        tokens_used: 0,
+    };
+    let reply = e.state.db.insert_message_as(Some("0-reply-card"), &msg, &MessageExtra::default()).await.unwrap();
+    assert!(pocket_block(&reply).is_some(), "the reply carries the vote's card: {:?}", reply.results);
+    assert_eq!(e.state.db.pocket_result_post_of(&code).await.unwrap(), None, "a reply card alone is no results post");
+    let closes = pocket::snapshot(&e.state, &code).await.unwrap().unwrap().row.closes_at.expect("the vote closes");
+    pocket::sweep(&e.state, closes + Duration::minutes(1)).await;
+    schedule::run_once(&e.state, closes + Duration::minutes(2)).await;
+    let mut list = e.state.db.list_messages(&e.bot.id, 100).await.unwrap();
+    e.state.db.attach_results(&mut list).await;
+    let post = list
+        .into_iter()
+        .find(|m| m.meta.as_deref().and_then(|s| serde_json::from_str::<Value>(s).ok()).is_some_and(|v| v["reason"] == "results" && v["code"] == json!(code)))
+        .expect("the results post");
+    assert_eq!(post.text, "Party theme has ended. Winter wonderland wins with 2 of 3.");
+    assert!(post.id.as_str() > reply.id.as_str(), "the reply's id sorts first");
+    assert_eq!(e.state.db.pocket_result_post_of(&code).await.unwrap().as_deref(), Some(post.id.as_str()));
+    let items = kwnt::server::inbox_pockets::items(&e.state, &SpaceId::default_space(), closes - Duration::days(1), None).await.unwrap();
+    let row = items.iter().find(|i| i["id"] == json!(format!("pocket:{code}"))).unwrap_or_else(|| panic!("the Done row: {items:?}"));
+    assert_eq!(row["title"], "Party theme: Winter wonderland wins", "{row}");
+    assert_eq!(row["result_message_id"], json!(post.id), "{row}");
+    assert_eq!(row["answer_excerpt"], "Party theme has ended. Winter wonderland wins with 2 of 3.", "{row}");
+}
+
 /// A JPEG header with no metadata, enough for the wall to take it.
 fn jpeg() -> Vec<u8> {
     let seg = |marker: u8, payload: &[u8]| {
