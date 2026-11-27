@@ -22,6 +22,10 @@ export default defineConfig({
     modulePreload: { polyfill: false },
     target: 'es2020',
     reportCompressedSize: false,
+    // santa-first-screen-preload: dist/pocket/manifest.json tells the server which files a kit's lazy chunk needs, so
+    // the page for a live code can name them before the entry asks (src/pocket/guest.rs kit_preloads). Never served
+    // on the guest port: /p/_a/ serves only scripts, styles, fonts and images.
+    manifest: 'manifest.json',
     rollupOptions: {
       output: {
         entryFileNames: 'g-[hash].js',
