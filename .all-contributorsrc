@@ -1,0 +1,62 @@
+{
+  "projectName": "kwant",
+  "projectOwner": "alexsergivan",
+  "repoType": "github",
+  "repoHost": "https://github.com",
+  "files": [
+    "README.md"
+  ],
+  "imageSize": 80,
+  "commit": false,
+  "commitConvention": "angular",
+  "contributorsPerLine": 7,
+  "linkToUsage": false,
+  "contributors": [
+    {
+      "login": "alexsergivan",
+      "name": "Oleksandr Ivanchenko",
+      "avatar_url": "https://avatars.githubusercontent.com/u/7488348?v=4",
+      "profile": "https://github.com/alexsergivan",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "skullsdev",
+      "name": "skullsdev",
+      "avatar_url": "https://avatars.githubusercontent.com/u/262048839?v=4",
+      "profile": "https://github.com/skullsdev",
+      "contributions": [
+        "code"
+      ]
+    },
+    {
+      "login": "greqone",
+      "name": "Grzegorz Nowosielski",
+      "avatar_url": "https://avatars.githubusercontent.com/u/39676616?v=4",
+      "profile": "https://github.com/greqone",
+      "contributions": [
+        "doc"
+      ]
+    },
+    {
+      "login": "calintro",
+      "name": "calintro",
+      "avatar_url": "https://avatars.githubusercontent.com/u/2131649?v=4",
+      "profile": "https://github.com/calintro",
+      "contributions": [
+        "bug"
+      ]
+    },
+    {
+      "login": "ProbablePrime",
+      "name": "ProbablePrime",
+      "avatar_url": "https://avatars.githubusercontent.com/u/8791132?v=4",
+      "profile": "https://github.com/ProbablePrime",
+      "contributions": [
+        "bug",
+        "ideas"
+      ]
+    }
+  ]
+}
