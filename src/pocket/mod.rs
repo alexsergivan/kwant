@@ -118,6 +118,33 @@ impl Switch {
             Switch::Kits(k) => k.clone(),
         }
     }
+
+    /// The setting's normal form: `off`, `on`, or the sorted kit list (`quiz,santa`).
+    pub fn stored(&self) -> String {
+        match self {
+            Switch::Off => "off".into(),
+            Switch::All => "on".into(),
+            Switch::Kits(k) => k.join(","),
+        }
+    }
+}
+
+/// What `POST /api/settings` stores for `pocket_apps` (pocket-switch-in-settings): the normal form
+/// of `raw`. Empty and `off` are off and `on` is every kit (either in any case). A list keeps the
+/// kits this build has and drops other names; a value that names no kit at all is an error, so a
+/// typo never quietly turns pocket apps off.
+pub fn setting_value(raw: &str) -> Result<String, String> {
+    let v = raw.trim().to_ascii_lowercase();
+    if v.is_empty() || v == "off" {
+        return Ok("off".into());
+    }
+    match Switch::parse(&v) {
+        Switch::Off => {
+            let shown: String = raw.trim().chars().take(60).collect();
+            Err(format!("Unknown Pocket app: {shown}. Known: {}", kits::kit_ids().join(", ")))
+        }
+        s => Ok(s.stored()),
+    }
 }
 
 /// The switch as stored now (a missing or unreadable setting is off).
@@ -1320,5 +1347,32 @@ mod tests {
         assert!(santa.any() && santa.allows("santa") && !santa.allows("quiz") && !santa.allows("desk"));
         assert!(Switch::All.allows("quiz") && Switch::All.allows("santa"));
         assert!(!Switch::Off.any() && !Switch::Off.allows("santa"));
+    }
+
+    #[test]
+    fn the_settings_value_is_the_normal_form_or_an_error() {
+        for (raw, want) in [
+            ("", "off"),
+            ("  ", "off"),
+            ("off", "off"),
+            (" OFF ", "off"),
+            ("on", "on"),
+            ("On", "on"),
+            ("santa", "santa"),
+            (" Santa , Quiz ", "quiz,santa"),
+            ("santa,santa", "santa"),
+            ("santa,bogus", "santa"),
+            ("on,santa", "santa"),
+        ] {
+            assert_eq!(setting_value(raw).as_deref(), Ok(want), "{raw:?}");
+        }
+        for raw in ["bogus", "yes", "true", ",", "on,"] {
+            let e = setting_value(raw).unwrap_err();
+            assert!(e.starts_with("Unknown Pocket app: ") && e.contains("santa") && e.contains("quiz"), "{raw:?}: {e}");
+        }
+        assert!(setting_value(&"x".repeat(500)).unwrap_err().len() < 200, "a long value isn't echoed whole");
+        assert_eq!(Switch::Off.stored(), "off");
+        assert_eq!(Switch::All.stored(), "on");
+        assert_eq!(Switch::parse("santa,quiz").stored(), "quiz,santa");
     }
 }
