@@ -67,6 +67,28 @@ export const FailoverNote: React.FC<{ text: string }> = ({ text }) => (
   </p>
 );
 
+/** #1278: a message's time on its name line, one look for every row: "3:42 PM" today, "Nov 3, 3:42 PM" on another
+ *  day (localClock). It takes its row's type size (11 px beside "You", 12 px on a reply). A bot reply (and the live row, which becomes it) puts "· " before it on phones, where the avatar
+ *  sits in the line; a person's row has no avatar there, so no dot. A <time dateTime> so screen readers get the
+ *  moment, not only the words. Nothing is drawn without a readable time. */
+export const MessageTime: React.FC<{ at?: string | number | null; now?: number; kind?: 'reply' | 'live' | 'user' }> = ({ at, now, kind = 'reply' }) => {
+  const time = localClock(at, now);
+  if (!time || at === null || at === undefined) return null;
+  const iso = new Date(at).toISOString();
+  return kind === 'user' ? (
+    <time className="shrink-0 whitespace-nowrap text-zinc-400" data-message-time="user" dateTime={iso}>
+      {time}
+    </time>
+  ) : (
+    <time className="shrink-0 whitespace-nowrap text-zinc-400" {...(kind === 'live' ? { 'data-message-time': 'live', title: `Started ${time}` } : { 'data-reply-time': '' })} dateTime={iso}>
+      {/* The live row's time is when the turn started, not an answer time: said on hover and to screen readers */}
+      {kind === 'live' && <span className="sr-only">Started </span>}
+      <span aria-hidden="true" className="sm:hidden">· </span>
+      {time}
+    </time>
+  );
+};
+
 const hasContent = (n: React.ReactNode) => React.Children.toArray(n).length > 0;
 
 /** A bot reply's header: one line, "Name · [Done] · 3:42 PM · Details", and a Details toggle holding the rest in words. */
@@ -80,7 +102,6 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
   const tone = !told || open ? 'text-zinc-400' : told.kind === 'failed' ? 'text-rose-300' : told.kind === 'unanswered' ? 'text-amber-300' : 'text-zinc-300';
   const why = useRouteChip(route);
   const panelId = useId();
-  const time = localClock(at, now);
   const facts: Array<[string, React.ReactNode]> = [];
   if (why.reason)
     facts.push([
@@ -122,12 +143,7 @@ export const ReplyMeta: React.FC<ReplyMetaProps> = ({ name, at, avatar, ranOn, a
         <span className={REPLY_NAME}>{name}</span>
         {done && <DoneMarker done={done} />}
         {handoff && <EngineChip label={[ranOn, account].filter(Boolean).join(' · ')} short={ranOn ? ranOn.split(' · ').pop() : null} handoff={handoff} />}
-        {time && (
-          <span className="shrink-0 whitespace-nowrap text-zinc-400" data-reply-time="">
-            <span aria-hidden="true" className="sm:hidden">· </span>
-            {time}
-          </span>
-        )}
+        <MessageTime at={at} now={now} />
         {sentToTelegram && <SentToTelegram />}
         {hasDetails && (
           <button
