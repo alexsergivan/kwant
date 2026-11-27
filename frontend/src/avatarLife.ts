@@ -77,6 +77,10 @@ interface Entry {
   nextBlink: number;
   nextQuirk: number;
   lastBulb: number;
+  /** A perk-up is pending or showing until this time (set by perk, cleared when it ends or is cancelled). */
+  perkEnd?: number;
+  /** A mood change that came in during the perk: it plays once the perk ends (the mood it came from). */
+  afterPerk?: { fn: () => void; from: string };
 }
 type Step = [frame: LifeFrame | null, hop: boolean, ms: number];
 interface Queued {
@@ -124,6 +128,8 @@ export function createLife(env: LifeEnv) {
   /** Drop an entry's queued steps and put its rest face back (a moment wins over an idle event). */
   const cancel = (e: Entry) => {
     queue = queue.filter((q) => q.e !== e);
+    e.perkEnd = undefined;
+    e.afterPerk = undefined;
     if (e.busy) {
       e.busy = false;
       if (e.counted) active--;
@@ -145,6 +151,7 @@ export function createLife(env: LifeEnv) {
     }
     push(t, e, () => {
       show(e, null, false);
+      e.perkEnd = undefined;
       e.busy = false;
       if (e.counted) active--;
       e.counted = false;
@@ -214,6 +221,16 @@ export function createLife(env: LifeEnv) {
     arm();
   }
 
+  /** A mood change's own steps: blink through, then finished hops once and needs_you twice. */
+  const moodSteps = (from: string, mood: string): Step[] => {
+    const steps: Step[] = [];
+    // Happy eyes are already closed carets; failed never moves: the face swaps at once.
+    if (mood !== 'failed' && from !== 'finished') steps.push(['closed', false, BLINK_THROUGH]);
+    if (mood === 'finished') steps.push([null, true, HOP], [null, false, HOP]);
+    if (mood === 'needs_you') steps.push([null, true, HOP], [null, false, HOP], [null, true, HOP]);
+    return steps;
+  };
+
   const firstEvents = (e: Entry, now: number) => {
     const z = ZONES[e.zone];
     // The first event lands at a random 0.6 s to the zone's max, so nothing syncs.
@@ -250,11 +267,24 @@ export function createLife(env: LifeEnv) {
       const from = e.mood;
       e.mood = mood;
       if (paused || !e.visible) return cancel(e);
-      const steps: Step[] = [];
-      // Happy eyes are already closed carets; failed never moves: the face swaps at once.
-      if (mood !== 'failed' && from !== 'finished') steps.push(['closed', false, BLINK_THROUGH]);
-      if (mood === 'finished') steps.push([null, true, HOP], [null, false, HOP]);
-      if (mood === 'needs_you') steps.push([null, true, HOP], [null, false, HOP], [null, true, HOP]);
+      // You just sent this bot a message and its turn started (~30 ms later): the perk pending or showing stays, and
+      // the mood change plays right after it ends (a later change in that window replaces the earlier one).
+      if (e.perkEnd !== undefined) {
+        const was = e.afterPerk;
+        if (was) queue = queue.filter((q) => q.fn !== was.fn);
+        const first = was?.from ?? from;
+        const fn = () => {
+          e.afterPerk = undefined;
+          if (paused || !e.visible || e.mood === first) return;
+          const after = moodSteps(first, e.mood);
+          if (after.length) play(e, after, true);
+        };
+        e.afterPerk = { fn, from: first };
+        push(e.perkEnd, e, fn);
+        arm();
+        return;
+      }
+      const steps = moodSteps(from, mood);
       if (steps.length) play(e, steps, true);
       else cancel(e);
       arm();
@@ -283,7 +313,11 @@ export function createLife(env: LifeEnv) {
     /** Perk-up: you sent this bot a message. After today's 160 ms blink: wide eyes, "o" and one hop. */
     perk(kwantId: string) {
       if (paused) return;
-      for (const e of entries.values()) if (e.kwantId === kwantId && e.visible) play(e, [['perk', true, HOP]], true, NOTICE_BLINK);
+      for (const e of entries.values())
+        if (e.kwantId === kwantId && e.visible) {
+          play(e, [['perk', true, HOP]], true, NOTICE_BLINK);
+          e.perkEnd = env.now() + NOTICE_BLINK + HOP;
+        }
       arm();
     },
     /**
