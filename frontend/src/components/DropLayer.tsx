@@ -82,7 +82,7 @@ export const DropLayer: React.FC<DropLayerProps> = ({ phase, card, single, bots,
           <div className="kw-dd-who">
             {single ? (
               <span className="kw-dd-one">
-                <ModernAvatar role={bots[0]?.avatar || bots[0]?.name || ''} name={bots[0]?.name || ''} size={64} kwantId={bots[0]?.id} className="rounded-2xl" />
+                <ModernAvatar role={bots[0]?.avatar || bots[0]?.name || ''} name={bots[0]?.name || ''} size={64} kwantId={bots[0]?.id} className="rounded-2xl" life="full" />
               </span>
             ) : (
               <span className="kw-dd-many">
