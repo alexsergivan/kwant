@@ -998,14 +998,14 @@ main:has(.jump-bar) .page-head h1 { max-width: 13.5em; text-wrap: wrap; }
 .prose .cloud { margin-top: 32px; }
 .cloud .cloud-art { --u: 3px; display: grid; place-items: center; width: 80px; height: 80px; background: var(--v2); color: var(--v7); clip-path: var(--steps); }
 .cloud .cloud-pi { width: 48px; height: 30px; }
-.cloud .cloud-k { margin: 0; color: var(--wait); }
+.cloud .cloud-k { margin: 0; color: var(--v7); }
 .cloud h3 { margin: 12px 0 0; font: 600 clamp(23px, 2.5vw, 29px)/1.15 var(--display); color: var(--ink); text-wrap: balance; }
 .cloud .cloud-say { margin: 10px 0 0; max-width: 60ch; color: var(--muted); font-size: 16.5px; line-height: 1.6; }
 .cloud .cloud-act { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-top: 20px; }
 .cloud .cloud-act .btn svg { width: 14px; height: 16px; }
 .cloud .cloud-alt { color: var(--v8); font-size: 15px; font-weight: 500; }
 .cloud .cloud-alt:hover { color: var(--v9); }
-.cloud .cloud-fine { margin: 18px 0 0; max-width: 72ch; color: var(--dim); font-size: 13.5px; line-height: 1.55; }
+.cloud .cloud-fine { margin: 18px 0 0; max-width: 72ch; color: var(--dim); font-size: 13.5px; line-height: 1.55; text-wrap: pretty; }
 .cloud .cloud-fine a { color: var(--v8); white-space: nowrap; }
 /* "What you get" fills the right side of the full-width home card on wide screens; the docs cards are too narrow. */
 .cloud .cloud-get { display: none; }
@@ -1024,4 +1024,6 @@ main:has(.jump-bar) .page-head h1 { max-width: 13.5em; text-wrap: wrap; }
   .cloud .cloud-art { width: 60px; height: 60px; }
   .cloud .cloud-pi { width: 36px; height: 23px; }
   .cloud .cloud-act .btn { width: 100%; }
+  .cloud .cloud-alt, .outro .outro-cloud a { display: inline-block; padding-block: 10px; margin-block: -10px; }
+  .cloud .cloud-fine a { display: inline-block; padding-block: 12px; margin-block: -12px; }
 }

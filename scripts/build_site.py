@@ -242,9 +242,9 @@ IC = {
 
 # One-click deploys on Railway: the two published templates from the README (Oleks's Railway workspace). Railway pays
 # the template's publisher a share of what deploys of it cost, so every Railway link on the site uses exactly these.
-# To add a Railway referral code later, append it here (e.g. "&referralCode=abc") and nowhere else.
-RAILWAY_KWANT = "https://railway.com/deploy/kwant-1?utm_medium=integration&utm_source=button&utm_campaign=kwant"
-RAILWAY_LAYA = "https://railway.com/deploy/kwant-laya?utm_medium=integration&utm_source=button&utm_campaign=kwant"
+# referralCode is Oleks's Railway referral code (Dashboard → Refer); the README buttons carry the same code.
+RAILWAY_KWANT = "https://railway.com/deploy/kwant-1?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant"
+RAILWAY_LAYA = "https://railway.com/deploy/kwant-laya?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant"
 
 
 def railway(uid, root):
@@ -261,7 +261,7 @@ def railway(uid, root):
         f'<div class="cloud-act">'
         f'<a class="btn btn-violet px" href="{kwant}" rel="noopener">{px_icon(IC["up"])}'
         f'<span>Deploy on Railway</span></a>'
-        f'<a class="cloud-alt" href="{laya}" rel="noopener">With Laya, for smarter routing '
+        f'<a class="cloud-alt" href="{laya}" rel="noopener">Or deploy with Laya, for smarter routing '
         f'<span aria-hidden="true">→</span></a>'
         f'</div>'
         f'<p class="cloud-fine">New Railway accounts start with a free trial, then Railway bills you directly. '
