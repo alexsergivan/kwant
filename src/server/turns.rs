@@ -285,7 +285,19 @@ impl TurnRegistry {
         self.lock().turns.contains_key(turn_id)
     }
 
+    /// Unlists the turn without saying how it ended; see [`Self::end_turn_as`].
     pub fn end_turn(&self, turn_id: &str) {
+        self.end_turn_with(turn_id, None);
+    }
+
+    /// Unlists the turn that ended with `outcome` ("completed", "failed" or "cancelled", as the
+    /// `turn_ended` it sends). A turn that was running sets its bot's `last_finished_at` and
+    /// `last_outcome`; one still queued sets neither.
+    pub fn end_turn_as(&self, turn_id: &str, outcome: &'static str) {
+        self.end_turn_with(turn_id, Some(outcome));
+    }
+
+    fn end_turn_with(&self, turn_id: &str, outcome: Option<&'static str>) {
         let mut inner = self.lock();
         let ended = inner.turns.remove(turn_id);
         inner.meters.remove(turn_id);
@@ -293,7 +305,9 @@ impl TurnRegistry {
         inner.board.signals.remove(turn_id);
         if let Some(t) = ended {
             if t.state == "running" {
-                inner.board.marks.entry(t.kwant_id.clone()).or_default().last_finished_at = Some(chrono::Utc::now());
+                let marks = inner.board.marks.entry(t.kwant_id.clone()).or_default();
+                marks.last_finished_at = Some(chrono::Utc::now());
+                let _ = outcome; // red: the outcome isn't kept yet
             }
             inner.board.nudge(&t.kwant_id);
         }
@@ -928,6 +942,57 @@ mod tests {
         assert_eq!(source, Some(TurnSource::bot("Ada")));
         reg.end_turn("t");
         assert!(reg.board(|b| !b.signals.contains_key("t")));
+    }
+
+    #[test]
+    fn the_last_outcome_is_the_newest_running_turns() {
+        let reg = TurnRegistry::default();
+        let turn = |id: &str, state: &str| ActiveTurn {
+            turn_id: id.into(),
+            kwant_id: "k".into(),
+            context_id: "c".into(),
+            thread_id: None,
+            state: state.into(),
+            since: chrono::Utc::now(),
+            purpose: None,
+            audit: None,
+        };
+        let marks = || reg.board(|b| b.marks.get("k").cloned().unwrap_or_default());
+        let status = || {
+            let input = super::super::bot_status::BotInput { kwant_id: "k".into(), turns: Vec::new(), questions: Vec::new(), marks: marks(), held: Vec::new() };
+            super::super::bot_status::compute(&input, chrono::Utc::now())
+        };
+        // completed, then failed: failed
+        reg.set_turn(turn("a", "running"));
+        reg.end_turn_as("a", "completed");
+        assert_eq!(marks().last_outcome, Some("completed"));
+        let first = marks().last_finished_at;
+        assert!(first.is_some());
+        reg.set_turn(turn("b", "running"));
+        reg.end_turn_as("b", "failed");
+        assert_eq!(marks().last_outcome, Some("failed"));
+        assert!(marks().last_finished_at >= first);
+        let s = status();
+        assert_eq!((s.last_outcome, s.last_finished_at), (Some("failed"), marks().last_finished_at));
+        // failed, then completed: completed
+        reg.set_turn(turn("c", "running"));
+        reg.end_turn_as("c", "completed");
+        assert_eq!(marks().last_outcome, Some("completed"));
+        assert_eq!(status().last_outcome, Some("completed"));
+        // a stopped turn says cancelled
+        reg.set_turn(turn("d", "running"));
+        reg.end_turn_as("d", "cancelled");
+        assert_eq!(marks().last_outcome, Some("cancelled"));
+        // a turn cancelled while still queued never finished: neither mark moves
+        let before = marks();
+        reg.set_turn(turn("e", "queued"));
+        reg.end_turn_as("e", "failed");
+        assert_eq!(marks(), before);
+        // an end that doesn't say how leaves no stale outcome beside the new time
+        reg.set_turn(turn("f", "running"));
+        reg.end_turn("f");
+        assert_eq!(marks().last_outcome, None);
+        assert!(marks().last_finished_at >= before.last_finished_at);
     }
 
     #[test]
