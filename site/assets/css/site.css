@@ -992,3 +992,36 @@ main:has(.jump-bar) .page-head h1 { max-width: 13.5em; text-wrap: wrap; }
 /* The home page's below-the-fold images wait in data-src, and demo video posters in data-poster, for site.js; without
    JS, hide the empty placeholder or poster-less video and let the <noscript> copy show instead. */
 @media (scripting: none) { img[data-src], video[data-poster] { display: none; } noscript { display: contents; } }
+
+/* ---------- Run it on Railway: the one-click deploy card ({{railway:ID}} on home, quickstart and install) ---------- */
+.cloud { --u: 3px; --px-edge: var(--v4); --px-fill: var(--surface); display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 28px; align-items: start; margin-top: 40px; padding: 30px 34px 28px; }
+.prose .cloud { margin-top: 32px; }
+.cloud .cloud-art { --u: 3px; display: grid; place-items: center; width: 80px; height: 80px; background: var(--v2); color: var(--v7); clip-path: var(--steps); }
+.cloud .cloud-pi { width: 48px; height: 30px; }
+.cloud .cloud-k { margin: 0; color: var(--wait); }
+.cloud h3 { margin: 12px 0 0; font: 600 clamp(23px, 2.5vw, 29px)/1.15 var(--display); color: var(--ink); text-wrap: balance; }
+.cloud .cloud-say { margin: 10px 0 0; max-width: 60ch; color: var(--muted); font-size: 16.5px; line-height: 1.6; }
+.cloud .cloud-act { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px; margin-top: 20px; }
+.cloud .cloud-act .btn svg { width: 14px; height: 16px; }
+.cloud .cloud-alt { color: var(--v8); font-size: 15px; font-weight: 500; }
+.cloud .cloud-alt:hover { color: var(--v9); }
+.cloud .cloud-fine { margin: 18px 0 0; max-width: 72ch; color: var(--dim); font-size: 13.5px; line-height: 1.55; }
+.cloud .cloud-fine a { color: var(--v8); white-space: nowrap; }
+/* "What you get" fills the right side of the full-width home card on wide screens; the docs cards are too narrow. */
+.cloud .cloud-get { display: none; }
+@media (min-width: 1100px) {
+  .cloud.cloud-home { grid-template-columns: 80px minmax(0, 1fr) 280px; gap: 28px 40px; }
+  .cloud.cloud-home .cloud-get { display: block; align-self: center; padding: 22px 24px; border-left: 2px solid var(--line); }
+}
+.cloud .cloud-get .mono-label { margin: 0 0 14px; }
+.cloud .cloud-get ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 12px; }
+.cloud .cloud-get li { display: flex; align-items: center; gap: 10px; margin: 0; color: var(--ink); font-size: 15px; }
+.cloud .cloud-get .cloud-ok { flex: none; width: 14px; height: 14px; color: var(--ok); }
+.outro .outro-cloud { margin: 16px 0 0; font-size: 15px; }
+.outro .outro-cloud a { color: var(--v8); }
+@media (max-width: 640px) {
+  .cloud { grid-template-columns: 1fr; gap: 16px; padding: 24px 20px; }
+  .cloud .cloud-art { width: 60px; height: 60px; }
+  .cloud .cloud-pi { width: 36px; height: 23px; }
+  .cloud .cloud-act .btn { width: 100%; }
+}
