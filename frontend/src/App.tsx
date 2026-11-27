@@ -174,7 +174,7 @@ import {
   turnsAwaitingAnswer,
 } from './questions';
 import { AwayError, AwayItem, affectsAway, awayApi, clearAnswered, resolveBody } from './away';
-import { asksHere, closedId, onlyLiveApproval, stripHasLiveApproval, isHandOff, dismissKind, dropClosed, loadAskWindow, openTarget as askOpenTarget, resendTarget, retryRoute, switchFor, type AskAction, type Here } from './askHere';
+import { askAction, asksHere, closedId, onlyLiveApproval, stripHasLiveApproval, isHandOff, dismissKind, dropClosed, loadAskWindow, openTarget as askOpenTarget, resendTarget, retryRoute, switchFor, type AskAction, type Here } from './askHere';
 import { NeedsYouStrip } from './components/NeedsYouStrip';
 import { chainBudgetApi } from './chainBudget';
 import { needsYouRows, attentionRows } from './chatsTab';
@@ -4881,6 +4881,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }}
           needsYouStrip={needsYouStrip}
           needsYouOpen={asks.length > 0}
+          stripQuestionBots={asks.filter((a) => askAction(a) === 'answer').map((a) => a.kwant_id)}
           stripOnlyApproval={onlyLiveApproval(asks)}
           stripHasApproval={stripHasLiveApproval(asks)}
           subHeader={subHeader}

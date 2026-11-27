@@ -43,24 +43,7 @@ export function WaitingBanner({
             </p>
           ))}
         </div>
-        {hasRail && (
-          <ol aria-label="Where the team is" className="flex-1 min-w-0 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-meta text-zinc-400 sm:col-start-1 sm:row-start-2" data-waiting-rail="">
-            {rail!.map((s, i) => (
-              <li key={`${s.state}-${i}`} className={`flex items-center gap-1 ${s.state === 'you' ? 'text-warn' : ''}`}>
-                {s.state === 'done' ? (
-                  <Check size={11} aria-hidden="true" className="text-ok" />
-                ) : (
-                  <Circle size={8} aria-hidden="true" className={s.state === 'you' ? 'fill-current' : ''} />
-                )}
-                <span>
-                  {s.state === 'done' && <span className="sr-only">Replied: </span>}
-                  {s.state === 'next' && <span className="sr-only">Next: </span>}
-                  {s.name}
-                </span>
-              </li>
-            ))}
-          </ol>
-        )}
+        {hasRail && <TurnRail rail={rail!} className="flex-1 sm:col-start-1 sm:row-start-2" />}
         <div className={`ml-auto flex items-center gap-1.5 shrink-0 sm:col-start-2 sm:row-start-1 ${hasRail ? 'sm:row-span-2' : ''}`}>
           {onShow && (
             <button
@@ -86,5 +69,28 @@ export function WaitingBanner({
         </div>
       </div>
     </div>
+  );
+}
+
+/** The team turn rail (who replied, "You pick", who wraps up). The banner's second row, or the Needs-you
+ *  strip's last line while the banner yields to it (thread-waiting-once). */
+export function TurnRail({ rail, className = '' }: { rail: RailStep[]; className?: string }) {
+  return (
+    <ol aria-label="Where the team is" className={`${className} min-w-0 flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-meta text-zinc-400`} data-waiting-rail="">
+      {rail.map((s, i) => (
+        <li key={`${s.state}-${i}`} className={`flex items-center gap-1 ${s.state === 'you' ? 'text-warn' : ''}`}>
+          {s.state === 'done' ? (
+            <Check size={11} aria-hidden="true" className="text-ok" />
+          ) : (
+            <Circle size={8} aria-hidden="true" className={s.state === 'you' ? 'fill-current' : ''} />
+          )}
+          <span>
+            {s.state === 'done' && <span className="sr-only">Replied: </span>}
+            {s.state === 'next' && <span className="sr-only">Next: </span>}
+            {s.name}
+          </span>
+        </li>
+      ))}
+    </ol>
   );
 }

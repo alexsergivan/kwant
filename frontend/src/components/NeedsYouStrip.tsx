@@ -1,5 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUp, Check, ChevronLeft, ChevronRight, Globe, Hand, Inbox, Loader2, Play, Plug, RotateCcw, type LucideIcon } from 'lucide-react';
+import { ArrowUp, Check, ChevronLeft, ChevronRight, Globe, Hand, Inbox, Loader2, Play, Plug, RotateCcw, Square, type LucideIcon } from 'lucide-react';
 import type { AwayItem } from '../away';
 import { approvalLine } from '../approvals';
 import { localClock } from '../clock';
@@ -21,6 +21,8 @@ import {
   type AskAction,
 } from '../askHere';
 import { useFocusAfterRender } from '../focusAfterRender';
+import type { RailStep } from '../waitingState';
+import { TurnRail } from './WaitingBanner';
 
 export interface NeedsYouStripProps {
   /** The open asks in this chat, oldest first (`asksHere`). Nothing shows when empty. */
@@ -45,6 +47,12 @@ export interface NeedsYouStripProps {
   /** The chat on screen; announcements only compare asks within one chat. */
   hereKey?: string;
   phone?: boolean;
+  /**
+   * thread-waiting-once (0.9.60): the turn waiting on `bot`'s question, while the chat's amber banner yields to
+   * this strip. On that bot's question the strip also carries what the banner held: the team rail under the
+   * hint, and the ghost Stop / "Stop team" beside "Go to the question" (no onStop in a thread: its header has Stop).
+   */
+  waitTurn?: { bot: string; rail?: RailStep[]; stopLabel?: string; onStop?: () => void };
   /** Tests: the clock's "now", and how long a sent action waits before its button comes back. */
   now?: number;
   sentWaitMs?: number;
@@ -76,7 +84,7 @@ const focusComposer = () => document.querySelector<HTMLElement>('textarea[data-c
  * through several. It reads the Needs-you list, not the messages, so it shows even when the ask's message
  * isn't loaded, and it goes in the same render as the sidebar row once the list drops the item.
  */
-export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, onDismiss, onShow, onOpenInbox, focusKey, hereKey, phone, now, sentWaitMs = SENT_WAIT_MS }) => {
+export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, onDismiss, onShow, onOpenInbox, focusKey, hereKey, phone, waitTurn, now, sentWaitMs = SENT_WAIT_MS }) => {
   const [index, setIndex] = useState(0);
   const shownId = useRef<string | null>(null);
   // The action can be sending while "Done, clear it" stays pressable; clearing stops both.
@@ -225,6 +233,9 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
   const time = localClock(item.timestamp, now);
   const goTo = action === 'answer' || action === 'decide';
   const resolving = !!action && RESOLVES.has(action);
+  // The waiting turn's Stop and rail go with its own question only, never with another ask stepped to.
+  const turnHere = waitTurn && action === 'answer' && item.kwant_id === waitTurn.bot ? waitTurn : null;
+  const stopHere = turnHere?.onStop ? turnHere : null;
 
   const step = (d: number) => {
     const next = Math.min(Math.max(0, i + d), n - 1);
@@ -341,6 +352,18 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
           {clearing ? 'Clearing…' : 'Done, clear it'}
         </button>
       )}
+      {stopHere && (
+        <button
+          type="button"
+          data-strip-stop=""
+          disabled={leaving}
+          onClick={stopHere.onStop}
+          className={`kw-btn-ghost ${btnH} ${phone ? 'flex-1' : ''} whitespace-nowrap disabled:opacity-60 disabled:cursor-default`}
+        >
+          <Square size={10} aria-hidden="true" className="fill-current shrink-0" />
+          {stopHere.stopLabel || 'Stop'}
+        </button>
+      )}
       {action && (
         <button
           ref={actionRef}
@@ -411,13 +434,14 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
           <p data-strip-hint className={`mt-0.5 text-meta ${gone ? 'text-zinc-300' : 'text-zinc-400'}`}>
             {hint}
           </p>
+          {!!turnHere?.rail?.length && <TurnRail rail={turnHere.rail} className="mt-1" />}
           {error && (
             <p role="alert" data-strip-error className="mt-1 text-meta text-bad break-words">
               {error}
             </p>
           )}
         </div>
-        {clearable || action ? buttons : null}
+        {clearable || action || stopHere ? buttons : null}
       </section>
     </>
   );

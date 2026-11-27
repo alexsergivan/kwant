@@ -6,7 +6,8 @@ import { queuedText } from '../claudeVm';
 import { stepsWho } from '../toolLabel';
 import { QueuedBeside } from './QueuedBeside';
 import { WaitingBanner } from './WaitingBanner';
-import { answerPlaceholder, isTeamTurn, onlyAskOpen, turnRail, waitingStopLabel } from '../waitingState';
+import type { NeedsYouStripProps } from './NeedsYouStrip';
+import { answerPlaceholder, bannerYieldsToStrip, isTeamTurn, onlyAskOpen, turnRail, waitingStopLabel } from '../waitingState';
 import type { SwitchEntry } from '../watchLive';
 import { emptyTrialReplyLine, trialCardsAfter, trialOf } from '../showOnce';
 import { parsePick } from '../engines';
@@ -375,6 +376,8 @@ export interface ChatViewProps {
   needsYouStrip?: React.ReactNode;
   /** 22i: the strip shows an ask here, so the working line drops its own "Answer ↑". */
   needsYouOpen?: boolean;
+  /** thread-waiting-once: the bots with an open question on the Needs-you strip here (their ids). */
+  stripQuestionBots?: string[];
   /** 29w: the strip's only ask is this chat's live approval, so it steps aside while that card's buttons are on screen. */
   stripOnlyApproval?: boolean;
   /** 30a: the strip offers "Go to the approval" for a live approval here, so the "Approval waiting" pill steps aside. */
@@ -690,6 +693,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   highlightRing,
   needsYouStrip,
   needsYouOpen,
+  stripQuestionBots,
   stripOnlyApproval = false,
   stripHasApproval = false,
   onContinueFrom,
@@ -1291,6 +1295,15 @@ export const ChatView: React.FC<ChatViewProps> = ({
   };
   // 29w: the Needs-you strip steps aside while its one ask is the live approval whose buttons are on screen.
   const stripAside = stripStepsAside({ strip: !!needsYouStrip, onlyApproval: stripOnlyApproval, cardInView: approvalCardInView, followingCard });
+  // thread-waiting-once (Mira's m6): the strip shows the same question, so the banner isn't drawn; the strip takes
+  // its Stop (not in a thread: the thread header has Stop) and the team rail. Without the strip the banner stays.
+  const bannerYields = bannerYieldsToStrip({ askOnly, askerId: awaitingBot?.id, stripQuestionBots, stripAside });
+  const stripNode =
+    bannerYields && React.isValidElement<NeedsYouStripProps>(needsYouStrip)
+      ? React.cloneElement(needsYouStrip, {
+          waitTurn: { bot: awaitingBot!.id, rail: askRail, stopLabel: waitingStopLabel(teamChat), onStop: threadKind ? undefined : onCancelDiscussion },
+        })
+      : needsYouStrip;
   const stripSlotRef = useRef<HTMLDivElement | null>(null);
   const stripHadFocusRef = useRef(false);
   // Its "Go to the approval" brings the card into view and the strip goes: focus that was in it goes to the
@@ -3166,7 +3179,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
       </div>
 
       {/* Waiting for the person: replaces the discussion banner while the only open thing is a question */}
-      {askOnly && (
+      {askOnly && !bannerYields && (
         <WaitingBanner
           lines={[{ kind: 'answer', bot: awaitingBot?.name || streamingSpeakerName || title }]}
           rail={askRail}
@@ -3495,7 +3508,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* 22i: below the working line, right above the box (design.md §2 order). */}
         {/* 29w: it steps aside (instantly, kept mounted) while it only repeats the approval card on screen. */}
         <div ref={stripSlotRef} className={stripAside ? 'hidden' : 'contents'} data-needs-you-slot={stripAside ? 'aside' : 'shown'} onFocus={(e) => (stripHadFocusRef.current = (e.target as HTMLElement).matches(':focus-visible'))} onBlur={() => (stripHadFocusRef.current = false)}>
-          {needsYouStrip}
+          {stripNode}
         </div>
 
         <form
