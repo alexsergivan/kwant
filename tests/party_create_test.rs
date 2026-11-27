@@ -227,7 +227,9 @@ async fn an_rsvp_whose_weekday_isnt_event_ats_day_is_refused_and_nothing_is_made
     let (text, err) = tool(&e, &token, "gather_create", fri).await;
     assert!(err, "{text}");
     assert!(text.starts_with("Nothing was made: when says Friday, but event_at is Saturday"), "{text}");
-    assert!(text.contains("Ask the person which they mean"), "{text}");
+    // The bot gets the question with both dates worked out, so it never counts days itself
+    let (sat, fri) = (d.format("%b %-d"), (d - Duration::days(1)).format("%b %-d"));
+    assert!(text.contains(&format!("Ask the person which they mean, like \"{sat} is a Saturday. Do you mean Saturday, {sat}, or Friday, {fri}?\"")), "{text}");
     assert!(e.state.db.pocket_list().await.unwrap().is_empty());
 }
 

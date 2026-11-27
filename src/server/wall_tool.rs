@@ -199,7 +199,7 @@ fn made_text(code: &str, title: &str, spec: &Value, join: Option<&Value>) -> Str
     format!(
         "{CARD_TEXT_HEAD}{code}] \"{title}\" is open. Uploads stop at {closes}.\n\
          {link}\n\
-         Tell the person to send the link to the guests (or show its QR on a big screen); kwant never sends it. Each photo waits for the \
+         Tell the person to send the link to the guests; kwant never sends it. Each photo waits for the \
          person's OK, and the big screen shows approved photos only. Keep your reply to two or three lines: the link, when uploads stop \
          (in the person's own words and time), and nothing you made up.",
         closes = spec["closes_at"].as_str().unwrap_or(""),
@@ -287,5 +287,7 @@ mod tests {
         assert!(t.starts_with("Pocket app · Photo wall [WALL22] \"Party\" is open. Uploads stop at 2026-12-13T12:00:00+01:00."), "{t}");
         assert!(t.contains("Guest link: http://192.168.1.20:8788/p/WALL22") && t.contains("same Wi-Fi"), "{t}");
         assert!(!t.contains("#remote=") && !t.contains("#screen="), "{t}");
+        // No screen link reaches the person from this answer, so it never sends them to a QR on one
+        assert!(t.contains("Tell the person to send the link to the guests; kwant never sends it.") && !t.contains("QR"), "{t}");
     }
 }

@@ -25,7 +25,7 @@ use super::continuity::SelfScope;
 use super::quizmaster_tools::PocketOrigin;
 use super::AppState;
 use crate::pocket::{gather, schedule, CreateRequest};
-use chrono::{DateTime, Datelike, NaiveDate, Weekday};
+use chrono::{DateTime, Datelike, Duration, NaiveDate, Weekday};
 use serde_json::{json, Map, Value};
 
 type ToolResult = (String, bool);
@@ -109,13 +109,14 @@ event_at. Left out, it is event_at: answers close when the event starts.
 link can still answer.
 - show_names (optional, default true): whether guests see each other's names and answers. With false, only the person sees who's coming.
 - templates (optional): the nudges the person copies, written now because nothing writes them later. Keys: maybe, not_paid, moved_up, \
-not_answered; each up to 300 characters, with {name}, {title}, {host}, {slot} and {link} filled in. Left out, kwant's own are used.
+not_answered; each up to 300 characters, with {name}, {title}, {when}, {place}, {host}, {slot} and {link} filled in. Left out, kwant's own are used.
 
 Rules:
-- Ask the person at most one question before you call. For an RSVP, ask whether guests should see who's coming, like \"Should guests \
-see who's coming, or only you? I'll show names if that's fine.\" For a vote, ask who's voting, like \"Who's voting? Give me their first \
-names and I'll show you who hasn't voted yet, or I'll leave it open to anyone with the link.\" If the day or time is missing, ask for that \
-instead.
+- Ask the person at most one question before you call. If the day or time is missing (for a vote: when voting closes), or the day \
+of the week and the date don't agree, ask only about that, and use the defaults for the rest: names shown, anyone with the link can \
+vote. Otherwise, for an RSVP, ask whether guests should see who's coming, like \"Should guests see who's coming, or only you? I'll show \
+names if that's fine.\" For a vote, ask who's voting, like \"Who's voting? Give me their first names and I'll show you who hasn't voted \
+yet. Anyone with the link can vote either way.\"
 - Never invent a price, a place, a time or a list of people. Write only what the person said.
 - Never say a field name (show_names, closes_at, members) to the person.
 - After it opens, keep your reply short: give the guest link, say when answers close, and that the person sends the link to everyone.
@@ -215,11 +216,18 @@ pub(crate) fn build_spec(g: &Value) -> Result<Value, String> {
     let line = spec.get("when").and_then(Value::as_str).unwrap_or("");
     if let (Some(said), Some(day)) = (weekday_in(line), spec.get("event_at").and_then(event_day)) {
         if said != day.weekday() {
+            // The nearest day with the weekday the person named (within 3 days either way), so
+            // the bot can offer both dates without counting days itself.
+            let d = (said.num_days_from_monday() as i64 - day.weekday().num_days_from_monday() as i64).rem_euclid(7);
+            let other = day + Duration::days(if d > 3 { d - 7 } else { d });
             return Err(format!(
-                "Nothing was made: when says {}, but event_at is {}, {}. Ask the person which they mean; don't pick one yourself.",
-                day_name(said),
-                day_name(day.weekday()),
-                day.format("%b %-d, %Y")
+                "Nothing was made: when says {said}, but event_at is {actual}, {date}. Ask the person which they mean, like \"{short} is a \
+                 {actual}. Do you mean {actual}, {short}, or {other}?\"; don't pick one yourself.",
+                said = day_name(said),
+                actual = day_name(day.weekday()),
+                date = day.format("%b %-d, %Y"),
+                short = day.format("%b %-d"),
+                other = other.format("%A, %b %-d"),
             ));
         }
     }
@@ -312,7 +320,17 @@ mod tests {
         let fri = build_spec(&json!({"face": "rsvp", "title": "Party", "when": "Fri Dec 12, 6 PM", "event_at": "2026-12-12T18:00:00+01:00"}));
         let e = fri.unwrap_err();
         assert!(e.starts_with("Nothing was made: when says Friday, but event_at is Saturday, Dec 12, 2026."), "{e}");
-        assert!(e.contains("Ask the person"), "{e}");
+        assert!(e.contains("Ask the person which they mean, like \"Dec 12 is a Saturday. Do you mean Saturday, Dec 12, or Friday, Dec 11?\""), "{e}");
+        // The other date is the nearest day with the named weekday, before or after
+        let sun = build_spec(&json!({"face": "rsvp", "title": "Party", "when": "Sunday", "event_at": "2026-12-12T18:00:00+01:00"})).unwrap_err();
+        assert!(sun.contains("Do you mean Saturday, Dec 12, or Sunday, Dec 13?"), "{sun}");
+        let wed = build_spec(&json!({"face": "rsvp", "title": "Party", "when": "Wed", "event_at": "2026-12-12T18:00:00+01:00"})).unwrap_err();
+        assert!(wed.contains("or Wednesday, Dec 9?"), "{wed}");
+        let tue = build_spec(&json!({"face": "rsvp", "title": "Party", "when": "Tue", "event_at": "2026-12-12T18:00:00+01:00"})).unwrap_err();
+        assert!(tue.contains("or Tuesday, Dec 15?"), "{tue}");
+        // Across a month end: Jan 1 2027 is a Friday
+        let jan = build_spec(&json!({"face": "rsvp", "title": "P", "when": "Wed", "event_at": "2027-01-01T18:00:00+01:00"})).unwrap_err();
+        assert!(jan.contains("\"Jan 1 is a Friday. Do you mean Friday, Jan 1, or Wednesday, Dec 30?\""), "{jan}");
         for ok in ["Sat Dec 12, 6 PM", "Saturday 12 December", "sat. 18:00", "Dec 12, 6 PM", "Fri night into Sat"] {
             assert!(build_spec(&json!({"face": "rsvp", "title": "Party", "when": ok, "event_at": "2026-12-12T18:00:00+01:00"})).is_ok(), "{ok}");
         }
@@ -394,7 +412,10 @@ mod tests {
             "Who's voting?",
             "Never invent a price, a place, a time or a list of people",
             "Never say a field name",
-            "If the day or time is missing, ask for that",
+            "If the day or time is missing (for a vote: when voting closes), or the day of the week and the date don't agree, ask only \
+             about that, and use the defaults for the rest: names shown, anyone with the link can vote.",
+            "\"Who's voting? Give me their first names and I'll show you who hasn't voted yet. Anyone with the link can vote either way.\"",
+            "with {name}, {title}, {when}, {place}, {host}, {slot} and {link} filled in.",
             "never an RFC 3339 time",
             "ask them which one they mean",
             "written now because nothing writes them later",
@@ -403,6 +424,7 @@ mod tests {
             assert!(RULES.contains(w), "{w}");
         }
         assert!(!RULES.contains("make up"), "nothing in the rules tells the bot to make anything up");
+        assert!(!RULES.contains("leave it open"), "naming voters never sounds like it closes the vote");
         let d = tool()["description"].as_str().unwrap().to_string();
         for w in ["RSVP", "who's coming", "sign-up sheet", "potluck", "slots", "volunteer", "vote", "poll", "secret ballot", "ranked"] {
             assert!(d.contains(w), "{w}");
