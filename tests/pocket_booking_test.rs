@@ -1084,6 +1084,49 @@ async fn a_request_makes_one_needs_you_item_and_a_notification_without_the_guest
     assert!(desk_items(&d).await.is_empty());
 }
 
+// ---- desk-card-in-chat: a time the guest asked for that isn't listed ----
+
+#[tokio::test]
+async fn an_unlisted_time_the_bot_hands_off_rides_on_the_row_until_the_host_answers() {
+    let d = setup().await;
+    let (code, host) = booking_desk(&d, two_slots()).await;
+    let (ann, ann_key) = joined(&d, &code, "Ann").await;
+    let asked = at(3, 18);
+    let r = say(&d, &code, &ann_key, &format!("Could you do 6 PM? REPLYTEXT:{}", b64(&format!("[[person]] 6 PM, not listed [time: {asked}]")))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    common::wait_for("Ann waits", || async { desk_items(&d).await.len() == 1 }).await;
+    let item = desk_items(&d).await.remove(0);
+    assert_eq!((item["ask"].as_str(), item["text"].as_str(), item["ask_slot_start"].as_str()), (Some("handoff"), Some("6 PM, not listed"), Some(asked.as_str())), "{item}");
+    let (_, inbox) = call(&d.env.app, "GET", "/api/inbox", None).await;
+    let row = inbox["items"].as_array().unwrap().iter().find(|i| i["kind"] == "pocket_desk").cloned().expect("in the inbox");
+    assert_eq!(row["ask_slot_start"], asked.as_str());
+    // On the card's read: host view and summary guests
+    let (_, read) = call(&d.env.app, "GET", &format!("/api/pockets/{code}"), None).await;
+    for list in [&read["host_view"]["guests"], &read["summary"]["guests"]] {
+        let g = list.as_array().unwrap().iter().find(|g| g["id"] == ann.as_str()).cloned().unwrap_or_else(|| panic!("{read}"));
+        assert_eq!((g["ask_slot_start"].as_str(), g["handoff_reason"].as_str()), (Some(asked.as_str()), Some("6 PM, not listed")), "{g}");
+    }
+    let st = state_of(&d, &code, &ann_key).await;
+    assert!(!st.to_string().contains("[time:") && !st.to_string().contains(&asked), "the guest never sees it: {st}");
+    // The host answers: the row and the time go
+    let r = host_act(&d, &code, &host, "reply", json!({ "guest": ann, "text": "Sorry, 6 is taken" })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert!(desk_items(&d).await.is_empty());
+    let (_, read) = call(&d.env.app, "GET", &format!("/api/pockets/{code}"), None).await;
+    let g = read["host_view"]["guests"].as_array().unwrap().iter().find(|g| g["id"] == ann.as_str()).cloned().unwrap();
+    assert_eq!(g["ask_slot_start"], Value::Null, "{g}");
+
+    // A past time, or a tag with nothing else, still hands off: no time, a plain label
+    let (_, ben_key) = joined(&d, &code, "Ben").await;
+    let past = at(-1, 18);
+    let r = say(&d, &code, &ben_key, &format!("Yesterday? REPLYTEXT:{}", b64(&format!("[[person]] [time: {past}]")))).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    common::wait_for("Ben waits", || async { desk_items(&d).await.len() == 1 }).await;
+    let item = desk_items(&d).await.remove(0);
+    assert_eq!(item["ask_slot_start"], Value::Null, "{item}");
+    assert!(!item["text"].as_str().unwrap().contains("[time:"), "{item}");
+}
+
 // ---- The bot ----
 
 #[tokio::test]

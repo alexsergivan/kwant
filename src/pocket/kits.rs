@@ -118,11 +118,20 @@ pub struct KitCtx<'a> {
     pub players: &'a [Player],
     pub now: DateTime<Utc>,
     pub events: Vec<KitEvent>,
+    /// desk-card-in-chat: when the pocket opened (its `opens_at`, else when it was made); set
+    /// only for [`Kit::on_end`], so a kit can say how long it ran.
+    pub opened_at: Option<DateTime<Utc>>,
 }
 
 impl<'a> KitCtx<'a> {
     pub fn new(spec: &'a Value, players: &'a [Player], now: DateTime<Utc>) -> Self {
-        Self { spec, players, now, events: Vec::new() }
+        Self { spec, players, now, events: Vec::new(), opened_at: None }
+    }
+
+    /// The same context, knowing when the pocket opened ([`KitCtx::opened_at`]).
+    pub fn opened(mut self, at: DateTime<Utc>) -> Self {
+        self.opened_at = Some(at);
+        self
     }
 
     pub fn player(&self, id: &str) -> Option<&Player> {

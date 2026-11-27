@@ -584,6 +584,45 @@ async fn a_desk_ended_with_nobody_waiting_keeps_its_plain_done_row() {
     assert!(done[0].get("ended_unanswered").is_none());
 }
 
+// ---- desk-card-in-chat: the Stopped card's totals ----
+
+#[tokio::test]
+async fn a_stopped_desk_reads_its_ended_totals_and_an_open_one_none() {
+    let d = setup().await;
+    let (code, host) = desk(&d, json!({})).await;
+    let (ann, key) = joined(&d, &code, "Ann").await;
+    say(&d, &code, &key, "Hi REPLYTAG:end59").await;
+    wait_msg(&d, &code, &key, "bot", "answer end59").await;
+    wait_idle(&d, &code, &key).await;
+    let r = host_act(&d, &code, &host, "reply", json!({ "guest": ann, "text": "Welcome!" })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let (_, read) = call(&d.env.app, "GET", &format!("/api/pockets/{code}"), None).await;
+    assert_eq!((read["summary"]["ended"].clone(), read["host_view"]["ended"].clone()), (Value::Null, Value::Null), "open: {read}");
+
+    let (s, v) = call(&d.env.app, "POST", &format!("/api/pockets/{code}/end"), None).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let today = chrono::Local::now().date_naive();
+    let want = json!({
+        "at": today.to_string(),
+        "deletes_on": (today + Duration::days(7)).to_string(),
+        "days": 1,
+        "bot_replies": 1,
+        "host_replies": 1,
+        "messages": 1,
+    });
+    let (s, read) = call(&d.env.app, "GET", &format!("/api/pockets/{code}"), None).await;
+    assert_eq!(s, StatusCode::OK, "{read}");
+    assert_eq!(read["pocket"]["state"], "ended");
+    assert_eq!(read["summary"]["ended"], want, "{read}");
+    assert_eq!(read["host_view"]["ended"], want);
+    // The guest's page never has the totals
+    assert!(state_of(&d, &code, &key).await["view"].get("ended").is_none());
+    // A second End keeps the first totals
+    call(&d.env.app, "POST", &format!("/api/pockets/{code}/end"), None).await;
+    let (_, read) = call(&d.env.app, "GET", &format!("/api/pockets/{code}"), None).await;
+    assert_eq!(read["summary"]["ended"], want);
+}
+
 // ---- Hand-off ----
 
 #[tokio::test]

@@ -59,7 +59,9 @@ const REQUEST_RULE_GUIDE: &str = "a short label for the host first (like \"Late 
      start the label with Request: (like \"Request: Late check-out: 2 PM, Sun Dec 8\")";
 const REQUEST_RULE_BOOKING: &str = "a short label for the host first (like \"Group of 4: Sat 2 PM\"); \
      when the guest asks to be allowed something only the host can allow (an extra guest, bringing a pet), \
-     start the label with Request: (like \"Request: Bring my dog\")";
+     start the label with Request: (like \"Request: Bring my dog\"); \
+     when the guest asks for one time that isn't in the open times, end the label with that time as [time: YYYY-MM-DDTHH:MM] \
+     in the host's local time (like \"Tue 6 PM, not listed [time: 2026-12-01T18:00]\")";
 
 /// What a front desk bot never does on its own, whatever the pack says.
 pub const DESK_NEVER: &str = "Confirm a booking, a refund, a late check-out or an early check-in yourself";
@@ -163,7 +165,7 @@ async fn run_one(state: &AppState, code: &str, guest: &str, texts: Vec<String>, 
     let bot = s.spec["answer_bot"].as_str().unwrap_or("");
     let label = desk::bot_label(&s.spec);
     let Ok(Some(kwant)) = state.db.get_kwant(bot).await else {
-        let _ = hand_off(state, code, guest, &no_reply_why(&label, NoReply::BotGone), desk::HOST_AWAY, None).await;
+        let _ = hand_off(state, code, guest, &no_reply_why(&label, NoReply::BotGone), desk::HOST_AWAY, None, None).await;
         let _ = pocket::server_event(state, code, "idle", &json!({ "guest": guest })).await;
         return false;
     };
@@ -206,17 +208,22 @@ async fn run_one(state: &AppState, code: &str, guest: &str, texts: Vec<String>, 
         Err(_) => None,
     };
     let step = match result {
-        Ok(reply) => match outsider::handoff_reason(&reply, desk::REASON_MAX) {
-            Some(why) => hand_off(state, code, guest, &asked_why(&label, why), desk::HANDOFF, cost).await,
+        // desk-card-in-chat (m9): the label is cut after its time tag is taken off
+        Ok(reply) => match outsider::handoff_reason(&reply, HANDOFF_LINE_MAX) {
+            Some(why) => {
+                let (why, ask_start) = desk::split_asked_time(&why);
+                let why = if why.is_empty() { outsider::ASKED_FOR_PERSON.to_string() } else { why };
+                hand_off(state, code, guest, &asked_why(&label, why), desk::HANDOFF, cost, ask_start.as_deref()).await
+            }
             None => {
                 let app_url = outsider::app_url(state, &kwant.space_id).await;
                 match outsider::plain_reply(&reply, app_url.as_deref()) {
                     Some(out) => pocket::server_event(state, code, "answer", &json!({ "guest": guest, "text": out, "cost_usd": cost })).await.map(|_| ()),
-                    None => hand_off(state, code, guest, &no_reply_why(&label, NoReply::Empty), desk::HOST_AWAY, cost).await,
+                    None => hand_off(state, code, guest, &no_reply_why(&label, NoReply::Empty), desk::HOST_AWAY, cost, None).await,
                 }
             }
         },
-        Err(_) => hand_off(state, code, guest, &no_reply_why(&label, NoReply::Failed), desk::HOST_AWAY, None).await,
+        Err(_) => hand_off(state, code, guest, &no_reply_why(&label, NoReply::Failed), desk::HOST_AWAY, None, None).await,
     };
     match step {
         Ok(()) => true,
@@ -281,12 +288,16 @@ async fn capped_tell(state: &AppState, code: &str, guest: &str) {
 
 /// The bot can't or mustn't answer: the guest gets `note` ([`desk::HANDOFF`] for the bot's own
 /// `[[person]]`, [`desk::HOST_AWAY`] when no reply came), the host a Needs-you item and a
-/// notification.
-async fn hand_off(state: &AppState, code: &str, guest: &str, why: &str, note: &str, cost_usd: Option<f64>) -> pocket::PResult<()> {
-    pocket::server_event(state, code, "handoff", &json!({ "guest": guest, "why": why, "note": note, "cost_usd": cost_usd })).await?;
+/// notification. `ask_start`: the unlisted time the bot's label named (the kit checks it).
+async fn hand_off(state: &AppState, code: &str, guest: &str, why: &str, note: &str, cost_usd: Option<f64>, ask_start: Option<&str>) -> pocket::PResult<()> {
+    pocket::server_event(state, code, "handoff", &json!({ "guest": guest, "why": why, "note": note, "cost_usd": cost_usd, "ask_slot_start": ask_start })).await?;
     told_host(state, code, guest).await;
     Ok(())
 }
+
+/// desk-card-in-chat (m9): how much of the bot's hand-off line is read: the label
+/// ([`desk::REASON_MAX`]) and room for its time tag, which is taken off before the label is cut.
+const HANDOFF_LINE_MAX: usize = desk::REASON_MAX + 40;
 
 /// What the host is told.
 enum Tell {
@@ -424,7 +435,7 @@ pub async fn needs_you(state: &AppState, kwants: &[Kwant]) -> Vec<(chrono::DateT
             }
         };
         let mode = if desk::is_booking(&s.spec) { desk::MODE_BOOKING } else { desk::MODE_GUIDE };
-        for desk::WaitingGuest { guest, why, quote, at, thread, booking, ask, waiting } in desk::waiting_guests(&s.spec, &s.kit_state) {
+        for desk::WaitingGuest { guest, why, quote, at, thread, booking, ask, waiting, ask_start } in desk::waiting_guests(&s.spec, &s.kit_state) {
             let thread = thread.filter(|_| live);
             let Some(p) = s.players.iter().find(|p| p.id == guest) else { continue };
             let why = if ask == desk::WAIT_BOOKING { desk::asks_for_time(&p.name) } else { why };
@@ -451,6 +462,8 @@ pub async fn needs_you(state: &AppState, kwants: &[Kwant]) -> Vec<(chrono::DateT
                 "slot": booking.as_ref().map(|b| b["slot"].clone()),
                 "slot_start": booking.as_ref().map(|b| b["start"].clone()),
                 "booking": booking,
+                // desk-card-in-chat (m9): a hand-off naming a time that isn't listed
+                "ask_slot_start": ask_start,
             })));
         }
     }
@@ -499,6 +512,15 @@ mod tests {
         assert!(!n.contains("say the host will send"), "{n}");
         // The Guest Guide's note is unchanged
         assert!(!desk_note("Ann", &[], "g").contains("only the host confirms"));
+    }
+
+    #[test]
+    fn only_the_booking_note_asks_for_a_time_tag() {
+        // desk-card-in-chat (m9)
+        let n = booking_note("Ann", &[], "", "Open times:\n");
+        assert!(n.contains("isn't in the open times, end the label with that time as [time: YYYY-MM-DDTHH:MM]"), "{n}");
+        assert!(!desk_note("Ann", &[], "Wi-Fi: sea123").contains("[time:"));
+        assert!(desk::ASK_TIME_TAG == "[time:" && n.contains(desk::ASK_TIME_TAG));
     }
 
     #[test]

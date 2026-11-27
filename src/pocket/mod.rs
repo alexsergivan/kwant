@@ -594,7 +594,9 @@ pub async fn end(state: &AppState, code: &str) -> PResult<Arc<Snapshot>> {
         // desk-inbox-rows-server: the kit's last word on the state (the desk counts who still waits)
         if let Some(kit) = s.kit() {
             let mut kit_state = s.kit_state.clone();
-            if kit.on_end(&KitCtx::new(&s.spec, &s.players, now), &mut kit_state) {
+            // desk-card-in-chat: the desk's end summary says how many days it ran
+            let opened = s.row.opens_at.map_or(s.row.created_at, |o| o.max(s.row.created_at));
+            if kit.on_end(&KitCtx::new(&s.spec, &s.players, now).opened(opened.min(now)), &mut kit_state) {
                 let text = serde_json::to_string(&kit_state).map_err(|_| PocketError::internal())?;
                 state.db.pocket_save_state(code, &text, &[], now).await?;
             }
