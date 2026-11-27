@@ -4,8 +4,9 @@
 //! polling. Guests reach only the separate guest listener ([`listener`], [`guest`]); the person's
 //! main port has only the person-only list/read/end/delete API ([`host_api`]).
 //!
-//! Everything is behind the `pocket_apps` setting (`on`); while it is off no listener runs, the
-//! sweeper does nothing and the main port's list is empty.
+//! Everything is behind the `pocket_apps` setting: `on` for every kit, or a list of kits such as
+//! `santa` ([`Switch`]). While no kit is on no listener runs, the sweeper does nothing and the main
+//! port's list is empty; a kit that is off makes no pocket and runs no kit-only path.
 //!
 //! Every change to a pocket runs under that pocket's lock: read, let the kit act, save the kit's
 //! state with a new version, refresh the in-memory snapshot, and signal the pocket's viewers,
@@ -46,7 +47,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
 
-/// The switch: pocket apps run only while this setting is `on`.
+/// The switch: pocket apps run only while this setting is `on` or names a kit ([`Switch`]).
 pub const SETTING: &str = "pocket_apps";
 /// The version every guest response names (`"api": "pocket/1"`).
 pub const API_VERSION: &str = "pocket/1";
@@ -61,8 +62,107 @@ pub const MAX_SPEC_BYTES: usize = 256 * 1024;
 /// Polling clients count as watching for this long after their last request.
 const ACTIVE_SECS: u64 = 10;
 
+/// Which kits the switch lets through (pocket-switch-santa-alone). The setting is `on` (every
+/// kit), or a comma list of kit ids such as `santa` or `santa,quiz` (case and spaces don't
+/// matter). `off`, empty, and every name this build has no kit for count as nothing: a list with
+/// no known kit is off (fail closed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Switch {
+    Off,
+    All,
+    Kits(Vec<&'static str>),
+}
+
+impl Switch {
+    pub fn parse(value: &str) -> Switch {
+        let v = value.trim();
+        if v == "on" {
+            return Switch::All;
+        }
+        let ids = kits::kit_ids();
+        let mut on: Vec<&'static str> = Vec::new();
+        for name in v.split(',').map(|n| n.trim().to_ascii_lowercase()) {
+            if let Some(id) = ids.iter().copied().find(|id| *id == name) {
+                if !on.contains(&id) {
+                    on.push(id);
+                }
+            }
+        }
+        if on.is_empty() {
+            Switch::Off
+        } else {
+            on.sort_unstable();
+            Switch::Kits(on)
+        }
+    }
+
+    /// Whether pockets of `kit` may be made and its kit-only paths run.
+    pub fn allows(&self, kit: &str) -> bool {
+        match self {
+            Switch::Off => false,
+            Switch::All => true,
+            Switch::Kits(k) => k.contains(&kit),
+        }
+    }
+
+    /// Whether any kit is on: the guest port, the sweeper and the person's list run.
+    pub fn any(&self) -> bool {
+        !matches!(self, Switch::Off)
+    }
+
+    /// The kits that are on, as `GET /api/pockets` lists them.
+    pub fn kits(&self) -> Vec<&'static str> {
+        match self {
+            Switch::Off => Vec::new(),
+            Switch::All => kits::kit_ids(),
+            Switch::Kits(k) => k.clone(),
+        }
+    }
+
+    /// The setting's normal form: `off`, `on`, or the sorted kit list (`quiz,santa`).
+    pub fn stored(&self) -> String {
+        match self {
+            Switch::Off => "off".into(),
+            Switch::All => "on".into(),
+            Switch::Kits(k) => k.join(","),
+        }
+    }
+}
+
+/// What `POST /api/settings` stores for `pocket_apps` (pocket-switch-in-settings): the normal form
+/// of `raw`. Empty and `off` are off and `on` is every kit (either in any case). A list keeps the
+/// kits this build has and drops other names; a value that names no kit at all is an error, so a
+/// typo never quietly turns pocket apps off.
+pub fn setting_value(raw: &str) -> Result<String, String> {
+    let v = raw.trim().to_ascii_lowercase();
+    if v.is_empty() || v == "off" {
+        return Ok("off".into());
+    }
+    match Switch::parse(&v) {
+        Switch::Off => {
+            let shown: String = raw.trim().chars().take(60).collect();
+            Err(format!("Unknown Pocket app: {shown}. Known: {}", kits::kit_ids().join(", ")))
+        }
+        s => Ok(s.stored()),
+    }
+}
+
+/// The switch as stored now (a missing or unreadable setting is off).
+pub async fn switch(db: &Database) -> Switch {
+    match db.get_setting(SETTING).await {
+        Ok(Some(v)) => Switch::parse(&v),
+        _ => Switch::Off,
+    }
+}
+
+/// At least one kit is on: the guest port listens, the sweeper runs, the person's list shows.
 pub async fn enabled(db: &Database) -> bool {
-    matches!(db.get_setting(SETTING).await, Ok(Some(v)) if v.trim() == "on")
+    switch(db).await.any()
+}
+
+/// `kit` is on: pockets of it can be made, and its own routes, tools and hooks run.
+pub async fn enabled_for(db: &Database, kit: &str) -> bool {
+    switch(db).await.allows(kit)
 }
 
 /// The guest port: `pocket_port` in the config (env `KWNT_POCKET_PORT`), else the main port + 1.
@@ -1227,5 +1327,52 @@ mod tests {
         }
         let c = after_wrong_try(&p, now);
         assert!(c.pin_locked, "the 10th wrong try in total locks the name until a reset");
+    }
+
+    #[test]
+    fn the_switch_parses_on_off_and_kit_lists() {
+        let kits = |v: &str| Switch::parse(v).kits();
+        assert_eq!(Switch::parse("on"), Switch::All);
+        assert_eq!(kits("on"), kits::kit_ids());
+        for off in ["off", "", "  ", "bogus", ",", "On", "on,", "yes", "true"] {
+            assert_eq!(Switch::parse(off), Switch::Off, "{off:?}");
+        }
+        assert_eq!(kits("santa"), ["santa"]);
+        assert_eq!(kits("quiz"), ["quiz"]);
+        assert_eq!(kits("santa,quiz"), ["quiz", "santa"]);
+        assert_eq!(kits(" Santa "), ["santa"]);
+        assert_eq!(kits("santa,bogus"), ["santa"]);
+        assert_eq!(kits("santa, santa ,SANTA"), ["santa"]);
+        let santa = Switch::parse("santa");
+        assert!(santa.any() && santa.allows("santa") && !santa.allows("quiz") && !santa.allows("desk"));
+        assert!(Switch::All.allows("quiz") && Switch::All.allows("santa"));
+        assert!(!Switch::Off.any() && !Switch::Off.allows("santa"));
+    }
+
+    #[test]
+    fn the_settings_value_is_the_normal_form_or_an_error() {
+        for (raw, want) in [
+            ("", "off"),
+            ("  ", "off"),
+            ("off", "off"),
+            (" OFF ", "off"),
+            ("on", "on"),
+            ("On", "on"),
+            ("santa", "santa"),
+            (" Santa , Quiz ", "quiz,santa"),
+            ("santa,santa", "santa"),
+            ("santa,bogus", "santa"),
+            ("on,santa", "santa"),
+        ] {
+            assert_eq!(setting_value(raw).as_deref(), Ok(want), "{raw:?}");
+        }
+        for raw in ["bogus", "yes", "true", ",", "on,"] {
+            let e = setting_value(raw).unwrap_err();
+            assert!(e.starts_with("Unknown Pocket app: ") && e.contains("santa") && e.contains("quiz"), "{raw:?}: {e}");
+        }
+        assert!(setting_value(&"x".repeat(500)).unwrap_err().len() < 200, "a long value isn't echoed whole");
+        assert_eq!(Switch::Off.stored(), "off");
+        assert_eq!(Switch::All.stored(), "on");
+        assert_eq!(Switch::parse("santa,quiz").stored(), "quiz,santa");
     }
 }

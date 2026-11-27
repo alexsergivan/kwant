@@ -5,7 +5,7 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "scripts": {
-    "test": "node --test tests/*.test.mjs",
+    "test": "node --import ./tests/pinLocale.mjs --test tests/*.test.mjs",
     "dev": "vite",
     "build": "tsc && vite build && npm run build:guest",
     "build:guest": "tsc -p guest && vite build -c guest/vite.config.ts",

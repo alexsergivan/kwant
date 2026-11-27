@@ -43,7 +43,7 @@ test('the finished name line renders exactly as before (b5449933)', () => {
 
 test("the live name line uses the shared strings, with the Details button's height", () => {
   const chat = readFileSync(new URL('../src/components/ChatView.tsx', import.meta.url), 'utf8');
-  assert.match(chat, /import \{ FailoverNote, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine \} from '\.\/ReplyMeta';/);
+  assert.match(chat, /import \{ FailoverNote, MessageTime, REPLY_NAME, REPLY_NAME_LINE_LIVE_HEIGHT, ReplyMeta, replyNameLine \} from '\.\/ReplyMeta';/);
   const liveRow = chat.slice(chat.indexOf('data-live-row=""'), chat.indexOf('data-live-bubble-body=""'));
   assert.match(liveRow, /<div className=\{replyNameLine\(REPLY_NAME_LINE_LIVE_HEIGHT\)\} data-live-name-line="">/);
   assert.match(liveRow, /<span className=\{REPLY_NAME\}>\{liveName\}<\/span>/);
