@@ -18,7 +18,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInputEle
 
 const m = await loadBundled(`
   export { gatherFrom, screenOf, whoSees, nth, move, FOOD_LABELS } from './guest/src/gather/view';
-  export { GatherApp, avatarFor, comingLine } from './guest/src/gather/app';
+  export { GatherApp, avatarFor } from './guest/src/gather/app';
 `);
 const settle = () => new Promise((r) => setTimeout(r, 0));
 const flush = async () => {
@@ -299,6 +299,8 @@ for (const [names, name, small] of [
     [9, 10, '10 coming, incl. 1 plus-one'],
     [9, 11, '11 coming, incl. 2 plus-ones'],
     [0, 0, '0 coming'],
+    [3, 2, '2 coming'], // odd counts: never "incl. -1"
+    [1200, 1203, '1,203 coming, incl. 3 plus-ones'],
   ]) {
     test(`G2 names ${names ? 'on' : 'off'}: ${yes} yes, ${coming} coming says "${want}"`, async () => {
       const t = harness(name);
@@ -312,11 +314,6 @@ for (const [names, name, small] of [
     });
   }
 }
-test('comingLine: never a negative or zero plus-one count from odd counts', () => {
-  assert.equal(m.comingLine({ yes: 3, coming: 2 }), '2 coming');
-  assert.equal(m.comingLine({ yes: 1200, coming: 1203 }), '1,203 coming, incl. 3 plus-ones');
-});
-
 test('G3 sign-up: slot cards, full one is dashed with the waiting line, button says waiting list', async () => {
   const t = await open('gather-signup');
   assert.equal(t.screen(), 'join');
