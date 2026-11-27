@@ -329,6 +329,26 @@ fn leaves_at(expires_at: Option<DateTime<Utc>>, stopped: Option<DateTime<Utc>>) 
     expires_at.or_else(|| stopped.map(|t| t + chrono::Duration::days(wall::KEEP_DAYS)))
 }
 
+/// wall-dates-agree m11: the view's `delete_on` (YYYY-MM-DD) as the chat lines say it: the day
+/// the photos leave ([`leaves_at`]: `expires_at` once ended, i.e. `ended_at + 30` days) on the
+/// person's clock (the schedule zone; UTC without one, as [`zone_and_origin`]).
+pub fn delete_on(s: &Snapshot) -> Option<String> {
+    let zone = s.zone.clone().unwrap_or_else(|| Zone::parse("UTC"));
+    leaves_at(s.row.expires_at, stopped_at(s)).map(|t| zone.local(t).date().to_string())
+}
+
+/// Puts [`delete_on`] in a wall's view, lobby or summary in place of the kit's guess (which only
+/// sees the spec, so it said `closes_at + 30` in UTC). Other kits and views without the field
+/// are left alone.
+pub fn fill_delete_on(s: &Snapshot, view: &mut Value) {
+    if s.row.kit != wall::ID {
+        return;
+    }
+    if let Some(o) = view.as_object_mut().filter(|o| o.contains_key("delete_on")) {
+        o.insert("delete_on".into(), json!(delete_on(s)));
+    }
+}
+
 /// The day the pocket's photos leave this box, on the person's clock (as in the state-8 line).
 fn leaves_on(zone: &Zone, s: &Snapshot) -> Option<String> {
     leaves_at(s.row.expires_at, stopped_at(s)).map(|t| local_date(zone, t))

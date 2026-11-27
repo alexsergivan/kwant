@@ -9,6 +9,10 @@
 //! ended_at}`, `winner {name, points}` (every team tied on the top score, null at 0 points),
 //! `source {kind: "pocket", code, kwant_id, message_id, channel_id, thread_id}`, and the results
 //! post's link and excerpt through [`inbox_done::apply`].
+//!
+//! desk-inbox-rows-server (m3): a front desk that ended while guests still waited says so:
+//! title `"<title>: Ended with N unanswered"`, `ended_unanswered: N`, and the item opens the
+//! desk's answering bot's chat (like its Needs-you rows) while that bot exists. One item per desk.
 
 use super::away::rfc3339;
 use super::inbox::{sort_key, Group};
@@ -104,6 +108,13 @@ pub fn title_as(pocket_title: &str, players: usize, winner: &Value, verb: &str) 
     }
 }
 
+/// m3: a desk that ended with `n` guests still waiting for the host.
+pub fn ended_unanswered_title(pocket_title: &str, n: u64) -> String {
+    let t = pocket_title.trim();
+    let t = if t.is_empty() { "Front desk" } else { t };
+    format!("{t}: Ended with {n} unanswered")
+}
+
 /// The space's Done items for posted pockets since `since`; `unread` against `seen`.
 pub async fn items(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen: Option<DateTime<Utc>>) -> Result<Vec<Value>, DbError> {
     let mut out = Vec::new();
@@ -112,10 +123,18 @@ pub async fn items(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen
         let code = s.row.code.clone();
         let players = s.player_count();
         let win = winner(s);
-        let kwant = match &p.kwant_id {
-            Some(k) => state.db.get_kwant(k).await?,
+        // m3: a desk left with guests waiting opens its answering bot's chat
+        let unanswered = if s.row.kit == pocket::desk::ID { pocket::desk::ended_unanswered(&s.kit_state) } else { 0 };
+        let desk_bot = match s.spec["answer_bot"].as_str().filter(|b| unanswered > 0 && !b.is_empty()) {
+            Some(b) => state.db.get_kwant(b).await?,
             None => None,
         };
+        let kwant = match (&desk_bot, &p.kwant_id) {
+            (Some(b), _) => Some(b.clone()),
+            (None, Some(k)) => state.db.get_kwant(k).await?,
+            (None, None) => None,
+        };
+        let kwant_id = kwant.as_ref().filter(|_| desk_bot.is_some()).map(|k| k.id.clone()).or_else(|| p.kwant_id.clone());
         let kwant_name = kwant.as_ref().map(|k| k.name.clone()).unwrap_or_default();
         let message = match state.db.pocket_result_post_of(&code).await? {
             Some(id) => state.db.get_message(&id).await?,
@@ -123,16 +142,18 @@ pub async fn items(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen
         };
         let unread = seen.is_none_or(|s| p.at > s);
         let id = format!("pocket:{code}");
-        let title = title_as(&s.row.title, players, &win, if s.row.kit == pocket::gather::ID { "wins" } else { "win" });
-        let link = match (&message, &p.origin) {
-            (Some(m), _) => json!({ "thread_id": m.thread_id, "channel_id": m.channel_id, "direct_kwant_id": m.direct_kwant_id }),
-            (None, Some(o)) => json!({ "thread_id": o.thread_id, "channel_id": o.channel_id, "direct_kwant_id": o.channel_id.is_none().then(|| o.kwant_id.clone()) }),
-            (None, None) => Value::Null,
+        let verb = if s.row.kit == pocket::gather::ID { "wins" } else { "win" };
+        let title = if unanswered > 0 { ended_unanswered_title(&s.row.title, unanswered) } else { title_as(&s.row.title, players, &win, verb) };
+        let link = match (&desk_bot, &message, &p.origin) {
+            (Some(b), _, _) => json!({ "thread_id": null, "channel_id": null, "direct_kwant_id": b.id }),
+            (None, Some(m), _) => json!({ "thread_id": m.thread_id, "channel_id": m.channel_id, "direct_kwant_id": m.direct_kwant_id }),
+            (None, None, Some(o)) => json!({ "thread_id": o.thread_id, "channel_id": o.channel_id, "direct_kwant_id": o.channel_id.is_none().then(|| o.kwant_id.clone()) }),
+            (None, None, None) => Value::Null,
         };
         let mut v = json!({
             "kind": "pocket",
             "id": id,
-            "kwant_id": p.kwant_id,
+            "kwant_id": kwant_id,
             "kwant_name": kwant_name,
             "title": title,
             "summary": title,
@@ -144,6 +165,9 @@ pub async fn items(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen
             "meta": { "players": players, "ended_at": s.row.ended_at.map(rfc3339) },
             "winner": win,
         });
+        if unanswered > 0 {
+            v["ended_unanswered"] = json!(unanswered);
+        }
         let source = json!({
             "kind": "pocket",
             "code": code,
@@ -235,6 +259,12 @@ mod tests {
         assert_eq!(title("Pub quiz", 4, &json!({ "name": "Team 1", "points": 3 })), "Pub quiz: Team 1 win");
         assert_eq!(title("Pub quiz", 0, &Value::Null), "Pub quiz: Nobody joined.");
         assert_eq!(title("  ", 2, &Value::Null), "Pocket app has ended");
+    }
+
+    #[test]
+    fn a_desk_left_with_guests_waiting_says_how_many() {
+        assert_eq!(ended_unanswered_title("Seaview desk", 1), "Seaview desk: Ended with 1 unanswered");
+        assert_eq!(ended_unanswered_title(" ", 3), "Front desk: Ended with 3 unanswered");
     }
 
     fn results(scores: &[(&str, i64)]) -> Value {

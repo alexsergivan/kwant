@@ -118,6 +118,33 @@ impl Switch {
             Switch::Kits(k) => k.clone(),
         }
     }
+
+    /// The setting's normal form: `off`, `on`, or the sorted kit list (`quiz,santa`).
+    pub fn stored(&self) -> String {
+        match self {
+            Switch::Off => "off".into(),
+            Switch::All => "on".into(),
+            Switch::Kits(k) => k.join(","),
+        }
+    }
+}
+
+/// What `POST /api/settings` stores for `pocket_apps` (pocket-switch-in-settings): the normal form
+/// of `raw`. Empty and `off` are off and `on` is every kit (either in any case). A list keeps the
+/// kits this build has and drops other names; a value that names no kit at all is an error, so a
+/// typo never quietly turns pocket apps off.
+pub fn setting_value(raw: &str) -> Result<String, String> {
+    let v = raw.trim().to_ascii_lowercase();
+    if v.is_empty() || v == "off" {
+        return Ok("off".into());
+    }
+    match Switch::parse(&v) {
+        Switch::Off => {
+            let shown: String = raw.trim().chars().take(60).collect();
+            Err(format!("Unknown Pocket app: {shown}. Known: {}", kits::kit_ids().join(", ")))
+        }
+        s => Ok(s.stored()),
+    }
 }
 
 /// The switch as stored now (a missing or unreadable setting is off).
@@ -161,6 +188,9 @@ pub struct Snapshot {
     pub kit_state: Value,
     pub rows: Vec<PlayerRow>,
     pub players: Vec<Player>,
+    /// wall-dates-agree: a wall's schedule zone (the person's clock for its dates and zip names);
+    /// `None` for other kits and a wall with no schedule row.
+    pub zone: Option<schedule::Zone>,
 }
 
 impl Snapshot {
@@ -329,7 +359,9 @@ async fn refresh(state: &AppState, code: &str) -> PResult<Option<Arc<Snapshot>>>
         return Ok(None);
     };
     let rows = state.db.pocket_players(code).await?;
+    let zone = if row.kit == wall::ID { state.db.pocket_schedule(code).await?.map(|r| schedule::Zone::parse(&r.zone)) } else { None };
     let snap = Arc::new(Snapshot {
+        zone,
         spec: serde_json::from_str(&row.spec).unwrap_or(Value::Null),
         kit_state: serde_json::from_str(&row.kit_state).unwrap_or(Value::Null),
         players: rows.iter().map(to_player).collect(),
@@ -394,16 +426,18 @@ pub fn view_json(s: &Snapshot, viewer: &Viewer, now: DateTime<Utc>) -> Value {
         Viewer::Host => "host",
         Viewer::BigScreen => "screen",
     };
+    let mut view = match viewer {
+        Viewer::Host => host_view_with_locks(s, kit.view(&ctx, &s.kit_state, viewer)),
+        _ => kit.view(&ctx, &s.kit_state, viewer),
+    };
+    wall_pick::fill_delete_on(s, &mut view);
     json!({
         "api": API_VERSION,
         "version": s.row.version,
         "viewer": role,
         "pocket": pocket_json(s),
         "me": me,
-        "view": match viewer {
-            Viewer::Host => host_view_with_locks(s, kit.view(&ctx, &s.kit_state, viewer)),
-            _ => kit.view(&ctx, &s.kit_state, viewer),
-        },
+        "view": view,
     })
 }
 
@@ -467,6 +501,14 @@ pub async fn create(state: &AppState, mut req: CreateRequest) -> PResult<(Arc<Sn
     if kit.answer_bot() {
         fill_answer_bot(state, &mut req).await?;
     }
+    // wall-dates-agree m14: a wall's `when` is the line people read; a date or RFC 3339 one (an
+    // older bot's spec) moves to `event_at`. Its times are planned from the spec as sent, so such
+    // a wall opens, closes and reminds exactly as before.
+    let as_sent = (kit.id() == wall::ID).then(|| {
+        let sent = req.spec.clone();
+        wall::when_to_event_at(&mut req.spec);
+        sent
+    });
     let spec_text = serde_json::to_string(&req.spec).map_err(|_| PocketError::internal())?;
     if spec_text.len() > MAX_SPEC_BYTES {
         return Err(PocketError::new(StatusCode::PAYLOAD_TOO_LARGE, "spec_too_big", "The spec is bigger than 256 KB."));
@@ -486,7 +528,7 @@ pub async fn create(state: &AppState, mut req: CreateRequest) -> PResult<(Arc<Sn
     }
     let now = Utc::now();
     // pa7: a future `when` sets the times the bot didn't (lobby 30 min before, close 4 h after)
-    let (times, mut sched) = schedule::plan(state, &req.spec, req.opens_at, req.closes_at, req.origin.as_ref(), now).await;
+    let (times, mut sched) = schedule::plan(state, as_sent.as_ref().unwrap_or(&req.spec), req.opens_at, req.closes_at, req.origin.as_ref(), now).await;
     if let (Some(o), Some(c)) = (times.opens_at, times.closes_at) {
         if c <= o {
             return Err(PocketError::new(StatusCode::BAD_REQUEST, "bad_times", "closes_at must be after opens_at."));
@@ -564,6 +606,14 @@ pub async fn end(state: &AppState, code: &str) -> PResult<Arc<Snapshot>> {
     let s = snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
     if s.row.state == OPEN {
         let now = Utc::now();
+        // desk-inbox-rows-server: the kit's last word on the state (the desk counts who still waits)
+        if let Some(kit) = s.kit() {
+            let mut kit_state = s.kit_state.clone();
+            if kit.on_end(&KitCtx::new(&s.spec, &s.players, now), &mut kit_state) {
+                let text = serde_json::to_string(&kit_state).map_err(|_| PocketError::internal())?;
+                state.db.pocket_save_state(code, &text, &[], now).await?;
+            }
+        }
         let expires = s.rules().map_or(Some(now), |r| r.retention.expires_at(&s.spec, Some(now)));
         state.db.pocket_end(code, now, expires).await?;
         changed(state, code).await?;
@@ -1320,5 +1370,32 @@ mod tests {
         assert!(santa.any() && santa.allows("santa") && !santa.allows("quiz") && !santa.allows("desk"));
         assert!(Switch::All.allows("quiz") && Switch::All.allows("santa"));
         assert!(!Switch::Off.any() && !Switch::Off.allows("santa"));
+    }
+
+    #[test]
+    fn the_settings_value_is_the_normal_form_or_an_error() {
+        for (raw, want) in [
+            ("", "off"),
+            ("  ", "off"),
+            ("off", "off"),
+            (" OFF ", "off"),
+            ("on", "on"),
+            ("On", "on"),
+            ("santa", "santa"),
+            (" Santa , Quiz ", "quiz,santa"),
+            ("santa,santa", "santa"),
+            ("santa,bogus", "santa"),
+            ("on,santa", "santa"),
+        ] {
+            assert_eq!(setting_value(raw).as_deref(), Ok(want), "{raw:?}");
+        }
+        for raw in ["bogus", "yes", "true", ",", "on,"] {
+            let e = setting_value(raw).unwrap_err();
+            assert!(e.starts_with("Unknown Pocket app: ") && e.contains("santa") && e.contains("quiz"), "{raw:?}: {e}");
+        }
+        assert!(setting_value(&"x".repeat(500)).unwrap_err().len() < 200, "a long value isn't echoed whole");
+        assert_eq!(Switch::Off.stored(), "off");
+        assert_eq!(Switch::All.stored(), "on");
+        assert_eq!(Switch::parse("santa,quiz").stored(), "quiz,santa");
     }
 }

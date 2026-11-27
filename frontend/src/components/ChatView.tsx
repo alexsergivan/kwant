@@ -15,13 +15,15 @@ import { TrialWaitsCard } from './SkillsPanel';
 import { agentSenderLabel, messageAbout, otherSenderLabel, senderLetter } from '../agentConnections';
 import { ArrowDown, ArrowUp, AtSign, Paperclip, Sparkles, ChevronDown, ChevronRight, Check, ChevronLeft, User, Users, Square, Settings2, Folder, GitBranch, Pencil, Pin, Monitor, CircleSlash } from 'lucide-react';
 import { ModernAvatar, creatureFor } from './ModernAvatar';
-import { bubbleTintStyle } from './bubbleTint';
+import { replyThreadStyle } from './replyThread';
 import { botLooksRev, subscribeBotLooks } from '../botLooks';
 import { WorkingAvatar } from './WorkingAvatar';
 import { BotHome } from './BotHome';
 import { accountCardShows } from '../firstScreen';
 import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine } from '../botHome';
 import { moodNoticed } from '../kwantMood';
+import { perkBot } from '../avatarLife';
+import { newestReplyIds } from '../avatarFaces';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, SM_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
@@ -246,12 +248,8 @@ function SenderLetter({ name }: { name: string }) {
 }
 const REPLY_AVATAR_PHONE = 20;
 const REPLY_BUBBLE = 'px-3.5 py-3 sm:p-5 rounded-2xl text-sm leading-relaxed shadow-sm w-full';
-const REPLY_BUBBLE_BOT = 'bg-zinc-900/60 text-zinc-200 rounded-tl-sm border border-zinc-800/80';
-/** A bot reply in its avatar's colour (Mira's reply-bubble-bot-tint): --kw-bubble-bg/-line come inline from bubbleTint.ts. */
-const REPLY_BUBBLE_BOT_TINT = 'kw-bubble-tint text-zinc-200 rounded-tl-sm border';
-const botBubble = (tint?: React.CSSProperties) => (tint ? REPLY_BUBBLE_BOT_TINT : REPLY_BUBBLE_BOT);
-/** 36d: the live bubble while the scene shows: the same card, its parts pad themselves (scene row, steps, words). */
-const REPLY_BUBBLE_SCENE = 'rounded-2xl text-sm leading-relaxed shadow-sm w-full overflow-hidden';
+/** bubble-not-alert: a bot reply is text on the page with its creature thread; boxes are for yours, guests and status. */
+const REPLY_PLAIN = 'kw-reply-plain text-sm leading-relaxed text-zinc-200 w-full';
 // 25b: a customer's or a bot's chat-API message, on the left. Outline only: not yours (filled, lighter), not a bot reply (filled); never violet.
 const OTHER_BUBBLE = 'bg-transparent text-zinc-200 rounded-tl-sm border border-zinc-700';
 
@@ -937,8 +935,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const liveSpeaker = streamingSpeakerName || title;
   // Who the live row shows: the current speaker in a discussion, else the replying bot.
   const liveName = discussionState?.inProgress && discussionState.currentSpeaker ? discussionState.currentSpeaker : liveSpeaker;
-  // The live bubble wears the live avatar's colour from its first frame (same args as that ModernAvatar).
-  const liveTint = bubbleTintStyle(creatureFor(liveName, liveName).body);
+  // The live reply's creature thread wears the live avatar's colour from its first frame (same args as that ModernAvatar).
+  const liveThread = replyThreadStyle(creatureFor(liveName, liveName).body);
   // 36a: who the live steps' words name; never the team or room chat's title (stepsWho).
   const stepsName = stepsWho({
     discussing: discussionState?.inProgress,
@@ -1941,8 +1939,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
       void (sent as Promise<boolean | void>).then((ok) => {
         if (ok === false) setReplyTo((now) => now ?? replying);
       });
-    // The bots this goes to blink once, so you see who received it.
-    recipientsOf(inputVal, activeKwants, home?.kind === 'bot' ? home.bot?.id : undefined).forEach(moodNoticed);
+    // The bots this goes to blink once, so you see who received it. The bot whose chat this is also perks up
+    // (living avatars: wide eyes, "o", one hop on its live avatars); an @mentioned bot keeps the plain blink.
+    const directId = home?.kind === 'bot' ? home.bot?.id : undefined;
+    recipientsOf(inputVal, activeKwants, directId).forEach(moodNoticed);
+    if (directId) perkBot(directId);
     setInputVal('');
     setUploads([]);
     setUploadNote(null);
@@ -2096,10 +2097,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   }, [isStreaming, contextKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
-  const freshTrack = useRef<{ key: string | undefined; seen: Set<string> | null; fresh: Set<string>; streamEnded: number; wasStreaming: boolean }>({
+  // `landed`: bot replies that are a stream handing over to its saved copy (Ada's "one bot on screen while it works":
+  // the row avatar comes back with one hop, the bot stepping away from the laptop). The saved copy can mount while the
+  // live row is still up, so the hop waits for `!isStreaming`: it plays as the live row leaves, not beside it.
+  const freshTrack = useRef<{ key: string | undefined; seen: Set<string> | null; fresh: Set<string>; landed: Set<string>; streamEnded: number; wasStreaming: boolean }>({
     key: undefined,
     seen: null,
     fresh: new Set(),
+    landed: new Set(),
     streamEnded: 0,
     wasStreaming: false,
   });
@@ -2114,11 +2119,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
       t.key = contextKey;
       t.seen = new Set(messages.map((m) => m.id));
       t.fresh = new Set();
+      t.landed = new Set();
     } else {
       for (const m of messages) {
         if (t.seen.has(m.id)) continue;
         t.seen.add(m.id);
         if (!isStreaming && Date.now() - t.streamEnded > 2500) t.fresh.add(m.id);
+        else if (m.sender_role !== 'user') t.landed.add(m.id);
       }
     }
   }
@@ -2127,6 +2134,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [endedTrials, setEndedTrials] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => onContinuity('trial_ended', (t) => setEndedTrials((prev) => (prev.has(t.skill_id) ? prev : new Set(prev).add(t.skill_id)))), []);
   const trialCards = useMemo(() => trialCardsAfter(messages, endedTrials), [messages, endedTrials]);
+  // Living avatars: only each bot's newest reply row shows its mood face; older rows keep the plain face (reading stays calm).
+  const newestReplies = useMemo(() => newestReplyIds(messages), [messages]);
+
+  // The landed set is spent once the live row is gone and the rows have drawn: a later re-render, scroll-back or
+  // remount never hops again (ModernAvatar's own effects run before this one).
+  useEffect(() => {
+    if (!isStreaming && freshTrack.current.landed.size) freshTrack.current.landed.clear();
+  });
 
   // `prev`: the message shown just above, so a kwant line under another sits close to it (0.9.5 F5)
   const renderMessage = (msg: ChatMessage, prev?: ChatMessage) => {
@@ -2331,6 +2346,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const done = isUser ? null : doneOf(msg, doneItems, { asks: asksOk || (msg.id === questionId && !answered.has(msg.id)) });
     // Any auto-routed channel, not only #general: the server attaches `routing` wherever it picked the bot.
     const routed = isUser ? null : parseRoutingMeta(msg.meta);
+    // A stream's saved copy, once the live row is gone: its avatar hops (after a routed reply's 200 ms hand-off).
+    const landHop = !isStreaming && newestReplies.has(msg.id) && freshTrack.current.landed.has(msg.id) ? (routed ? 200 : 0) : undefined;
     // Older channel replies still hold a raw [DECISIONS] block: hidden here, its lines shown as chips
     const shownDecisions = isUser ? null : messageDecisions(msg.text, msg.meta);
     const decisions = shownDecisions?.decisions ?? [];
@@ -2356,8 +2373,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const replyKwantId = isUser
       ? undefined
       : routed?.kwant_id ?? (home?.kind === 'bot' ? home.bot?.id : undefined) ?? botOf(msg.sender_id, knownBots)?.id;
-    // A bot's reply bubble takes its avatar's colour, resolved with the avatar's own args so the two always agree.
-    const replyTint = isUser || onYourSide || workAhead ? undefined : bubbleTintStyle(creatureFor(title, displayName, replyKwantId).body);
+    // A bot reply's creature thread takes its avatar's colour, resolved with the avatar's own args so the two always agree.
+    const replyThread = isUser || onYourSide || workAhead ? undefined : replyThreadStyle(creatureFor(title, displayName, replyKwantId).body);
 
     return (
       <div
@@ -2389,6 +2406,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 size={REPLY_AVATAR}
                 kwantId={replyKwantId}
                 modelBadge={false}
+                face={newestReplies.has(msg.id) ? 'mood' : 'plain'}
+                land={landHop}
               />
             ) : null}
           </span>
@@ -2411,7 +2430,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               name={displayName}
               at={msg.created_at}
               sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
-              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
+              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} face={newestReplies.has(msg.id) ? 'mood' : 'plain'} land={landHop} /></span>}
               ranOn={ranOn}
               account={account}
               effort={effortWords(msg.reasoning_content)}
@@ -2497,16 +2516,17 @@ export const ChatView: React.FC<ChatViewProps> = ({
             ) : null;
           })()}
           <div
-            className={`${REPLY_BUBBLE} ${
+            className={
               onYourSide
-                ? 'bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl'
+                ? `${REPLY_BUBBLE} bg-zinc-800 text-zinc-100 rounded-tr-sm border border-zinc-700/60 max-w-2xl`
                 : isUser
-                  ? `${OTHER_BUBBLE} max-w-2xl`
+                  ? `${REPLY_BUBBLE} ${OTHER_BUBBLE} max-w-2xl`
                   : workAhead
-                    ? 'bg-sky-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-sky-400/25'
-                    : botBubble(replyTint)
-            }`}
-            style={replyTint}
+                    ? `${REPLY_BUBBLE} bg-sky-950/15 text-zinc-200 rounded-tl-sm border border-dashed border-sky-400/25`
+                    : REPLY_PLAIN
+            }
+            style={replyThread}
+            data-reply-plain={!isUser && !workAhead ? '' : undefined}
             data-other-bubble={isUser && !onYourSide ? '' : undefined}
             data-work-ahead={workAhead ? '' : undefined}
           >
@@ -3022,7 +3042,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </button>
         )}
         {home?.kind === 'bot' && home.bot && (
-          <ModernAvatar role={home.bot.avatar_sprite} name={home.bot.name} size={phone ? (kbd ? 28 : 32) : 34} kwantId={home.bot.id} className="rounded-xl" />
+          <ModernAvatar role={home.bot.avatar_sprite} name={home.bot.name} size={phone ? (kbd ? 28 : 32) : 34} kwantId={home.bot.id} className="rounded-xl" life="header" />
         )}
         <div className="min-w-0 flex-1">
           <h2
@@ -3260,16 +3280,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
         {isStreaming && !deciding && routingState?.phase !== 'deciding' && !askOnly && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl" data-live-row="">
-            {/* The finished reply's geometry (16a): avatar column from sm up, in the name line on phones */}
-            <span className="hidden sm:contents">
-              <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR} />
-            </span>
+            {/* The finished reply's geometry (16a): avatar column from sm up, in the name line on phones. While the scene
+                shows, its bot at the laptop is the row's only bot: an empty slot of the avatar's size holds the place, so
+                the name line and bubble don't move when the reply lands (Ada, Nov 26: "one bot on screen while it works"). */}
+            {sceneShown ? (
+              <span className="hidden sm:block w-9 h-9 shrink-0" aria-hidden="true" data-live-avatar-slot="" />
+            ) : (
+              <span className="hidden sm:contents">
+                <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR} />
+              </span>
+            )}
             <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
               {/* The finished name line's type and height (17c), so it doesn't grow when the reply lands */}
               <div className={replyNameLine(REPLY_NAME_LINE_LIVE_HEIGHT)} data-live-name-line="">
-                <span className="sm:hidden shrink-0 inline-flex">
-                  <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR_PHONE} />
-                </span>
+                {sceneShown ? (
+                  <span className="sm:hidden shrink-0 w-5 h-5" aria-hidden="true" data-live-avatar-slot="" />
+                ) : (
+                  <span className="sm:hidden shrink-0 inline-flex">
+                    <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR_PHONE} />
+                  </span>
+                )}
                 <span className={REPLY_NAME}>{liveName}</span>
                 {/* #1278: when this turn started, where the finished reply's time will sit; not while it waits in line */}
                 {!queued && <MessageTime at={liveStartedAt} kind="live" />}
@@ -3306,7 +3336,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
               {/* 36d: the scene is the one working status, on a phone too. On a phone the strip still says "waiting" (with Answer ↑), so no "Paused on…" bubble there. */}
               {sceneShown ? (
-                <div className={`${REPLY_BUBBLE_SCENE} ${botBubble(liveTint)} kw-live-in`} style={liveTint} data-live-bubble-body="">
+                <div className={`${REPLY_PLAIN} kw-live-in`} style={liveThread} data-live-bubble-body="" data-reply-scene="">
                   <WorkingAvatar
                     name={
                       discussionState?.inProgress && discussionState.currentSpeaker
@@ -3331,7 +3361,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
                   </WorkingAvatar>
                 </div>
               ) : (!phone || queued || writing) && (
-              <div className={`${REPLY_BUBBLE} min-h-[3.5rem] ${botBubble(liveTint)} kw-live-in`} style={liveTint} data-live-bubble-body="">
+              <div className={`${REPLY_PLAIN} min-h-[3.5rem] kw-live-in`} style={liveThread} data-live-bubble-body="">
                 {queued ? (
                   <p className="text-zinc-300" role="status">
                     {queued.position ? <strong className="font-medium text-zinc-100">#{queued.position} in line.</strong> : <strong className="font-medium text-zinc-100">In line.</strong>}{' '}
