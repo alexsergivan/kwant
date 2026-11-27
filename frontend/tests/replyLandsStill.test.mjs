@@ -72,18 +72,18 @@ test('the live row and the finished row share one geometry', () => {
   const liveRow = chat.slice(chat.indexOf('data-live-row=""'), chat.indexOf('data-live-bubble-body=""') + 30);
   assert.match(liveRow, /<span className="hidden sm:contents">\s+<ModernAvatar role=\{liveName\} name=\{liveName\} size=\{REPLY_AVATAR\} \/>/);
   assert.match(liveRow, /<span className="sm:hidden shrink-0 inline-flex">\s+<ModernAvatar role=\{liveName\} name=\{liveName\} size=\{REPLY_AVATAR_PHONE\} \/>/);
-  // reply-bubble-bot-tint: the live bubble wears the bot's tint (botBubble falls back to REPLY_BUBBLE_BOT).
-  assert.match(chat, /className=\{`\$\{REPLY_BUBBLE\} min-h-\[3\.5rem\] \$\{botBubble\(liveTint\)\} kw-live-in`\} style=\{liveTint\} data-live-bubble-body=""/);
-  // 36d: while the bot works the scene is the bubble; it keeps the finished bubble's corners, type and shadow.
-  assert.match(chat, /const REPLY_BUBBLE_SCENE = 'rounded-2xl text-sm leading-relaxed shadow-sm w-full overflow-hidden';/);
-  assert.match(chat, /className=\{`\$\{REPLY_BUBBLE_SCENE\} \$\{botBubble\(liveTint\)\} kw-live-in`\} style=\{liveTint\} data-live-bubble-body=""/);
+  // bubble-not-alert: the live reply is plain text with the bot's creature thread, like the landed one.
+  assert.match(chat, /const REPLY_PLAIN = 'kw-reply-plain text-sm leading-relaxed text-zinc-200 w-full';/);
+  assert.match(chat, /className=\{`\$\{REPLY_PLAIN\} min-h-\[3\.5rem\] kw-live-in`\} style=\{liveThread\} data-live-bubble-body=""/);
+  // 36d: while the bot works the scene is the reply; same plain body and thread.
+  assert.match(chat, /className=\{`\$\{REPLY_PLAIN\} kw-live-in`\} style=\{liveThread\} data-live-bubble-body=""/);
   assert.doesNotMatch(liveRow, /size=\{34\}|p-4 sm:p-5/);
   // The finished row uses the same strings.
   assert.match(chat, /size=\{REPLY_AVATAR\}\s+kwantId=\{replyKwantId\}/);
   assert.match(chat, /size=\{REPLY_AVATAR_PHONE\} kwantId=\{replyKwantId\}/);
-  // 25b: the finished row picks its look by side (onYourSide), still from REPLY_BUBBLE
-  assert.match(chat, /className=\{`\$\{REPLY_BUBBLE\} \$\{\s+onYourSide/);
-  assert.match(chat, /: botBubble\(replyTint\)\s+\}`\}\s+style=\{replyTint\}/);
+  // 25b: the finished row picks its look by side (onYourSide); boxes from REPLY_BUBBLE, a bot reply is REPLY_PLAIN
+  assert.match(chat, /className=\{\s+onYourSide\s+\? `\$\{REPLY_BUBBLE\} bg-zinc-800/);
+  assert.match(chat, /: REPLY_PLAIN\s+\}\s+style=\{replyThread\}/);
 });
 
 test('the stream store lives as long as the app (useState, not useMemo)', () => {
