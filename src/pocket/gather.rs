@@ -67,7 +67,7 @@ pub const NUDGES: &[&str] = &["maybe", "not_paid", "moved_up", "not_answered"];
 pub const LINK: &str = "{link}";
 
 /// secret-ballot-open-phase: a vote from a page that doesn't send a ballot token (an old cached copy).
-pub const UPDATE_THE_PAGE: &str = "Update this page to vote.";
+pub const UPDATE_THE_PAGE: &str = "Reload this page to vote.";
 /// secret-ballot-open-phase: someone who voted asks to change it from a phone without that ballot's token.
 pub const VOTED_ON_ANOTHER_PHONE: &str = "You already voted on another phone. Your vote is secret, so only that phone can change it.";
 

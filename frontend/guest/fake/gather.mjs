@@ -298,7 +298,7 @@ export class GatherBox {
           // Like gather.rs: an older (salted) vote ignores the token and shows the order back; a new one needs this
           // phone's token, refuses another phone's, and never shows the order.
           if (!this.s.salted) {
-            if (typeof b.token !== 'string' || !/^[0-9a-f]{32}$/.test(b.token)) return err(400, 'bad_action', { message: 'Update this page to vote.' });
+            if (typeof b.token !== 'string' || !/^[0-9a-f]{32}$/.test(b.token)) return err(400, 'bad_action', { message: 'Reload this page to vote.' });
             const kept = this.token ?? this.s.token;
             if ((v.me?.voted || this.s.elsewhere) && kept !== b.token) return err(400, 'bad_action', { message: 'You already voted on another phone. Your vote is secret, so only that phone can change it.' });
             this.token = b.token;

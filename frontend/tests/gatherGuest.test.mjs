@@ -495,7 +495,7 @@ test('done page on the phone that voted: its own order and Change my vote, from 
 test('done page on another phone: secret, no order, no Change my vote', async () => {
   const t = await open('gather-voted-secret', { store: phoneStore() });
   assert.equal(t.screen(), 'voted');
-  assert.equal(t.$('[data-secret]').textContent, "Your vote is in. It's secret, so only the phone you voted on can show or change it.");
+  assert.equal(t.$('[data-secret]').textContent, "It's secret, so only the phone you voted on can show or change it.");
   assert.equal(t.$('[data-ballot]'), null);
   assert.equal(t.$('[data-change]'), null);
   t.app.stop();

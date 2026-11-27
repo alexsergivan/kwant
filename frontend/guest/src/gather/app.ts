@@ -1211,7 +1211,7 @@ export class GatherApp {
         mine.length
           ? h('div', { class: 'soft sum', 'data-ballot': '' }, ranked ? mine.map((o, i) => `${i + 1} ${name(o)}`).join(' · ') : name(mine[0]))
           : // Voted on another phone (or this one forgot): the box can't show it, so nobody else can either.
-            h('div', { class: 'soft sum', 'data-secret': '' }, "Your vote is in. It's secret, so only the phone you voted on can show or change it."),
+            h('div', { class: 'soft sum', 'data-secret': '' }, "It's secret, so only the phone you voted on can show or change it."),
       ),
       live
         ? h(

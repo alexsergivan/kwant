@@ -755,7 +755,7 @@ async fn a_closed_votes_salt_leaves_the_database_files_too() {
 
 // ---- secret-ballot-open-phase (part B) ----
 
-const UPDATE_THE_PAGE: &str = "Update this page to vote.";
+const UPDATE_THE_PAGE: &str = "Reload this page to vote.";
 const VOTED_ON_ANOTHER_PHONE: &str = "You already voted on another phone. Your vote is secret, so only that phone can change it.";
 
 /// A new vote has no salt: each ballot sits under `sha256(token)` of the token the voter's
