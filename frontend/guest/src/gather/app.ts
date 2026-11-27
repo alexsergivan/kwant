@@ -46,9 +46,6 @@ export function at(iso: string): string {
   return `${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} at ${clock(iso)}`;
 }
 
-const poss = (name: string): string => `${name}'s`;
-/** "A", "A and B", "A, B and C". */
-const and = (xs: string[]): string => (xs.length < 2 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 // "12 coming, incl. 3 plus-ones": coming counts plus-ones (gather.rs), so name them only when there are some.
 // verb: false drops "coming" where the heading already asks it ("Who's coming · 12, incl. 3 plus-ones").
 export function comingLine(c: { yes: number; coming: number }, o: { verb?: boolean } = {}): string {
@@ -56,6 +53,9 @@ export function comingLine(c: { yes: number; coming: number }, o: { verb?: boole
   const n = o.verb === false ? fmt(c.coming) : `${fmt(c.coming)} coming`;
   return p > 0 ? `${n}, incl. ${fmt(p)} ${p === 1 ? 'plus-one' : 'plus-ones'}` : n;
 }
+const poss = (name: string): string => `${name}'s`;
+/** "A", "A and B", "A, B and C". */
+const and = (xs: string[]): string => (xs.length < 2 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
 /** A creature for a new guest: the page has no picker (G1), so it follows the name. Not a number anyone sees. */
 export const avatarFor = (name: string): string => AVATARS[[...name.trim().toLowerCase()].reduce((a, c) => a + c.codePointAt(0)!, 0) % AVATARS.length];
 /** A bar's width in 5% steps (classes, since the page's CSP allows no style attributes). */
