@@ -22,6 +22,8 @@ import { BotHome } from './BotHome';
 import { accountCardShows } from '../firstScreen';
 import { ChatHome, answerTarget, goodAt, recipientsOf, teamAnswerLine } from '../botHome';
 import { moodNoticed } from '../kwantMood';
+import { perkBot } from '../avatarLife';
+import { newestReplyIds } from '../avatarFaces';
 import { NewTag } from './NewTag';
 import { PHONE_QUERY, SM_QUERY, TOUCH_QUERY } from '../layout';
 import { useMedia } from '../useMedia';
@@ -1941,8 +1943,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
       void (sent as Promise<boolean | void>).then((ok) => {
         if (ok === false) setReplyTo((now) => now ?? replying);
       });
-    // The bots this goes to blink once, so you see who received it.
-    recipientsOf(inputVal, activeKwants, home?.kind === 'bot' ? home.bot?.id : undefined).forEach(moodNoticed);
+    // The bots this goes to blink once, so you see who received it. The bot whose chat this is also perks up
+    // (living avatars: wide eyes, "o", one hop on its live avatars); an @mentioned bot keeps the plain blink.
+    const directId = home?.kind === 'bot' ? home.bot?.id : undefined;
+    recipientsOf(inputVal, activeKwants, directId).forEach(moodNoticed);
+    if (directId) perkBot(directId);
     setInputVal('');
     setUploads([]);
     setUploadNote(null);
@@ -2096,10 +2101,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   }, [isStreaming, contextKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Replies that arrive while the chat is open slide in; the first load and a stream handing over to its saved copy do not
-  const freshTrack = useRef<{ key: string | undefined; seen: Set<string> | null; fresh: Set<string>; streamEnded: number; wasStreaming: boolean }>({
+  // `landed`: bot replies that are a stream handing over to its saved copy (Ada's "one bot on screen while it works":
+  // the row avatar comes back with one hop, the bot stepping away from the laptop). The saved copy can mount while the
+  // live row is still up, so the hop waits for `!isStreaming`: it plays as the live row leaves, not beside it.
+  const freshTrack = useRef<{ key: string | undefined; seen: Set<string> | null; fresh: Set<string>; landed: Set<string>; streamEnded: number; wasStreaming: boolean }>({
     key: undefined,
     seen: null,
     fresh: new Set(),
+    landed: new Set(),
     streamEnded: 0,
     wasStreaming: false,
   });
@@ -2114,11 +2123,13 @@ export const ChatView: React.FC<ChatViewProps> = ({
       t.key = contextKey;
       t.seen = new Set(messages.map((m) => m.id));
       t.fresh = new Set();
+      t.landed = new Set();
     } else {
       for (const m of messages) {
         if (t.seen.has(m.id)) continue;
         t.seen.add(m.id);
         if (!isStreaming && Date.now() - t.streamEnded > 2500) t.fresh.add(m.id);
+        else if (m.sender_role !== 'user') t.landed.add(m.id);
       }
     }
   }
@@ -2127,6 +2138,14 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const [endedTrials, setEndedTrials] = useState<ReadonlySet<string>>(() => new Set());
   useEffect(() => onContinuity('trial_ended', (t) => setEndedTrials((prev) => (prev.has(t.skill_id) ? prev : new Set(prev).add(t.skill_id)))), []);
   const trialCards = useMemo(() => trialCardsAfter(messages, endedTrials), [messages, endedTrials]);
+  // Living avatars: only each bot's newest reply row shows its mood face; older rows keep the plain face (reading stays calm).
+  const newestReplies = useMemo(() => newestReplyIds(messages), [messages]);
+
+  // The landed set is spent once the live row is gone and the rows have drawn: a later re-render, scroll-back or
+  // remount never hops again (ModernAvatar's own effects run before this one).
+  useEffect(() => {
+    if (!isStreaming && freshTrack.current.landed.size) freshTrack.current.landed.clear();
+  });
 
   // `prev`: the message shown just above, so a kwant line under another sits close to it (0.9.5 F5)
   const renderMessage = (msg: ChatMessage, prev?: ChatMessage) => {
@@ -2331,6 +2350,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
     const done = isUser ? null : doneOf(msg, doneItems, { asks: asksOk || (msg.id === questionId && !answered.has(msg.id)) });
     // Any auto-routed channel, not only #general: the server attaches `routing` wherever it picked the bot.
     const routed = isUser ? null : parseRoutingMeta(msg.meta);
+    // A stream's saved copy, once the live row is gone: its avatar hops (after a routed reply's 200 ms hand-off).
+    const landHop = !isStreaming && newestReplies.has(msg.id) && freshTrack.current.landed.has(msg.id) ? (routed ? 200 : 0) : undefined;
     // Older channel replies still hold a raw [DECISIONS] block: hidden here, its lines shown as chips
     const shownDecisions = isUser ? null : messageDecisions(msg.text, msg.meta);
     const decisions = shownDecisions?.decisions ?? [];
@@ -2389,6 +2410,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 size={REPLY_AVATAR}
                 kwantId={replyKwantId}
                 modelBadge={false}
+                face={newestReplies.has(msg.id) ? 'mood' : 'plain'}
+                land={landHop}
               />
             ) : null}
           </span>
@@ -2411,7 +2434,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               name={displayName}
               at={msg.created_at}
               sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
-              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} /></span>}
+              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} face={newestReplies.has(msg.id) ? 'mood' : 'plain'} land={landHop} /></span>}
               ranOn={ranOn}
               account={account}
               effort={effortWords(msg.reasoning_content)}
@@ -3022,7 +3045,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
           </button>
         )}
         {home?.kind === 'bot' && home.bot && (
-          <ModernAvatar role={home.bot.avatar_sprite} name={home.bot.name} size={phone ? (kbd ? 28 : 32) : 34} kwantId={home.bot.id} className="rounded-xl" />
+          <ModernAvatar role={home.bot.avatar_sprite} name={home.bot.name} size={phone ? (kbd ? 28 : 32) : 34} kwantId={home.bot.id} className="rounded-xl" life="header" />
         )}
         <div className="min-w-0 flex-1">
           <h2
@@ -3260,16 +3283,26 @@ export const ChatView: React.FC<ChatViewProps> = ({
         {/* Live Streaming Assistant Message (or its place in the queue, in the same frame) */}
         {isStreaming && !deciding && routingState?.phase !== 'deciding' && !askOnly && (
           <div className="flex items-start gap-3.5 w-full max-w-5xl" data-live-row="">
-            {/* The finished reply's geometry (16a): avatar column from sm up, in the name line on phones */}
-            <span className="hidden sm:contents">
-              <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR} />
-            </span>
+            {/* The finished reply's geometry (16a): avatar column from sm up, in the name line on phones. While the scene
+                shows, its bot at the laptop is the row's only bot: an empty slot of the avatar's size holds the place, so
+                the name line and bubble don't move when the reply lands (Ada, Nov 26: "one bot on screen while it works"). */}
+            {sceneShown ? (
+              <span className="hidden sm:block w-9 h-9 shrink-0" aria-hidden="true" data-live-avatar-slot="" />
+            ) : (
+              <span className="hidden sm:contents">
+                <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR} />
+              </span>
+            )}
             <div className="flex flex-col items-start min-w-0 flex-1 max-w-4xl">
               {/* The finished name line's type and height (17c), so it doesn't grow when the reply lands */}
               <div className={replyNameLine(REPLY_NAME_LINE_LIVE_HEIGHT)} data-live-name-line="">
-                <span className="sm:hidden shrink-0 inline-flex">
-                  <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR_PHONE} />
-                </span>
+                {sceneShown ? (
+                  <span className="sm:hidden shrink-0 w-5 h-5" aria-hidden="true" data-live-avatar-slot="" />
+                ) : (
+                  <span className="sm:hidden shrink-0 inline-flex">
+                    <ModernAvatar role={liveName} name={liveName} size={REPLY_AVATAR_PHONE} />
+                  </span>
+                )}
                 <span className={REPLY_NAME}>{liveName}</span>
                 {/* #1278: when this turn started, where the finished reply's time will sit; not while it waits in line */}
                 {!queued && <MessageTime at={liveStartedAt} kind="live" />}

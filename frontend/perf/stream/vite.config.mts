@@ -17,5 +17,6 @@ export default defineConfig({
   base: './',
   publicDir: false,
   plugins: [react(), whatsNewStub()],
-  build: { outDir: 'dist', emptyOutDir: true, target: 'es2022' },
+  // life.html: the living-avatars case (30 bots on the shared clock; ui_budget "life").
+  build: { outDir: 'dist', emptyOutDir: true, target: 'es2022', rollupOptions: { input: { main: `${here}index.html`, life: `${here}life.html` } } },
 });
