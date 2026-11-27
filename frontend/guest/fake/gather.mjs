@@ -138,6 +138,8 @@ export const gatherScenarios = {
   'gather-rsvp-unnamed': { state: seat({ ...rsvpView({ answer: 'yes', plus_ones: 1, food: ['vegetarian'], food_other: null, answered_at: '2026-12-01T10:00:00Z', paid: null }), names_notice: true }) },
   // The same, but Dana turns names off again before Mia's tap lands: show_my_name gives the 409.
   'gather-rsvp-unnamed-off': { namesOffOnTap: true, state: seat({ ...rsvpView({ answer: 'yes', plus_ones: 1, food: ['vegetarian'], food_other: null, answered_at: '2026-12-01T10:00:00Z', paid: null }), names_notice: true }) },
+  // rsvp-names-switch: answers closed, names on after Mia answered (the short sentence, no "answer again").
+  'gather-rsvp-unnamed-closed': { state: seat({ ...rsvpView({ answer: 'yes', plus_ones: 1, food: ['vegetarian'], food_other: null, answered_at: '2026-12-01T10:00:00Z', paid: null }), phase: 'closed', names_notice: true }) },
   // Sign-up: Mia holds a Drinks spot from before the switch; counted (1 of 4), not listed.
   'gather-signup-unnamed': { state: seat({ ...signupView({ slot: 3, note: 'lemonade', waiting: null, moved_up: null }, (() => { const s = signupSlots(); s[3] = { ...slot(3, 'Drinks', 4, []), filled: 1 }; return s; })()), names_notice: true }) },
   // G3 Sign-up pick: Desserts is full with a waiting list.

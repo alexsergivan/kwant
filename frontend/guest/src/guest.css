@@ -339,11 +339,11 @@ button.ans:active:not(:disabled) { animation: tap 120ms var(--kw-ease); }
 .whosees svg.pi { width: 14px; height: 14px; margin-top: 3px; color: var(--sky-300); flex-shrink: 0; }
 /* rsvp-names-switch: the quiet "now shows names" line under the who-sees line (Mira, copy-check.md 4). Information, not
    a warning: the who-sees row style, a secondary button inline on desktop and on its own row on a phone. */
-.ga .namesnote { flex-wrap: wrap; align-items: center; }
-.ga .namesnote > span { flex: 1 1 240px; min-width: 0; overflow-wrap: anywhere; }
+.ga .namesnote { flex-wrap: wrap; align-items: center; text-align: left; }
+.ga .namesnote > span { flex: 1 1 0; min-width: 0; overflow-wrap: anywhere; }
 .ga .namesnote > svg.pi { align-self: flex-start; }
 .ga .namesnote > span .err { color: var(--zinc-100); }
-.ga .namesnote .gbtn { width: auto; min-height: 44px; font-size: 15px; padding: 0 16px; margin: 0; flex: 0 0 auto; }
+.ga .namesnote .gbtn { width: auto; min-width: 176px; justify-content: center; min-height: 44px; font-size: 15px; padding: 0 16px; margin: 0; flex: 0 0 auto; }
 @media (max-width: 520px) { .ga .namesnote .gbtn { flex-basis: 100%; } }
 .ga .spin { display: inline-block; width: 14px; height: 14px; border-radius: 50%; border: 2px solid currentColor; border-right-color: transparent; vertical-align: -2px; animation: ga-spin 0.8s linear infinite; }
 @keyframes ga-spin { to { transform: rotate(1turn); } }

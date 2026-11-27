@@ -444,18 +444,20 @@ export class GatherApp {
    * the who-sees style with "Show my name", never a warning; after a tap, "Your name shows now." for this visit, or
    * the server's own words when it didn't work.
    */
-  private namesNote(v: GatherView): Kid {
+  private namesNote(v: GatherView, closed = false): Kid {
     const said = this.namesSaid;
     if (v.names_notice) {
       const busy = this.busy === 'names';
       const btn = h('button', { type: 'button', class: 'gbtn ghost', 'data-show-name': '', disabled: busy ? true : null, 'aria-busy': busy ? 'true' : null }, busy ? h('span', { class: 'spin', 'aria-hidden': 'true' }) : null, 'Show my name') as HTMLButtonElement;
       btn.addEventListener('click', () => void this.showMyName());
-      const what = v.facts.face === 'signup' ? 'change your sign-up' : 'answer again';
+      // Closed (Mira, guest-design-check.md 1): the server only takes seen and show_my_name now, so the sentence ends
+      // at the button.
+      const what = closed ? '' : v.facts.face === 'signup' ? ' or change your sign-up' : ' or answer again';
       return h(
         'div',
         { class: 'whosees namesnote', 'data-names-notice': '' },
         gaIcon('eye'),
-        h('span', null, `${cap(this.host())} now shows names here. Yours stays hidden until you tap Show my name or ${what}.`, said && !said.ok ? h('span', { class: 'err', role: 'alert', 'data-names-said': '' }, ` ${said.text}`) : null),
+        h('span', null, `${cap(this.host())} now shows names here. Yours stays hidden until you tap Show my name${what}.`, said && !said.ok ? h('span', { class: 'err', role: 'alert', 'data-names-said': '' }, ` ${said.text}`) : null),
         btn,
       );
     }
@@ -1353,7 +1355,7 @@ export class GatherApp {
       back = this.ghost('See my answer', () => this.goRejoin(), 'to-rejoin');
     }
     const mine = v.mine?.answer ? h('p', { class: 'soft' }, 'Your answer: ', h('b', null, WORD[v.mine.answer])) : null;
-    return this.message(tally(96, 'finished'), title, lead, this.gone_(v), mine, this.namesNote(v), back);
+    return this.message(tally(96, 'finished'), title, lead, this.gone_(v), mine, this.namesNote(v, true), back);
   }
 
   // ---------- Host asleep (pa10a's G9) ----------

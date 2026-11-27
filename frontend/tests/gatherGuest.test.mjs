@@ -597,9 +597,22 @@ test('names switch: any other failure keeps the notice and adds the server sente
   t.app.stop();
 });
 
+test('names switch: closed RSVP shows the short sentence, never "answer again"; Show my name still works', async () => {
+  const t = await open('gather-rsvp-unnamed-closed');
+  assert.equal(t.screen(), 'closed');
+  assert.equal(t.$('[data-names-notice] span').firstChild.textContent, 'Dana now shows names here. Yours stays hidden until you tap Show my name.');
+  assert.doesNotMatch(t.text(), /answer again|change your sign-up/);
+  assert.match(t.text(), /Need to change something\? Ask Dana\./);
+  await click(t.$('[data-show-name]'));
+  assert.deepEqual(t.acts(), [{ name: 'show_my_name', body: {} }]);
+  assert.equal(t.$('[data-names-said]').textContent, 'Your name shows now.');
+  t.app.stop();
+});
+
 test('names switch: css keeps the notice quiet, 44 px button, spinner still under reduced motion', () => {
   const css = readFileSync(new URL('../guest/src/guest.css', import.meta.url), 'utf8');
-  assert.match(css, /\.ga \.namesnote \.gbtn \{[^}]*min-height: 44px/);
+  assert.match(css, /\.ga \.namesnote \.gbtn \{[^}]*min-width: 176px; justify-content: center;[^}]*min-height: 44px/);
+  assert.match(css, /\.ga \.namesnote > span \{ flex: 1 1 0;/, 'wrapping never depends on the text length');
   assert.match(css, /@media \(max-width: 520px\) \{ \.ga \.namesnote \.gbtn \{ flex-basis: 100%; \} \}/);
   assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.ga \.spin \{ animation: none; \} \}/);
   const block = css.slice(css.indexOf('.ga .namesnote'), css.indexOf('@keyframes ga-spin'));
