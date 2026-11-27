@@ -304,7 +304,12 @@ pub fn ended_block(s: &Snapshot, sched: Option<&ScheduleRow>, zone: &Zone) -> Va
         "budget": null,
         "results": results,
     });
-    if let Some((_, part)) = part {
+    if let Some((_, mut part)) = part {
+        // The chat keeps this card after the pocket is gone: an ended RSVP, sign-up or vote card
+        // carries no guest's name from the start (the host page still lists them until expiry)
+        if let Some(g) = part.as_object_mut().filter(|_| s.row.kit == super::gather::ID) {
+            blank_gather_names(g);
+        }
         block[s.row.kit.as_str()] = part;
     }
     block
