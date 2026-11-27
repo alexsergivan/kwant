@@ -176,7 +176,7 @@ async fn more_than_30_the_bot_picks_once_and_the_host_says_yes() {
     assert_eq!(h["budget"]["bot_calls"], 1);
     assert!(h["budget"]["line"].as_str().unwrap().starts_with("1 bot call so far"), "{}", h["budget"]);
     let ready = wait_reply(&env, &env.a, "guests see them only after you say yes").await;
-    assert!(ready.text.starts_with("I picked the best 30 photos from Mia & Sam. Look them over on the card"), "{}", ready.text);
+    assert!(ready.text.starts_with("I picked the best 30 photos from Mia & Sam. Look them over on the wall card"), "{}", ready.text);
     assert!(ready.text.contains("All the photos leave this box on"), "says when the photos leave: {}", ready.text);
     assert!(!ready.text.contains("Zora") && !ready.text.contains(&w.guest), "no guest names: {}", ready.text);
 
