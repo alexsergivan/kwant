@@ -126,6 +126,11 @@ async fn still_busy(state: &AppState, code: &str, guest: &str) -> bool {
 
 /// Runs this guest's turns until nothing waits. `true` when it stopped because nothing did.
 async fn worker(state: &AppState, code: &str, guest: &str) -> bool {
+    // pocket-switch-santa-alone: a desk's bot turns run only while the switch names `desk`; the
+    // guest's messages wait, and the sweeper's resume starts them once it does
+    if !pocket::enabled_for(&state.db, desk::ID).await {
+        return false;
+    }
     loop {
         let Ok(taken) = pocket::server_event(state, code, "take", &json!({ "guest": guest })).await else { return false };
         if taken["capped"] == json!(true) {
@@ -384,7 +389,7 @@ pub async fn resume(state: &AppState) {
 /// answered by this space's bots.
 pub async fn needs_you(state: &AppState, kwants: &[Kwant]) -> Vec<(chrono::DateTime<chrono::Utc>, Value)> {
     let mut items = Vec::new();
-    if !pocket::enabled(&state.db).await {
+    if !pocket::enabled_for(&state.db, desk::ID).await {
         return items;
     }
     for code in state.db.pocket_codes_open_of_kit(desk::ID).await.unwrap_or_default() {

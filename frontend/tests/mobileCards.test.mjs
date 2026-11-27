@@ -296,7 +296,7 @@ test('engine chip: the model alone on a phone, the full label from sm up and on 
 test('reply header on a phone: one row, the time never shrinks, no engine chip (reply-chrome part 4)', () => {
   const html = m.meta({ name: 'Architect', at: '2026-11-02T11:42:00Z', now: Date.parse('2026-11-02T12:00:00Z'), ranOn: 'Custom API · claude-opus-5-5', account: 'Anthropic API' });
   assert.match(html, /<div class="[^"]*flex-nowrap sm:flex-wrap[^"]*">/);
-  assert.match(html, /<span class="[^"]*shrink-0 whitespace-nowrap[^"]*" data-reply-time="">/);
+  assert.match(html, /<time class="[^"]*shrink-0 whitespace-nowrap[^"]*" data-reply-time="" dateTime="2026-11-02T11:42:00.000Z">/);
   assert.doesNotMatch(html, /data-engine-chip/);
   assert.doesNotMatch(html, /claude-opus-5-5/);
 });

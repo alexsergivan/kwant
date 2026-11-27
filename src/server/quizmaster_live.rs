@@ -108,7 +108,7 @@ pub fn after_answer(state: &AppState, code: &str, kit: &str) {
 /// Judges the pocket's near misses now; what [`after_answer`] runs. Nothing happens while the
 /// switch is off, when nothing is pending, or for a pocket no quiz draft opened.
 pub async fn judge_now(state: &AppState, code: &str) -> Vec<Outcome> {
-    if !pocket::enabled(&state.db).await {
+    if !pocket::enabled_for(&state.db, KIT_ID).await {
         return Vec::new();
     }
     let target = PocketTarget { state, code };
