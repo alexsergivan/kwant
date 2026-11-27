@@ -513,7 +513,7 @@ impl St {
             self.tally = Some(tally);
             // A tie too: "vote again" starts over with no ballots and a new salt, and "pick"
             // reads the tally
-            self.unlink_ballots();
+            ctx.forgot |= self.unlink_ballots();
         } else {
             self.phase = CLOSED.into();
             ctx.event(None, "closed", json!({ "answers": self.answered_count(ctx) }));

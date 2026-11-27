@@ -307,6 +307,16 @@ fn orders(st: &Value) -> Vec<Value> {
 
 /// Proves a stored state can't be paired with names: no ballot key is the salted hash of any
 /// player id under any salt that was ever stored (or none), and no salt is left.
+/// The database files (`kwnt.db` and its write-ahead log) that still hold `needle` anywhere,
+/// in a live row or in an old row version's leftover bytes.
+fn files_holding(t: &T, needle: &str) -> Vec<&'static str> {
+    let dir = t.state.config.data_dir.clone();
+    ["kwnt.db", "kwnt.db-wal"]
+        .into_iter()
+        .filter(|f| std::fs::read(dir.join(f)).map(|b| b.windows(needle.len()).any(|w| w == needle.as_bytes())).unwrap_or(false))
+        .collect()
+}
+
 fn unpairable(st: &Value, salts: &[&str], ids: &[String]) {
     assert_eq!(st["ballot_salt"], "", "the salt is cleared: {st}");
     let keys: Vec<&String> = st["ballots"].as_object().unwrap().keys().collect();
@@ -626,6 +636,7 @@ async fn a_vote_closed_before_the_fix_is_unlinked_on_the_next_sweep() {
     pocket::listener::sweep_once(&t.state, Utc::now()).await;
     let st = kit_state(&t, &code).await;
     unpairable(&st, &[&salt], &ids);
+    assert_eq!(files_holding(&t, &salt), Vec::<&str>::new(), "the sweep wiped the old copies too (F2)");
     assert_eq!(orders(&st), orders(&open));
     assert_eq!(kit_state(&t, &rsvp).await["ballot_salt"], "", "an unused salt goes too");
     assert_eq!(kit_state(&t, &open_code).await, open_before, "an open vote is left as it is");
@@ -635,6 +646,37 @@ async fn a_vote_closed_before_the_fix_is_unlinked_on_the_next_sweep() {
     let v = t.state.db.pocket_get(&code).await.unwrap().unwrap().version;
     pocket::sweep(&t.state, Utc::now()).await;
     assert_eq!(t.state.db.pocket_get(&code).await.unwrap().unwrap().version, v);
+}
+
+#[tokio::test]
+async fn a_closed_votes_salt_leaves_the_database_files_too() {
+    // Rigel F2: the row said salt "", but the old row versions in the file and its log still
+    // had it, so anyone reading the disk could pair people with ballots
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let mut ids = Vec::new();
+    for (n, b) in [("Ana", json!([2, 0])), ("Ben", json!([0, 1])), ("Cleo", json!([1, 0, 3]))] {
+        let (id, k) = joined(&t, &code, n).await;
+        ok(&t, &code, &k, "vote", json!({ "ranking": [0] })).await;
+        ok(&t, &code, &k, "vote", json!({ "ranking": b })).await;
+        ids.push(id);
+    }
+    let salt = kit_state(&t, &code).await["ballot_salt"].as_str().unwrap().to_string();
+    assert!(!files_holding(&t, &salt).is_empty(), "the open vote's salt is on disk");
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    unpairable(&kit_state(&t, &code).await, &[&salt], &ids);
+    // The close asked for the wipe; the next sweep waits for it (and would run it if the
+    // background one had been held up). The sweep scrubs nothing here: the close unlinked it
+    pocket::sweep(&t.state, Utc::now()).await;
+    assert_eq!(files_holding(&t, &salt), Vec::<&str>::new(), "no old copy of the salt in the files");
+    // A save that forgets nothing doesn't wipe: the next vote's salt stays while it is open
+    let (open_code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let (_, k) = joined(&t, &open_code, "Dev").await;
+    ok(&t, &open_code, &k, "vote", json!({ "ranking": [0] })).await;
+    let open_salt = kit_state(&t, &open_code).await["ballot_salt"].as_str().unwrap().to_string();
+    pocket::sweep(&t.state, Utc::now()).await;
+    assert!(!files_holding(&t, &open_salt).is_empty(), "an open vote keeps its salt");
 }
 
 // ---- RSVP ----

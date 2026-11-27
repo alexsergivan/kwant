@@ -118,11 +118,14 @@ pub struct KitCtx<'a> {
     pub players: &'a [Player],
     pub now: DateTime<Utc>,
     pub events: Vec<KitEvent>,
+    /// secret-ballot-unlinkable F2: this change dropped a secret (a vote's ballot salt). After
+    /// saving it the core wipes the database's old copies of the row ([`super::Hub::wipe_soon`]).
+    pub forgot: bool,
 }
 
 impl<'a> KitCtx<'a> {
     pub fn new(spec: &'a Value, players: &'a [Player], now: DateTime<Utc>) -> Self {
-        Self { spec, players, now, events: Vec::new() }
+        Self { spec, players, now, events: Vec::new(), forgot: false }
     }
 
     pub fn player(&self, id: &str) -> Option<&Player> {
