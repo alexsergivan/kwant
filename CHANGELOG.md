@@ -8,6 +8,13 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.57] - 2026-11-27
+
+kwant 0.9.57: living bot avatars.
+
+### Added
+- **Your bots come alive.** A bot's avatar now has a face for each mood, so you can see at a glance whether it is working, finished or needs you; only the newest reply shows the mood. In the sidebar, the chat header and a bot's home, avatars blink and glance around now and then, and look your way when you point at their row. A bot perks up when you message it, hops to say hello when it joins a space and hops once as its reply lands. Saving a new icon or colour in Space settings plays a short shine on that space's tile in the rail. With reduced motion on, nothing moves and only the faces change (#1287)
+
 ## [Mac 0.9.56] - 2026-11-27
 
 kwant 0.9.56: a time on every chat row.
