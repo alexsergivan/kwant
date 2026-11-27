@@ -243,6 +243,13 @@ pub trait Kit: Send + Sync + 'static {
     fn taking_part(&self) -> (&'static str, &'static str) {
         ("player", "players")
     }
+    /// party-card-and-results (Mira's office-party pass m1): the ended line's outcome in the
+    /// kit's own words, said instead of "N players took part." (a decided vote: "Winter
+    /// wonderland wins with 6 of 8."; a photo wall: "12 photos on the wall."). Counts and
+    /// option names only, never a guest's name. `None` (the default): the [`Self::taking_part`] count.
+    fn ended_line(&self, _ctx: &KitCtx, _state: &Value) -> Option<String> {
+        None
+    }
     /// pa7: the results the person's chat gets once the pocket has ended, in the `results` shape
     /// of the chat's pocket card (Pixel's pa4/impl.md "PocketBlock"): `{teams: [{name, players,
     /// points, palette, members}] (1-12, best first), margin, missed, near_misses,

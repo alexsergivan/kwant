@@ -190,14 +190,22 @@ pub fn results_copy(title: &str, players: usize, has_chat: bool) -> (String, Str
 
 /// [`results_copy`] with the kit's words for who took part ([`super::kits::Kit::taking_part`]):
 /// "6 people took part." for a Secret Santa.
-pub fn results_copy_as((one, many): (&str, &str), title: &str, players: usize, has_chat: bool) -> (String, String, String) {
+pub fn results_copy_as(words: (&str, &str), title: &str, players: usize, has_chat: bool) -> (String, String, String) {
+    results_copy_with(words, None, title, players, has_chat)
+}
+
+/// [`results_copy_as`] with the kit's own outcome ([`super::kits::Kit::ended_line`]) said
+/// instead of the count when it has one (party-card-and-results, m1): "Party theme has ended.
+/// Winter wonderland wins with 6 of 8."
+pub fn results_copy_with((one, many): (&str, &str), outcome: Option<&str>, title: &str, players: usize, has_chat: bool) -> (String, String, String) {
     let t = short_title(title);
-    let who = match players {
-        0 => "Nobody joined.".to_string(),
-        1 => format!("1 {one} took part."),
-        n => format!("{n} {many} took part."),
+    let who = match (outcome.map(str::trim).filter(|o| !o.is_empty()), players) {
+        (Some(o), _) => o.to_string(),
+        (None, 0) => "Nobody joined.".to_string(),
+        (None, 1) => format!("1 {one} took part."),
+        (None, n) => format!("{n} {many} took part."),
     };
-    let body = if has_chat && players > 0 { format!("{who} The results are in your chat.") } else { who.clone() };
+    let body = if has_chat && (players > 0 || outcome.is_some()) { format!("{who} The results are in your chat.") } else { who.clone() };
     (format!("{t} has ended"), body, format!("{t} has ended. {who}"))
 }
 
@@ -211,6 +219,9 @@ pub(crate) fn when_line(zone: &Zone, starts_at: DateTime<Utc>) -> String {
 /// `results.names_deleted_at` records when. Team names, points and the winner stay (Mira's
 /// copy check: the Ended card promises "Names and answers are deleted on …").
 pub fn blank_names(block: &mut Value, at: DateTime<Utc>) {
+    if let Some(g) = block.get_mut("gather").and_then(Value::as_object_mut) {
+        blank_gather_names(g);
+    }
     let Some(results) = block.get_mut("results").and_then(Value::as_object_mut) else { return };
     if let Some(teams) = results.get_mut("teams").and_then(Value::as_array_mut) {
         for team in teams.iter_mut().filter_map(Value::as_object_mut) {
@@ -220,6 +231,32 @@ pub fn blank_names(block: &mut Value, at: DateTime<Utc>) {
         }
     }
     results.insert("names_deleted_at".into(), json!(at));
+}
+
+/// party-card-and-results: an ended RSVP, sign-up or vote card loses every guest's name and
+/// words: its lists of people empty (the card still draws them empty) and its counts, options and
+/// summary stay. Nothing is added, so the chat draws the card as before, without names.
+fn blank_gather_names(g: &mut serde_json::Map<String, Value>) {
+    for k in ["people", "voters", "not_answered", "drafts", "moved_up"] {
+        if g.get(k).is_some_and(Value::is_array) {
+            g.insert(k.into(), json!([]));
+        }
+    }
+    if let Some(slots) = g.get_mut("slots").and_then(Value::as_array_mut) {
+        for slot in slots.iter_mut().filter_map(Value::as_object_mut) {
+            for k in ["people", "waiting_people"] {
+                if slot.get(k).is_some_and(Value::is_array) {
+                    slot.insert(k.into(), json!([]));
+                }
+            }
+        }
+    }
+    if let Some(not_yet) = g.get_mut("paid").and_then(|p| p.get_mut("not_yet")).filter(|v| v.is_array()) {
+        *not_yet = json!([]);
+    }
+    if let Some(other) = g.get_mut("food").and_then(|f| f.get_mut("other")).filter(|v| v.is_array()) {
+        *other = json!([]);
+    }
 }
 
 /// The kit's results when they fit the card's shape (1-12 teams), else `Null`.
@@ -239,7 +276,12 @@ pub fn ended_block(s: &Snapshot, sched: Option<&ScheduleRow>, zone: &Zone) -> Va
         .map(|k| k.results(&super::kits::KitCtx::new(&s.spec, &s.players, Utc::now()), &s.kit_state))
         .map_or(Value::Null, fitting_results);
     let winner = results["teams"].as_array().and_then(|a| a.first()).map(|t| json!({ "name": t["name"], "points": t["points"] }));
-    json!({
+    // party-card-and-results: an RSVP, sign-up, vote or wall ends as its own card (`gather` or
+    // `wall`, never `results`), which the chat draws; a vote that never closed has none
+    let party = matches!(s.row.kit.as_str(), super::gather::ID | super::wall::ID);
+    let part = if party { crate::server::smart_results::pocket::party_part(&s.row.kit, &s.spec, &s.kit_state, &s.players, true, Utc::now(), None) } else { None };
+    let results = if party { Value::Null } else { results };
+    let mut block = json!({
         "id": format!("pocket-{}-ended", s.row.code),
         "type": "pocket",
         "title": null,
@@ -261,7 +303,11 @@ pub fn ended_block(s: &Snapshot, sched: Option<&ScheduleRow>, zone: &Zone) -> Va
         "ended": ended_part(zone, s.row.ended_at, s.row.expires_at, winner),
         "budget": null,
         "results": results,
-    })
+    });
+    if let Some((_, part)) = part {
+        block[s.row.kit.as_str()] = part;
+    }
+    block
 }
 
 /// The card's `ended`: when it ended and the day names are deleted, as the card prints them ("10:12 PM",
@@ -527,7 +573,9 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
     let zone = Zone::parse(row.as_ref().map_or("UTC", |r| r.zone.as_str()));
     let origin = row.as_ref().and_then(origin_of);
     let words = s.kit().map_or(("player", "players"), |k| k.taking_part());
-    let (_, _, line) = results_copy_as(words, &s.row.title, s.player_count(), true);
+    // m1: the kit's own outcome ("Winter wonderland wins with 6 of 8.") when it has one
+    let outcome = s.kit().and_then(|k| k.ended_line(&super::kits::KitCtx::new(&s.spec, &s.players, now), &s.kit_state));
+    let (_, _, line) = results_copy_with(words, outcome.as_deref(), &s.row.title, s.player_count(), true);
     let posted = match &origin {
         Some(o) => {
             let mut block = ended_block(&s, row.as_ref(), &zone);
@@ -548,7 +596,7 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
         }
         None => false,
     };
-    let (title, body, _) = results_copy_as(words, &s.row.title, s.player_count(), posted);
+    let (title, body, _) = results_copy_with(words, outcome.as_deref(), &s.row.title, s.player_count(), posted);
     notify(state, origin.as_ref(), &s, title, body).await;
     Ok(true)
 }

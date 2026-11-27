@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   CircleDashed,
   Eye,
+  EyeOff,
   Hand,
   Info,
   Layers,
@@ -35,7 +36,8 @@ import { usePhoneLayout } from '../usePhoneLayout';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
 import { type HumanStep, toolsFixOf } from '../humanSteps';
 import { ApprovalDecision, AwayItem, awayApi, failureNotice, resolveFromList, awaySummary, itemLabel, stoppedAction, windowLabel } from '../away';
-import { InboxGroup, InboxItem, ReviewItem, isBeingChecked, isReview, pendingHeld, reviewWord } from '../api/inbox';
+import { InboxGroup, InboxItem, ReviewItem, isBeingChecked, isReview, pendingHeld, reviewWord, wallNext } from '../api/inbox';
+import { pocketApi, wallPhotoUrl } from '../pocketApi';
 import {
   BatchRow,
   Crumb,
@@ -189,7 +191,8 @@ const ReviewSubline: React.FC<{ item: ReviewItem }> = ({ item }) => {
 };
 
 const AwaySubline: React.FC<{ item: InboxItem }> = ({ item }) => {
-  const { label, tone } = itemLabel(item as AwayItem);
+  // party-card-and-results: a Photo Wall row is no away kind; it says what waits.
+  const { label, tone } = item.kind === 'pocket_wall' ? { label: 'Photos to check', tone: 'amber' } : itemLabel(item as AwayItem);
   const toneText = tone === 'amber' ? 'text-amber-300' : tone === 'rose' ? 'text-rose-300' : tone === 'emerald' ? 'text-teal-300' : tone === 'sky' ? 'text-sky-300' : 'text-zinc-400';
   const sum = awaySummary(item as AwayItem);
   // 33m: a stopped row titled with the person's request shows its reason here; titled with the reason, it doesn't say it twice.
@@ -228,6 +231,8 @@ interface RowProps {
   onRetry?: (i: InboxItem, approvalId: string) => void;
   /** routine-run-again: Run again on a failed routine run that names its routine. */
   onRunAgain?: (i: InboxItem) => void;
+  /** party-card-and-results: Approve / Hide on a Photo Wall row's next photo (the wall's own host actions). */
+  onWall?: (i: InboxItem, action: 'approve' | 'hide') => void;
   /** A routine's review task in Done: its run's first line, as the run's own row would show it. */
   doneSummary?: string | null;
   /** The conversation it happened in ("@Spring launch"), said before the bot's name like the mockup. */
@@ -316,7 +321,7 @@ const PocketRow: React.FC<{ item: InboxItem; selected: boolean; focusable: boole
 
 const QueueRow: React.FC<RowProps> = (props) => (props.item.kind === 'pocket' ? <PocketRow item={props.item} selected={props.selected} focusable={props.focusable} onPick={props.onPick} /> : <AnyRow {...props} />);
 
-const AnyRow: React.FC<RowProps> = ({ item: raw, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, onRunAgain, doneSummary, place, onOpenConnections, onOpenTools, steps }) => {
+const AnyRow: React.FC<RowProps> = ({ item: raw, selected, focusable, wide, busy, onPick, onAnswer, onResolve, onRetry, onRunAgain, onWall, doneSummary, place, onOpenConnections, onOpenTools, steps }) => {
   // 0.9.55 (#1262): a step fixed in Tools › MCP servers says so, from the item or else from the step's own record
   const stepId = raw.kind === 'stopped' ? (raw as AwayItem).human_step_id : null;
   const toolsFix = stepId ? toolsFixOf(raw as AwayItem) ?? toolsFixOf(steps?.[stepId]) : null;
@@ -337,6 +342,7 @@ const AnyRow: React.FC<RowProps> = ({ item: raw, selected, focusable, wide, busy
   const doneRow = !review && isDoneGroup(item.group) && opensInPane(item);
   // done-check: one word before the summary on done rows whose item says how it was checked.
   const check = isDoneGroup(item.group) ? knownChecked(item.checked) : null;
+  const wall = wallNext(item);
   return (
     <li role="presentation" className={`relative rounded-xl border transition-colors ${tint}`} data-row={item.id} data-group={item.group}>
       <div
@@ -478,6 +484,26 @@ const AnyRow: React.FC<RowProps> = ({ item: raw, selected, focusable, wide, busy
           <button type="button" onClick={() => onOpenTools(toolsFix.serverId, toolsFix.server)} className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-open-tools={item.id}>
             <Plug size={12} aria-hidden="true" />
             Open Tools
+          </button>
+        </div>
+      )}
+
+      {wall && onWall && (
+        <div role="group" aria-label={`Next photo: ${title}`} className="px-3 pb-3 pl-[54px] flex items-center gap-2" data-wall-row={item.id}>
+          <img
+            src={wallPhotoUrl(wall.code, wall.id)}
+            alt={wall.by ? `Photo from ${wall.by}` : 'Waiting photo'}
+            loading="lazy"
+            className="w-12 h-12 shrink-0 rounded-md object-cover bg-zinc-800"
+            data-wall-thumb={wall.id}
+          />
+          <button type="button" disabled={disabled} onClick={() => onWall(item, 'approve')} className={`${okBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-wall-approve={wall.id}>
+            <Check size={12} aria-hidden="true" />
+            Approve
+          </button>
+          <button type="button" disabled={disabled} onClick={() => onWall(item, 'hide')} className={`${plainBtn} px-3 text-xs ${wide ? 'h-7' : 'h-11'}`} data-wall-hide={wall.id}>
+            <EyeOff size={12} aria-hidden="true" />
+            Hide
           </button>
         </div>
       )}
@@ -974,6 +1000,17 @@ export const InboxNew: React.FC<InboxNewProps> = ({
       // Skipped is news, not success: the info tone (Mira's design check, fix 2).
       return r === 'skipped' ? { text: `${t} is already running, so nothing new started.`, tone: 'info' } : { text: `Started: ${t}`, tone: 'ok' };
     });
+  // party-card-and-results: the wall row acts on its next photo through the wall's own host actions; the reload
+  // then shows the next one, or drops the row when none waits.
+  const onWall = (item: InboxItem, action: 'approve' | 'hide') => {
+    const w = wallNext(item);
+    if (!w) return;
+    const who = w.by ? ` from ${w.by}` : '';
+    return act(item, () => pocketApi.hostAction(w.code, action, { ids: [w.id] }), false, () => ({
+      text: action === 'approve' ? `Approved the photo${who}. It's on the wall now.` : `Hid the photo${who}. Guests won't see it.`,
+      tone: 'ok',
+    }));
+  };
   const onResolve = (item: InboxItem, decision: ApprovalDecision, withoutBackup?: boolean, reason?: string) =>
     act(
       item,
@@ -1096,6 +1133,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
                   onResolve={onResolve}
                   onRetry={onRetry}
                   onRunAgain={onRunAgain}
+                  onWall={onWall}
                   doneSummary={sections.runFor[i.id]?.summary || null}
                   place={i.link?.channel_id ? (placeName?.(i.link.channel_id) ?? null) : null}
                   onOpenConnections={onOpenConnections}
