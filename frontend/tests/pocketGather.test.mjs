@@ -242,7 +242,7 @@ test('RSVP open: tiles, food, Paid with Only you, nudges line and the full join 
   assert.equal(v.host.querySelectorAll('[data-count]').length, 3);
   assert.match(t, /\+3 plus-ones · 17 coming/);
   assert.match(t, /Leo, Zoe, Nina, Sam/);
-  assert.match(t, /Food needs \(members\): 3 vegetarian, 1 vegan, 1 nut allergy, 1 gluten-free/);
+  assert.match(t, /Food needs \(per member\): 3 vegetarian, 1 vegan, 1 nut allergy, 1 gluten-free/);
   assert.match(t, /Paid 10 of 14 · not yet: Ana, Kai, Ravi, Tom/);
   assert.ok(v.host.querySelector('[data-chip="only-you"]'));
   assert.match(t, /8 nudges drafted: 4 said maybe, 4 not paid yet\. Nothing sends by itself\./);
@@ -486,12 +486,13 @@ test('closed RSVP: the restaurant list never carries paid; Nudge Omar copies his
   const v = await card('rsvpResult');
   const t = v.host.textContent;
   assert.match(t, /19 coming \(15 members \+ 4 plus-ones\) · 4 no · 3 never answered/);
-  assert.match(t, /Tell The Old Mill \(members\): 4 vegetarian, 1 vegan, 1 nut allergy, 1 gluten-free/);
+  assert.match(t, /Tell The Old Mill \(per member\): 4 vegetarian, 1 vegan, 1 nut allergy, 1 gluten-free/);
   assert.match(t, /Paid 14 of 15 · not yet: Omar/);
   assert.equal(v.host.querySelectorAll('[data-result="rsvp"] tbody tr').length, 15);
   await click(button(v, 'Copy list for the restaurant'));
   assert.match(clipboard.text, /19 coming/);
   assert.match(clipboard.text, /- Oleks \+1: vegetarian/);
+  assert.match(clipboard.text, /\nFood needs \(per name below\): 4 vegetarian, 1 vegan, 1 nut allergy, 1 gluten-free\n/);
   assert.doesNotMatch(clipboard.text, /paid|Paid|Not yet/);
   await click(button(v, 'Nudge Omar'));
   assert.match(clipboard.text, /^Hi Omar/);

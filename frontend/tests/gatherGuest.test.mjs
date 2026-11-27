@@ -267,7 +267,7 @@ test('G2 in: summary, paid line only for them, who is coming, change my answer s
   assert.equal(t.screen(), 'in');
   assert.match(t.text(), /You're in, Mia!/);
   assert.match(t.$('[data-paid]').textContent, /Dana marked you as paid · Dec 4 · only you see this/);
-  assert.equal(t.$('#lbl-who small').textContent, '12 coming, incl. 3 plus-ones');
+  assert.equal(t.$('#lbl-who small').textContent, '12, incl. 3 plus-ones', 'the heading already says coming');
   assert.equal(t.root.querySelectorAll('.who-grid li').length, 4);
   assert.match(t.text(), /Maybe: Ana/);
   assert.equal(holo(t), 0);
@@ -289,7 +289,8 @@ test('G2 without names: counts only', async () => {
   t.app.stop();
 });
 
-// m8 (signup-coming-count): `coming` already counts plus-ones, so say "<n> coming" and name plus-ones only when there are some.
+// m8 (signup-coming-count): `coming` already counts plus-ones, so name plus-ones only when there are some.
+// Names on, the heading "Who's coming" already says the verb, so the count drops it (Mira, copy-check.md 1).
 for (const [names, name, small] of [
   [true, 'gather-rsvp-in', '#lbl-who small'],
   [false, 'gather-rsvp-counts', '.lbl small'],
@@ -302,13 +303,14 @@ for (const [names, name, small] of [
     [3, 2, '2 coming'], // odd counts: never "incl. -1"
     [1200, 1203, '1,203 coming, incl. 3 plus-ones'],
   ]) {
-    test(`G2 names ${names ? 'on' : 'off'}: ${yes} yes, ${coming} coming says "${want}"`, async () => {
+    const line = names ? want.replace(' coming', '') : want;
+    test(`G2 names ${names ? 'on' : 'off'}: ${yes} yes, ${coming} coming says "${line}"`, async () => {
       const t = harness(name);
       t.box.seat.view.counts = { ...t.box.seat.view.counts, yes, coming };
       await t.app.start(null);
       await flush();
       assert.equal(t.screen(), 'in');
-      assert.equal(t.$(small).textContent, want);
+      assert.equal(t.$(small).textContent, line);
       assert.doesNotMatch(t.text(), /with plus-ones/);
       t.app.stop();
     });
