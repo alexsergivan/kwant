@@ -326,9 +326,9 @@ async fn wait_rows(d: &D, n: usize) {
 #[tokio::test]
 async fn rq1_capped_guest_row() {
     let d = setup().await;
-    let (code, host) = guide_desk(&d, json!({ "daily_cap": 3 })).await;
+    let (code, host) = guide_desk(&d, json!({ "daily_cap": 10 })).await;
     let (ben, key) = joined(&d, &code, "Ben").await;
-    for i in 0..3 {
+    for i in 0..10 {
         say(&d, &code, &key, &format!("Q{i} REPLYTAG:rq1n{i}")).await;
         wait_msg(&d, &code, &key, "bot", &format!("answer rq1n{i}")).await;
         // wait idle
