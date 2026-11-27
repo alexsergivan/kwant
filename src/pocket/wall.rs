@@ -1515,6 +1515,9 @@ mod tests {
         // A wall made now
         assert_eq!(facts(json!({ "title": "W", "when": "Sat, Dec 12", "event_at": "2026-12-12" })), (json!("2026-12-12T23:59:59Z"), json!("Sat, Dec 12")));
         assert_eq!(facts(json!({ "title": "W", "when": "Sat, Dec 12" })), (Value::Null, json!("Sat, Dec 12")));
+        // wall-dates-followups 3: with event_at set, a bare-date `when` is the person's text
+        assert_eq!(facts(json!({ "title": "W", "when": "2026-12-12", "event_at": "2026-12-12T19:30:00+01:00" })), (json!("2026-12-12T18:30:00Z"), json!("2026-12-12")));
+        assert_eq!(facts(json!({ "title": "W", "when": "2026-12-12", "event_at": null })).1, Value::Null, "no event_at: the date is the event's time");
     }
 
     #[test]
