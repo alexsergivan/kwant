@@ -328,7 +328,7 @@ async fn bad_fill_or_bad_slots_answer_bad_slots_in_the_validators_words_and_make
         assert!(err, "{desk}: {text}");
         assert!(text.starts_with("Nothing was made (bad_slots"), "{desk}: {text}");
         assert!(text.contains(&format!("why: \"{why}")), "{why} for {desk}: {text}");
-        assert!(text.ends_with("Fix the times and call desk_create again."), "{text}");
+        assert!(text.ends_with("Fix the times from what the person said and call desk_create again. If their hours don't fit, ask them; never make up hours."), "{text}");
     }
     let (text, _) = tool(&e, &token, "desk_create", cases_overlap(&tomorrow)).await;
     assert!(text.contains("index: 1"), "the second time overlaps: {text}");
@@ -343,6 +343,13 @@ async fn bad_fill_or_bad_slots_answer_bad_slots_in_the_validators_words_and_make
         let (text, err) = tool(&e, &token, "desk_create", bad.clone()).await;
         assert!(err && text.starts_with("Nothing was made") && !text.contains("panic"), "{bad}: {text}");
     }
+    // The kit's own refusal (here: a guide desk with no guide) sends the bot to the person, never to writing the guide itself
+    let (text, err) = tool(&e, &token, "desk_create", json!({"title": "Sea View"})).await;
+    assert!(err, "{text}");
+    assert!(
+        text.ends_with("Fix it from what the person said and call desk_create again. If a fact is missing (like the guide), ask the person; never fill it in yourself."),
+        "{text}"
+    );
     assert!(e.state.db.pocket_list().await.unwrap().is_empty(), "nothing made");
     let m = reply_as(&e, &e.bot, &e.bot.id, vec![call(booking(json!({})), "error", &text)]).await;
     assert_eq!(pocket(&m), None, "a failed call carries no card");

@@ -54,10 +54,11 @@ pub fn tool() -> Value {
         "name": TOOL,
         "description": "Set up a front desk: a guest page where your bot answers guests' questions from the facts the person gives \
             (a guest guide for a guesthouse, Airbnb or holiday flat: check-in, Wi-Fi, parking, house rules), or a booking desk where \
-            people ask for a time (appointments: a haircut, a lesson, a table) and the person confirms each one. Guests open it on their \
+            people book a time (appointments: a haircut, a lesson, a table) and the person confirms each one. Guests open it on their \
             phones; the person sees every conversation and answers what the bot can't. Call it first with no arguments to get the fields \
             and rules, then with the whole desk: it checks it, opens the desk and shows its card, with the guest link, in the person's chat. \
-            Never invent a Wi-Fi password, door code or price, and never promise a time or a late check-out yourself.",
+            Ask the person at most one question. Never invent a Wi-Fi password, door code, address, price or opening time; never promise \
+            a time or a late check-out; money always goes to the person.",
         "inputSchema": {"type": "object", "properties": {
             "mode": {"type": "string", "enum": ["guide", "booking"], "description": "guide (answers questions) or booking (guests ask for a time)"},
             "title": {"type": "string", "description": "What guests see, up to 80 characters"},
@@ -102,11 +103,14 @@ No two may overlap; up to 200.
 never one already past. weeks is 1 to 4 (default 1).
 
 Rules:
-- Ask the person at most one question before you call, and only about daily_cap if they didn't say it. Fill everything else from what \
-they said: make up the title, use 50 replies a day if they don't answer.
+- Ask the person at most one question before you call. If they gave you the facts (for a booking desk: what, which days and hours), \
+ask only how many answers a day the desk may give, in plain words, like \"How many guest answers a day should I give before passing guests \
+to you? I'll use 50 if that's fine.\" If they gave no facts, or no days and hours, ask for those instead and use 50 replies a day. Never \
+say \"daily_cap\" to the person. Pick a short title from their words.
 - Never invent a Wi-Fi password, a door code, an address, a price or an opening time. Put in the guide only what the person told you.
 - Never promise a late check-out, an early check-in, a discount or a time. Those go to the person.
-- Money is always a hand-off: you never take a payment, quote a price the guide doesn't give, or promise a refund.
+- Money is always a hand-off: payments, deposits and refunds go to the person. Never take a payment, quote a price the guide doesn't \
+give, or promise a refund or discount.
 - After the desk opens, keep your reply short: its card in the chat already shows the guest link and the counts.
 
 Sample guide desk (its facts are samples; write the person's own):
@@ -148,7 +152,8 @@ pub(crate) fn holds_desk(args: Option<&Value>) -> bool {
 /// A `bad_slots` refusal: the kit's (or the fill rule's) words, with where and why.
 fn bad_slots(index: Option<u64>, why: &str, message: &str) -> String {
     let at = index.map(|i| format!(", index: {i}")).unwrap_or_default();
-    format!("Nothing was made (bad_slots, why: {why:?}{at}): {message} Fix the times and call desk_create again.")
+    format!("Nothing was made (bad_slots, why: {why:?}{at}): {message} Fix the times from what the person said and call desk_create again. \
+         If their hours don't fit, ask them; never make up hours.")
 }
 
 /// The spec `desk_create` hands the kit, from `desk` (the known fields only), with a `fill` rule
@@ -264,7 +269,7 @@ pub(crate) fn expand_fill(rule: &Value, now: NaiveDateTime) -> Result<Vec<Value>
         }
     }
     if out.is_empty() {
-        return Err("fill made no times: every one is already past. Add weeks or other days.".into());
+        return Err("fill made no times: every one is already past. Add weeks (up to 4); don't add days the person didn't name.".into());
     }
     Ok(out)
 }
@@ -298,7 +303,11 @@ pub async fn call(state: &AppState, scope: &SelfScope, args: &Value) -> ToolResu
     let (snap, _host_key) = match crate::pocket::create(state, req).await {
         Ok(s) => s,
         Err(e) if e.code == "bad_slots" => return fail(bad_slots(e.extra["index"].as_u64(), e.extra["why"].as_str().unwrap_or("slots"), &e.message)),
-        Err(e) => return fail(format!("Nothing was made: {} Fix the desk and call desk_create again.", e.message)),
+        Err(e) => return fail(format!(
+            "Nothing was made: {} Fix it from what the person said and call desk_create again. If a fact is missing (like the \
+             guide), ask the person; never fill it in yourself.",
+            e.message
+        )),
     };
     let join = super::santa_tool::santa_join(&crate::pocket::address::join(state, &snap).await);
     super::santa_tool::remember_join(&snap.row.code, join.clone());
@@ -318,14 +327,15 @@ fn made_text(code: &str, title: &str, booking: bool, times: usize, cap: u64, joi
         (Some(u), _) => format!("Guest link: {u}"),
         (None, _) => "No guest link works yet: the card shows the person how to set one up. Don't write a link yourself.".into(),
     };
-    let kind = if booking { format!("Booking desk with {times} times") } else { "Guest guide".into() };
+    let kind = if booking { format!("Booking desk with {times} {}", if times == 1 { "time" } else { "times" }) } else { "Guest guide".into() };
     format!(
         "{CARD_TEXT_HEAD}{code}] \"{title}\" is open. {kind}, up to {cap} bot replies a day.\n\
          The person's chat already shows its card (the guest link, the guests and the replies today), so keep your reply to two or three \
          lines and don't repeat what's on it.\n\
          {link_line}\n\
          Guests' questions are answered from the guide only; anything it doesn't say goes to the person.{booking_line}\n\
-         Never invent a Wi-Fi password, door code or price, and never promise a time or a late check-out yourself.",
+         Never invent a Wi-Fi password, door code, address, price or opening time, and never promise a time or a late check-out \
+         yourself.",
         booking_line = if booking { " Only the person confirms a booking." } else { "" },
     )
 }
@@ -504,6 +514,29 @@ mod tests {
         // Times on a guide desk
         let e = bad(json!({"title": "Sea View", "guide": "Check-in 3 PM", "fill": haircut_fill()}));
         assert!(e.contains("for a booking desk"), "{e}");
+        // Every bad_slots answer sends the bot back to the person's words, never to making up hours
+        let e = bad(booking(json!({})));
+        assert!(e.ends_with("Fix the times from what the person said and call desk_create again. If their hours don't fit, ask them; never make up hours."), "{e}");
+        // A fill whose times are all past: more weeks, never days the person didn't name
+        let sat_eve = NaiveDate::from_ymd_opt(2026, 12, 5).unwrap().and_hms_opt(19, 0, 0).unwrap();
+        let e = expand_fill(&json!({"days": ["sat"], "from": "10:00", "to": "18:00"}), sat_eve).unwrap_err();
+        assert!(e.ends_with("Add weeks (up to 4); don't add days the person didn't name."), "{e}");
+        assert!(!e.contains("other days"), "{e}");
+    }
+
+    #[test]
+    fn the_made_answer_counts_one_time_and_names_every_never() {
+        let one = made_text("ABC123", "Book a lesson", true, 1, 50, None);
+        assert!(one.contains("Booking desk with 1 time,"), "{one}");
+        assert!(!one.contains("1 times"), "{one}");
+        let many = made_text("ABC123", "Book a lesson", true, 16, 50, None);
+        assert!(many.contains("Booking desk with 16 times,"), "{many}");
+        for text in [one, many, made_text("ABC123", "Sea View", false, 0, 30, None)] {
+            assert!(
+                text.ends_with("Never invent a Wi-Fi password, door code, address, price or opening time, and never promise a time or a late check-out yourself."),
+                "{text}"
+            );
+        }
     }
 
     #[test]
@@ -537,9 +570,24 @@ mod tests {
         for w in ["at most one question", "Never invent a Wi-Fi password, a door code", "Never promise a late check-out", "Money is always a hand-off"] {
             assert!(RULES.contains(w), "{w}");
         }
+        // No facts: ask for them (never make up a guide); never say the field name; the title comes from their words
+        for w in [
+            "If they gave no facts, or no days and hours, ask for those instead",
+            "Never say \"daily_cap\" to the person",
+            "Pick a short title from their words",
+            "payments, deposits and refunds go to the person",
+            "promise a refund or discount",
+        ] {
+            assert!(RULES.contains(w), "{w}");
+        }
+        assert!(!RULES.contains("make up"), "nothing in the rules tells the bot to make anything up");
         let d = tool()["description"].as_str().unwrap().to_string();
-        for w in ["front desk", "guest guide", "guesthouse", "Airbnb", "booking desk", "appointments", "ask for a time"] {
+        for w in ["front desk", "guest guide", "guesthouse", "Airbnb", "booking desk", "appointments", "book a time"] {
             assert!(d.contains(w), "{w}");
+        }
+        // The description alone carries the rules a bot that skips the no-argument call needs
+        for w in ["Ask the person at most one question", "door code, address, price or opening time", "money always goes to the person"] {
+            assert!(d.contains(w), "{w} in {d}");
         }
         let mut samples = Vec::new();
         let mut rest = RULES;
