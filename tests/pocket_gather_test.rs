@@ -599,7 +599,7 @@ async fn names_turned_on_later_keep_earlier_rsvps_counted_but_unnamed_until_they
     assert_eq!((st["names"].clone(), st.get("names_on_at"), st.get("unnamed")), (json!(false), None, None), "{st}");
     let r = act(&t, &code, &cleo, "show_my_name", json!({})).await;
     assert_eq!(r.status, StatusCode::CONFLICT);
-    assert_eq!(r.body["message"], "Names are hidden here, so only the host sees who answered.");
+    assert_eq!(r.body["message"], "Names are hidden now, so only the host sees who answered.");
 
     // On again: everyone answered while names were hidden, so nobody is named until they've seen it
     assert_eq!(host_act(&t, &code, "set_show_names", json!({ "on": true })).await.status, StatusCode::OK);
@@ -674,9 +674,9 @@ async fn a_vote_refuses_the_names_switch() {
     let (_, a) = joined(&t, &code, "Ana").await;
     ok(&t, &code, &a, "vote", json!({ "ranking": [0] })).await;
     let r = host_act(&t, &code, "set_show_names", json!({ "on": true })).await;
-    assert_eq!((r.status, r.body["message"].as_str()), (StatusCode::BAD_REQUEST, Some("A vote never shows who voted.")));
+    assert_eq!((r.status, r.body["message"].as_str()), (StatusCode::BAD_REQUEST, Some("A vote never shows who picked what.")));
     let r = act(&t, &code, &a, "show_my_name", json!({})).await;
-    assert_eq!((r.status, r.body["message"].as_str()), (StatusCode::BAD_REQUEST, Some("A vote never shows who voted.")));
+    assert_eq!((r.status, r.body["message"].as_str()), (StatusCode::BAD_REQUEST, Some("A vote never shows who picked what.")));
     let st = kit_state(&t, &code).await;
     assert!(st.get("names").is_none() && st.get("unnamed").is_none(), "{st}");
     let (h, v) = (host_view(&t, &code).await, view_of(&t, &code, &a).await);
