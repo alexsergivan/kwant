@@ -74,7 +74,7 @@ export function pinCopy(r: Fail, host: string, joining: boolean): Problem {
     const t = r.until ? clock(r.until) : '';
     return { title: 'Too many tries for now.', sub: `${t ? `Try again after ${t}` : 'Try again in 10 minutes'}, or ask ${host} for a reset code.`, field: 'pin' };
   }
-  if (e === 'hard_locked') return { title: 'This name is locked.', sub: `Ask ${host} for a reset code to get back in.`, field: 'pin' };
+  if (e === 'hard_locked') return { title: 'This name is locked.', sub: `Ask ${host} for a reset code to get back in.`, field: 'code' };
   if (e === 'pin_required') return { title: 'Pick a 4-digit PIN.', field: 'pin' };
   if (e === 'name_taken')
     return joining

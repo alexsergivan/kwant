@@ -251,7 +251,8 @@ impl AppState {
             codex_login: Arc::new(engine_login::EngineLogin::system(crate::profiles::Engine::Codex)),
             grok_login: Arc::new(engine_login::EngineLogin::system(crate::profiles::Engine::Grok)),
             mcp_registry: Arc::new(crate::mcp::registry::McpRegistry::from_env()),
-            mcp_directory: Arc::default(),
+            // Find a tool's rows wait on disk, in the data folder, until they are a hit (perf-idle-memory A2)
+            mcp_directory: Arc::new(crate::mcp::directory::Directory::new(config_data_dir.join("cache"))),
             composio_api: Arc::new(crate::mcp::composio::ComposioApi::from_env()),
             credentials: Arc::new(crate::sandbox::vault::PasswordVault::open(&config_data_dir)),
             zombie: Default::default(),
