@@ -9,6 +9,7 @@ import { ArchivedSpacesModal, NewSpaceModal, SpaceRail } from './components/Spac
 import { Toasts, Toast } from './components/Toasts';
 import { InstallHint } from './components/InstallHint';
 import { AppUpdateBanner } from './components/AppUpdateBanner';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { playSfx } from './audio/chiptune';
 import {
   Space,
@@ -318,6 +319,8 @@ export const App: React.FC = () => {
       <AppUpdateBanner />
       <div className="flex-1 min-h-0 flex">
         <SpaceRail spaces={spaces} currentId={current.id} onSwitch={switchTo} onCreate={openCreate} onOpenAppSettings={() => requestView({ kind: 'settings', scope: 'app' })} />
+        {/* #1301: a crash inside the space shows a line and Reload here; the rail still switches spaces. */}
+        <AppErrorBoundary resetKey={current.id}>
         <SpaceApp
           key={current.id}
           space={current}
@@ -355,6 +358,7 @@ export const App: React.FC = () => {
             if (window.location.pathname !== path) window.history.replaceState(null, '', path);
           }}
         />
+        </AppErrorBoundary>
       </div>
 
       {creating && (
