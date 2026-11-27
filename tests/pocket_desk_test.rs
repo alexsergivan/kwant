@@ -523,14 +523,18 @@ async fn a_request_row_a_cap_row_and_one_ended_with_n_unanswered_done_row() {
     assert_eq!(item["id"], format!("desk:{code}:{ann}").as_str());
     assert!(!state_of(&d, &code, &ann_key).await.to_string().contains("Request:"), "the guest never sees the label");
 
-    // Ben goes over the cap: ask "daily_cap" and how many of his messages wait
+    // Ben goes over the cap: ask "daily_cap" and how many of his messages wait. The cap is
+    // the whole desk's: Ann's turn took 1 of the 10 replies, so Ben gets 9.
     let (ben, ben_key) = joined(&d, &code, "Ben").await;
-    for i in 0..10 {
+    for i in 0..9 {
         let r = say(&d, &code, &ben_key, &format!("Question {i} REPLYTAG:rows13n{i}")).await;
         assert_eq!(r.status, StatusCode::OK, "{}", r.body);
         wait_msg(&d, &code, &ben_key, "bot", &format!("answer rows13n{i}")).await;
         wait_idle(&d, &code, &ben_key).await;
     }
+    let (_, read) = call(&d.env.app, "GET", &format!("/api/pockets/{code}"), None).await;
+    assert_eq!((read["summary"]["counts"]["replies_today"].as_u64(), read["summary"]["counts"]["daily_cap"].as_u64()), (Some(10), Some(10)), "{read}");
+    assert!(desk_items(&d).await.iter().all(|i| i["guest_id"] != ben.as_str()), "Ben doesn't wait before the cap");
     for text in ["Can I check out at 2?", "Hello?"] {
         let r = say(&d, &code, &ben_key, text).await;
         assert_eq!(r.status, StatusCode::OK, "{}", r.body);
