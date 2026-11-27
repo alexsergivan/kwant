@@ -121,7 +121,7 @@ test('36 px and up returns today\'s values, unchanged', () => {
   const h = s.html({ size: 36, mood: 'finished', status: 'available' });
   assert.match(h, /<svg viewBox="0 0 7 7" width="14" height="14"/);
   assert.match(h, /top:-4px;right:-4px;border-radius:2px/);
-  assert.match(h, /absolute bottom-0 right-0 w-2\.5 h-2\.5 rounded-full ring-2 ring-zinc-950/);
+  assert.match(h, /ring-2 ring-zinc-950 bottom-0 right-0 w-2\.5 h-2\.5/);
   assert.doesNotMatch(h, /kw-avatar-sm/);
 });
 

@@ -2434,7 +2434,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
               name={displayName}
               at={msg.created_at}
               sentToTelegram={sentToTelegram(parseMetaObject(msg.meta))}
-              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} face={newestReplies.has(msg.id) ? 'mood' : 'plain'} land={landHop} /></span>}
+              avatar={wideRows ? undefined : <span className={routed && freshTrack.current.fresh.has(msg.id) ? 'kws-handoff inline-flex' : 'inline-flex'} style={{ ['--kw-avatar-cut' as string]: 'var(--kw-surface-main)' }}><ModernAvatar role={title} name={displayName} size={REPLY_AVATAR_PHONE} kwantId={replyKwantId} modelBadge={false} face={newestReplies.has(msg.id) ? 'mood' : 'plain'} land={landHop} /></span>}
               ranOn={ranOn}
               account={account}
               effort={effortWords(msg.reasoning_content)}

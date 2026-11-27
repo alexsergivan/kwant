@@ -912,6 +912,9 @@ a.kw-sticker:hover { transform: rotate(var(--kw-tilt)) scale(1.04); box-shadow: 
 }
 .kw-mb-layer { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; }
 .kw-mb-spark { position: absolute; top: -3px; left: -6px; line-height: 1; text-shadow: 0 0 2px theme('colors.zinc.950'), 0 0 2px theme('colors.zinc.950'); }
+.kw-model-badge[data-small] .kw-mb-spark { left: -4px; }
+/* small-avatar-badges: the dev hard hat is 12 px under 36 px, same -4 px corner. */
+.kw-avatar-sm .kw-dev-hat { width: 12px; height: 12px; }
 .kw-mb-in { animation: kw-mb-in 150ms ease-out both; }
 .kw-mb-out { animation: kw-mb-out 150ms ease-out both; }
 @keyframes kw-mb-in { from { opacity: 0; } }
