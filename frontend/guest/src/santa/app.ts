@@ -24,15 +24,15 @@ export type SantaEnv = Env & {
   now: () => number;
   setInterval: (f: () => void, ms: number) => number;
   clearInterval: (id: number) => void;
-  /** localStorage when the browser allows it: remembers that this device unwrapped the gift. */
+  /** localStorage when the browser allows it: remembers that this device held a seat and unwrapped the gift. */
   store?: Store | null;
 };
 
-/** "Dec 18" (a calendar day, read in UTC like ../app.ts `day`). */
+/** "Dec 18" or "18 Dec" in the phone's own locale (a calendar day, read in UTC like ../app.ts `day`). */
 export function shortDay(iso: string): string {
   const d = new Date(`${iso.slice(0, 10)}T12:00:00Z`);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', timeZone: 'UTC' });
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', timeZone: 'UTC' });
 }
 
 /** Whole days from this phone's today to the gift day (0 on the day, negative after). */
@@ -51,10 +51,26 @@ export function when(iso: string | undefined, now: number): string {
   if (Number.isNaN(d.getTime())) return '';
   const t = new Date(now);
   if (d.getFullYear() === t.getFullYear() && d.getMonth() === t.getMonth() && d.getDate() === t.getDate()) return `today ${clock(iso)}`;
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
 const poss = (name: string): string => `${name}'s`;
+
+/** Top-level domains a bare `name.tld` counts as a link with: the same list as src/pocket/words.rs. */
+const TLDS = new Set('com net org io ly co uk de si me app shop info biz ru fr es it nl eu us ca au gg tv xyz link be ch at pl ua in jp cn br to dev ai gl page site store'.split(' '));
+
+/** Whether the server will take a word out as a link (words.rs `is_link`). Only picks the hint under the box. */
+export function isLink(word: string): boolean {
+  const t = word.replace(/^[()[\]{}<>"'.,!?;:*]+|[()[\]{}<>"'.,!?;:*]+$/g, '').toLowerCase();
+  if (t.includes('://') || t.startsWith('www.') || t.startsWith('mailto:') || t.startsWith('tel:')) return true;
+  const i = t.search(/[/?#]/);
+  const host = i >= 0 ? t.slice(0, i) : t;
+  const labels = host.split('.');
+  const tld = labels[labels.length - 1];
+  return labels.length >= 2 && labels.every((l) => /^[\p{L}\p{N}-]+$/u.test(l)) && /^[a-z]{2,}$/.test(tld) && (i >= 0 || TLDS.has(tld));
+}
+
+export const hasLink = (s: string): boolean => s.split(/\s+/).some((w) => w && isLink(w));
 const chars = (s: string): number => [...s].length;
 
 type JoinDraft = { name: string; avatar: string; pin: string; wish: string };
@@ -109,6 +125,8 @@ export class SantaApp {
 
   /** Same boot as the quiz: the page's public facts first, then `state` finds out whether this phone has a seat. */
   async start(boot?: unknown): Promise<void> {
+    // A device that held a seat for this code before (a PIN reset, a sign-out) opens "Welcome back", not "late".
+    if (this.heldSeat()) this.rejoin = true;
     const b = boot ? this.api.take(boot) : undefined;
     if (b) this.show(b);
     else this.paint();
@@ -156,6 +174,7 @@ export class SantaApp {
     this.take(v);
     if (v.me) {
       this.hadSeat = true;
+      this.rememberSeat();
       this.rejoin = false;
       this.joinLate = false;
     }
@@ -192,7 +211,7 @@ export class SantaApp {
       this.live.stop();
       this.away = null;
       this.env.clearInterval(this.awayTick);
-      if (this.hadSeat) this.rejoin = true;
+      if (this.hadSeat || this.heldSeat()) this.rejoin = true;
       const i = await this.api.info();
       if (i.ok && i.view) {
         this.show(i.view);
@@ -276,6 +295,27 @@ export class SantaApp {
       return this.env.store?.getItem(this.flagKey()) === '1';
     } catch {
       return false;
+    }
+  }
+
+  /** Per code, not per seat: after a PIN reset or a sign-out this device has no seat id to look up. */
+  private seatKey(): string {
+    return `kp-santa-seat:${this.code}`;
+  }
+
+  private heldSeat(): boolean {
+    try {
+      return this.env.store?.getItem(this.seatKey()) === '1';
+    } catch {
+      return false;
+    }
+  }
+
+  private rememberSeat(): void {
+    try {
+      if (!this.heldSeat()) this.env.store?.setItem(this.seatKey(), '1');
+    } catch {
+      /* private mode: a sign-out on this device opens the late page, with "Open my page" first */
     }
   }
 
@@ -393,6 +433,12 @@ export class SantaApp {
     const why = v.keep_days !== undefined ? ` (${v.keep_days} day${v.keep_days === 1 ? '' : 's'} after ${after})` : '';
     const text = full ? `Kept on ${poss(host)} computer until ${day(at)}${why}, then deleted.` : `Everything here is deleted on ${day(at)}.`;
     return h('div', { class: 'keep', 'data-keep': '' }, icon('lock', 'pi'), h('span', null, text));
+  }
+
+  /** The match is the host (the host joined their own Santa): names as typed, compared without case or spaces. */
+  private isHost(name: string): boolean {
+    const hn = this.view?.facts.host_name;
+    return !!hn && hn.trim().toLowerCase() === name.trim().toLowerCase();
   }
 
   private hero(title: string, sub: string): HTMLElement {
@@ -620,6 +666,7 @@ export class SantaApp {
             h('p', { class: 'center' }, this.linkButton('I have a reset code', () => this.setReset(true), 'use-code')),
           ],
       v.facts.phase === 'collecting' && !v.ended ? h('p', { class: 'center' }, this.linkButton('New here? Join the draw', () => this.leaveRejoin(), 'to-join')) : null,
+      v.facts.phase === 'drawn' && !v.ended && !d.reset ? this.newHere(host) : null,
       this.keep(v),
     );
     form.addEventListener('submit', (e) => {
@@ -668,27 +715,27 @@ export class SantaApp {
       d.pin = '';
       d.newPin = '';
     }
-    if (r.error === 'reset_pending') d.reset = true;
+    // A locked name opens the reset form: the PIN boxes can't get in any more (Mira minor b).
+    if (r.error === 'reset_pending' || r.error === 'hard_locked') d.reset = true;
     this.fail(pinCopy(r, this.host(), false));
   }
 
   // G10 Late
   private late(v: SantaView): HTMLElement {
     const host = this.host();
-    const open = h('button', { type: 'button', class: 'gbtn ghost', 'data-to-rejoin': '' }, "I've joined before: open my page");
+    // Almost everyone without a seat after the draw joined already (a new phone, a cleared browser): open first.
+    const open = h('button', { type: 'button', class: 'gbtn', 'data-to-rejoin': '' }, 'Open my page');
     open.addEventListener('click', () => this.goRejoin());
-    return this.message(
-      santa(96),
-      'The names are already drawn',
-      this.lateNote || `The names were drawn already. If you should be in it, ask ${host} to add you.`,
-      undefined,
-      open,
-      h('p', { class: 'center' }, this.linkButton(`${cap(host)} added me: join now`, () => this.goJoinLate(), 'join-late')),
-      this.keep(v),
-    );
+    return this.message(santa(96), 'Names are drawn', this.lateNote || 'Joined already? Open your page with your name and PIN.', undefined, open, this.newHere(host), this.keep(v));
+  }
+
+  /** After the draw: a real late joiner needs the host first, then joins from here. */
+  private newHere(host: string): HTMLElement {
+    return h('p', { class: 'small center', 'data-new-here': '' }, `New here? Ask ${host} to add you, then `, this.linkButton(`${cap(host)} added me: join now`, () => this.goJoinLate(), 'join-late'));
   }
 
   private goJoinLate(): void {
+    this.rejoin = false;
     this.joinLate = true;
     this.lateNote = '';
     this.problem = null;
@@ -756,7 +803,13 @@ export class SantaApp {
     }
     const ta = h('textarea', { id: 's-mywish', 'data-k': 's-mywish', class: 'wish', rows: 4, maxlength: WISH_MAX, 'aria-describedby': 'mywish-why mywish-err' }) as HTMLTextAreaElement;
     ta.value = this.wishDraft ?? v.my_wish ?? '';
-    ta.addEventListener('input', () => (this.wishDraft = ta.value));
+    const why = h('p', { class: 'small', id: 'mywish-why' });
+    const whyNow = () => (why.textContent = `You can change it until the gift day. ${hasLink(ta.value) ? 'Links are taken out before your Santa sees it.' : 'Links are removed.'}`);
+    ta.addEventListener('input', () => {
+      this.wishDraft = ta.value;
+      whyNow();
+    });
+    whyNow();
     const save = h('button', { type: 'submit', class: 'gbtn', 'aria-busy': this.busy === 'wish' ? 'true' : null }, this.busy === 'wish' ? 'Saving…' : 'Save wish list') as HTMLButtonElement;
     save.disabled = this.busy === 'wish';
     const cancel = h('button', { type: 'button', class: 'gbtn ghost' }, 'Cancel');
@@ -774,7 +827,7 @@ export class SantaApp {
       h('p', { class: 'err', id: 'mywish-err', role: 'alert' }, this.formErr.get('wish') ?? ''),
       save,
       cancel,
-      h('p', { class: 'small', id: 'mywish-why' }, 'You can change it until the gift day. Links are removed.'),
+      why,
     );
     form.addEventListener('submit', (e) => {
       e.preventDefault();
@@ -910,7 +963,7 @@ export class SantaApp {
           : h('p', { class: 'soft' }, v.asks.open ? `No wish list yet. You can ask ${m.name} below.` : 'No wish list.'),
       ),
       ready,
-      h('p', { class: 'small center' }, `${m.name} won't know. It only tells ${this.host()} how many gifts are ready.`),
+      h('p', { class: 'small center', 'data-ready-why': '' }, this.isHost(m.name) ? `${cap(this.host())} only sees how many gifts are ready, not whose.` : `${m.name} won't know. It only tells ${this.host()} how many gifts are ready.`),
       this.formErr.get('gift') ? h('p', { class: 'err', role: 'alert' }, this.formErr.get('gift')!) : null,
       jump,
       this.asks(v),
@@ -966,7 +1019,9 @@ export class SantaApp {
         const n = chars(this.askDraft);
         count.textContent = out
           ? 'No questions left today. You can ask again tomorrow.'
-          : `${fmt(n)} of ${fmt(max)}${a.left_today !== undefined ? ` · ${fmt(a.left_today)} question${a.left_today === 1 ? '' : 's'} left today` : ''}`;
+          : hasLink(this.askDraft)
+            ? `Links are taken out before ${m.name} sees it.`
+            : `${fmt(n)} of ${fmt(max)}${a.left_today !== undefined ? ` · ${fmt(a.left_today)} question${a.left_today === 1 ? '' : 's'} left today` : ''}`;
       };
       input.addEventListener('input', () => {
         this.askDraft = input.value;
@@ -1039,7 +1094,7 @@ export class SantaApp {
     if (q.a) kids.push(h('div', { class: 'a' }, h('b', null, 'You:'), ' ', q.a));
     else if (open) {
       const key = `reply-${q.id}`;
-      const input = h('input', { id: key, 'data-k': key, class: 'input', type: 'text', maxlength: 200, autocomplete: 'off', enterkeyhint: 'send', 'aria-label': `Answer: ${q.q}`, 'aria-describedby': `${key}-err` }) as HTMLInputElement;
+      const input = h('input', { id: key, 'data-k': key, class: 'input', type: 'text', maxlength: 200, placeholder: 'Type your answer…', autocomplete: 'off', enterkeyhint: 'send', 'aria-label': `Answer: ${q.q}`, 'aria-describedby': `${key}-err` }) as HTMLInputElement;
       input.value = this.replies.get(q.id) ?? '';
       const send = h('button', { type: 'submit', class: 'send', 'aria-label': 'Send answer' }, saIcon('send')) as HTMLButtonElement;
       const sync = () => (send.disabled = this.busy === key || !(this.replies.get(q.id) ?? '').trim());

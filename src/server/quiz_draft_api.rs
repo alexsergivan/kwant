@@ -78,7 +78,7 @@ type R<T> = Result<T, ApiError>;
 
 /// The draft in the person's space, while pocket apps are on.
 async fn load(state: &AppState, space: &str, id: &str) -> R<QuizDraftRow> {
-    if !crate::pocket::enabled(&state.db).await {
+    if !crate::pocket::enabled_for(&state.db, crate::kits::quiz::KIT_ID).await {
         return Err(ApiError::new(StatusCode::NOT_FOUND, "pocket_apps_off", "Pocket apps are off. Turn them on in Settings first."));
     }
     state.db.quiz_draft_get(space, id).await?.ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "not_found", "There's no quiz draft here."))
