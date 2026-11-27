@@ -150,6 +150,38 @@ struct St {
     /// at the end); the Inbox's Done row says "Ended with N unanswered".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ended_unanswered: Option<u64>,
+    /// desk-card-in-chat: every message the desk has had, by who wrote it (kept as guests'
+    /// chats are cut to [`KEEP_MESSAGES`] or deleted), for the stopped card's totals.
+    #[serde(default)]
+    totals: Totals,
+    /// desk-card-in-chat: the stopped desk's summary, set once as it ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ended: Option<Ended>,
+}
+
+/// desk-card-in-chat: messages so far, by who wrote them.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Serialize, Deserialize)]
+struct Totals {
+    #[serde(default)]
+    guest: u64,
+    #[serde(default)]
+    bot: u64,
+    #[serde(default)]
+    host: u64,
+}
+
+/// desk-card-in-chat: what the desk did, frozen when it ended.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Ended {
+    at: DateTime<Utc>,
+    /// Calendar days it was open on the box's clock, the first and the last both counted;
+    /// `None` when the core didn't say when it opened.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    days: Option<u64>,
+    bot_replies: u64,
+    host_replies: u64,
+    /// What guests wrote.
+    messages: u64,
 }
 
 /// pa13b: a confirmed seat kept after its guest's data went: the seat stays taken, nameless.
@@ -390,11 +422,16 @@ struct Waiting {
     reason: String,
     why: String,
     at: DateTime<Utc>,
+    /// desk-card-in-chat (m9): on a booking desk's hand-off, a time the guest asked for that
+    /// isn't listed, as a slot start (`YYYY-MM-DDTHH:MM`, the box's local time), checked by
+    /// [`asked_start`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    ask_start: Option<String>,
 }
 
 impl Waiting {
     fn new(reason: &str, why: String, at: DateTime<Utc>) -> Self {
-        Self { reason: reason.into(), why, at }
+        Self { reason: reason.into(), why, at, ask_start: None }
     }
 
     fn booking(&self) -> bool {
@@ -497,6 +534,12 @@ impl St {
 
     fn push(&mut self, pid: &str, from: &str, text: String, at: DateTime<Utc>, client_id: Option<String>, note: Option<&str>) {
         self.next += 1;
+        match from {
+            GUEST => self.totals.guest += 1,
+            BOT => self.totals.bot += 1,
+            HOST => self.totals.host += 1,
+            _ => {}
+        }
         let id = format!("m{}", self.next);
         let g = self.guests.entry(pid.to_string()).or_default();
         g.msgs.push(Msg { id, from: from.into(), text, at, client_id, note: note.map(str::to_string), slot: None, start: None });
@@ -623,6 +666,11 @@ impl G {
         }
     }
 
+    /// desk-card-in-chat (m9): the unlisted time the open hand-off asks for.
+    fn ask_start(&self) -> Option<String> {
+        self.handoff().and_then(|w| w.ask_start.clone())
+    }
+
     /// Waits for the host: a hand-off, a capped message or a booking request.
     fn waits(&self) -> bool {
         self.handoff().is_some() || self.requested().is_some()
@@ -713,6 +761,7 @@ impl Desk {
             "msgs": g.map_or(0, |g| g.msgs.iter().filter(|m| m.from != NOTE).count()),
             "delete_on": g.and_then(|g| g.delete_on(slots)),
             "booking": g.and_then(|g| g.booking.as_ref()).map(|b| json!({ "slot": b.slot, "state": b.state })),
+            "ask_slot_start": g.and_then(G::ask_start),
         })
     }
 
@@ -1201,6 +1250,7 @@ impl Kit for Desk {
                 if is_booking(ctx.spec) {
                     v["slots"] = json!(Self::host_slots(ctx, &s));
                 }
+                v["ended"] = ended_json(&s);
                 v
             }
             // A TV never shows a guest's conversation
@@ -1228,6 +1278,8 @@ impl Kit for Desk {
             "guide_facts": g.lines().filter(|l| !l.trim().is_empty()).count(),
             "address": null,
             "guests": Self::guest_list(ctx, &s),
+            // desk-card-in-chat: null until the desk is stopped
+            "ended": ended_json(&s),
         });
         if is_booking(ctx.spec) {
             let slots = s.slots(ctx.spec);
@@ -1254,12 +1306,27 @@ impl Kit for Desk {
 
     /// desk-inbox-rows-server: the guests still waiting for the host (a hand-off, a capped
     /// message or a booking request) are counted once, for the Done row.
+    /// desk-card-in-chat: and the stopped card's summary is frozen ([`Ended`]).
     fn on_end(&self, ctx: &KitCtx, state: &mut Value) -> bool {
         let mut s = load(state);
-        if s.ended_unanswered.is_some() {
+        if s.ended_unanswered.is_some() && s.ended.is_some() {
             return false;
         }
-        s.ended_unanswered = Some(ctx.players.iter().filter(|p| s.guests.get(&p.id).is_some_and(G::waits)).count() as u64);
+        if s.ended_unanswered.is_none() {
+            s.ended_unanswered = Some(ctx.players.iter().filter(|p| s.guests.get(&p.id).is_some_and(G::waits)).count() as u64);
+        }
+        if s.ended.is_none() {
+            // A desk from before the totals were kept counts what its chats still hold
+            let held = |from: &str| s.guests.values().map(|g| g.msgs.iter().filter(|m| m.from == from).count() as u64).sum::<u64>();
+            let days = ctx.opened_at.map(|o| ((local_day(ctx.now) - local_day(o.min(ctx.now))).num_days() + 1).max(1) as u64);
+            s.ended = Some(Ended {
+                at: ctx.now,
+                days,
+                bot_replies: s.totals.bot.max(held(BOT)),
+                host_replies: s.totals.host.max(held(HOST)),
+                messages: s.totals.guest.max(held(GUEST)),
+            });
+        }
         store(state, &s);
         true
     }
@@ -1315,8 +1382,12 @@ impl Kit for Desk {
                 };
                 let why = if request && why.is_empty() { format!("{} asked you to reply", bot_label(ctx.spec)) } else { why };
                 let why = cut(&why, REASON_MAX);
+                // desk-card-in-chat (m9): only the bot's own hand-off on a booking desk names a time
+                let ask_start = body.get("ask_slot_start").and_then(Value::as_str).filter(|_| note == HANDOFF).and_then(|t| asked_start(ctx.spec, t, ctx.now));
                 s.push(&pid, NOTE, String::new(), ctx.now, None, Some(note));
-                s.guests.entry(pid).or_default().waiting = Some(Waiting::new(if request { ASK_REQUEST } else { HANDOFF }, why, ctx.now));
+                let mut wait = Waiting::new(if request { ASK_REQUEST } else { HANDOFF }, why, ctx.now);
+                wait.ask_start = ask_start;
+                s.guests.entry(pid).or_default().waiting = Some(wait);
                 json!({})
             }
             // The worker couldn't go on (its bot is gone): nothing is running for this guest
@@ -1366,6 +1437,7 @@ impl Kit for Desk {
                 "waiting": g.is_some_and(G::waits),
                 "handoff_reason": g.and_then(|g| g.handoff_reason(&p.name)),
                 "booking": g.and_then(|g| g.booking.as_ref()).map(|b| json!({ "slot": b.slot, "state": b.state, "note": b.note, "text": b.text, "at": b.at, "by": b.by() })),
+                "ask_slot_start": g.and_then(G::ask_start),
             },
             "messages": messages(g, false),
         }))
@@ -1397,6 +1469,9 @@ pub struct WaitingGuest {
     /// desk-inbox-rows-server: on a `daily_cap` row, the guest's messages since the cap began
     /// (at least 1); 0 on every other row.
     pub waiting: usize,
+    /// desk-card-in-chat (m9): on a hand-off row of a booking desk, the unlisted time the guest
+    /// asked for (`YYYY-MM-DDTHH:MM`); `None` on every other row.
+    pub ask_start: Option<String>,
 }
 
 /// For the Needs-you list: what each guest waits for. F1: a booking request comes from
@@ -1415,7 +1490,7 @@ pub fn waiting_guests(spec: &Value, state: &Value) -> Vec<WaitingGuest> {
             let slot = slots.iter().find(|x| x.id == b.slot);
             let booking = json!({ "slot": b.slot, "label": slot.map_or_else(|| b.slot.clone(), Slot::label), "start": slot.map(|x| x.start.clone()) });
             let quote = b.note.as_deref().map(|q| cut(q, 200)).unwrap_or_default();
-            out.push(WaitingGuest { guest: id.clone(), why: String::new(), quote, at: b.at, thread: thread.clone(), booking: Some(booking), ask: WAIT_BOOKING, waiting: 0 });
+            out.push(WaitingGuest { guest: id.clone(), why: String::new(), quote, at: b.at, thread: thread.clone(), booking: Some(booking), ask: WAIT_BOOKING, waiting: 0, ask_start: None });
         }
         let Some(w) = g.handoff() else { continue };
         let quote = g.msgs.iter().rev().find(|m| m.from == GUEST).map(|m| cut(&m.text, 200)).unwrap_or_default();
@@ -1424,7 +1499,7 @@ pub fn waiting_guests(spec: &Value, state: &Value) -> Vec<WaitingGuest> {
             ASK_REQUEST => (ASK_REQUEST, 0),
             _ => (HANDOFF, 0),
         };
-        out.push(WaitingGuest { guest: id.clone(), why: w.why.clone(), quote, at: w.at, thread, booking: None, ask, waiting });
+        out.push(WaitingGuest { guest: id.clone(), why: w.why.clone(), quote, at: w.at, thread, booking: None, ask, waiting, ask_start: w.ask_start.clone() });
     }
     out
 }
@@ -1433,6 +1508,57 @@ pub fn waiting_guests(spec: &Value, state: &Value) -> Vec<WaitingGuest> {
 /// 0 for a desk that is open or ended with nobody waiting.
 pub fn ended_unanswered(state: &Value) -> u64 {
     load(state).ended_unanswered.unwrap_or(0)
+}
+
+/// desk-card-in-chat: the stopped desk's summary for the card (frontend `validDesk` `ended`):
+/// `{at, deletes_on, days, bot_replies, host_replies, messages}`, the two dates as the box's
+/// local `YYYY-MM-DD` (`deletes_on` is when the pocket and every chat in it go: [`KEEP_DAYS`]
+/// after the end, as the kit's retention says). Null for a desk that is open, or that ended
+/// before the summary was kept.
+fn ended_json(s: &St) -> Value {
+    let Some(e) = &s.ended else { return Value::Null };
+    json!({
+        "at": local_day(e.at).to_string(),
+        "deletes_on": local_day(e.at + Duration::days(KEEP_DAYS)).to_string(),
+        "days": e.days,
+        "bot_replies": e.bot_replies,
+        "host_replies": e.host_replies,
+        "messages": e.messages,
+    })
+}
+
+/// desk-card-in-chat (m9): how far ahead a guest's asked-for time may be.
+pub const ASK_START_DAYS_MAX: i64 = 366;
+
+/// desk-card-in-chat (m9): the bot's tag for an unlisted time a guest asked for, at the end of
+/// its hand-off label: `[time: 2026-12-01T18:00]`.
+pub const ASK_TIME_TAG: &str = "[time:";
+
+/// desk-card-in-chat (m9): a hand-off label without its [`ASK_TIME_TAG`], and the tag's time as
+/// written (unchecked: [`asked_start`] checks it). The last tag wins; a label with none comes
+/// back trimmed, with `None`.
+pub fn split_asked_time(why: &str) -> (String, Option<String>) {
+    let lower = why.to_ascii_lowercase();
+    let Some(open) = lower.rfind(ASK_TIME_TAG) else { return (why.trim().to_string(), None) };
+    let Some(len) = why[open..].find(']') else { return (why.trim().to_string(), None) };
+    let time = why[open + ASK_TIME_TAG.len()..open + len].trim().to_string();
+    let label = format!("{}{}", why[..open].trim_end(), &why[open + len + 1..]);
+    let label = label.trim().trim_end_matches([':', '-', '—', ',']).trim().to_string();
+    (label, Some(time).filter(|t| !t.is_empty()))
+}
+
+/// desk-card-in-chat (m9): `start` if it is a time a guest of this booking desk can have asked
+/// for: written `YYYY-MM-DDTHH:MM` (exactly, the slots' form), a real local time on the box,
+/// after `now` and at most [`ASK_START_DAYS_MAX`] days ahead. `None` otherwise, and always on
+/// a Guest Guide desk.
+pub fn asked_start(spec: &Value, start: &str, now: DateTime<Utc>) -> Option<String> {
+    let start = start.trim();
+    if !is_booking(spec) || start.len() != 16 {
+        return None;
+    }
+    let local = NaiveDateTime::parse_from_str(start, SLOT_START_FORMAT).ok()?;
+    let at = local.and_local_timezone(chrono::Local).earliest()?.with_timezone(&Utc);
+    (at > now && at <= now + Duration::days(ASK_START_DAYS_MAX)).then(|| start.to_string())
 }
 
 /// pa13b: the booking facts for a guest's turn: the open times (labels only, soonest first, at
@@ -1458,6 +1584,8 @@ pub fn booking_facts(spec: &Value, state: &Value, guest: &str, now: DateTime<Utc
     if open.len() > BOT_SLOTS_MAX {
         out.push_str(&format!("- and {} more on the guest's page\n", open.len() - BOT_SLOTS_MAX));
     }
+    // desk-card-in-chat (m9): the day, so "Tuesday at 6" can be written as a date
+    out.push_str(&format!("Today is {} on the host's clock.\n", now.with_timezone(&chrono::Local).format("%a %b %-d, %Y")));
     let host = spec_str(spec, "host_name");
     if !host.is_empty() {
         out.push_str(&format!("Call the host {host} every time, never he, she or they.\n"));
@@ -2106,5 +2234,149 @@ mod tests {
         let spec = spec();
         let ctx = KitCtx::new(&spec, &ps, now);
         assert!(matches!(Desk.admit(&ctx, &Desk.init(&spec), "cy"), Err(KitError::Coded { code: "guest_max", .. })));
+    }
+
+    // ---- desk-card-in-chat ----
+
+    #[test]
+    fn a_stopped_desk_has_its_summary_and_an_open_one_has_none() {
+        let now = Utc::now();
+        let ps = players(now);
+        let spec = spec();
+        let mut st = Desk.init(&spec);
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        for (who, text) in [("pl_ann", "wifi?"), ("pl_ann", "and parking?"), ("pl_ben", "late check-out?")] {
+            say(&mut st, &mut ctx, who, text).unwrap();
+        }
+        Desk.server_event(&mut ctx, &mut st, "answer", &json!({ "guest": "pl_ann", "text": "sea123" })).unwrap();
+        Desk.server_event(&mut ctx, &mut st, "answer", &json!({ "guest": "pl_ann", "text": "The blue zone" })).unwrap();
+        Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ben", "why": "Late check-out" })).unwrap();
+        act(&mut st, &mut ctx, &Viewer::Host, "reply", json!({ "guest": "pl_ben", "text": "Sure, 1 PM" })).unwrap();
+        assert_eq!(Desk.host_summary(&ctx, &st)["ended"], Value::Null, "an open desk has none");
+        assert_eq!(Desk.view(&ctx, &st, &Viewer::Host)["ended"], Value::Null);
+
+        // Opened 11 days ago (box clock): it ran on 12 days, both ends counted
+        let end_ctx = KitCtx::new(&spec, &ps, now).opened(now - Duration::days(11));
+        assert!(Desk.on_end(&end_ctx, &mut st));
+        let today = local_day(now);
+        let want = json!({
+            "at": today.to_string(),
+            "deletes_on": (today + Duration::days(KEEP_DAYS)).to_string(),
+            "days": 12,
+            "bot_replies": 2,
+            "host_replies": 1,
+            "messages": 3,
+        });
+        assert_eq!(Desk.host_summary(&ctx, &st)["ended"], want, "the card's read and the chat card");
+        assert_eq!(Desk.view(&ctx, &st, &Viewer::Host)["ended"], want, "the host remote");
+        assert!(Desk.view(&ctx, &st, &Viewer::Guest("pl_ann".into())).get("ended").is_none(), "a guest never gets the totals");
+        assert!(Desk.view(&ctx, &st, &Viewer::BigScreen).get("ended").is_none());
+
+        // Frozen: a later End or a reply after it changes nothing
+        act(&mut st, &mut ctx, &Viewer::Host, "reply", json!({ "guest": "pl_ann", "text": "Bye" })).unwrap();
+        assert!(!Desk.on_end(&KitCtx::new(&spec, &ps, now + Duration::days(1)).opened(now), &mut st));
+        assert_eq!(Desk.host_summary(&ctx, &st)["ended"], want);
+    }
+
+    #[test]
+    fn the_totals_outlive_cut_and_deleted_chats_and_an_old_desk_counts_what_it_holds() {
+        let now = Utc::now();
+        let ps = players(now);
+        let spec = spec();
+        let mut st = Desk.init(&spec);
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        say(&mut st, &mut ctx, "pl_ann", "hi").unwrap();
+        Desk.server_event(&mut ctx, &mut st, "answer", &json!({ "guest": "pl_ann", "text": "Hello" })).unwrap();
+        // Ann's data goes (7 days idle): her messages still count
+        Desk.on_remove(&mut ctx, &mut st, "pl_ann");
+        assert!(Desk.on_end(&KitCtx::new(&spec, &ps, now).opened(now), &mut st));
+        let e = &Desk.host_summary(&ctx, &st)["ended"];
+        assert_eq!((e["messages"].as_u64(), e["bot_replies"].as_u64(), e["host_replies"].as_u64(), e["days"].as_u64()), (Some(1), Some(1), Some(0), Some(1)), "{e}");
+
+        // State written before the totals: End counts the messages the chats still hold
+        let mut old = Desk.init(&spec);
+        say(&mut old, &mut ctx, "pl_ben", "hi").unwrap();
+        Desk.server_event(&mut ctx, &mut old, "answer", &json!({ "guest": "pl_ben", "text": "Hello" })).unwrap();
+        old.as_object_mut().unwrap().remove("totals");
+        // An End without the opening time (no caller does that) leaves days out
+        assert!(Desk.on_end(&KitCtx::new(&spec, &ps, now), &mut old));
+        let e = &Desk.host_summary(&ctx, &old)["ended"];
+        assert_eq!((e["messages"].as_u64(), e["bot_replies"].as_u64(), e["days"].clone()), (Some(1), Some(1), Value::Null), "{e}");
+    }
+
+    #[test]
+    fn a_time_tag_comes_off_the_hand_off_label() {
+        assert_eq!(split_asked_time("Tue 6 PM, not listed [time: 2026-12-01T18:00]"), ("Tue 6 PM, not listed".into(), Some("2026-12-01T18:00".into())));
+        assert_eq!(split_asked_time("Group of 4 [TIME:2026-12-01T18:00] on Sat"), ("Group of 4 on Sat".into(), Some("2026-12-01T18:00".into())));
+        assert_eq!(split_asked_time("Late check-out: 2 PM"), ("Late check-out: 2 PM".into(), None));
+        assert_eq!(split_asked_time("Odd time: [time: 2026-12-01T18:00]"), ("Odd time".into(), Some("2026-12-01T18:00".into())));
+        assert_eq!(split_asked_time("[time: ]"), (String::new(), None));
+        assert_eq!(split_asked_time("Broken [time: 2026-12-01T18:00"), ("Broken [time: 2026-12-01T18:00".into(), None), "no closing bracket: no tag");
+        assert_eq!(split_asked_time("Ünïcode ☕ [time: x] after"), ("Ünïcode ☕ after".into(), Some("x".into())));
+    }
+
+    #[test]
+    fn only_a_real_future_time_on_a_booking_desk_is_kept() {
+        let now = Utc::now();
+        let bk = booking_spec();
+        assert_eq!(asked_start(&bk, &at(3, 18), now), Some(at(3, 18)));
+        assert_eq!(asked_start(&bk, &format!(" {} ", at(3, 18)), now), Some(at(3, 18)), "trimmed");
+        assert_eq!(asked_start(&spec(), &at(3, 18), now), None, "a Guest Guide desk has no times");
+        assert_eq!(asked_start(&bk, &at(-1, 18), now), None, "past");
+        assert_eq!(asked_start(&bk, &at(ASK_START_DAYS_MAX + 2, 18), now), None, "too far ahead");
+        for bad in ["2026-02-30T10:00", "2026-12-01 18:00", "2026-12-01T18:00:00", "2026-12-01T25:00", "tuesday 6pm", "", "2026-12-01T18:00Z"] {
+            assert_eq!(asked_start(&bk, bad, now), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn an_unlisted_time_rides_on_the_hand_off_until_the_host_answers() {
+        let now = Utc::now();
+        let ps = players(now);
+        let spec = booking_spec();
+        let mut st = Desk.init(&spec);
+        let mut ctx = KitCtx::new(&spec, &ps, now);
+        say(&mut st, &mut ctx, "pl_ben", "Could you do 6 PM?").unwrap();
+        Desk.server_event(&mut ctx, &mut st, "handoff", &json!({ "guest": "pl_ben", "why": "6 PM, not listed", "note": HANDOFF, "ask_slot_start": at(3, 18) })).unwrap();
+        let row = |ctx: &KitCtx, st: &Value| Desk.view(ctx, st, &Viewer::Host)["guests"].as_array().unwrap().iter().find(|g| g["id"] == "pl_ben").cloned().unwrap();
+        assert_eq!(row(&ctx, &st)["ask_slot_start"], json!(at(3, 18)));
+        assert_eq!(row(&ctx, &st)["handoff_reason"], "6 PM, not listed");
+        let sum = Desk.host_summary(&ctx, &st);
+        assert_eq!(sum["guests"].as_array().unwrap().iter().find(|g| g["id"] == "pl_ben").unwrap()["ask_slot_start"], json!(at(3, 18)));
+        assert_eq!(Desk.host_detail(&ctx, &st, "guest:pl_ben").unwrap()["guest"]["ask_slot_start"], json!(at(3, 18)));
+        let w = waiting_guests(&spec, &st);
+        assert_eq!((w.len(), w[0].ask, w[0].ask_start.clone()), (1, HANDOFF, Some(at(3, 18))));
+        // The guest never sees it
+        assert!(!Desk.view(&ctx, &st, &Viewer::Guest("pl_ben".into())).to_string().contains(&at(3, 18)));
+        // Ann's guest row has none
+        assert_eq!(Desk.view(&ctx, &st, &Viewer::Host)["guests"].as_array().unwrap().iter().find(|g| g["id"] == "pl_ann").unwrap()["ask_slot_start"], Value::Null);
+
+        // The host answers: it goes with the wait
+        act(&mut st, &mut ctx, &Viewer::Host, "reply", json!({ "guest": "pl_ben", "text": "Yes, I'll add it" })).unwrap();
+        assert_eq!(row(&ctx, &st)["ask_slot_start"], Value::Null);
+        assert!(waiting_guests(&spec, &st).is_empty());
+
+        // A bad time, a host-away note or a guide desk keep none (the hand-off still waits)
+        for (sp, body) in [
+            (booking_spec(), json!({ "guest": "pl_ben", "why": "x", "note": HANDOFF, "ask_slot_start": at(-1, 18) })),
+            (booking_spec(), json!({ "guest": "pl_ben", "why": "x", "note": HOST_AWAY, "ask_slot_start": at(3, 18) })),
+            (booking_spec(), json!({ "guest": "pl_ben", "why": "x", "note": HANDOFF, "ask_slot_start": 42 })),
+            (super::tests::spec(), json!({ "guest": "pl_ben", "why": "x", "note": HANDOFF, "ask_slot_start": at(3, 18) })),
+        ] {
+            let mut st = Desk.init(&sp);
+            let mut ctx = KitCtx::new(&sp, &ps, now);
+            Desk.server_event(&mut ctx, &mut st, "handoff", &body).unwrap();
+            let w = waiting_guests(&sp, &st);
+            assert_eq!((w.len(), w[0].ask_start.clone()), (1, None), "{body}");
+        }
+    }
+
+    #[test]
+    fn the_bot_is_told_the_day() {
+        let now = Utc::now();
+        let spec = booking_spec();
+        let facts = booking_facts(&spec, &Desk.init(&spec), "pl_ann", now).unwrap();
+        let day = now.with_timezone(&chrono::Local).format("%a %b %-d, %Y").to_string();
+        assert!(facts.contains(&format!("Today is {day} on the host's clock.\n")), "{facts}");
     }
 }
