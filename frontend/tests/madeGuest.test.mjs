@@ -26,8 +26,9 @@ const env = (pre, scene) => new MadeBox(`${pre}made-${scene}`).env(true);
 const viewOf = (pre, scene) => m.madeFrom(env(pre, scene)).view;
 
 /** Draws one surface of a scene into a fresh section; `sent` collects what the blocks send. */
-function draw(pre, scene, { now = Date.now(), reply = null } = {}) {
+function draw(pre, scene, { now, reply = null } = {}) {
   const v = viewOf(pre, scene);
+  now ??= Date.now(); // after the view: MadeBox stamps ends_at with Date.now(), so an earlier now could read one second more
   const sent = [];
   const ui = m.newUi(() => {});
   const c = { v, surface: SURFACE[pre], send: async (name, body) => (sent.push({ name, body }), reply), ui, now, skew: 0 };
