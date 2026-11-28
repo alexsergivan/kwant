@@ -37,14 +37,15 @@ export function noteCopy(kind: NoteKind, n: Names, when = ''): { line: Line; ico
   return { line: [`${n.bot} can't answer right now.`, `${n.Host} has your message and will reply here.`], icon: 'moon' };
 }
 
-/** G6, 429 slow_down: the open time is the server's retry_at in this phone's own time. */
-export const slowCopy = (retryAt: string): { lead: string; time: string; rest: string; hint: string } => {
+/** G6, 429 slow_down: the open time is the server's retry_at in this phone's own time. `kept` is whether the composer
+ * still holds the refused message: after a reload it is empty, so the line only says when writing opens again. */
+export const slowCopy = (retryAt: string, kept = true): { lead: string; time: string; rest: string; hint: string } => {
   const time = clock(retryAt);
   return {
     lead: "That's a lot of messages for one hour.",
     time,
-    rest: 'Your message is still here, ready to send.',
-    hint: time ? `You can send it at ${time}` : 'You can send it soon',
+    rest: kept ? 'Your message is still here, ready to send.' : '',
+    hint: kept ? (time ? `You can send it at ${time}` : 'You can send it soon') : time ? `You can write again at ${time}` : 'You can write again soon',
   };
 };
 

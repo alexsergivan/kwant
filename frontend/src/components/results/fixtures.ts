@@ -831,6 +831,7 @@ const DESK_GUESTS = [
   deskGuest('g-emma', 'Emma', 'beret', {
     waiting: true,
     handoff_reason: 'Emma asks to check out at 1 PM',
+    ask: 'request',
     last: { from: 'guest', text: 'Could we check out at 1 instead of 10 on Sunday? Our ferry is at 3.', at: deskAt(14, 14) },
     unread: 1,
     msgs: 6,
@@ -866,9 +867,9 @@ const deskFixture = (reply: string, state: 'writing' | 'live' | 'ended', desk: R
     desk: { ...deskBase, ...desk },
   });
 const deskCapGuests = [
-  deskGuest('g-ana', 'Ana', 'spikes', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'Is there a hair dryer somewhere?', at: deskAt(21, 12) }, unread: 1, msgs: 5 }),
-  deskGuest('g-emma', 'Emma', 'beret', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'What time does the bakery downstairs open?', at: deskAt(20, 48) }, unread: 1, msgs: 9 }),
-  deskGuest('g-ben', 'Ben', 'horns', { waiting: true, handoff_reason: 'Daily limit reached', last: { from: 'guest', text: 'Can we leave the bags here after check-out?', at: deskAt(20, 3) }, unread: 2, msgs: 7 }),
+  deskGuest('g-ana', 'Ana', 'spikes', { waiting: true, handoff_reason: 'Daily limit reached', ask: 'daily_cap', last: { from: 'guest', text: 'Is there a hair dryer somewhere?', at: deskAt(21, 12) }, unread: 1, msgs: 5 }),
+  deskGuest('g-emma', 'Emma', 'beret', { waiting: true, handoff_reason: 'Daily limit reached', ask: 'daily_cap', last: { from: 'guest', text: 'What time does the bakery downstairs open?', at: deskAt(20, 48) }, unread: 1, msgs: 9 }),
+  deskGuest('g-ben', 'Ben', 'horns', { waiting: true, handoff_reason: 'Daily limit reached', ask: 'daily_cap', last: { from: 'guest', text: 'Can we leave the bags here after check-out?', at: deskAt(20, 3) }, unread: 2, msgs: 7 }),
   deskGuest('g-tom', 'Tom', 'visor', { last: { from: 'bot', text: 'The nearest pharmacy is on Tartinijev trg, open till 8 PM.', at: deskAt(19, 2) }, msgs: 12 }),
 ];
 export const DESK_FIXTURES = {
@@ -932,6 +933,7 @@ export const DESK_WAITING = {
     {
       kind: 'pocket_desk',
       id: 'desk:seaview:g-emma',
+      ask: 'request',
       pocket_code: 'seaview',
       pocket_title: 'Sea-view flat',
       guest_id: 'g-emma',
@@ -939,6 +941,32 @@ export const DESK_WAITING = {
       text: 'Emma asks to check out at 1 PM',
       quote: 'Could we check out at 1 instead of 10 on Sunday? Our ferry is at 3.',
       asked_at: deskAt(14, 14),
+      kwant_id: 'kw-never-shown-01',
+      kwant_name: 'Bell',
+      channel_id: null,
+      direct_kwant_id: 'kw-never-shown-01',
+      thread_id: 't-desk',
+    },
+  ],
+};
+
+/** desk-cap-row: Yuki's row once Bell hit the daily limit (Juno's #1300 row JSON: ask "daily_cap", waiting n). */
+export const DESK_CAP_WAITING = {
+  follow_up_hours: 24,
+  items: [
+    {
+      kind: 'pocket_desk',
+      id: 'desk:seaview:g-yuki',
+      ask: 'daily_cap',
+      waiting: 13,
+      mode: 'guide',
+      pocket_code: 'seaview',
+      pocket_title: 'Sea-view flat',
+      guest_id: 'g-yuki',
+      guest_name: 'Yuki',
+      text: 'Daily limit reached',
+      quote: 'Is there a hair dryer somewhere? And what time is quiet time?',
+      asked_at: deskAt(21, 40),
       kwant_id: 'kw-never-shown-01',
       kwant_name: 'Bell',
       channel_id: null,
@@ -1051,6 +1079,13 @@ export const BOOKING_FIXTURES = {
     guests: [BK_BEN, ...BK_GUESTS],
     counts: { guests: 6, waiting: 1, replies_today: 19, daily_cap: 50, messages_today: 27 },
   }),
+  /** desk-needs-you-buttons: the same odd request on a server that lists `book` (pa13c): "Book a time for Ben" shows. */
+  oddBook: bookingFixture('Ben asks for Tuesday at 6 PM, a time you haven’t listed. It waits for you.', 'live', {
+    slots: bkSlots(BK_REQUESTED),
+    guests: [BK_BEN, ...BK_GUESTS],
+    counts: { guests: 6, waiting: 1, replies_today: 19, daily_cap: 50, messages_today: 27 },
+    actions: ['reply', 'resolve', 'set_cap', 'confirm', 'decline', 'set_slots', 'book'],
+  }),
   cap: bookingFixture('Bell wrote 50 replies today, its limit. Booking still works.', 'live', {
     slots: bkSlots(BK_REQUESTED),
     counts: { guests: 5, waiting: 0, replies_today: 50, daily_cap: 50, messages_today: 71 },
@@ -1061,7 +1096,7 @@ export const BOOKING_FIXTURES = {
     ended: { at: '2026-12-01', deletes_on: '2026-12-09', days: 6, bot_replies: 37, host_replies: 4, messages: 52 },
   }),
 } satisfies Record<string, Fixture>;
-export const BOOKING_OPEN: Partial<Record<keyof typeof BOOKING_FIXTURES, string>> = { odd: 'g-ben' };
+export const BOOKING_OPEN: Partial<Record<keyof typeof BOOKING_FIXTURES, string>> = { odd: 'g-ben', oddBook: 'g-ben' };
 export const BOOKING_CONVERSATIONS: Record<string, unknown> = {
   'g-ben': {
     api: 1,

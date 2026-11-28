@@ -48,7 +48,7 @@ test('the source line ("From task checks") is a quiet caption at every width, no
   }
 });
 
-test('a 14 px avatar that needs you gets the 6 px dot, not the 7×7 plate; 24 px keeps the plate', () => {
+test('a 14 px avatar that needs you gets the 6 px dot, not the plate; 20-35 px get the 10 px glyph plate, 36 px the 7×7 plate', () => {
   const small = m.mark('needs_you', 14);
   assert.match(small, /data-mood-dot/);
   assert.match(small, /width:6px;height:6px/);
@@ -59,9 +59,10 @@ test('a 14 px avatar that needs you gets the 6 px dot, not the 7×7 plate; 24 px
   assert.equal(m.mark('thinking', 14), '');
   assert.equal(m.mark('failed', 19), '');
   const big = m.mark('needs_you', 24);
-  assert.match(big, /viewBox="0 0 7 7"/);
-  assert.match(big, /width="14" height="14"/);
+  assert.match(big, /viewBox="1 1 5 5"/);
+  assert.match(big, /width="10" height="10"/);
   assert.doesNotMatch(big, /data-mood-dot/);
-  assert.match(m.mark('needs_you', 20), /viewBox="0 0 7 7"/);
-  assert.match(read('src/components/ModernAvatar.tsx'), /<AvatarMoodMark mood=\{mood\} size=\{size\} \/>/);
+  assert.match(m.mark('needs_you', 20), /viewBox="1 1 5 5"/);
+  assert.match(m.mark('needs_you', 36), /viewBox="0 0 7 7" width="14" height="14"/);
+  assert.match(read('src/components/ModernAvatar.tsx'), /<AvatarMoodMark mood=\{shownMood\} size=\{size\} \/>/);
 });
