@@ -3,6 +3,7 @@
 // "running longest first", `held` for the line under a held message, and Try again.
 import { personFetch } from './auth';
 import { timeText } from './clock';
+import { usageResetTime } from './profiles';
 
 export type H4StatusKind = 'working' | 'queued' | 'needs_you' | 'quiet' | 'stuck' | 'paused' | 'available';
 
@@ -25,6 +26,8 @@ export interface H4Status {
   stuck?: { gave_up_at?: string; tries?: number };
   /** needs_you/asked_question: the open question (its time goes in a waits_on_you held line). */
   question?: { asked_at?: string };
+  /** queued/usage_limit: when the usage limit resets and the parked turn runs again. */
+  back_at?: string;
   held: H4Held[];
 }
 
@@ -60,6 +63,7 @@ export function parseH4Status(v: unknown): H4Status | null {
     retry: r ? { at: str(r.at), try: num(r.try), of: num(r.of) } : undefined,
     stuck: s ? { gave_up_at: str(s.gave_up_at), tries: num(s.tries) } : undefined,
     question: q ? { asked_at: str(q.asked_at) } : undefined,
+    back_at: str(o.back_at),
     held,
   };
 }
@@ -110,6 +114,65 @@ export function h4StuckLine(s: H4Status): string {
     return `Stuck: stopped after ${s.stuck?.tries ?? 2} tries${at ? ` · ${at}` : ''}`;
   }
   return `Stuck: ${s.waits_on?.label ?? 'the AI'} stopped answering`;
+}
+
+/** m7: a bot whose model has sent nothing for 3 min (`quiet`/`model_silent`): "No word from Claude · 4:47 PM";
+ *  `full` spells out "since" for the tooltip. Without a time: "No word from Claude yet". */
+export function h4QuietLine(s?: H4Status | null, full = false): string | null {
+  if (s?.status !== 'quiet' || s.reason_code !== 'model_silent') return null;
+  const who = s.waits_on?.label ?? 'the AI';
+  const at = hhmm(s.since);
+  if (!at) return `No word from ${who} yet`;
+  return full ? `No word from ${who} since ${at}` : `No word from ${who} · ${at}`;
+}
+
+/** The sidebar's busy lines with a silent model's line in place of "Working …"; the old line moves to its tooltip. */
+export function withQuietLines(lines: Record<string, string>, status: Record<string, H4Status> | null | undefined, titles?: Record<string, string>): Record<string, string> {
+  if (!status) return lines;
+  let out = lines;
+  for (const [id, line] of Object.entries(lines)) {
+    const quiet = h4QuietLine(status[id]);
+    if (!quiet) continue;
+    if (out === lines) out = { ...lines };
+    out[id] = quiet;
+    if (titles) titles[id] = `${h4QuietLine(status[id], true)}. ${titles[id] ?? line}`;
+  }
+  return out;
+}
+
+/** limit-wait-status (m3): a bot whose turn is parked on a usage limit (`queued`/`usage_limit`): "Back 16:42 ·
+ *  usage limit", the reset on the person's clock as the hand-off card says it ("Back Sun 09:10", "Back 1 Dec").
+ *  Time first, so a cut in the ~151 px desktop line only ever eats "usage limit" (Mira's copy check).
+ *  Without a time still to come: "Waits for the usage limit". */
+export function h4LimitLine(s?: H4Status | null, now = Date.now()): string | null {
+  if (s?.status !== 'queued' || s.reason_code !== 'usage_limit') return null;
+  const at = s.back_at ? new Date(s.back_at) : null;
+  return at && Number.isFinite(at.getTime()) && at.getTime() > now ? `Back ${usageResetTime(at, now)} · usage limit` : 'Waits for the usage limit';
+}
+
+/** The sidebar's busy lines plus a limit-waiting bot's line (it has no turn, so no line of its own yet). */
+export function withLimitLines(lines: Record<string, string>, status: Record<string, H4Status> | null | undefined, now = Date.now()): Record<string, string> {
+  if (!status) return lines;
+  let out = lines;
+  for (const [id, s] of Object.entries(status)) {
+    const line = out[id] ? null : h4LimitLine(s, now);
+    if (!line) continue;
+    if (out === lines) out = { ...lines };
+    out[id] = line;
+  }
+  return out;
+}
+
+/** The dots: a limit-waiting bot with no turn of its own is `queued`, not available. */
+export function withLimitWaits<T extends string>(statuses: Record<string, T | 'queued'>, status: Record<string, H4Status> | null | undefined): Record<string, T | 'queued'> {
+  if (!status) return statuses;
+  let out = statuses;
+  for (const [id, s] of Object.entries(status)) {
+    if (out[id] || s.status !== 'queued' || s.reason_code !== 'usage_limit') continue;
+    if (out === statuses) out = { ...statuses };
+    out[id] = 'queued';
+  }
+  return out;
 }
 
 /** When the bot became stuck, for "oldest first" inside rank 2. */
