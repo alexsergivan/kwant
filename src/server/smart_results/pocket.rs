@@ -20,7 +20,7 @@ use sqlx::SqliteConnection;
 use crate::db::models::{MessageExtra, NewMessage};
 use crate::db::pocket::PocketRow;
 use crate::pocket::kits::Player;
-use crate::server::{desk_tool, santa_tool};
+use crate::server::{desk_tool, queue_tool, santa_tool};
 use crate::db::quiz_drafts::QuizDraftRow;
 use crate::mcp::SELF_SERVER_NAME;
 use crate::quizmaster::card::{Card, State};
@@ -48,6 +48,7 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
         Called::Quiz(_) => crate::kits::quiz::KIT_ID,
         Called::Santa(_) => crate::pocket::santa::ID,
         Called::Desk(_) => crate::pocket::desk::ID,
+        Called::Queue(_) => crate::pocket::queue::ID,
     };
     if !switch.allows(kit) {
         return None;
@@ -70,6 +71,11 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
             let code = kit_made_this_turn(&mut *conn, crate::pocket::desk::ID, input, extra).await?;
             return desk_candidate(&mut *conn, &code, input, extra).await;
         }
+        Called::Queue(Named::Id(code)) => return queue_candidate(&mut *conn, &code, input, extra).await,
+        Called::Queue(Named::MadeThisTurn) => {
+            let code = kit_made_this_turn(&mut *conn, crate::pocket::queue::ID, input, extra).await?;
+            return queue_candidate(&mut *conn, &code, input, extra).await;
+        }
     };
     let row = match named {
         Named::Id(id) => sqlx::query_as::<_, QuizDraftRow>("SELECT * FROM quiz_drafts WHERE id = ?").bind(id.as_str()).fetch_optional(&mut *conn).await.ok()??,
@@ -91,6 +97,8 @@ enum Called {
     Santa(Named),
     /// The front desk `desk_create` made (desk-create-from-chat), named the same two ways.
     Desk(Named),
+    /// The take-a-number queue `queue_create` made (queue-card-in-chat), named the same two ways.
+    Queue(Named),
 }
 
 /// The turn's last call that names a card, of any kind.
@@ -98,8 +106,9 @@ fn last_named(input: &NewMessage) -> Option<Called> {
     let quiz = draft_named_at(input).map(|(i, n)| (i, Called::Quiz(n)));
     let santa = santa_named_at(input).map(|(i, n)| (i, Called::Santa(n)));
     let desk = desk_named_at(input).map(|(i, n)| (i, Called::Desk(n)));
+    let queue = queue_named_at(input).map(|(i, n)| (i, Called::Queue(n)));
     // No two calls share a place in the turn
-    [quiz, santa, desk].into_iter().flatten().max_by_key(|(i, _)| *i).map(|(_, c)| c)
+    [quiz, santa, desk, queue].into_iter().flatten().max_by_key(|(i, _)| *i).map(|(_, c)| c)
 }
 
 /// The Secret Santa the turn's last `santa_create` call that made one names, and that call's place
@@ -218,6 +227,7 @@ fn santa_block(code: &str, c: santa_tool::Card) -> Pocket {
         notice: None,
         santa: Some(c.santa),
         desk: None,
+        queue: None,
     }
 }
 
@@ -321,6 +331,113 @@ fn desk_block(code: &str, title: &str, ended: bool, d: Value) -> Pocket {
         notice: None,
         santa: None,
         desk: Some(d),
+        queue: None,
+    }
+}
+
+/// The take-a-number queue the turn's last `queue_create` call that made one names, and that
+/// call's place: the code its answer starts with (`Pocket app · Queue [<code>]`), or, for a call
+/// the Claude CLI engine let through ("allowed") holding a queue and with no answer kept,
+/// [`Named::MadeThisTurn`]. A failed or denied call, a call that only asked for the rules (no
+/// `title`), a refusal ("Nothing was made: …"), or another server's tool of the same name names
+/// nothing.
+fn queue_named_at(input: &NewMessage) -> Option<(usize, Named)> {
+    let calls = input.tool_calls.as_ref()?.as_array()?;
+    calls.iter().enumerate().rev().find_map(|(i, c)| {
+        if c.get("server").and_then(Value::as_str) != Some(SELF_SERVER_NAME) || c.get("tool").and_then(Value::as_str) != Some(queue_tool::TOOL) {
+            return None;
+        }
+        let status = c.get("status").and_then(Value::as_str);
+        if !matches!(status, Some("ok" | "allowed")) {
+            return None;
+        }
+        let Some(result) = c.get("result").and_then(Value::as_str) else {
+            return (status == Some("allowed") && queue_tool::holds_queue(c.get("arguments"))).then_some((i, Named::MadeThisTurn));
+        };
+        let rest = result.trim_start().strip_prefix(queue_tool::CARD_TEXT_HEAD)?;
+        let code = &rest[..rest.find(']')?];
+        valid_code(code).then(|| (i, Named::Id(code.to_string())))
+    })
+}
+
+/// A take-a-number queue's card: the stored pocket (kit `queue`, owned by the reply's sender, in
+/// the reply's space), as `GET /api/pockets/:code` gives it to the card: the kit's host view, the
+/// join `queue_create` worked out (while it's fresh, and never once the queue ended) and
+/// `ended_at`. Never the call's text.
+async fn queue_candidate(conn: &mut SqliteConnection, code: &str, input: &NewMessage, extra: &MessageExtra) -> Option<Block> {
+    let sql = format!("SELECT {} FROM pocket_apps WHERE code = ?", crate::db::pocket::POCKET_COLS);
+    let row = sqlx::query_as::<_, PocketRow>(&sql).bind(code).fetch_optional(&mut *conn).await.ok()??;
+    if row.kit != crate::pocket::queue::ID {
+        return None;
+    }
+    let owner = row.owner_kwant_id.clone()?;
+    let space = sqlx::query_scalar::<_, String>("SELECT space_id FROM kwants WHERE id = ?").bind(&owner).fetch_optional(&mut *conn).await.ok()??;
+    if !belongs(&mut *conn, &owner, &space, input, extra).await {
+        return None;
+    }
+    let players: Vec<Player> = sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
+        "SELECT id, name, avatar, team, joined_at FROM pocket_players WHERE pocket_code = ? AND removed_at IS NULL ORDER BY joined_at, id",
+    )
+    .bind(code)
+    .fetch_all(&mut *conn)
+    .await
+    .ok()?
+    .into_iter()
+    .map(|(id, name, avatar, team, joined_at)| Player { id, name, avatar, team, joined_at })
+    .collect();
+    let spec: Value = serde_json::from_str(&row.spec).ok()?;
+    let kit_state: Value = serde_json::from_str(&row.kit_state).unwrap_or(Value::Null);
+    let ended = row.state != crate::db::pocket::OPEN;
+    let join = if ended { None } else { santa_tool::join_for(code) };
+    let q = queue_part(&spec, &kit_state, &players, Utc::now(), join, row.ended_at);
+    Some(Block::Pocket(Box::new(queue_block(&row.code, &row.title, ended, q))))
+}
+
+/// The `queue` part: the kit's host view (what the card's live read gets as `host_view`) with the
+/// pocket's own `join` and `ended_at` laid over it, the way the card's `queueFromRead` does.
+fn queue_part(spec: &Value, kit_state: &Value, players: &[Player], now: DateTime<Utc>, join: Option<Value>, ended_at: Option<DateTime<Utc>>) -> Value {
+    use crate::pocket::kits::{KitCtx, Viewer};
+    let kit = crate::pocket::kits::kit(crate::pocket::queue::ID).expect("the queue kit is built in");
+    let ctx = KitCtx::new(spec, players, now);
+    let mut q = kit.view(&ctx, kit_state, &Viewer::Host);
+    if let Some(o) = q.as_object_mut() {
+        o.insert("join".into(), join.unwrap_or(Value::Null));
+        o.insert("ended_at".into(), serde_json::to_value(ended_at).unwrap_or(Value::Null));
+    }
+    q
+}
+
+/// The `pocket` block for a queue's card: kit `queue`, its `queue` part (which carries its own
+/// join), and none of the quiz's parts.
+fn queue_block(code: &str, title: &str, ended: bool, q: Value) -> Pocket {
+    Pocket {
+        id: "b0".into(),
+        title: None,
+        source: Source::slot(),
+        provenance: Provenance::kwant_data(format!("pocket:{code}")),
+        code: code.to_string(),
+        kit: crate::pocket::queue::ID.into(),
+        name: fit(title, 80),
+        when: None,
+        state: if ended { "ended" } else { "live" }.into(),
+        paused: false,
+        progress: None,
+        rounds: Vec::new(),
+        checks: None,
+        dry_run: None,
+        eta: None,
+        opens_line: None,
+        live: None,
+        join: None,
+        ended: None,
+        budget: None,
+        results: None,
+        draft: None,
+        yours: None,
+        notice: None,
+        santa: None,
+        desk: None,
+        queue: Some(q),
     }
 }
 
@@ -603,6 +720,7 @@ fn block(row: &QuizDraftRow, card: &Card, tz: Option<&str>) -> Pocket {
         notice,
         santa: None,
         desk: None,
+        queue: None,
     }
 }
 
@@ -682,6 +800,7 @@ mod tests {
             notice: None,
             santa: None,
             desk: None,
+            queue: None,
         }
     }
 
@@ -921,6 +1040,129 @@ mod tests {
         assert_eq!(santa(vec![call(santa_tool::TOOL, serde_json::json!({"spec": {}}), "allowed", made)]), Some(Named::Id("PQ7XK2".into())));
         assert_eq!(santa(vec![call(santa_tool::TOOL, serde_json::json!({"spec": {}}), "allowed", "Nothing was made: gift_on is missing.")]), None);
         assert_eq!(santa(vec![call(santa_tool::TOOL, serde_json::json!({}), "allowed", "")]), None);
+    }
+
+    /// queue-card-in-chat: `queue_create`'s answer names its queue by the code after its head; the
+    /// Claude CLI engine's "allowed" call with a queue and no answer names the one made this turn.
+    #[test]
+    fn a_queue_create_names_its_queue_and_only_a_made_one() {
+        let queue = |calls| queue_named_at(&reply_with(calls)).map(|(_, n)| n);
+        let bakery = serde_json::json!({"title": "Tine's Bakery", "until": "12:00"});
+        let made = "Pocket app · Queue [PQ7XK2] \"Tine's Bakery\" is made. It's open now and closes by itself at 12:00.";
+        assert_eq!(queue(vec![call(queue_tool::TOOL, bakery.clone(), "ok", made)]), Some(Named::Id("PQ7XK2".into())));
+        assert_eq!(queue(vec![call(queue_tool::TOOL, bakery.clone(), "allowed", made)]), Some(Named::Id("PQ7XK2".into())));
+        // A refusal or the rules made nothing
+        assert_eq!(queue(vec![call(queue_tool::TOOL, bakery.clone(), "ok", "Nothing was made: until must be a time written HH:MM.")]), None);
+        assert_eq!(queue(vec![call(queue_tool::TOOL, serde_json::json!({}), "ok", queue_tool::RULES)]), None);
+        // The Claude CLI engine: a queue in the arguments made one; the rules, a blank title or a denied call didn't
+        let allowed = |args: serde_json::Value| serde_json::json!({"server": SELF_SERVER_NAME, "tool": queue_tool::TOOL, "arguments": args, "status": "allowed"});
+        assert_eq!(queue(vec![allowed(bakery.clone())]), Some(Named::MadeThisTurn));
+        assert_eq!(queue(vec![allowed(serde_json::json!({"spec": {"title": "Q"}}))]), Some(Named::MadeThisTurn));
+        for args in [serde_json::json!({}), serde_json::json!({"spec": null}), serde_json::json!({"title": "  "})] {
+            assert_eq!(queue(vec![allowed(args.clone())]), None, "{args}");
+        }
+        for status in ["denied", "error", "ok"] {
+            let mut c = allowed(bakery.clone());
+            c["status"] = serde_json::json!(status);
+            assert_eq!(queue(vec![c]), None, "{status}");
+        }
+        // Another server's tool of the same name, or a code of the wrong shape
+        let mut foreign = call(queue_tool::TOOL, bakery.clone(), "ok", made);
+        foreign["server"] = serde_json::json!("someones_mcp");
+        assert_eq!(queue(vec![foreign]), None);
+        assert_eq!(queue(vec![call(queue_tool::TOOL, bakery.clone(), "ok", "Pocket app · Queue [a b] made")]), None);
+        // The turn's last card call wins: a queue after a desk shows the queue, a desk after it the desk
+        let desk = call(desk_tool::TOOL, serde_json::json!({"title": "D"}), "ok", "Pocket app · Front desk [DESK01] \"D\" is open.");
+        let q = call(queue_tool::TOOL, bakery.clone(), "ok", made);
+        assert_eq!(last_named(&reply_with(vec![desk.clone(), q.clone()])), Some(Called::Queue(Named::Id("PQ7XK2".into()))));
+        assert_eq!(last_named(&reply_with(vec![q, desk])), Some(Called::Desk(Named::Id("DESK01".into()))));
+    }
+
+    /// The queue part is the kit's host view (what the card's live read gets) with its own join and
+    /// `ended_at`, and the block passes the validator; first names show, a guest's id never does.
+    #[test]
+    fn a_queue_block_carries_the_host_view_and_its_join_and_passes() {
+        use crate::pocket::kits::{KitCtx, Viewer};
+        let kit = crate::pocket::kits::kit(crate::pocket::queue::ID).unwrap();
+        let spec = serde_json::json!({"title": "Tine's Bakery", "line": "Pick up at the side counter", "hours": {"until": "12:00"}, "call_minutes": 3, "ask_name": true});
+        let now = Utc::now();
+        let players: Vec<Player> = ["g-ana-1", "g-ben-2"].iter().map(|id| Player { id: id.to_string(), name: String::new(), avatar: String::new(), team: None, joined_at: now }).collect();
+        let mut st = kit.init(&spec);
+        for (g, name) in [("g-ana-1", "Ana"), ("g-ben-2", "Ben")] {
+            let mut ctx = KitCtx::new(&spec, &players, now);
+            kit.act(&mut ctx, &mut st, &Viewer::Guest(g.into()), "take", &serde_json::json!({"name": name})).unwrap();
+        }
+        let mut ctx = KitCtx::new(&spec, &players, now);
+        kit.act(&mut ctx, &mut st, &Viewer::Host, "call_next", &serde_json::json!({})).unwrap();
+        let join = serde_json::json!({"mode": "wifi", "anywhere_kind": null, "anywhere_url": null, "wifi_url": "http://192.168.1.5:8787/j/PQ7XK2", "wifi_note": null});
+        let q = queue_part(&spec, &st, &players, now, Some(join.clone()), None);
+        let p = queue_block("PQ7XK2", "Tine's Bakery", false, q.clone());
+        assert_eq!(check(p.clone()), Ok(()));
+        assert_eq!((p.kit.as_str(), p.state.as_str(), p.name.as_str()), ("queue", "live", "Tine's Bakery"));
+        assert!(p.join.is_none() && p.desk.is_none() && p.santa.is_none() && p.draft.is_none());
+        // The same view GET /api/pockets/:code reads as host_view, plus join and ended_at
+        let mut want = kit.view(&KitCtx::new(&spec, &players, now), &st, &Viewer::Host);
+        want["join"] = join;
+        want["ended_at"] = serde_json::Value::Null;
+        assert_eq!(q, want);
+        assert_eq!((q["state"].clone(), q["now_serving"].clone(), q["next_number"].clone()), (serde_json::json!("open"), serde_json::json!(1), serde_json::json!(3)), "{q}");
+        assert_eq!(q["spec"]["hours"], serde_json::json!({"until": "12:00"}), "{q}");
+        let tickets = q["tickets"].as_array().unwrap();
+        assert_eq!(tickets.iter().map(|t| (t["number"].as_u64().unwrap(), t["state"].as_str().unwrap(), t["name"].as_str().unwrap())).collect::<Vec<_>>(), vec![(1, "called", "Ana"), (2, "waiting", "Ben")]);
+        assert_eq!(q["summary"]["waiting"], serde_json::json!(1), "{q}");
+        let wire = serde_json::to_string(&Block::Pocket(Box::new(p))).unwrap();
+        assert!(!wire.contains("g-ana-1") && !wire.contains("g-ben-2"), "a guest's id on the card: {wire}");
+        // An ended queue: state ended, no join, its end time
+        let ended_at = now;
+        let q = queue_part(&spec, &st, &players, now, None, Some(ended_at));
+        let p = queue_block("PQ7XK2", "Tine's Bakery", true, q.clone());
+        assert_eq!(check(p.clone()), Ok(()));
+        assert_eq!(p.state, "ended");
+        assert!(q["join"].is_null() && q["ended_at"].is_string(), "{q}");
+    }
+
+    #[test]
+    fn each_queue_rule_refuses_its_block() {
+        let kit = crate::pocket::kits::kit(crate::pocket::queue::ID).unwrap();
+        let spec = serde_json::json!({"title": "Tine's Bakery"});
+        let good = || queue_block("PQ7XK2", "Tine's Bakery", false, queue_part(&spec, &kit.init(&spec), &[], Utc::now(), None, None));
+        assert_eq!(check(good()), Ok(()));
+        let ticket = |n: u64, state: &str, name: serde_json::Value| serde_json::json!({"number": n, "state": state, "name": name});
+        // What a guest or the host types is plain text to the card: a `<` doesn't refuse it
+        let mut p = good();
+        p.queue.as_mut().unwrap()["tickets"] = serde_json::json!([ticket(1, "waiting", serde_json::json!("<b>Ana"))]);
+        p.queue.as_mut().unwrap()["pause_text"] = serde_json::json!("Back <3 in 10");
+        assert_eq!(check(p), Ok(()));
+        let cases: Vec<(&str, Change)> = vec![
+            ("no part on kit queue", Box::new(|p| p.queue = None)),
+            ("a part on another kit", Box::new(|p| p.kit = "desk".into())),
+            ("a top-level join", Box::new(|p| p.join = Some(serde_json::json!({"mode": "anywhere", "wifi_url": null, "anywhere_url": null, "quick_tunnel": false})))),
+            ("a ready queue", Box::new(|p| p.state = "ready".into())),
+            ("not an object", Box::new(|p| p.queue = Some(serde_json::json!("open")))),
+            ("an unknown state", Box::new(|p| p.queue.as_mut().unwrap()["state"] = serde_json::json!("busy"))),
+            ("a guest id", Box::new(move |p| p.queue.as_mut().unwrap()["tickets"] = serde_json::json!([{"number": 1, "state": "waiting", "guest": "g-1"}]))),
+            ("a key", Box::new(|p| p.queue.as_mut().unwrap()["host_key"] = serde_json::json!("k"))),
+            ("two called", Box::new(move |p| p.queue.as_mut().unwrap()["tickets"] = serde_json::json!([ticket(1, "called", serde_json::Value::Null), ticket(2, "called", serde_json::Value::Null)]))),
+            ("the same number twice", Box::new(move |p| p.queue.as_mut().unwrap()["tickets"] = serde_json::json!([ticket(1, "waiting", serde_json::Value::Null), ticket(1, "skipped", serde_json::Value::Null)]))),
+            ("a served ticket", Box::new(move |p| p.queue.as_mut().unwrap()["tickets"] = serde_json::json!([ticket(1, "served", serde_json::Value::Null)]))),
+            ("number 0", Box::new(move |p| p.queue.as_mut().unwrap()["tickets"] = serde_json::json!([ticket(0, "waiting", serde_json::Value::Null)]))),
+            ("a long name", Box::new(move |p| p.queue.as_mut().unwrap()["tickets"] = serde_json::json!([ticket(1, "waiting", serde_json::json!("x".repeat(41)))]))),
+            ("a control character", Box::new(|p| p.queue.as_mut().unwrap()["close_text"] = serde_json::json!("Closed\u{7}"))),
+            ("261 tickets", Box::new(move |p| p.queue.as_mut().unwrap()["tickets"] = serde_json::Value::Array((1..=261).map(|n| ticket(n, "waiting", serde_json::Value::Null)).collect()))),
+            ("a negative count", Box::new(|p| p.queue.as_mut().unwrap()["summary"]["served_today"] = serde_json::json!(-1))),
+            ("call minutes 11", Box::new(|p| p.queue.as_mut().unwrap()["spec"]["call_minutes"] = serde_json::json!(11))),
+            ("HTML in the title", Box::new(|p| p.queue.as_mut().unwrap()["spec"]["title"] = serde_json::json!("<b>Bakery</b>"))),
+            ("a quick tunnel", Box::new(|p| p.queue.as_mut().unwrap()["join"] = serde_json::json!({"mode": "anywhere", "anywhere_kind": "https", "anywhere_url": "https://x.trycloudflare.com/j/PQ7XK2"}))),
+        ];
+        for (what, change) in cases {
+            let mut p = good();
+            change(&mut p);
+            assert!(check(p).is_err(), "{what}");
+        }
+        // A quiz block never carries a queue part either
+        let mut d = good();
+        d.kit = "quiz".into();
+        assert!(check(d).is_err());
     }
 
     /// The turn's last card call wins, with Claude engine calls as with any other.
