@@ -311,9 +311,13 @@ echo KWNT_ALLOWED_ORIGINS=https://kwant.example.com >> .env && docker compose up
 - **kwant's own `execute_shell` tool** runs in per-team Docker containers, so it isn't available inside this stack: that would need the host's Docker socket, which is root on the host. The CLIs' own shell tools work inside the kwnt container.
 - **Upgrading from an older image:** kwnt now runs as uid 10001, not root. If it says `/data isn't writable`, run once: `docker compose run --rm -u root kwnt chown -R 10001:10001 /data`.
 
-### Render, Railway, CasaOS, Umbrel and Coolify
+### Render, Railway, DigitalOcean, CasaOS, Umbrel and Coolify
 
 [![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/alexsergivan/kwant) [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/kwant-1?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant) or [Deploy kwant + Laya](https://railway.com/deploy/kwant-laya?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant)
+
+*We earn commissions when you shop through the links below.*
+
+[Create a DigitalOcean account](https://www.awin1.com/cread.php?awinmid=123996&awinaffid=3169369&ued=https%3A%2F%2Fwww.digitalocean.com%2F) and run kwant on a 2 GB Droplet (4 GB with Laya). A DigitalOcean 1-Click App is coming soon.
 
 The button reads [`render.yaml`](render.yaml): one web service from the released image with a 1 GB disk on `/data`. **Render keeps files only on a disk, and disks need a paid instance** (Starter or up), so the free plan won't work. Render makes the sign-in token: copy `KWNT_API_TOKEN` from the service's **Environment** page and paste it on the sign-in screen.
 
