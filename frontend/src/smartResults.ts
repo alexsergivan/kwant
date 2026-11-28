@@ -455,7 +455,7 @@ export interface GatherInfo {
   deletes_on: string;
   /** The host's first name ("Oleks"), for "Tie: Oleks picks". */
   host_name: string | null;
-  /** Members see names and Yes / Maybe / No (RSVP) or the live count after voting (vote). */
+  /** Members see names and Yes / Maybe / No (RSVP). A vote shows no count until it closes (secret-ballot-unlinkable). */
   show_names: boolean;
   /** Members on the host's list; null without a list. */
   members: number | null;
