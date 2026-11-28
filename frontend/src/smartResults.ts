@@ -625,6 +625,8 @@ export interface QueueInfo {
   closed_waiting: number;
   /** "13:00" on the box's clock, or null: until the host closes it. */
   hours_until: string | null;
+  /** When the hours next close it (RFC 3339): tomorrow after a reopen past them. null without hours, or closed. */
+  closes_at: string | null;
   now_serving: number | null;
   next_number: number;
   tickets: QueueTicket[];

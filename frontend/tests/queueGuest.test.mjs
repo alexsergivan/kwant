@@ -11,7 +11,7 @@ import { QueueBox, queueScenes } from '../guest/fake/queue.mjs';
 
 const m = await loadBundled(`
   export { queueFrom, ticketFrom, phaseOf, live } from './guest/src/queue/view';
-  export { ordinal, untilText, minutesFor, eta, wouldBe, refusalCopy, tabTitle, facts } from './guest/src/queue/copy';
+  export { ordinal, untilText, minutesFor, eta, wouldBe, refusalCopy, tabTitle, facts, barRight } from './guest/src/queue/copy';
   export { detect, Buzz, VIBRATE } from './guest/src/queue/buzz';
   export { queueTvFrom, hm } from './guest/src/queue/tv';
 `);
@@ -62,6 +62,25 @@ test('view: junk is dropped, never drawn', () => {
   assert.equal(v.hours_until, undefined);
   assert.equal(v.avg_minutes, null);
   assert.equal(v.state, 'open');
+});
+
+test('copy: the bar says tomorrow once the close has moved to the next day (Mira m2)', () => {
+  const e = box('take').env(false);
+  const now = new Date(2026, 11, 5, 5, 47).getTime();
+  e.view.hours_until = '05:46';
+  e.view.closes_at = new Date(2026, 11, 6, 5, 46).toISOString();
+  const v = m.queueFrom(e).view;
+  assert.equal(v.closes_at, e.view.closes_at);
+  assert.equal(m.barRight(v, now), 'open until tomorrow 5:46 AM');
+  e.view.hours_until = '13:00';
+  e.view.closes_at = new Date(2026, 11, 5, 13, 0).toISOString();
+  assert.equal(m.barRight(m.queueFrom(e).view, now), 'open until 1 PM');
+  // an older box sends no closes_at: today's text, as before
+  delete e.view.closes_at;
+  assert.equal(m.barRight(m.queueFrom(e).view, now), 'open until 1 PM');
+  e.view.closes_at = 'soon';
+  assert.equal(m.queueFrom(e).view.closes_at, undefined);
+  assert.equal(m.barRight({ ...v, state: 'closed' }, now), 'closed');
 });
 
 test('copy: eta pill, tab titles per phase and the blink', () => {

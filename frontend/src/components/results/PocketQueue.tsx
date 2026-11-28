@@ -105,7 +105,7 @@ export function validQueue(v: unknown, fallbackTitle?: string, blockState?: stri
   const state: QueueInfo['state'] = blockState === 'writing' ? 'setup' : blockState === 'ended' ? 'ended' : raw;
   const hours = optHour(v.hours_until);
   const text = { pause_text: optPlain(v.pause_text, QUEUE_PAUSE_MAX), close_text: optPlain(v.close_text, QUEUE_CLOSE_MAX) };
-  const times = { paused_at: optTime(v.paused_at), closed_at: optTime(v.closed_at), now: optTime(v.now), ended_at: optTime(v.ended_at) };
+  const times = { paused_at: optTime(v.paused_at), closed_at: optTime(v.closed_at), closes_at: optTime(v.closes_at), now: optTime(v.now), ended_at: optTime(v.ended_at) };
   const autoClosed = v.auto_closed === undefined || v.auto_closed === null ? false : typeof v.auto_closed === 'boolean' ? v.auto_closed : undefined;
   const closedWaiting = count(v.closed_waiting);
   const nowServing = optCount(v.now_serving);
@@ -141,6 +141,7 @@ export function validQueue(v: unknown, fallbackTitle?: string, blockState?: stri
     auto_closed: autoClosed!,
     closed_waiting: closedWaiting!,
     hours_until: hours === null ? specUntil! : hours!,
+    closes_at: times.closes_at!,
     now_serving: nowServing!,
     next_number: next!,
     tickets: (tickets as QueueTicket[]).slice().sort((a, b) => a.number - b.number),
@@ -202,6 +203,9 @@ export const hourLabel = (hm: string | null) => {
   const [h, m] = hm.split(':').map(Number);
   return `${h % 12 || 12}${m ? `:${String(m).padStart(2, '0')}` : ''} ${h < 12 ? 'AM' : 'PM'}`;
 };
+/** "open until 1 PM", or "open until tomorrow 5:46 AM" once the close has moved to the next day (Mira m2). */
+export const openUntil = (hm: string, closesAt: string | null, now = Date.now()) =>
+  `open until ${closesAt && new Date(closesAt).toDateString() !== new Date(now).toDateString() ? 'tomorrow ' : ''}${hourLabel(hm)}`;
 const dayLabel = (iso: string | null) => (iso ? new Date(iso).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }) : '');
 const mmss = (ms: number) => {
   const s = Math.max(0, Math.ceil(ms / 1000));
@@ -285,14 +289,14 @@ const Tiles: React.FC<{ q: QueueInfo }> = ({ q }) => {
       <div className="grid grid-cols-3 gap-2" role="group" aria-label="The queue in all">
         <Tile k="days" label="Days open" value={num(s.days)} sub={s.days === 1 ? 'day' : 'days'} />
         <Tile k="served" label="Served" value={num(s.served_total)} sub="in all" />
-        <Tile k="avg" label="Average wait" value={avg(s.avg_total_minutes)} sub={s.avg_total_minutes === null ? 'too few calls' : 'per turn'} />
+        <Tile k="avg" label="Each turn" value={avg(s.avg_total_minutes)} sub={s.avg_total_minutes === null ? 'too few calls' : 'per turn'} />
       </div>
     );
   if (q.state === 'closed')
     return (
       <div className="grid grid-cols-3 gap-2" role="group" aria-label="Today at the counter">
         <Tile k="served" label="Served" value={num(s.served_today)} sub="today" />
-        <Tile k="avg" label="Average wait" value={avg(s.avg_minutes)} sub={s.avg_minutes === null ? 'too few calls' : 'per turn'} />
+        <Tile k="avg" label="Each turn" value={avg(s.avg_minutes)} sub={s.avg_minutes === null ? 'too few calls' : 'per turn'} />
         <Tile k="skipped-left" label="Skipped · left" value={`${num(s.skipped_today)} · ${num(s.left_today)}`} sub="no-shows, gave up" />
       </div>
     );
@@ -301,7 +305,7 @@ const Tiles: React.FC<{ q: QueueInfo }> = ({ q }) => {
       <Tile k="served" label="Served" value={num(s.served_today)} sub="today" />
       <Tile
         k="avg"
-        label={<><span className="sm:hidden">Each turn</span><span className="hidden sm:inline">Average wait</span></>}
+        label="Each turn"
         value={avg(s.avg_minutes)}
         sub={s.avg_minutes === null ? 'after 3 calls' : <><span className="sm:hidden">measured</span><span className="hidden sm:inline">per turn, measured today</span></>}
       />
@@ -641,7 +645,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
             : q.state === 'paused'
               ? 'paused'
               : q.hours_until
-                ? `open until ${hourLabel(q.hours_until)}`
+                ? openUntil(q.hours_until, q.closes_at)
                 : 'open until you close it',
         ]
           .filter(Boolean)

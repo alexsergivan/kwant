@@ -21,7 +21,7 @@ const m = await loadBundled(`
   export { default as React } from 'react';
   export { createRoot } from 'react-dom/client';
   export { validPocket, kitLabel } from './src/components/results/Pocket';
-  export { validQueue, queueFromRead, queueMood, QueueCard, hourLabel, QUEUE_UNDO_MS, QUEUE_CLOSE_DEFAULT, QUEUE_POLL_MS, oneLine } from './src/components/results/PocketQueue';
+  export { validQueue, queueFromRead, queueMood, QueueCard, hourLabel, openUntil, QUEUE_UNDO_MS, QUEUE_CLOSE_DEFAULT, QUEUE_POLL_MS, oneLine } from './src/components/results/PocketQueue';
   export { QUEUE_FIXTURES } from './src/components/results/fixtures';
 `);
 const { React, createRoot } = m;
@@ -159,6 +159,13 @@ test('queueFromRead lays a host read over the card; queueMood follows the state'
   assert.equal(m.queueMood(m.validPocket(raw('closed')).queue), 'finished');
   assert.equal(m.hourLabel('13:00'), '1 PM');
   assert.equal(m.hourLabel('09:30'), '9:30 AM');
+  // Mira m2: reopened past the hours, the close is tomorrow and the card says so
+  const at547 = new Date(2026, 11, 5, 5, 47).getTime();
+  assert.equal(m.openUntil('05:46', new Date(2026, 11, 6, 5, 46).toISOString(), at547), 'open until tomorrow 5:46 AM');
+  assert.equal(m.openUntil('13:00', new Date(2026, 11, 5, 13, 0).toISOString(), at547), 'open until 1 PM');
+  assert.equal(m.openUntil('13:00', null, at547), 'open until 1 PM');
+  assert.equal(m.validPocket(raw('waiting')).queue.closes_at, null, 'an older box sends none');
+  assert.equal(m.validPocket({ ...raw('waiting'), queue: { ...raw('waiting').queue, closes_at: 'soon' } }), null, 'junk closes_at: the card is not drawn from it');
 });
 
 // ---- the states draw
@@ -167,7 +174,7 @@ test('states draw their own chip, block and actions; never holo', async () => {
   const want = {
     setup: ['Set up · not open yet', 'Open the queue'],
     empty: ['Open · nobody waiting', 'Nobody waiting yet. The first ticket is #1.', 'Customers scan this to take a ticket', 'Print counter sign'],
-    waiting: ['Open · 5 waiting', 'Call next · #24', 'Next 3 · 5 waiting', '+ 2 more: #27, #28', 'Served', 'Average wait'],
+    waiting: ['Open · 5 waiting', 'Call next · #24', 'Next 3 · 5 waiting', '+ 2 more: #27, #28', 'Served', 'Each turn'],
     called: ['Open · #24 called', 'Served · call #25', 'Skip #24', 'to reach the counter', '4 waiting after'],
     skipped: ["#24 didn't come in 3 minutes", 'Bring back #24', 'until 10:44'],
     paused: ['Paused · 5 keep their place', 'Back in 10 minutes', 'Resume · call #24 next', 'Paused since 10:40'],

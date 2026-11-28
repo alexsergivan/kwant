@@ -44,12 +44,14 @@ export const keepLine = (v: Pick<QueueView, 'ask_name'>): string =>
     ? "Your ticket is a number and, if you like, a first name. Both are deleted when you're served, skipped or leave, or when the queue closes. No phone number, no account."
     : "Your ticket is just a number. It's deleted when you're served, skipped or leave, or when the queue closes. No phone number, no account.";
 
-/** The bar's right side: "open until 1 PM", "open", "paused", "closed". */
-export function barRight(v: QueueView): string {
+/** The bar's right side: "open until 1 PM", "open until tomorrow 5:46 AM", "open", "paused", "closed". */
+export function barRight(v: QueueView, now = Date.now()): string {
   if (v.state === 'paused') return 'paused';
   if (v.state === 'closed') return 'closed';
   if (v.state === 'ended') return '';
-  return v.hours_until ? `open until ${untilText(v.hours_until)}` : 'open';
+  if (!v.hours_until) return 'open';
+  const tomorrow = v.closes_at && new Date(v.closes_at).toDateString() !== new Date(now).toDateString();
+  return `open until ${tomorrow ? 'tomorrow ' : ''}${untilText(v.hours_until)}`;
 }
 
 /** The three Take facts: [label, value]. "—" stands in for what isn't measured or set yet. */
