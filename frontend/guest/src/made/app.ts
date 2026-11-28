@@ -4,7 +4,7 @@
 // their surface (blocks.ts) from the view the box filtered for them. No bot-written code, no frame (that is P1).
 import { Api, Env, Live, backoff } from '../api';
 import { creature, h } from '../dom';
-import { drawBlocks, newUi, stepBar, Ui } from './blocks';
+import { drawBlocks, fitRows, newUi, stepBar, Ui } from './blocks';
 import { clock as clockText, madeFrom, MadeView, secondsLeft, Surface } from './view';
 
 export type MadeEnv = Env & { now: () => number; setInterval: (f: () => void, ms: number) => number; clearInterval: (id: number) => void };
@@ -47,7 +47,15 @@ export class MadeApp {
     this.ui = newUi(() => this.render());
     this.main = h('main', { class: `g made m-${surface}`, 'data-surface': surface, 'aria-label': LABEL[surface] });
     root.replaceChildren(this.main);
-    if (surface === 'screen') document.documentElement.classList.add('mtvpage');
+    if (surface === 'screen') {
+      document.documentElement.classList.add('mtvpage');
+      // Rows that fit depend on the screen's size, so draw again when it changes.
+      let t: ReturnType<typeof setTimeout> | undefined;
+      window.addEventListener('resize', () => {
+        clearTimeout(t);
+        t = setTimeout(() => this.render(), 150);
+      });
+    }
   }
 
   async start(_boot?: unknown): Promise<void> {
@@ -157,7 +165,15 @@ export class MadeApp {
 
   render(): void {
     // Keep focus on the same control across a redraw (a push can land while someone types).
-    const focus = (document.activeElement as HTMLElement | null)?.id;
+    const was = document.activeElement as HTMLInputElement | null;
+    const focus = was?.id;
+    // The caret too: without it, typing on through a push lands at the start of the box ("lemarchMidd").
+    let caret: [number, number] | null = null;
+    try {
+      if (was && typeof was.selectionStart === 'number' && typeof was.selectionEnd === 'number') caret = [was.selectionStart, was.selectionEnd];
+    } catch {
+      caret = null;
+    }
     const v = this.view;
     let body: HTMLElement;
     if (this.screen === 'loading') body = this.calm('Opening…', 'One moment.');
@@ -191,6 +207,17 @@ export class MadeApp {
     this.main.dataset.screen = this.screen;
     this.main.replaceChildren(this.bar(), body);
     document.title = v?.title ?? LABEL[this.surface];
-    if (focus) document.getElementById(focus)?.focus();
+    if (this.surface === 'screen' && this.screen === 'live') fitRows(this.main);
+    if (focus) {
+      const el = document.getElementById(focus) as HTMLInputElement | null;
+      el?.focus();
+      if (el && caret && typeof el.setSelectionRange === 'function') {
+        try {
+          el.setSelectionRange(caret[0], caret[1]);
+        } catch {
+          /* not a text box */
+        }
+      }
+    }
   }
 }

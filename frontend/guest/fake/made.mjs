@@ -25,12 +25,12 @@ const SHELF = {
     ] },
     screen: { blocks: [
       { type: 'say', text: 'Book swap: vote for the next read', size: 'big' },
-      { type: 'board', from: 'shelf', label: 'Vote for the next read', show: 'title', vote: 'picks' },
+      { type: 'board', from: 'shelf', label: 'Vote for the next read', noun: ['book', 'books'], show: 'title', vote: 'picks' },
       { type: 'list', from: 'shelf', label: 'On the shelf', show: ['title', 'genre'], noun: ['book', 'books'], empty: 'No books on the shelf yet.' },
     ] },
     remote: { blocks: [
       { type: 'form', into: 'shelf', label: 'On the shelf', noun: ['book', 'books'], fields: [{ name: 'title', type: 'text', label: 'Book title' }] },
-      { type: 'board', from: 'shelf', label: 'Vote for the next read', show: 'title', vote: 'picks' },
+      { type: 'board', from: 'shelf', label: 'Vote for the next read', noun: ['book', 'books'], show: 'title', vote: 'picks' },
     ] },
   },
 };
@@ -87,11 +87,11 @@ const SWAP = {
     phone: { blocks: [
       { type: 'list', from: 'shelf', label: 'On the shelf', show: ['title', 'genre'], noun: ['book', 'books'], take_back: true },
       { type: 'form', into: 'shelf', noun: ['book', 'books'], fields: [{ name: 'title', type: 'text', label: 'Book title', max: 80 }], submit: 'Add to the shelf', done: 'Last added:' },
-      { type: 'board', from: 'shelf', label: 'Vote for the next read', show: 'title', vote: 'picks' },
+      { type: 'board', from: 'shelf', label: 'Vote for the next read', noun: ['book', 'books'], show: 'title', vote: 'picks' },
       { type: 'list', from: 'wishes', label: 'Wish list', show: ['title'], noun: ['wish', 'wishes'] },
     ] },
     screen: { blocks: [
-      { type: 'board', from: 'shelf', label: 'Vote for the next read', show: 'title', vote: 'picks' },
+      { type: 'board', from: 'shelf', label: 'Vote for the next read', noun: ['book', 'books'], show: 'title', vote: 'picks' },
       { type: 'list', from: 'wishes', label: 'Wish list', show: ['title'], noun: ['wish', 'wishes'] },
     ] },
   },

@@ -129,13 +129,13 @@ function list(c: Ctx, b: Extract<Block, { type: 'list' }>, i: number): HTMLEleme
   if (!col.rows.length) return card('list', title, h('p', { class: 'mempty muted' }, b.empty));
   const more = col.count - col.rows.length;
   return card('list', title,
-    h('ul', { class: 'mlist' }, ...col.rows.map((r) =>
+    h('ul', { class: 'mlist', 'data-total': col.count, 'data-noun': b.noun.join('|') }, ...col.rows.map((r) =>
       h('li', { class: `mrow${r.mine ? ' me' : ''}` },
         face(c, r.owner),
         h('span', { class: 'mtext' }, h('b', null, shown(r.values[b.show[0]])), ...b.show.slice(1).map((s) => (r.values[s] !== undefined ? h('span', { class: 'muted' }, ' · ', shown(r.values[s])) : null))),
         r.mine && c.surface === 'phone' ? h('span', { class: 'mtag' }, 'You') : null,
         r.mine && b.take_back && c.surface === 'phone' && !col.locked ? btn(c, `${key}-${r.id}`, 'Take back', () => void run(c, `${key}-${r.id}`, 'take_back', { collection: b.from, id: r.id }), 'gbtn ghost msm', { 'aria-label': `Take back ${shown(r.values[b.show[0]])}` }) : null))),
-    more > 0 ? h('p', { class: 'small' }, `and ${plural(more, b.noun)} more`) : null,
+    more > 0 ? h('p', { class: 'small mmore' }, `and ${plural(more, b.noun)} more`) : null,
     errLine(c, key));
 }
 
@@ -166,7 +166,7 @@ function board(c: Ctx, b: Extract<Block, { type: 'board' }>, i: number): HTMLEle
   const myPick = votes?.rows?.find((r) => r.mine)?.values.pick;
   const open = c.surface === 'phone' && !!votes && !votes.locked;
   return card('board', title,
-    h('ul', { class: 'mboard', role: open ? 'group' : null, 'aria-label': open ? (title ? `Vote: ${title}` : 'Vote') : null }, ...from.rows.map((r) => {
+    h('ul', { class: 'mboard', 'data-total': from.count, 'data-noun': b.noun.join('|'), role: open ? 'group' : null, 'aria-label': open ? (title ? `Vote: ${title}` : 'Vote') : null }, ...from.rows.map((r) => {
       const label = shown(r.values[b.show]);
       const n = tally?.[r.id];
       const picked = myPick === r.id;
@@ -177,6 +177,7 @@ function board(c: Ctx, b: Extract<Block, { type: 'board' }>, i: number): HTMLEle
           : h('div', { class: 'mvote' }, ...body),
         tally ? bar(n ?? 0, total) : null);
     })),
+    from.count > from.rows.length ? h('p', { class: 'small mmore' }, `and ${plural(from.count - from.rows.length, b.noun)} more`) : null,
     // With no tally the counts stay hidden. A phone holds only its own ballot, so it can't say how many are in.
     !tally && votes ? h('p', { class: 'small' }, votes.rows ? 'The counts are hidden for now.' : votes.count === 0 ? 'No votes yet.' : votes.count === 1 ? '1 vote in.' : `${plural(votes.count, ['vote', 'votes'])} in. The counts are hidden for now.`) : null,
     open ? h('p', { class: 'small' }, myPick ? 'Tap another one to change your vote.' : 'Tap one to vote.') : null,
@@ -228,6 +229,33 @@ function reveal(c: Ctx, b: Extract<Block, { type: 'reveal' }>, i: number): HTMLE
 }
 
 /** Every block of this surface, in the spec's order. A block that has nothing to say on this surface is left out. */
+/**
+ * The big screen can't scroll, so a list or board draws only the rows that fit, in the box's order, and then says how
+ * many more there are ("and 9 books more"): the box's count less the rows on screen. Runs after the page is drawn,
+ * since only the browser knows how tall a row is; a drawn row is never cut in half.
+ */
+export function fitRows(root: HTMLElement): void {
+  const pad = window.innerWidth * 0.02;
+  const limit = window.innerHeight - pad;
+  root.querySelectorAll<HTMLUListElement>('ul[data-total]').forEach((ul) => {
+    const card = ul.closest<HTMLElement>('.mb');
+    if (!card || card.getBoundingClientRect().bottom <= limit) return;
+    const total = Number(ul.dataset.total);
+    const [one, many] = (ul.dataset.noun ?? '|').split('|');
+    let line = card.querySelector<HTMLElement>('.mmore');
+    if (!line) {
+      line = h('p', { class: 'small mmore' });
+      ul.after(line);
+    }
+    const say = () => (line!.textContent = `and ${plural(total - ul.children.length, [one, many])} more`);
+    say();
+    while (ul.children.length > 1 && card.getBoundingClientRect().bottom > limit) {
+      ul.lastElementChild!.remove();
+      say();
+    }
+  });
+}
+
 export function drawBlocks(c: Ctx): HTMLElement[] {
   const out: HTMLElement[] = [];
   c.v.blocks.forEach((b, i) => {

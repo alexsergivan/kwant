@@ -140,6 +140,43 @@ try {
     await check('walk-refused', o, { width: 390 });
     await o.ctx.close();
   }
+  // Walk 1c: typing on through a push keeps the caret where it was (qa.md D1: "lemarchMidd").
+  {
+    const o = await open('made-shelf');
+    const p = o.page;
+    const code = o.url.split('/p/')[1].split('#')[0];
+    await p.waitForSelector('[data-block=form] input[name=title]');
+    await p.click('[data-block=form] input[name=title]');
+    await p.keyboard.type('Midd');
+    fake.push(code, (b) => b.rows.shelf.push({ id: 'px', owner: 'g2', values: { title: 'Pushed In', genre: 'novel' }, at: '' }));
+    await p.waitForSelector('text=Pushed In');
+    await p.keyboard.type('lemarch');
+    const typed = await p.inputValue('[data-block=form] input[name=title]');
+    if (typed !== 'Middlemarch') problems.push(`walk caret: typed through a push gave ${JSON.stringify(typed)}`);
+    results['walk-caret'] = typed;
+    await o.ctx.close();
+  }
+  // Walk 1d: 44 books on the big screen. Only whole rows that fit are drawn, then "and N books more" (qa.md D2).
+  for (const [label, size] of [['1080', TV], ['720', TV720]]) {
+    const o = await open('screen-made-shelf', size);
+    const p = o.page;
+    const code = o.url.split('/p/')[1].split('#')[0];
+    await p.waitForSelector('[data-block=board]');
+    fake.push(code, (b) => { for (let i = 0; i < 40; i++) b.rows.shelf.push({ id: `m${i}`, owner: 'g2', values: { title: `Book ${i + 1}`, genre: 'novel' }, at: '' }); });
+    await p.waitForSelector('[data-block=board] .mmore');
+    const facts = await p.evaluate(() => ['board', 'list'].map((k) => {
+      const card = document.querySelector(`[data-block=${k}]`);
+      return card && { k, rows: card.querySelectorAll('ul[data-total] > li').length, more: card.querySelector('.mmore')?.textContent ?? '' };
+    }).filter(Boolean));
+    for (const f of facts) {
+      const m = /^and (\d+) \w+ more$/.exec(f.more);
+      if (!m || f.rows + Number(m[1]) !== 44 || f.rows < 1) problems.push(`many ${label} ${f.k}: ${f.rows} rows, "${f.more}"`);
+    }
+    results[`many-${label}`] = facts;
+    await p.screenshot({ path: path.join(out, `screen-many-${label}.png`) });
+    await check(`screen-many-${label}`, o, { width: size.width });
+    await o.ctx.close();
+  }
   // Walk 2: a guess on the phone, then the host reveals from the remote and the phone shows the answers.
   {
     const phone = await open('made-opening');
