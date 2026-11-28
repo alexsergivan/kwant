@@ -1,0 +1,26 @@
+{
+  "version": "0.9.58",
+  "date": "2026-11-27",
+  "highlights": [
+    {
+      "id": "bubble-not-alert",
+      "title": "Bot replies no longer look like warnings",
+      "text": "A bot's reply is now plain text with a thin line in its avatar's colour, so you still see who is talking. Coloured boxes are kept for errors, warnings and questions for you.",
+      "image": null,
+      "open": null
+    },
+    {
+      "id": "small-avatar-badges-build",
+      "title": "Small avatars show their faces clearly",
+      "text": "In the sidebar and on phone replies, a bot's mood, status and model marks now sit on the avatar's corner instead of over its face. Only each bot's newest reply shows how it feels.",
+      "image": null,
+      "open": null
+    }
+  ],
+  "fixes": [
+    "Deleting a bot no longer blanks the page; if its chat was open you move to another chat, and a page error shows a Reload button.",
+    "kwant.si now has a Deploy on Railway card, so you can run kwant in the cloud in one click without your own server.",
+    "An approval request from a team's member bot now shows in the team chat, not only the lead's.",
+    "A bot's avatar perks up again when you send it a message; the thinking blink no longer cuts the perk-up off."
+  ]
+}

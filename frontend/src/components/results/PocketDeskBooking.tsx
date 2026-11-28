@@ -6,7 +6,7 @@
 // Only Tailwind classes and --kw-* tokens; never a hex. No pronouns for a guest or the host: the name repeats.
 
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { AlertTriangle, BellRing, CalendarClock, CalendarPlus, Check, ChevronLeft, ChevronRight, Clock, LayoutGrid, List, Lock, Minus, Pencil, Plus, Reply, Send, Undo2, X, Zap } from 'lucide-react';
+import { AlertTriangle, BellRing, CalendarClock, CalendarPlus, Check, ChevronLeft, ChevronRight, Clock, Clock3, LayoutGrid, List, Lock, Minus, Pencil, Plus, Reply, Send, Undo2, X, Zap } from 'lucide-react';
 import type { DeskBooking, DeskInfo, DeskSlot } from '../../smartResults';
 import { ModernAvatar } from '../ModernAvatar';
 import { pocketApi } from '../../pocketApi';
@@ -78,13 +78,25 @@ function ago(at: string | null): string | null {
 let bookOff = false;
 const BOOK_MISSING = new Set(['bad_action', 'unknown_action', 'no_such_action', 'not_supported']);
 export const bookingFeatures = {
-  /** False once the server said it has no `book` action: "Book a time for Ben" hides. */
-  canBook: () => !bookOff,
+  /** desk-needs-you-buttons: true only when the server lists `book` in the desk's actions, and false again once a tap
+   *  said it has none. Off by default, so a page load never offers a button that ends in 400 unknown_action. */
+  canBook: (actions?: readonly string[] | null) => !bookOff && !!actions?.includes('book'),
   /** Tests and fixtures. */
   setBook(on: boolean) {
     bookOff = !on;
   },
 };
+
+/** The guest holds a time the host confirmed or booked in this app: "Book a time" isn't offered again. */
+export const bookedHere = (code: string, guest: string) =>
+  deskAnswers.forCode(code).some((x) => x.guest === guest && x.a.phase !== 'failed' && (x.a.kind === 'confirm' || x.a.kind === 'book'));
+
+/** The guest's own lines (frontend/guest/src/desk/copy.ts bookNote), quoted in the host's Undo line. */
+const hostOr = (host: string) => host || 'The host';
+const SEE_YOU = 'See you then! To change it, write here.';
+export const guestConfirmedLine = (host: string, when: string) => `${hostOr(host)} confirmed your time: ${when}. ${SEE_YOU}`;
+export const guestBookedLine = (host: string, when: string) => `${hostOr(host)} booked you for ${when}. ${SEE_YOU}`;
+export const guestDeclinedLine = (host: string, when: string) => `${hostOr(host)} can’t do ${when}. The time is free again.`;
 
 /** Opens the Inbox (Needs you) in this space, the way Shell's Back/Forward do. */
 export function openInbox() {
@@ -555,18 +567,18 @@ const HostBubble: React.FC<{ children: React.ReactNode }> = ({ children }) => (
 );
 
 const UndoLine: React.FC<{ k: string; phase: string; name: string; what: string }> = ({ k, phase, name, what }) => (
-  <p className="flex flex-wrap items-center gap-x-2 text-[13px] text-zinc-400 sm:text-2xs">
-    <Check size={12} aria-hidden="true" />
-    <span>
-      {phase === 'sending' ? `Sending to ${name}…` : `Sent to ${name}: “${what}”`}
-      {phase === 'holding' ? ' · Undo for 5 s' : ''}
+  // The icon keeps its own column, so a long quote wraps under the words, and Undo follows the quote.
+  <p className="grid grid-cols-[12px_minmax(0,1fr)] items-start gap-x-2 text-[13px] text-zinc-400 sm:text-2xs">
+    {phase === 'sent' ? <Check size={12} className="mt-[3px]" aria-hidden="true" data-icon="sent" /> : <Clock3 size={12} className="mt-[3px]" aria-hidden="true" data-icon="waiting" />}
+    <span className="flex flex-wrap items-center gap-x-2">
+      <span>{phase === 'holding' ? `Sending to ${name} in 5\u00a0s: “${what}”` : phase === 'sending' ? `Sending to ${name}…` : `Sent to ${name}: “${what}”`}</span>
+      {phase === 'holding' && (
+        <button type="button" onClick={() => deskAnswers.undo(k)} className="inline-flex min-h-[44px] items-center gap-1 -ml-2 rounded-lg px-2 font-semibold text-zinc-100 hover:bg-white/[0.05] kw-focus sm:min-h-[28px]" data-action="undo">
+          <Undo2 size={13} aria-hidden="true" />
+          Undo
+        </button>
+      )}
     </span>
-    {phase === 'holding' && (
-      <button type="button" onClick={() => deskAnswers.undo(k)} className="inline-flex min-h-[44px] items-center gap-1 rounded-lg px-2 font-semibold text-zinc-100 hover:bg-white/[0.05] kw-focus sm:min-h-[28px]" data-action="undo">
-        <Undo2 size={13} aria-hidden="true" />
-        Undo
-      </button>
-    )}
   </p>
 );
 
@@ -670,7 +682,7 @@ export const BookingAllow: React.FC<{ code: string; req: BookingRequest; host: s
             <HostBubble>{a.text}</HostBubble>
           </div>
         ) : null}
-        <UndoLine k={k} phase={a.phase} name={name} what={yes ? (host ? `${host} confirmed your time.` : 'Your time is confirmed.') : host ? `${host} can’t do ${when}.` : `${when} isn’t possible.`} />
+        <UndoLine k={k} phase={a.phase} name={name} what={yes ? guestConfirmedLine(host, when) : guestDeclinedLine(host, when)} />
       </div>
     );
   }
@@ -810,7 +822,11 @@ export const OddAllow: React.FC<{
   askStart?: string | null;
   /** The desk's times; the Inbox has none and BookFor reads them. */
   slots?: DeskSlot[] | null;
-}> = ({ code, guest, name, reason, quote, bot, host, askedAt, askStart, slots }) => {
+  /** The host actions the server lists for this desk: "Book a time" needs `book` among them. */
+  actions?: readonly string[] | null;
+  /** The guest already holds a confirmed time: no "Book a time" for them. */
+  booked?: boolean;
+}> = ({ code, guest, name, reason, quote, bot, host, askedAt, askStart, slots, actions = null, booked = false }) => {
   useDeskAnswers();
   const k = deskKey(code, guest);
   const a = deskAnswers.get(k);
@@ -840,8 +856,8 @@ export const OddAllow: React.FC<{
           </span>
         </p>
         <p className="flex items-center gap-2 text-[13px] text-zinc-400 sm:text-2xs">
-          <Check size={12} aria-hidden="true" />
-          {a.phase === 'sending' ? `Booking ${name}…` : `Sent to ${name}: “${host ? `${host} booked you for` : 'You’re booked for'} ${when}.”`}
+          {a.phase === 'sent' ? <Check size={12} aria-hidden="true" data-icon="sent" /> : <Clock3 size={12} aria-hidden="true" data-icon="waiting" />}
+          {a.phase === 'sending' ? `Booking ${name}…` : `Sent to ${name}: “${guestBookedLine(host, when)}”`}
         </p>
       </div>
     );
@@ -852,7 +868,8 @@ export const OddAllow: React.FC<{
   if (picking) return <BookFor code={code} guest={guest} name={name} host={host} slots={slots ?? null} askStart={askStart ?? null} onBack={() => setPicking(false)} />;
 
   const head = askStart ? `${name} asks for a time you haven’t listed: ${slotWhen(askStart)}` : reason || `${name} needs you`;
-  const canBook = bookingFeatures.canBook() && !missing;
+  // Only for a guest who named a time (a plain question, such as a price, has none), never for one already booked.
+  const canBook = bookingFeatures.canBook(actions) && !missing && !!askStart && !booked && !bookedHere(code, guest);
   const submit = () => {
     const t = text.trim();
     if (!t) return;
@@ -917,9 +934,11 @@ export const OddAllow: React.FC<{
         </div>
       )}
       <p className={SMALL}>
-        {canBook
-          ? `There’s no plain “Yes” here: a yes to a time is a booking. “Book a time” lets you pick an open time or add one, and ${name} is told it’s booked.`
-          : `There’s no plain “Yes” here: a yes to a time is a booking. Write ${name} a reply asking them to pick a time, or add the time in Edit times first.`}
+        {!askStart
+          ? `Your answer goes to ${name} as you, marked “host”. ${bot} never answers this for you. “No reply needed” sends nothing.`
+          : canBook
+            ? `There’s no plain “Yes” here: a yes to a time is a booking. “Book a time” lets you pick an open time or add one, and ${name} is told it’s booked.`
+            : `There’s no plain “Yes” here: a yes to a time is a booking. Write ${name} a reply asking them to pick a time, or add the time in Edit times first.`}
       </p>
     </div>
   );
@@ -964,7 +983,14 @@ export const BookFor: React.FC<{ code: string; guest: string; name: string; host
   const askDay = askStart?.slice(0, 10) ?? null;
   const askOpen = askStart ? open.find((s) => s.start === askStart) ?? null : null;
   const commonLen = slots.length ? slots[slots.length - 1].minutes : 60;
-  const [day, setDay] = useState<string>(() => (askDay && askDay >= todayKey() ? askDay : openDays[0] ?? todayKey()));
+  const firstDay = () => (askDay && askDay >= todayKey() ? askDay : openDays[0] ?? todayKey());
+  const [day, setDay] = useState<string>(firstDay);
+  // m9: in the Inbox the times arrive after the first draw; open on the asked day, else the first day with a time.
+  const dayPicked = useRef(false);
+  useEffect(() => {
+    if (!dayPicked.current && loaded) setDay(firstDay());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loaded]);
   const [others, setOthers] = useState(false);
   const [pick, setPick] = useState<Pick | null>(() =>
     askOpen ? { kind: 'slot', slot: askOpen } : askStart && askStart > now ? { kind: 'new', day: askStart.slice(0, 10), time: askStart.slice(11), minutes: commonLen } : null,
@@ -1044,6 +1070,7 @@ export const BookFor: React.FC<{ code: string; guest: string; name: string; host
                   type="button"
                   aria-pressed={d === day}
                   onClick={() => {
+                    dayPicked.current = true;
                     setDay(d);
                     setOthers(false);
                   }}
@@ -1191,6 +1218,8 @@ export const BookingNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
             askedAt={item.asked_at}
             askStart={item.ask_slot_start ?? null}
             slots={null}
+            actions={item.actions ?? null}
+            booked={!!item.booked}
           />
         )}
       </div>
@@ -1290,8 +1319,20 @@ export const BookingSetup: React.FC<{
 /** The read-only week on a live desk: head with ‹ ›, then the days. */
 export const LiveWeek: React.FC<{ slots: DeskSlot[] }> = ({ slots }) => {
   const now = nowKey();
-  const first = slots.find((s) => s.start > now)?.start.slice(0, 10) ?? todayKey();
-  const [monday, setMonday] = useState(() => weekOf(first < todayKey() ? todayKey() : first));
+  // Who is booked when: open on the week of the next booking (confirmed or asked for), else the next open time.
+  const ahead = slots.filter((s) => s.start > now);
+  const first = (ahead.find((s) => s.confirmed.length > 0 || s.requested.length > 0) ?? ahead[0])?.start.slice(0, 10) ?? todayKey();
+  const opening = weekOf(first < todayKey() ? todayKey() : first);
+  const [monday, setMondayRaw] = useState(opening);
+  // The live read can land after the first paint: follow it until the host moves the week.
+  const moved = useRef(false);
+  useEffect(() => {
+    if (!moved.current) setMondayRaw(opening);
+  }, [opening]);
+  const setMonday = (m: string) => {
+    moved.current = true;
+    setMondayRaw(m);
+  };
   const inWeek = slots.filter((s) => s.start.slice(0, 10) >= monday && s.start.slice(0, 10) <= addDays(monday, 6));
   const days = shownDays(inWeek, monday);
   return (

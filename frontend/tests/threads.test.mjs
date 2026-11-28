@@ -344,8 +344,10 @@ test('32j: waiting lines name the teammate and the ask; no ask keeps "working on
   assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: 'question' }), 'Writer asked you a question');
   assert.equal(t.delegationStatusLine('running', 'Writer', { waiting: null }), 'Writer is working on it');
   assert.equal(t.delegationStatusLine('running', 'Writer'), 'Writer is working on it');
-  // Only a running teammate can be waiting on the person: other states keep their own line.
+  // Only a running teammate can wait on an approval; a finished one can still have its question open.
   assert.equal(t.delegationStatusLine('completed', 'Writer', { waiting: 'approval' }), 'Writer finished');
+  assert.equal(t.delegationStatusLine('completed', 'Writer', { waiting: 'question' }), 'Writer needs your answer to finish');
+  assert.equal(t.delegationStatusLine('completed', 'Writer', { waiting: null }), 'Writer finished');
   assert.equal(t.delegationStatusLine('queued', 'Writer', { waiting: 'question' }), 'Waiting for Writer to start');
 });
 
@@ -399,14 +401,34 @@ test('32j: the card says the teammate is waiting, in amber with a hand, and its 
   }
 });
 
-test('32j: without an ask, or once finished, the card is unchanged', () => {
+test('32j: without an ask, or finished with no open question, the card is unchanged', () => {
   const working = card.render(props({ meta: wMeta, live: { ...delegation('running'), id: 'd1' }, waiting: null }));
   assert.match(working, /Writer is working on it/);
   assert.match(working, /animate-spin/);
   assert.match(working, /Open Writer&#x27;s thread|Open Writer's thread/);
-  const done = card.render(props({ meta: wMeta, live: { ...delegation('completed'), id: 'd1' }, waiting: 'approval' }));
-  assert.match(done, /Writer finished/);
-  assert.doesNotMatch(done, /Go to it|needs your OK/);
+  for (const waiting of ['approval', null]) {
+    const done = card.render(props({ meta: wMeta, live: { ...delegation('completed'), id: 'd1' }, waiting }));
+    assert.match(done, /Writer finished/);
+    assert.doesNotMatch(done, /Go to it|needs your OK|needs your answer/);
+    assert.doesNotMatch(done, /border-amber-500\/30|lucide-hand/);
+    assert.match(done, /Open Writer&#x27;s thread|Open Writer's thread/);
+  }
+});
+
+test('tnac: a finished teammate whose question is still open says it needs the answer, in amber, with "Go to it"', () => {
+  const rMeta = { ...wMeta, kind: 'delegation_result', status: 'completed' };
+  const html = card.render(props({ meta: rMeta, text: 'Blocked: the budget per person.', live: { ...delegation('completed'), id: 'd1' }, waiting: 'question' }));
+  assert.match(html, /Result from/, 'the heading stays');
+  assert.match(html, /Blocked: the budget per person\./, 'the result text stays');
+  assert.match(html, /role="status"[^>]*>.*Writer needs your answer to finish/s);
+  assert.doesNotMatch(html, /Writer finished/);
+  assert.match(html, /lucide-hand/);
+  assert.match(html, /border-amber-500\/30/);
+  assert.match(html, /text-amber-300/);
+  assert.match(html, />Go to it</);
+  assert.match(html, /aria-label="Go to Writer&#x27;s thread"|aria-label="Go to Writer's thread"/);
+  assert.doesNotMatch(html, /Stop “/, 'Stop only while it runs');
+  assert.doesNotMatch(html, /holo|kw-sticker/);
 });
 
 test('32j: App passes the waiting state to the delegation card from pending approvals and questions', async () => {

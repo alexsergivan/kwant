@@ -42,7 +42,7 @@ use chrono::{DateTime, Duration, Utc};
 use kits::{Kit, KitCtx, KitError, KitRules, Player, Viewer};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
@@ -118,6 +118,33 @@ impl Switch {
             Switch::Kits(k) => k.clone(),
         }
     }
+
+    /// The setting's normal form: `off`, `on`, or the sorted kit list (`quiz,santa`).
+    pub fn stored(&self) -> String {
+        match self {
+            Switch::Off => "off".into(),
+            Switch::All => "on".into(),
+            Switch::Kits(k) => k.join(","),
+        }
+    }
+}
+
+/// What `POST /api/settings` stores for `pocket_apps` (pocket-switch-in-settings): the normal form
+/// of `raw`. Empty and `off` are off and `on` is every kit (either in any case). A list keeps the
+/// kits this build has and drops other names; a value that names no kit at all is an error, so a
+/// typo never quietly turns pocket apps off.
+pub fn setting_value(raw: &str) -> Result<String, String> {
+    let v = raw.trim().to_ascii_lowercase();
+    if v.is_empty() || v == "off" {
+        return Ok("off".into());
+    }
+    match Switch::parse(&v) {
+        Switch::Off => {
+            let shown: String = raw.trim().chars().take(60).collect();
+            Err(format!("Unknown Pocket app: {shown}. Known: {}", kits::kit_ids().join(", ")))
+        }
+        s => Ok(s.stored()),
+    }
 }
 
 /// The switch as stored now (a missing or unreadable setting is off).
@@ -161,6 +188,9 @@ pub struct Snapshot {
     pub kit_state: Value,
     pub rows: Vec<PlayerRow>,
     pub players: Vec<Player>,
+    /// wall-dates-agree: a wall's schedule zone (the person's clock for its dates and zip names);
+    /// `None` for other kits and a wall with no schedule row.
+    pub zone: Option<schedule::Zone>,
 }
 
 impl Snapshot {
@@ -199,9 +229,60 @@ pub struct Hub {
     /// pa14b: the walls whose best-30 pick runs in this process now, with the bot running it.
     /// A pick the state says runs but that isn't here was cut off by a restart.
     picks: Mutex<HashMap<String, String>>,
+    /// secret-ballot-unlinkable F2: a save dropped a secret and the database's old copies of
+    /// the row still need wiping ([`Self::wipe_soon`]).
+    wipe_due: Arc<AtomicBool>,
+    /// A wipe runs now.
+    wiping: Arc<AtomicBool>,
 }
 
 impl Hub {
+    /// Wipes the database's old row versions ([`Database::wipe_old_rows`]) in the background
+    /// when a save asked for it, at most one at a time. A wipe a reader held up stays due, and
+    /// the next save or the sweep (once a minute) tries again.
+    pub(crate) fn wipe_soon(&self, db: &Database) {
+        if !self.wipe_due.load(Ordering::SeqCst) || self.wiping.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (db, due, wiping) = (db.clone(), self.wipe_due.clone(), self.wiping.clone());
+        tokio::spawn(async move {
+            while due.swap(false, Ordering::SeqCst) {
+                match db.wipe_old_rows().await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        tracing::debug!("pocket apps: a reader held up the wipe of old rows; trying again later");
+                        due.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!("pocket apps: couldn't wipe old rows: {e}");
+                        due.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
+            wiping.store(false, Ordering::SeqCst);
+        });
+    }
+
+    /// Waits for the wipe [`Self::wipe_soon`] started, and runs one more when it is still due.
+    /// For the sweep and tests: true when nothing is left to wipe.
+    pub async fn wipe_now(&self, db: &Database) -> bool {
+        // A wipe waits for readers at most the busy timeout; never hold the sweep for longer
+        let until = Instant::now() + std::time::Duration::from_secs(30);
+        while self.wiping.load(Ordering::SeqCst) {
+            if Instant::now() > until {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        if self.wipe_due.swap(false, Ordering::SeqCst) && !matches!(db.wipe_old_rows().await, Ok(true)) {
+            self.wipe_due.store(true, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+
     fn lock_for(&self, code: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.locks.lock().unwrap_or_else(|e| e.into_inner()).entry(code.to_string()).or_default().clone()
     }
@@ -329,7 +410,9 @@ async fn refresh(state: &AppState, code: &str) -> PResult<Option<Arc<Snapshot>>>
         return Ok(None);
     };
     let rows = state.db.pocket_players(code).await?;
+    let zone = if row.kit == wall::ID { state.db.pocket_schedule(code).await?.map(|r| schedule::Zone::parse(&r.zone)) } else { None };
     let snap = Arc::new(Snapshot {
+        zone,
         spec: serde_json::from_str(&row.spec).unwrap_or(Value::Null),
         kit_state: serde_json::from_str(&row.kit_state).unwrap_or(Value::Null),
         players: rows.iter().map(to_player).collect(),
@@ -394,16 +477,18 @@ pub fn view_json(s: &Snapshot, viewer: &Viewer, now: DateTime<Utc>) -> Value {
         Viewer::Host => "host",
         Viewer::BigScreen => "screen",
     };
+    let mut view = match viewer {
+        Viewer::Host => host_view_with_locks(s, kit.view(&ctx, &s.kit_state, viewer)),
+        _ => kit.view(&ctx, &s.kit_state, viewer),
+    };
+    wall_pick::fill_delete_on(s, &mut view);
     json!({
         "api": API_VERSION,
         "version": s.row.version,
         "viewer": role,
         "pocket": pocket_json(s),
         "me": me,
-        "view": match viewer {
-            Viewer::Host => host_view_with_locks(s, kit.view(&ctx, &s.kit_state, viewer)),
-            _ => kit.view(&ctx, &s.kit_state, viewer),
-        },
+        "view": view,
     })
 }
 
@@ -467,6 +552,14 @@ pub async fn create(state: &AppState, mut req: CreateRequest) -> PResult<(Arc<Sn
     if kit.answer_bot() {
         fill_answer_bot(state, &mut req).await?;
     }
+    // wall-dates-agree m14: a wall's `when` is the line people read; a date or RFC 3339 one (an
+    // older bot's spec) moves to `event_at`. Its times are planned from the spec as sent, so such
+    // a wall opens, closes and reminds exactly as before.
+    let as_sent = (kit.id() == wall::ID).then(|| {
+        let sent = req.spec.clone();
+        wall::when_to_event_at(&mut req.spec);
+        sent
+    });
     let spec_text = serde_json::to_string(&req.spec).map_err(|_| PocketError::internal())?;
     if spec_text.len() > MAX_SPEC_BYTES {
         return Err(PocketError::new(StatusCode::PAYLOAD_TOO_LARGE, "spec_too_big", "The spec is bigger than 256 KB."));
@@ -486,7 +579,7 @@ pub async fn create(state: &AppState, mut req: CreateRequest) -> PResult<(Arc<Sn
     }
     let now = Utc::now();
     // pa7: a future `when` sets the times the bot didn't (lobby 30 min before, close 4 h after)
-    let (times, mut sched) = schedule::plan(state, &req.spec, req.opens_at, req.closes_at, req.origin.as_ref(), now).await;
+    let (times, mut sched) = schedule::plan(state, as_sent.as_ref().unwrap_or(&req.spec), req.opens_at, req.closes_at, req.origin.as_ref(), now).await;
     if let (Some(o), Some(c)) = (times.opens_at, times.closes_at) {
         if c <= o {
             return Err(PocketError::new(StatusCode::BAD_REQUEST, "bad_times", "closes_at must be after opens_at."));
@@ -564,6 +657,14 @@ pub async fn end(state: &AppState, code: &str) -> PResult<Arc<Snapshot>> {
     let s = snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
     if s.row.state == OPEN {
         let now = Utc::now();
+        // desk-inbox-rows-server: the kit's last word on the state (the desk counts who still waits)
+        if let Some(kit) = s.kit() {
+            let mut kit_state = s.kit_state.clone();
+            if kit.on_end(&KitCtx::new(&s.spec, &s.players, now), &mut kit_state) {
+                let text = serde_json::to_string(&kit_state).map_err(|_| PocketError::internal())?;
+                state.db.pocket_save_state(code, &text, &[], now).await?;
+            }
+        }
         let expires = s.rules().map_or(Some(now), |r| r.retention.expires_at(&s.spec, Some(now)));
         state.db.pocket_end(code, now, expires).await?;
         changed(state, code).await?;
@@ -844,10 +945,15 @@ pub async fn join(state: &AppState, code: &str, req: JoinRequest) -> PResult<(Pl
 }
 
 async fn save(state: &AppState, code: &str, kit_state: &Value, ctx: KitCtx<'_>, now: DateTime<Utc>) -> PResult<()> {
+    let forgot = ctx.forgot;
     let events: Vec<(Option<String>, String, String)> =
         ctx.events.into_iter().map(|e| (e.player_id, e.kind, serde_json::to_string(&e.payload).unwrap_or_else(|_| "{}".into()))).collect();
     let text = serde_json::to_string(kit_state).map_err(|_| PocketError::internal())?;
     state.db.pocket_save_state(code, &text, &events, now).await?;
+    if forgot {
+        state.pocket.wipe_due.store(true, Ordering::SeqCst);
+        state.pocket.wipe_soon(&state.db);
+    }
     changed(state, code).await?;
     // pa14: a photo the save hid loses its file now
     if let Some(s) = snapshot(state, code).await?.filter(|s| s.row.kit == wall::ID) {
@@ -1200,6 +1306,35 @@ async fn tick_one(state: &AppState, code: &str, now: DateTime<Utc>, only_unwatch
     }
 }
 
+/// Kits whose stored states [`Kit::scrub`] may bring up to date.
+pub const SCRUBS: &[&str] = &[gather::ID];
+
+/// secret-ballot-unlinkable: every pocket of a kit in [`SCRUBS`], open or ended (a decided vote
+/// ends at once and keeps its data until the deletion date), gets the kit's scrub; a change is
+/// saved like any other (no event). So an upgrade fixes data an older version stored.
+pub(crate) async fn scrub_stored(state: &AppState) {
+    for kit_id in SCRUBS {
+        for code in state.db.pocket_codes_of_kit(kit_id).await.unwrap_or_default() {
+            let lock = state.pocket.lock_for(&code);
+            let _g = lock.lock().await;
+            let Ok(Some(s)) = snapshot(state, &code).await else { continue };
+            let Some(kit) = s.kit() else { continue };
+            let mut kit_state = s.kit_state.clone();
+            if kit.scrub(&mut kit_state) {
+                let mut ctx = KitCtx::new(&s.spec, &s.players, Utc::now());
+                ctx.forgot = true;
+                match save(state, &code, &kit_state, ctx, Utc::now()).await {
+                    Ok(()) => tracing::info!(code = %code, "pocket apps: unlinked a closed vote's ballots"),
+                    Err(e) => tracing::warn!(code = %code, "pocket apps: couldn't unlink a closed vote's ballots: {}", e.code),
+                }
+            }
+        }
+    }
+    // F2: the old row versions those saves, or a vote's close, left in the database files go
+    // too (a no-op when nothing forgot a secret)
+    state.pocket.wipe_now(&state.db).await;
+}
+
 /// What one sweep did.
 #[derive(Debug, Default, PartialEq)]
 pub struct Swept {
@@ -1208,9 +1343,12 @@ pub struct Swept {
 }
 
 /// Runs unwatched kit timers, ends pockets past their closing time and deletes pockets whose
-/// data has expired. Does nothing while the switch is off.
+/// data has expired. Only the scrub of stored states ([`Kit::scrub`]) runs while the switch is
+/// off.
 pub async fn sweep(state: &AppState, now: DateTime<Utc>) -> Swept {
     let mut out = Swept::default();
+    // A privacy fix to stored data doesn't wait for the switch
+    scrub_stored(state).await;
     if !enabled(&state.db).await {
         return out;
     }
@@ -1320,5 +1458,32 @@ mod tests {
         assert!(santa.any() && santa.allows("santa") && !santa.allows("quiz") && !santa.allows("desk"));
         assert!(Switch::All.allows("quiz") && Switch::All.allows("santa"));
         assert!(!Switch::Off.any() && !Switch::Off.allows("santa"));
+    }
+
+    #[test]
+    fn the_settings_value_is_the_normal_form_or_an_error() {
+        for (raw, want) in [
+            ("", "off"),
+            ("  ", "off"),
+            ("off", "off"),
+            (" OFF ", "off"),
+            ("on", "on"),
+            ("On", "on"),
+            ("santa", "santa"),
+            (" Santa , Quiz ", "quiz,santa"),
+            ("santa,santa", "santa"),
+            ("santa,bogus", "santa"),
+            ("on,santa", "santa"),
+        ] {
+            assert_eq!(setting_value(raw).as_deref(), Ok(want), "{raw:?}");
+        }
+        for raw in ["bogus", "yes", "true", ",", "on,"] {
+            let e = setting_value(raw).unwrap_err();
+            assert!(e.starts_with("Unknown Pocket app: ") && e.contains("santa") && e.contains("quiz"), "{raw:?}: {e}");
+        }
+        assert!(setting_value(&"x".repeat(500)).unwrap_err().len() < 200, "a long value isn't echoed whole");
+        assert_eq!(Switch::Off.stored(), "off");
+        assert_eq!(Switch::All.stored(), "on");
+        assert_eq!(Switch::parse("santa,quiz").stored(), "quiz,santa");
     }
 }

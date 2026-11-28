@@ -2883,7 +2883,8 @@ struct TurnEndedGuard {
 
 impl Drop for TurnEndedGuard {
     fn drop(&mut self) {
-        self.turns.end_turn(&self.tag.turn_id);
+        // the outcome the turn_ended below says, kept for the bot's status (last_outcome)
+        self.turns.end_turn_as(&self.tag.turn_id, self.outcome);
         // a busy browser step a failed or stopped turn left behind is never retried
         let _ = super::busy_retry::take(&self.tag.turn_id);
         // However it ended (reply, error, stop, panic), the lead hears the hand-offs this turn started
@@ -5692,6 +5693,11 @@ pub struct SettingsResponse {
     pub truth_ledger: String,
     /// With the Truth Ledger `on`: the deterministic contradiction scan (default true).
     pub fact_dispute_scan: bool,
+    /// Pocket apps: `off` (the default), `on` (every kit) or the kits that are on (`santa`,
+    /// `quiz,santa`), in the normal form `POST` stores (see `crate::pocket::Switch`).
+    pub pocket_apps: String,
+    /// Every kit this build has, for the Settings control.
+    pub pocket_kits: Vec<&'static str>,
 }
 
 /// Unknown keys are refused, so a typo or a key from another version fails loudly instead of
@@ -5754,6 +5760,9 @@ pub struct SaveSettingsPayload {
     pub automation_discovery_daily_cap: Option<i64>,
     pub truth_ledger: Option<String>,
     pub fact_dispute_scan: Option<bool>,
+    /// `off`, `on` or a comma list of kit ids; stored in its normal form (`crate::pocket::setting_value`).
+    /// A value that names no kit is refused; unknown names next to known ones are dropped.
+    pub pocket_apps: Option<String>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -5826,6 +5835,8 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         automation_discovery_daily_cap: super::missions::discovery::daily_cap(&state).await,
         truth_ledger: super::missions::truth_ledger::mode(&state).await.into(),
         fact_dispute_scan: super::missions::truth_ledger::scan_enabled(&state).await,
+        pocket_apps: crate::pocket::switch(&state.db).await.stored(),
+        pocket_kits: crate::pocket::kits::kit_ids(),
     }))
 }
 
@@ -5911,6 +5922,11 @@ pub async fn save_settings(
     if let Some(e) = super::missions::truth_ledger::settings_error(payload.truth_ledger.as_deref()) {
         return bad(e);
     }
+    let pocket_apps = match payload.pocket_apps.as_deref().map(crate::pocket::setting_value) {
+        Some(Err(e)) => return bad(e),
+        Some(Ok(v)) => Some(v),
+        None => None,
+    };
     if payload.chain_token_budget.is_some_and(|n| n > super::budget::MAX) {
         return bad(format!("chain_token_budget must be 0–{}", super::budget::MAX));
     }
@@ -6122,6 +6138,14 @@ pub async fn save_settings(
     }
     if let Some(city) = location {
         let _ = state.db.set_setting(super::bot_actions::LOCATION_SETTING, &city).await;
+    }
+    // The guest port's listener reads the switch every few seconds, so no restart is needed
+    if let Some(v) = pocket_apps {
+        if let Err(e) = state.db.set_setting(crate::pocket::SETTING, &v).await {
+            tracing::warn!("pocket apps: saving the switch failed: {e}");
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Could not save pocket_apps" }))));
+        }
+        return Ok(Json(json!({ "status": "saved", "pocket_apps": v })));
     }
 
     Ok(Json(json!({ "status": "saved" })))

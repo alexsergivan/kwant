@@ -1,13 +1,16 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { HardHat, useDevModeOn } from './DevModeSwitch';
 import { isKwantWorking, lastRunOf, liveRunOf, subscribeKwant } from '../kwantActivity';
 import { badgeUsageFor, modelBadgeFor, modelBadgeSize, type ModelBadge } from '../engines';
 import { badgeBotOf, badgeEngines, badgeProfiles, subscribeBadgeData } from '../modelBadgeData';
 import { EngineMark } from './EngineMark';
 import { AvatarMoodMark, useKwantMood, useKwantNotices } from './AvatarMood';
+import { smallMark } from '../avatarMarks';
 import { moodLabel, restingUntilOf, type Mood } from '../kwantMood';
 import { STATUS_DOT, STATUS_PRIORITY, statusText, type BotStatus } from '../botStatus';
 import { avatarStyleFor, botLooksRev, subscribeBotLooks } from '../botLooks';
+import { MOOD_FACE, cellFill, eyeCells, faceMood, mouthCells, twitchFor, type Cell, type Eyes, type Mouth } from '../avatarFaces';
+import { landAvatar, lifeMood, registerLife, type LifeQuirk, type LifeZone } from '../avatarLife';
 
 interface ModernAvatarProps {
   /** The bot's avatar style, or a title or name hint; a known bot's saved style wins over a hint. */
@@ -30,6 +33,22 @@ interface ModernAvatarProps {
   mood?: Mood;
   /** Words for that set mood ("House is checking Home Assistant"); the avatar is then an image with this name. */
   moodText?: string;
+  /**
+   * Living avatars: 'mood' (default) draws the face of the bot's mood; 'plain' keeps today's idle face (the chat's
+   * older reply rows: only each bot's newest reply shows its mood face).
+   */
+  face?: 'mood' | 'plain';
+  /**
+   * Idle life from the shared clock (avatarLife.ts): 'full' on Bot home and the drop layer, 'header' in the chat header,
+   * 'list' on sidebar rows (blinks, and the hovered row glances). Off everywhere else. Never under 24 px or under
+   * reduced motion; no React render per blink.
+   */
+  life?: LifeZone;
+  /**
+   * The reply this avatar heads just landed (a stream handing over): hop once on the shared clock after `land` ms,
+   * only when the face is "finished" (a failed or stopped reply stays still). Fires once per mount.
+   */
+  land?: number;
 }
 
 const noopUnsubscribe = () => undefined;
@@ -101,6 +120,8 @@ export const AvatarModelBadge: React.FC<{ kwantId: string; size: number }> = ({ 
   const badge = useModelBadge(kwantId);
   const usage = useBadgeUsage(badge);
   const d = modelBadgeSize(size);
+  // small-avatar-badges: under 36 px the badge is 12 px and sits 4 px (5 under 28) past the corner, off the face.
+  const sm = smallMark(size, 'model');
   const [leaving, setLeaving] = useState<ModelBadge | null>(null);
   const shownRef = useRef<ModelBadge | null>(badge);
   const key = badge?.key;
@@ -123,7 +144,8 @@ export const AvatarModelBadge: React.FC<{ kwantId: string; size: number }> = ({ 
   return (
     <span
       className={`kw-model-badge ring-2 ring-zinc-950 ${badge.cantRun ? 'bg-zinc-950' : 'bg-zinc-900'}`}
-      style={{ width: d, height: d }}
+      style={sm ? { width: d, height: d, left: -sm.out, bottom: -sm.out } : { width: d, height: d }}
+      data-small={sm ? '' : undefined}
       role="img"
       aria-label={tip.replace('\n', '. ')}
       title={tip}
@@ -579,7 +601,62 @@ function renderHouse(c: Creature) {
   ];
 }
 
-function renderCreature(c: Creature) {
+export interface FaceOptions {
+  /** The mood whose face to draw (idle when missing or unknown). */
+  mood?: string;
+  /** Also draw the hidden frame groups the shared clock switches with data-life (ModernAvatar's `life`). */
+  life?: boolean;
+}
+
+const cellRects = (c: Creature, cells: Cell[], prefix: string) =>
+  cells.map(([x, y, w, h, role], i) => px(x, y, w, h, cellFill(c, role), `${prefix}${i}`));
+
+/** The 7 face cells of a mood, or, with `life`, the rest face plus the hidden frames (closed, glances, perk, happy). */
+function renderFace(c: Creature, o: FaceOptions): React.ReactElement[] {
+  const f = MOOD_FACE[faceMood(o.mood)];
+  if (!o.life) return [...cellRects(c, eyeCells(c, f.eyes), 'fe'), ...cellRects(c, mouthCells(c, f.mouth), 'fm')];
+  const eyes = (e: Eyes, k: string) => <g key={k} className={`kw-life kw-life-${k}`}>{cellRects(c, eyeCells(c, e), `${k}e`)}</g>;
+  const whole = (e: Eyes, m: Mouth, k: string) => (
+    <g key={k} className={`kw-life kw-life-${k}`}>{[...cellRects(c, eyeCells(c, e), `${k}e`), ...cellRects(c, mouthCells(c, m), `${k}m`)]}</g>
+  );
+  return [
+    <g key="face-eyes" className="kw-face-eyes">{cellRects(c, eyeCells(c, f.eyes), 'fe')}</g>,
+    <g key="face-mouth" className="kw-face-mouth">{cellRects(c, mouthCells(c, f.mouth), 'fm')}</g>,
+    eyes('closed', 'closed'),
+    eyes('glanceL', 'glanceL'),
+    eyes('glanceR', 'glanceR'),
+    whole('wide', 'o', 'perk'),
+    whole('happy', 'grin', 'happy'),
+  ];
+}
+
+const FACE_KEY = /^(e[1-4]|m[1-3])$/;
+
+/**
+ * The creature with a mood's face: the face replaces e1-e4 and m1-m3 where they are drawn today (after the feet,
+ * before the in-front accessories; House: before its blush), so glasses, the camera, the bell and ties stay in front.
+ * Without options it is today's idle face. With `life`, the twitch frame hides and adds its accessory cells.
+ */
+function renderCreature(c: Creature, o: FaceOptions = {}) {
+  const base = renderCreatureBase(c).filter((r) => !FACE_KEY.test(String(r.key)));
+  const at = c.accessory === 'house' ? base.findIndex((r) => r.key === 'k1') : base.findIndex((r) => r.key === 'f2') + 1;
+  const tw = o.life ? twitchFor(c) : null;
+  const hidden = (k: string) => !!tw?.hide.some(([x, y, w, h]) => k.startsWith(`${x}-${y}-${w}-${h}-`));
+  const drawn = tw ? base.map((r) => (hidden(String(r.key)) ? React.cloneElement(r, { className: 'kw-tw-hide' }) : r)) : base;
+  const out = [...drawn.slice(0, at), ...renderFace(c, o), ...drawn.slice(at)];
+  if (tw)
+    out.push(
+      <g key="twitch" className="kw-life kw-life-twitch">
+        {tw.add.map(([x, y, w, h, fill], i) => px(x, y, w, h, fill, `tw${i}`))}
+      </g>,
+    );
+  return out;
+}
+
+/** How this creature fidgets when idle (design.md "Twitch cells per accessory"); the rest glance instead. */
+export const quirkOf = (c: Creature): LifeQuirk => (c.accessory === 'bulb' ? 'bulb' : twitchFor(c) ? 'twitch' : 'none');
+
+function renderCreatureBase(c: Creature) {
   if (c.accessory === 'house') return renderHouse(c);
   return [
     // Ground shadow
@@ -664,6 +741,9 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   asleep = false,
   mood: moodOverride,
   moodText: moodTextOverride,
+  face = 'mood',
+  life,
+  land,
 }) => {
   const turnWorking = useKwantWorking(kwantId);
   const working = moodOverride ? moodOverride === 'working' : turnWorking;
@@ -673,8 +753,13 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   const kwantMood = useKwantMood(kwantId);
   const mood: Mood = moodOverride ?? kwantMood;
   const notices = useKwantNotices(kwantId);
-  const moodText = moodTextOverride ?? moodLabel(mood, name, restingUntilOf(kwantId));
-  const label = moodText ?? (shown ? statusText(name, shown) : name ? (working ? `${name} is working…` : name) : undefined);
+  // An older reply row (face="plain") shows no live mood: no plate, no ring, no resting tint, no mood words. Only each
+  // bot's newest reply row carries the mood (Mira, 0.9.57 media: older rows kept the live mood mark).
+  const plain = face === 'plain';
+  const shownMood: Mood = plain ? 'idle' : mood;
+  const ringOn = working && !plain;
+  const moodText = moodTextOverride ?? moodLabel(shownMood, name, restingUntilOf(kwantId));
+  const label = moodText ?? (shown ? statusText(name, shown) : name ? (ringOn ? `${name} is working…` : name) : undefined);
   // Same bot, same look in every place: re-reads when the app's bot list changes.
   useSyncExternalStore(subscribeBotLooks, botLooksRev, botLooksRev);
   const creature = creatureFor(role, name, kwantId);
@@ -685,19 +770,48 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
   const framed = size > 20;
   // Small framed avatars enlarge the creature so it stays readable
   const compact = framed && size < 48;
+  // Living avatars: the face follows the mood (a plain face on the chat's older reply rows); life only from 24 px.
+  const faced = faceMood(shownMood);
+  const lifeOn = !!life && framed && size >= 24 && !asleep;
+  const rootRef = useRef<HTMLDivElement>(null);
+  const quirk = quirkOf(creature);
+  useEffect(() => {
+    if (!lifeOn || !life || !rootRef.current) return;
+    return registerLife(rootRef.current, { zone: life, mood: faced, kwantId, quirk });
+    // The mood follows through lifeMood below; re-registering on it would restart the clock for this avatar.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lifeOn, life, kwantId, quirk]);
+  const landedOnce = useRef(false);
+  useEffect(() => {
+    if (land === undefined || landedOnce.current || faced !== 'finished' || !rootRef.current) return;
+    landedOnce.current = true;
+    landAvatar(rootRef.current, land);
+  }, [land, faced]);
+  // Before paint, so a mood change blinks through (lids for 100 ms) instead of flashing the new face first.
+  useLayoutEffect(() => {
+    if (lifeOn && rootRef.current) lifeMood(rootRef.current, faced);
+  }, [faced, lifeOn]);
+  // The eyes a blink or sleep covers: whatever eyes the face draws now.
+  const shownEyes = eyeCells(creature, MOOD_FACE[faced].eyes);
+  const lids = (prefix: string) => [
+    ...shownEyes.map(([x, y, w, h], i) => px(x, y, w, h, creature.body, `${prefix}c${i}`)),
+    ...eyeCells(creature, 'closed').map(([x, y, w, h], i) => px(x, y, w, h, creature.shade, `${prefix}l${i}`)),
+  ];
 
   return (
     <div
-      className={`kw-avatar relative inline-flex flex-shrink-0 select-none ${working ? 'kw-avatar-working' : ''} ${mood === 'resting' ? 'kw-avatar-resting' : ''} ${className}`}
+      ref={rootRef}
+      data-life-zone={lifeOn ? life : undefined}
+      className={`kw-avatar relative inline-flex flex-shrink-0 select-none ${size < 36 ? 'kw-avatar-sm' : ''} ${ringOn ? 'kw-avatar-working' : ''} ${shownMood === 'resting' ? 'kw-avatar-resting' : ''} ${className}`}
       style={{ width: size, height: size }}
       title={label}
       role={moodTextOverride ? 'img' : undefined}
       aria-label={moodTextOverride}
-      data-working={working || undefined}
+      data-working={ringOn || undefined}
       data-status={shown}
-      data-mood={mood === 'idle' ? undefined : mood}
+      data-mood={shownMood === 'idle' ? undefined : shownMood}
     >
-      {working && <span className="kw-avatar-ring" aria-hidden="true" />}
+      {ringOn && <span className="kw-avatar-ring" aria-hidden="true" />}
       <svg
         viewBox={framed ? '0 0 26 26' : '5 2.5 16 17'}
         className="w-full h-full"
@@ -713,33 +827,24 @@ export const ModernAvatar: React.FC<ModernAvatarProps> = ({
           ))}
         <g transform={compact ? 'translate(13 13.2) scale(1.2) translate(-13 -12)' : undefined}>
           <g className="kw-avatar-body">
-            {renderCreature(creature).filter((r) => framed && !compact || r.key !== 'shadow')}
+            {renderCreature(creature, { mood: faced, life: lifeOn }).filter((r) => framed && !compact || r.key !== 'shadow')}
+            {asleep && <g data-asleep>{lids('sl')}</g>}
             {/* One blink when the person sends this bot a message: the eyes close for 160 ms. */}
-            {asleep && (
-              <g data-asleep>
-                {px(10, 10, 2, 2, creature.body, 'sl1')}
-                {px(14, 10, 2, 2, creature.body, 'sl2')}
-                {px(10, 12, 2, 1, creature.shade, 'sl3')}
-                {px(14, 12, 2, 1, creature.shade, 'sl4')}
-              </g>
-            )}
             {!asleep && notices > 0 && (
               <g key={notices} className="kw-avatar-blink">
-                {px(10, 10, 2, 3, creature.body, 'bl1')}
-                {px(14, 10, 2, 3, creature.body, 'bl2')}
-                {px(10, 12, 2, 1, creature.shade, 'bl3')}
-                {px(14, 12, 2, 1, creature.shade, 'bl4')}
+                {lids('bl')}
               </g>
             )}
           </g>
         </g>
       </svg>
-      <AvatarMoodMark mood={mood} size={size} />
+      <AvatarMoodMark mood={shownMood} size={size} />
       {hat && <HardHat />}
       {modelBadge && kwantId && modelBadgeSize(size) !== null && <AvatarModelBadge kwantId={kwantId} size={size} />}
+      {/* No status dot under 24 px: no caller passes one today, and on a 20 px face it would cover the mouth. */}
       {shown && (
         <>
-          <span className={`absolute bottom-0 right-0 w-2.5 h-2.5 rounded-full ring-2 ring-zinc-950 ${STATUS_DOT[shown]}`} aria-hidden="true" />
+          {size >= 24 && <span className={`absolute rounded-full ring-2 ring-zinc-950 ${smallMark(size, 'status') ? 'w-2 h-2 -bottom-px -right-px' : 'bottom-0 right-0 w-2.5 h-2.5'} ${STATUS_DOT[shown]}`} aria-hidden="true" />}
           <span className="sr-only">{label}</span>
         </>
       )}

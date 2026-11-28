@@ -118,11 +118,14 @@ pub struct KitCtx<'a> {
     pub players: &'a [Player],
     pub now: DateTime<Utc>,
     pub events: Vec<KitEvent>,
+    /// secret-ballot-unlinkable F2: this change dropped a secret (a vote's ballot salt). After
+    /// saving it the core wipes the database's old copies of the row ([`super::Hub::wipe_soon`]).
+    pub forgot: bool,
 }
 
 impl<'a> KitCtx<'a> {
     pub fn new(spec: &'a Value, players: &'a [Player], now: DateTime<Utc>) -> Self {
-        Self { spec, players, now, events: Vec::new() }
+        Self { spec, players, now, events: Vec::new(), forgot: false }
     }
 
     pub fn player(&self, id: &str) -> Option<&Player> {
@@ -189,6 +192,13 @@ pub trait Kit: Send + Sync + 'static {
     /// `true` when the kit's timers must run even while nobody watches (a draw or a reveal
     /// weeks away): the sweeper then ticks its open pockets once a minute.
     fn ticks_unwatched(&self) -> bool {
+        false
+    }
+    /// Brings a stored state up to a privacy rule that came after it was saved (secret-ballot-
+    /// unlinkable: a vote closed by an older version still keeps its ballots' salt). The sweeper
+    /// calls it once a minute for each pocket of a kit in [`super::SCRUBS`], open or ended, and
+    /// saves the state when it returns `true`. Nothing by default.
+    fn scrub(&self, _state: &mut Value) -> bool {
         false
     }
     /// `true` when guests come back over days or weeks, so the link must keep working: such a
@@ -259,6 +269,11 @@ pub trait Kit: Send + Sync + 'static {
     /// pa13a: `true` when guests mustn't learn about each other at all, not even how many there
     /// are (the front desk): the public facts then carry no player count.
     fn private_guests(&self) -> bool {
+        false
+    }
+    /// desk-inbox-rows-server: once, as the pocket ends (under its lock, before the state is
+    /// frozen): the kit may note what the end left behind. `true` when it changed `state`.
+    fn on_end(&self, _ctx: &KitCtx, _state: &mut Value) -> bool {
         false
     }
     /// pa13a: `true` when a bot answers guests (the front desk): the core then refuses a spec

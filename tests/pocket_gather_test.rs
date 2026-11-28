@@ -11,7 +11,7 @@ use axum::{
     http::{HeaderMap, Request, StatusCode},
     Router,
 };
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, NaiveDate, Utc};
 use kwnt::{
     broker::PermissionBroker,
     config::Config,
@@ -287,6 +287,48 @@ async fn every_route(t: &T, code: &str, host_key: &str, a_key: &str) -> Vec<(Str
     out
 }
 
+/// Swaps two stored ballots that differ, whatever their keys (after the close no key leads to
+/// a person), and reloads the pocket.
+async fn swap_any_two(t: &T, code: &str, any_player: &str) {
+    let mut st = kit_state(t, code).await;
+    let b = st["ballots"].as_object().unwrap().clone();
+    let (kx, bx) = b.iter().next().unwrap();
+    let (ky, by) = b.iter().find(|(_, v)| *v != bx).unwrap();
+    st["ballots"][kx] = by.clone();
+    st["ballots"][ky] = bx.clone();
+    save_kit_state(t, code, &st, any_player).await;
+}
+
+/// The stored ballots as a sorted list of orders (who cast them can't matter).
+fn orders(st: &Value) -> Vec<Value> {
+    let mut v: Vec<Value> = st["ballots"].as_object().unwrap().values().cloned().collect();
+    v.sort_by_key(|x| x.to_string());
+    v
+}
+
+/// Proves a stored state can't be paired with names: no ballot key is the salted hash of any
+/// player id under any salt that was ever stored (or none), and no salt is left.
+/// The database files (`kwnt.db` and its write-ahead log) that still hold `needle` anywhere,
+/// in a live row or in an old row version's leftover bytes.
+fn files_holding(t: &T, needle: &str) -> Vec<&'static str> {
+    let dir = t.state.config.data_dir.clone();
+    ["kwnt.db", "kwnt.db-wal"]
+        .into_iter()
+        .filter(|f| std::fs::read(dir.join(f)).map(|b| b.windows(needle.len()).any(|w| w == needle.as_bytes())).unwrap_or(false))
+        .collect()
+}
+
+fn unpairable(st: &Value, salts: &[&str], ids: &[String]) {
+    assert_eq!(st["ballot_salt"], "", "the salt is cleared: {st}");
+    let keys: Vec<&String> = st["ballots"].as_object().unwrap().keys().collect();
+    for salt in salts.iter().copied().chain([""]) {
+        for id in ids {
+            let k = ballot_key(salt, id);
+            assert!(!keys.contains(&&k), "{id}'s ballot is still under its salted key {k}");
+        }
+    }
+}
+
 /// Swaps two players' stored ballots (everything else kept) and reloads the pocket.
 async fn swap_ballots(t: &T, code: &str, x: &str, y: &str, any_player: &str) {
     let mut st = kit_state(t, code).await;
@@ -330,10 +372,10 @@ async fn no_route_pairs_a_person_with_a_ballot() {
         ok(&t, &code, k, "vote", json!({ "ranking": b })).await;
     }
     let a_key = p[0].1.clone();
-    // A sees their own ballot and the live 1st-choice bars (they voted)
+    // A sees their own ballot (to change it), and no count while voting is open
     let a = view_of(&t, &code, &a_key).await;
     assert_eq!(a["me"], json!({ "voted": true, "ballot": [2, 0, 1] }));
-    assert_eq!(a["live"].as_array().unwrap().len(), 4);
+    assert_eq!(a["live"], Value::Null);
     // The host: who voted (to nudge), totals, never an order
     let h = host_view(&t, &code).await;
     assert_eq!(h["voters"].as_array().unwrap().len(), 5);
@@ -362,12 +404,14 @@ async fn no_route_pairs_a_person_with_a_ballot() {
     assert_eq!(result["outcome"], "winner", "{result}");
     assert!(!result["rounds"].as_array().unwrap().is_empty());
     assert_eq!(result["ballots_counted"], 5, "a count, named so no view carries a \"ballots\" key");
+    // Closed: A no longer gets an order back either (nothing links A to one now)
+    assert_eq!(view_of(&t, &code, &a_key).await["me"], json!({ "voted": true, "ballot": null }));
     let before = every_route(&t, &code, &host_key, &a_key).await;
     for (route, status, body) in &before {
         let text = body.to_string();
         assert!(!text.contains("ballot_salt") && !text.contains("\"ballots\""), "{route} ({status}): {text}");
     }
-    swap_ballots(&t, &code, &p[1].0, &p[2].0, &p[0].0).await;
+    swap_any_two(&t, &code, &p[0].0).await;
     same(&before, &every_route(&t, &code, &host_key, &a_key).await, "closed");
 
     // The event log: no row per vote, and no row names a person
@@ -447,6 +491,196 @@ async fn a_ranked_vote_counts_in_rounds_and_a_tie_waits_for_the_host() {
     let h = host_view(&t, &code).await;
     assert_eq!((h["phase"].as_str(), h["result"]["outcome"].as_str(), h["result"]["winner"]["name"].as_str()), (Some("closed"), Some("picked"), Some("Sat")));
     assert_eq!(kit_state(&t, &code).await["done"], true);
+}
+
+// ---- secret-ballot-unlinkable (part A) ----
+
+/// What is stored after the close can't be paired with names, for a winner and for a tie: the
+/// salt is gone and every ballot sits under a new random key, so recomputing
+/// `sha256(salt:player_id)` with the salt stored before the close (or none) finds nothing. The
+/// orders and the count are the same, and a tie's "vote again" and "pick" still work.
+#[tokio::test]
+async fn a_closed_vote_keeps_nothing_that_pairs_a_ballot_with_a_name() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let mut ids = Vec::new();
+    for (n, b) in [("Ana", json!([2, 0, 1])), ("Ben", json!([0, 1])), ("Cleo", json!([1, 0, 3])), ("Dev", json!([0, 2])), ("Eli", json!([3, 1]))] {
+        let (id, k) = joined(&t, &code, n).await;
+        ok(&t, &code, &k, "vote", json!({ "ranking": b })).await;
+        ids.push((id, k));
+    }
+    let open = kit_state(&t, &code).await;
+    let salt = open["ballot_salt"].as_str().unwrap().to_string();
+    assert!(!salt.is_empty());
+    let pid: Vec<String> = ids.iter().map(|x| x.0.clone()).collect();
+    // While open the salted key is how a voter finds their own ballot (part B moves it)
+    assert!(pid.iter().all(|id| open["ballots"].get(ballot_key(&salt, id)).is_some()));
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    let closed = kit_state(&t, &code).await;
+    unpairable(&closed, &[&salt], &pid);
+    let old_keys: Vec<&String> = open["ballots"].as_object().unwrap().keys().collect();
+    assert!(closed["ballots"].as_object().unwrap().keys().all(|k| !old_keys.contains(&k)), "no key survives the close");
+    assert_eq!(orders(&closed), orders(&open), "the same ballots, only re-keyed");
+    assert_eq!(closed["voted"].as_object().unwrap().len(), 5, "who voted stays (for the card), apart");
+    let r = &host_view(&t, &code).await["result"];
+    assert_eq!((r["outcome"].as_str(), r["ballots_counted"].as_u64()), (Some("winner"), Some(5)), "{r}");
+    for (_, k) in &ids {
+        assert_eq!(view_of(&t, &code, k).await["me"], json!({ "voted": true, "ballot": null }));
+    }
+
+    // A tie unlinks too; "vote again" starts with a new salt, and the next close unlinks again
+    let (code, _) = make(&t, spec(now, "vote", json!({ "ballot": { "kind": "one_pick", "options": ["Fri", "Sat", "Sun"] } }))).await;
+    let mut ids = Vec::new();
+    for (n, pick) in [("Ana", 0), ("Ben", 0), ("Cleo", 1), ("Dev", 1)] {
+        let (id, k) = joined(&t, &code, n).await;
+        ok(&t, &code, &k, "vote", json!({ "ranking": [pick] })).await;
+        ids.push((id, k));
+    }
+    let pid: Vec<String> = ids.iter().map(|x| x.0.clone()).collect();
+    let salt1 = kit_state(&t, &code).await["ballot_salt"].as_str().unwrap().to_string();
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    let tie = kit_state(&t, &code).await;
+    assert_eq!(tie["phase"], "tie");
+    unpairable(&tie, &[&salt1], &pid);
+    assert_eq!(host_act(&t, &code, "revote_24h", json!({})).await.status, StatusCode::OK);
+    let again = kit_state(&t, &code).await;
+    let salt2 = again["ballot_salt"].as_str().unwrap().to_string();
+    assert!(!salt2.is_empty() && salt2 != salt1 && again["ballots"] == json!({}), "{again}");
+    for (i, (_, k)) in ids.iter().enumerate() {
+        ok(&t, &code, k, "vote", json!({ "ranking": [i % 2] })).await;
+    }
+    pocket::sweep(&t.state, Utc::now() + Duration::hours(24) + Duration::minutes(1)).await;
+    let tie2 = kit_state(&t, &code).await;
+    assert_eq!(tie2["phase"], "tie");
+    unpairable(&tie2, &[&salt1, &salt2], &pid);
+    assert_eq!(host_act(&t, &code, "pick", json!({ "option": 1 })).await.status, StatusCode::OK);
+    assert_eq!(host_view(&t, &code).await["result"]["winner"]["name"], "Sat");
+}
+
+/// No count while a vote is open, for the host or a guest, whatever `show_live_count` says: two
+/// host reads around Ben's vote show Ben in `voters` and no tally either time, and Ben (the
+/// 2nd voter, with the live count on) can't learn Ana's pick. At the close the totals are the
+/// same as before the change.
+#[tokio::test]
+async fn nobody_sees_a_count_while_a_vote_is_open() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "vote", json!({ "show_live_count": true, "ballot": { "kind": "one_pick", "options": ["Winter wonderland", "80s disco", "Casino"] } }))).await;
+    let (_, ana) = joined(&t, &code, "Ana").await;
+    let (_, ben) = joined(&t, &code, "Ben").await;
+    ok(&t, &code, &ana, "vote", json!({ "ranking": [0] })).await;
+    let h1 = host_view(&t, &code).await;
+    ok(&t, &code, &ben, "vote", json!({ "ranking": [1] })).await;
+    let h2 = host_view(&t, &code).await;
+    let names = |h: &Value| h["voters"].as_array().unwrap().iter().map(|v| v["name"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    assert_eq!((names(&h1), names(&h2)), (vec!["Ana".to_string()], vec!["Ana".to_string(), "Ben".to_string()]), "who voted stays, to nudge");
+    assert_eq!((h1["live"].clone(), h2["live"].clone()), (Value::Null, Value::Null));
+    assert_eq!((h1["result"].clone(), h2["result"].clone()), (Value::Null, Value::Null));
+    for k in [&ana, &ben] {
+        let v = view_of(&t, &code, k).await;
+        assert_eq!(v["show_live_count"], true, "the flag is still accepted and shown");
+        assert_eq!((v["live"].clone(), v["result"].clone()), (Value::Null, Value::Null), "{v}");
+    }
+    // A 3rd vote, then the close: totals for everyone, as before
+    let (_, cleo) = joined(&t, &code, "Cleo").await;
+    ok(&t, &code, &cleo, "vote", json!({ "ranking": [1] })).await;
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    for r in [host_view(&t, &code).await["result"].clone(), view_of(&t, &code, &ana).await["result"].clone()] {
+        assert_eq!((r["outcome"].as_str(), r["winner"]["name"].as_str(), r["winner"]["votes"].as_u64()), (Some("winner"), Some("80s disco"), Some(2)), "{r}");
+        // A round lists the options most votes first (then option order), as before the change
+        let counts: Vec<(&str, u64)> = r["rounds"][0]["counts"].as_array().unwrap().iter().map(|c| (c["name"].as_str().unwrap(), c["votes"].as_u64().unwrap())).collect();
+        assert_eq!(counts, vec![("80s disco", 2), ("Winter wonderland", 1), ("Casino", 0)]);
+    }
+}
+
+/// A vote closed by an older version (salt still beside the ballots) is unlinked by the next
+/// sweep period, also after the pocket ended and while the switch is off (Rigel's F1: the
+/// supervisor's period, not only `pocket::sweep`). An open vote keeps its salt
+/// (a voter still changes their own ballot), and an RSVP's unused salt goes too.
+#[tokio::test]
+async fn a_vote_closed_before_the_fix_is_unlinked_on_the_next_sweep() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let mut ids = Vec::new();
+    // A decided vote (The Old Mill, 2 of 3 first choices): a tie waits for the host and never
+    // ends by itself
+    for (n, b) in [("Ana", json!([2, 0])), ("Ben", json!([0, 1])), ("Cleo", json!([0, 1, 3]))] {
+        let (id, k) = joined(&t, &code, n).await;
+        ok(&t, &code, &k, "vote", json!({ "ranking": b })).await;
+        ids.push(id);
+    }
+    let open = kit_state(&t, &code).await;
+    let salt = open["ballot_salt"].as_str().unwrap().to_string();
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    pocket::schedule::run_once(&t.state, Utc::now()).await;
+    assert_eq!(before_state(&t, &code).await, "ended");
+    let result = host_view(&t, &code).await["result"].clone();
+    // What an older version stored at the close: the salted keys and the salt
+    let mut old = kit_state(&t, &code).await;
+    old["ballots"] = open["ballots"].clone();
+    old["ballot_salt"] = json!(salt);
+    save_kit_state(&t, &code, &old, &ids[0]).await;
+    assert!(ids.iter().all(|id| old["ballots"].get(ballot_key(&salt, id)).is_some()), "pairable before the sweep");
+    // An open vote and a closed RSVP next to it
+    let (open_code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let (_, k) = joined(&t, &open_code, "Dev").await;
+    ok(&t, &open_code, &k, "vote", json!({ "ranking": [0] })).await;
+    let open_before = kit_state(&t, &open_code).await;
+    let (rsvp, _) = make(&t, spec(now, "rsvp", json!({}))).await;
+    assert_eq!(host_act(&t, &rsvp, "close_now", json!({})).await.status, StatusCode::OK);
+    let mut r = kit_state(&t, &rsvp).await;
+    r["ballot_salt"] = json!("0123456789abcdef");
+    t.state.db.pocket_save_state(&rsvp, &r.to_string(), &[], Utc::now()).await.unwrap();
+
+    // Through the supervisor's own sweep period, with the switch read the way it reads it
+    t.state.db.set_setting(pocket::SETTING, "off").await.unwrap();
+    assert!(!pocket::listener::reconcile(&t.state).await);
+    pocket::listener::sweep_once(&t.state, Utc::now()).await;
+    let st = kit_state(&t, &code).await;
+    unpairable(&st, &[&salt], &ids);
+    assert_eq!(files_holding(&t, &salt), Vec::<&str>::new(), "the sweep wiped the old copies too (F2)");
+    assert_eq!(orders(&st), orders(&open));
+    assert_eq!(kit_state(&t, &rsvp).await["ballot_salt"], "", "an unused salt goes too");
+    assert_eq!(kit_state(&t, &open_code).await, open_before, "an open vote is left as it is");
+    t.state.db.set_setting(pocket::SETTING, "on").await.unwrap();
+    assert_eq!(host_view(&t, &code).await["result"], result, "the same result");
+    // Once is enough: a second sweep has nothing to change
+    let v = t.state.db.pocket_get(&code).await.unwrap().unwrap().version;
+    pocket::sweep(&t.state, Utc::now()).await;
+    assert_eq!(t.state.db.pocket_get(&code).await.unwrap().unwrap().version, v);
+}
+
+#[tokio::test]
+async fn a_closed_votes_salt_leaves_the_database_files_too() {
+    // Rigel F2: the row said salt "", but the old row versions in the file and its log still
+    // had it, so anyone reading the disk could pair people with ballots
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let mut ids = Vec::new();
+    for (n, b) in [("Ana", json!([2, 0])), ("Ben", json!([0, 1])), ("Cleo", json!([1, 0, 3]))] {
+        let (id, k) = joined(&t, &code, n).await;
+        ok(&t, &code, &k, "vote", json!({ "ranking": [0] })).await;
+        ok(&t, &code, &k, "vote", json!({ "ranking": b })).await;
+        ids.push(id);
+    }
+    let salt = kit_state(&t, &code).await["ballot_salt"].as_str().unwrap().to_string();
+    assert!(!files_holding(&t, &salt).is_empty(), "the open vote's salt is on disk");
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    unpairable(&kit_state(&t, &code).await, &[&salt], &ids);
+    // The close asked for the wipe; the next sweep waits for it (and would run it if the
+    // background one had been held up). The sweep scrubs nothing here: the close unlinked it
+    pocket::sweep(&t.state, Utc::now()).await;
+    assert_eq!(files_holding(&t, &salt), Vec::<&str>::new(), "no old copy of the salt in the files");
+    // A save that forgets nothing doesn't wipe: the next vote's salt stays while it is open
+    let (open_code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let (_, k) = joined(&t, &open_code, "Dev").await;
+    ok(&t, &open_code, &k, "vote", json!({ "ranking": [0] })).await;
+    let open_salt = kit_state(&t, &open_code).await["ballot_salt"].as_str().unwrap().to_string();
+    pocket::sweep(&t.state, Utc::now()).await;
+    assert!(!files_holding(&t, &open_salt).is_empty(), "an open vote keeps its salt");
 }
 
 // ---- RSVP ----
@@ -567,6 +801,117 @@ async fn a_full_slot_keeps_a_waiting_list_and_the_first_moves_in_at_once() {
     assert_eq!(act(&t, &code, &b, "take", json!({ "slot": 0, "note": "x" })).await.status, StatusCode::BAD_REQUEST, "no notes on this sign-up");
 }
 
+/// signup-waiting-note (Mira's office-party pass, fix #4): Leo types "cookies" while joining the
+/// full Desserts line; when Hal lets go, Leo moves up with his note, so the food plan is right.
+#[tokio::test]
+async fn a_waiting_guests_note_moves_up_with_them() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "signup", json!({ "fields": ["slot_note"] }))).await;
+    let (_, hal) = joined(&t, &code, "Hal").await;
+    let (leo_id, leo) = joined(&t, &code, "Leo").await;
+    let (_, nina) = joined(&t, &code, "Nina").await;
+    ok(&t, &code, &hal, "take", json!({ "slot": 0, "note": "Brownies" })).await;
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "cookies" })).await;
+    assert_eq!(view_of(&t, &code, &leo).await["me"]["waiting"], json!({ "slot": 0, "position": 1 }));
+    // Kept, but shown to nobody while he waits
+    assert_eq!(kit_state(&t, &code).await["slots"][0]["notes"][&leo_id], "cookies");
+    let h = host_view(&t, &code).await;
+    assert_eq!(h["slots"][0]["waiting_people"][0]["id"], json!(leo_id));
+    assert!(h["slots"][0]["waiting_people"][0].get("note").is_none(), "{h}");
+    assert!(!h.to_string().contains("cookies"), "{h}");
+    assert!(!view_of(&t, &code, &nina).await.to_string().contains("cookies"));
+    // Hal lets go: Leo moves in with his note
+    ok(&t, &code, &hal, "let_go", json!({})).await;
+    let h = host_view(&t, &code).await;
+    assert_eq!((h["slots"][0]["people"][0]["id"].clone(), h["slots"][0]["people"][0]["note"].clone()), (json!(leo_id), json!("cookies")), "{h}");
+    assert_eq!(view_of(&t, &code, &nina).await["slots"][0]["people"][0]["note"], "cookies");
+    let me = view_of(&t, &code, &leo).await["me"].clone();
+    assert_eq!((me["slot"].as_u64(), me["note"].as_str(), me["moved_up"]["slot"].as_u64()), (Some(0), Some("cookies"), Some(0)), "{me}");
+    let st = kit_state(&t, &code).await;
+    assert!(st["slots"][0].get("notes").is_none(), "the line's note moved, none left behind: {st}");
+    // The moved-up nudge and event still fill, the event without who or the note
+    let d = &h["drafts"][0];
+    assert_eq!((d["to"].as_str(), d["kind"].as_str()), (Some("Leo"), Some("moved_up")));
+    assert!(d["text"].as_str().unwrap().contains("Desserts"), "{d}");
+    let events = t.state.db.pocket_events(&code).await.unwrap();
+    let moved: Vec<_> = events.iter().filter(|(_, k, _)| k == "moved_up").collect();
+    assert_eq!(moved.len(), 1, "{events:?}");
+    assert!(moved.iter().all(|(p, _, payload)| p.is_none() && !payload.contains("pl_") && !payload.contains("cookies")), "{events:?}");
+}
+
+#[tokio::test]
+async fn a_note_in_line_can_change_or_go_and_goes_with_the_person() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "signup", json!({ "fields": ["slot_note"] }))).await;
+    let (_, hal) = joined(&t, &code, "Hal").await;
+    let (leo_id, leo) = joined(&t, &code, "Leo").await;
+    let (max_id, max) = joined(&t, &code, "Max").await;
+    let (ivy_id, ivy) = joined(&t, &code, "Ivy").await;
+    let (zoe_id, zoe) = joined(&t, &code, "Zoe").await;
+    let notes = |st: &Value| st["slots"][0].get("notes").cloned().unwrap_or(json!({}));
+    ok(&t, &code, &hal, "take", json!({ "slot": 0, "note": "Brownies" })).await;
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "cookies" })).await;
+    // A new note replaces it, the same slot with no note clears it
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "carrot cake" })).await;
+    assert_eq!(notes(&kit_state(&t, &code).await), json!({ leo_id.clone(): "carrot cake" }));
+    ok(&t, &code, &leo, "take", json!({ "slot": 0 })).await;
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["slots"][0]["waiting"].clone(), st["slots"][0].get("notes")), (json!([leo_id]), None), "still in line, no note: {st}");
+    // Leaving the line takes the note with it
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "carrot cake" })).await;
+    ok(&t, &code, &leo, "let_go", json!({})).await;
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["slots"][0]["waiting"].clone(), notes(&st)), (json!([]), json!({})), "{st}");
+    // So does moving from the line to a free slot (that slot gets the note sent with it)
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "carrot cake" })).await;
+    ok(&t, &code, &leo, "take", json!({ "slot": 1, "note": "Lemonade" })).await;
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["slots"][0]["waiting"].clone(), notes(&st)), (json!([]), json!({})), "{st}");
+    assert_eq!(st["slots"][1]["taken"][0]["note"], "Lemonade");
+    // A player removed while answers are open: their note goes with them
+    ok(&t, &code, &max, "take", json!({ "slot": 0, "note": "apple pie" })).await;
+    ok(&t, &code, &ivy, "take", json!({ "slot": 0, "note": "caramel flan" })).await;
+    ok(&t, &code, &zoe, "take", json!({ "slot": 0, "note": "lemon tart" })).await;
+    assert_eq!(send(&t.main, "POST", &format!("/api/pockets/{code}/remove"), Some(json!({ "player_id": max_id })), &person()).await.status, StatusCode::OK);
+    assert_eq!(notes(&kit_state(&t, &code).await), json!({ ivy_id.clone(): "caramel flan", zoe_id.clone(): "lemon tart" }));
+    // And after the close
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    assert_eq!(send(&t.main, "POST", &format!("/api/pockets/{code}/remove"), Some(json!({ "player_id": ivy_id })), &person()).await.status, StatusCode::OK);
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["slots"][0]["waiting"].clone(), notes(&st)), (json!([zoe_id]), json!({ zoe_id.clone(): "lemon tart" })), "{st}");
+    // Deleting the answers forgets the line's notes too
+    let r = host_act(&t, &code, "delete_answers", json!({})).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert!(kit_state(&t, &code).await["slots"].as_array().unwrap().iter().all(|s| s.get("notes").is_none()));
+    let all = t.state.db.pocket_get(&code).await.unwrap().unwrap().kit_state;
+    for w in ["cookies", "carrot cake", "apple pie", "caramel flan", "lemon tart"] {
+        assert!(!all.contains(w), "{w:?} is still kept: {all}");
+    }
+}
+
+/// A waiting list stored by an older build (plain ids, no `notes`) reads unchanged and moves up
+/// with no note; a line with no notes stores exactly what an older build stored.
+#[tokio::test]
+async fn a_waiting_list_from_an_older_build_still_moves_up() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "signup", json!({ "fields": ["slot_note"] }))).await;
+    let (_, hal) = joined(&t, &code, "Hal").await;
+    let (leo_id, leo) = joined(&t, &code, "Leo").await;
+    ok(&t, &code, &hal, "take", json!({ "slot": 0 })).await;
+    ok(&t, &code, &leo, "take", json!({ "slot": 0, "note": "cookies" })).await;
+    let mut st = kit_state(&t, &code).await;
+    st["slots"][0].as_object_mut().unwrap().remove("notes");
+    assert_eq!(st["slots"][0], json!({ "taken": st["slots"][0]["taken"].clone(), "waiting": [leo_id.clone()] }), "the older shape");
+    save_kit_state(&t, &code, &st, &leo_id).await;
+    ok(&t, &code, &hal, "let_go", json!({})).await;
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["slots"][0]["taken"][0]["id"].clone(), st["slots"][0]["taken"][0]["note"].clone()), (json!(leo_id), Value::Null), "{st}");
+    assert_eq!(st["slots"][0].as_object().unwrap().keys().collect::<Vec<_>>(), vec!["taken", "waiting"], "{st}");
+}
+
 // ---- The Chaser ----
 
 #[tokio::test]
@@ -600,6 +945,44 @@ async fn one_nudge_per_person_every_48_hours_and_nothing_is_sent() {
     // Nothing went out: no outbox, only counts in the event log
     for (p, kind, payload) in t.state.db.pocket_events(&code).await.unwrap() {
         assert!(p.is_none() && !payload.contains("Ben") && !payload.contains("Hey"), "{kind} {payload}");
+    }
+}
+
+/// signup-waiting-note m3: the not-paid nudge names the price; a template's "({price})" goes
+/// cleanly when there's no price.
+#[tokio::test]
+async fn the_not_paid_nudge_names_the_price() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "rsvp", json!({ "price": "EUR 15" }))).await;
+    let (_, ana) = joined(&t, &code, "Ana").await;
+    ok(&t, &code, &ana, "answer", json!({ "answer": "yes" })).await;
+    let d = host_view(&t, &code).await["drafts"][0].clone();
+    assert_eq!((d["kind"].as_str(), d["text"].as_str()), (Some("not_paid"), Some("Hi Ana, a quick one: your share for Club dinner (EUR 15) is still open. Pay Oleks whenever suits you before the day. Thanks!")));
+    let (code, _) = make(&t, spec(now, "rsvp", json!({ "templates": { "maybe": "Hi {name}, still a maybe for {title} ({price})? {link}" } }))).await;
+    let (_, ana) = joined(&t, &code, "Ana").await;
+    ok(&t, &code, &ana, "answer", json!({ "answer": "maybe" })).await;
+    assert_eq!(host_view(&t, &code).await["drafts"][0]["text"], "Hi Ana, still a maybe for Club dinner? {link}");
+}
+
+/// signup-waiting-note m4: a second copy within 48 hours is refused with "Sun 1:37 AM" in the
+/// host's own zone (the offset on `event_at`), never RFC 3339 or "UTC".
+#[tokio::test]
+async fn the_48_hour_refusal_says_the_time_in_the_hosts_zone() {
+    let t = setup().await;
+    let now = Utc::now();
+    for hours in [-8, 1] {
+        let zone = FixedOffset::east_opt(hours * 3600).unwrap();
+        let (code, _) = make(&t, spec(now, "rsvp", json!({ "members": ["Cleo"], "event_at": (now + Duration::days(7)).with_timezone(&zone).to_rfc3339() }))).await;
+        assert_eq!(host_act(&t, &code, "copied", json!({ "to": "Cleo" })).await.status, StatusCode::OK);
+        let r = host_act(&t, &code, "copied", json!({ "to": "Cleo" })).await;
+        assert_eq!(r.status, StatusCode::CONFLICT);
+        let d = host_view(&t, &code).await["drafts"].as_array().unwrap().iter().find(|d| d["to"] == "Cleo").unwrap().clone();
+        let next = DateTime::parse_from_rfc3339(d["next_copy_at"].as_str().unwrap()).unwrap();
+        let shown = next.with_timezone(&zone).format("%a %-I:%M %p").to_string();
+        let msg = r.body["message"].as_str().unwrap();
+        assert_eq!(msg, format!("One nudge per person every 48 hours. The next one for Cleo is from {shown}."), "at {hours:+}");
+        assert!(!msg.contains("UTC") && !msg.contains(&next.format("%Y").to_string()) && !msg.contains('+'), "{msg}");
     }
 }
 

@@ -9,7 +9,9 @@
 //!   someone leaves, the first person waiting moves in at once and on their own.
 //! - `vote`: one pick (plurality) or ranked (instant runoff), as a **secret ballot**: who voted
 //!   is kept apart from the ballots, and no view, event row or log line pairs a person with a
-//!   ballot. The host sees who voted (to nudge) and the totals, never anyone's order.
+//!   ballot. The host sees who voted (to nudge) and, once voting closes, the totals; never
+//!   anyone's order. Nobody sees a count while voting is open (two reads around one vote would
+//!   give that vote away), and at the close the ballots lose their link to a person for good.
 //!
 //! Host-only: paid ticks, each person's food needs and plus-ones. Guests get names and
 //! Yes / Maybe / No only when `show_names` is on, their own record, and their own paid tick once
@@ -195,6 +197,8 @@ struct St {
     moved: BTreeMap<String, Moved>,
     // Vote. Who voted and the ballots are kept apart: `voted` has people and times, `ballots`
     // has orders under a key that is not a player id (salted hash), in key order, not time order.
+    // While open the salt lets a voter see and change their own ballot; at the close every
+    // ballot gets a random key and the salt is cleared, so no stored value pairs the two.
     ballot_salt: String,
     voted: BTreeMap<String, DateTime<Utc>>,
     ballots: BTreeMap<String, Vec<usize>>,
@@ -245,6 +249,12 @@ struct Slot {
     taken: Vec<Taken>,
     /// Player ids, first in line first.
     waiting: Vec<String>,
+    /// signup-waiting-note: the note someone in line typed (player id → note). It moves into
+    /// their `Taken` when they move up and is never shown while they wait. A separate map, so a
+    /// state from an older build (plain ids, no notes) reads unchanged and an older build reads
+    /// this one.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    notes: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
@@ -344,7 +354,7 @@ fn template<'a>(spec: &'a Value, kind: &str) -> Option<&'a str> {
 fn default_template(face: &str, kind: &str) -> &'static str {
     match (face, kind) {
         (_, "maybe") => "Hi {name}! Still a maybe for {title}? Tap to change your answer: {link}",
-        (_, "not_paid") => "Hi {name}, a quick one: your share for {title} is still open. Pay {host} whenever suits you before the day. Thanks!",
+        (_, "not_paid") => "Hi {name}, a quick one: your share for {title} ({price}) is still open. Pay {host} whenever suits you before the day. Thanks!",
         (_, "moved_up") => "Hi {name}, good news: a spot opened in {slot} for {title}, so you're in now. If you can't make it, let it go here: {link}",
         (VOTE, _) => "Hi {name}! There's a vote: {title}. It takes a few seconds: {link}",
         (SIGNUP, _) => "Hi {name}! There's a sign-up: {title}. Pick what you'd like to bring: {link}",
@@ -379,6 +389,7 @@ impl St {
         for slot in self.slots.iter_mut() {
             slot.taken.clear();
             slot.waiting.clear();
+            slot.notes.clear();
         }
         self.moved.clear();
         self.voted.clear();
@@ -439,13 +450,33 @@ impl St {
         }
     }
 
-    /// 1st-choice totals per option in play (live bars).
-    fn first_choices(&self, spec: &Value) -> Vec<Value> {
-        let opts = self.in_play(spec);
-        let inn: BTreeSet<usize> = opts.iter().copied().collect();
-        let ballots: Vec<Vec<usize>> = self.ballots.values().cloned().collect();
-        let (counts, _) = round_counts(&ballots, &inn);
-        opts.iter().map(|o| json!({ "option": o, "votes": counts.get(o).copied().unwrap_or(0) })).collect()
+    /// secret-ballot-unlinkable: the ballots lose any link to a person. Each gets a new random
+    /// key (the map stays in key order, so neither the salted keys nor the voting order survive)
+    /// and the salt is cleared, so `sha256(salt:player_id)` can't be recomputed from what is
+    /// stored. The count is unchanged: it reads only the orders. False when there is no salt
+    /// (already unlinked, or deleted).
+    fn unlink_ballots(&mut self) -> bool {
+        if self.ballot_salt.is_empty() {
+            return false;
+        }
+        let orders: Vec<Vec<usize>> = std::mem::take(&mut self.ballots).into_values().collect();
+        for (i, order) in orders.into_iter().enumerate() {
+            // 12 random bytes don't collide; if the system's randomness failed (all zeros),
+            // a numbered key keeps every ballot without a link to anyone
+            let mut k = random_hex(12);
+            if self.ballots.contains_key(&k) {
+                k = format!("{k}{i:04}");
+            }
+            self.ballots.insert(k, order);
+        }
+        self.ballot_salt.clear();
+        true
+    }
+
+    /// A vote closed before secret-ballot-unlinkable still has its salt beside the ballots:
+    /// unlink it now (also any other face's unused salt). True when the state changed.
+    fn scrub(&mut self) -> bool {
+        self.phase != OPEN && self.unlink_ballots()
     }
 
     fn slot_of(&self, id: &str) -> Option<usize> {
@@ -462,6 +493,7 @@ impl St {
         self.moved.remove(id);
         if let Some((i, p)) = self.waiting_of(id) {
             self.slots[i].waiting.remove(p);
+            self.slots[i].notes.remove(id);
             return true;
         }
         let Some(i) = self.slot_of(id) else { return false };
@@ -469,7 +501,9 @@ impl St {
         let cap = caps.get(i).map_or(0, |c| c.1);
         while self.slots[i].taken.len() < cap && !self.slots[i].waiting.is_empty() {
             let next = self.slots[i].waiting.remove(0);
-            self.slots[i].taken.push(Taken { id: next.clone(), note: None, at: Some(ctx.now) });
+            // The note they typed while waiting comes with them
+            let note = self.slots[i].notes.remove(&next);
+            self.slots[i].taken.push(Taken { id: next.clone(), note, at: Some(ctx.now) });
             self.moved.insert(next, Moved { slot: i, at: Some(ctx.now), seen: false });
             // A count, never who
             ctx.event(None, "moved_up", json!({ "slot": i }));
@@ -487,6 +521,9 @@ impl St {
             self.done = !tie;
             ctx.event(None, if tie { "tie" } else { "closed" }, json!({ "ballots_counted": self.ballots.len() }));
             self.tally = Some(tally);
+            // A tie too: "vote again" starts over with no ballots and a new salt, and "pick"
+            // reads the tally
+            ctx.forgot |= self.unlink_ballots();
         } else {
             self.phase = CLOSED.into();
             ctx.event(None, "closed", json!({ "answers": self.answered_count(ctx) }));
@@ -594,17 +631,33 @@ struct Nudge<'a> {
 }
 
 /// A draft from the spec's template (else a plain default): `{name}`, `{title}`, `{when}`,
-/// `{place}`, `{host}`, `{slot}` are filled here; `{link}` stays for the card, which knows the
-/// join link it shows.
+/// `{place}`, `{host}`, `{slot}`, `{price}` are filled here; `{link}` stays for the card, which
+/// knows the join link it shows. With no price, a bracketed " ({price})" goes with its brackets.
 fn fill(spec: &Value, kind: &str, name: &str, slot: Option<usize>) -> String {
     let t = template(spec, kind).unwrap_or_else(|| default_template(face(spec), kind));
     let slot_name = slot.and_then(|i| slot_specs(spec).get(i).map(|s| s.0.clone())).unwrap_or_default();
+    let t = match spec_str(spec, "price") {
+        Some(price) => t.replace("{price}", price),
+        None => t.replace(" ({price})", "").replace("({price})", "").replace("{price}", ""),
+    };
     t.replace("{name}", name)
         .replace("{title}", spec_str(spec, "title").unwrap_or(""))
         .replace("{when}", spec_str(spec, "when").unwrap_or(""))
         .replace("{place}", spec_str(spec, "place").unwrap_or(""))
         .replace("{host}", spec_str(spec, "host_name").unwrap_or("the host"))
         .replace("{slot}", &slot_name)
+}
+
+/// signup-waiting-note m4: a time for the host to read, "Sun 1:37 AM", in the host's own zone:
+/// the UTC offset the host's bot wrote on `event_at` (else `closes_at`), else the box's zone.
+/// Never RFC 3339, never "UTC". Within the week a nudge waits, the weekday is enough.
+fn host_time(spec: &Value, t: DateTime<Utc>) -> String {
+    const SHOWN: &str = "%a %-I:%M %p";
+    let offset = DATE_FIELDS.iter().find_map(|f| spec_str(spec, f).and_then(|v| DateTime::parse_from_rfc3339(v).ok()).map(|d| *d.offset()));
+    match offset {
+        Some(o) => t.with_timezone(&o).format(SHOWN).to_string(),
+        None => t.with_timezone(&chrono::Local).format(SHOWN).to_string(),
+    }
 }
 
 fn tally_json(spec: &Value, s: &St) -> Value {
@@ -787,10 +840,12 @@ impl Gather {
                 });
             }
             _ => {
-                let mine = s.voted.contains_key(me).then(|| s.ballots.get(&s.ballot_key(me)).cloned()).flatten();
+                // Their own order while open (to change it); after the close there's no link left
+                let mine = (s.phase == OPEN && s.voted.contains_key(me)).then(|| s.ballots.get(&s.ballot_key(me)).cloned()).flatten();
                 v["me"] = json!({ "voted": s.voted.contains_key(me), "ballot": mine });
-                let live = flag(spec, "show_live_count") && s.voted.contains_key(me) && s.phase == OPEN;
-                v["live"] = if live { json!(s.first_choices(spec)) } else { Value::Null };
+                // secret-ballot-unlinkable: no count while open, whatever `show_live_count` says
+                // (the 2nd voter would learn the 1st's pick); the totals are `result` at the close
+                v["live"] = Value::Null;
                 v["result"] = tally_json(spec, s);
             }
         }
@@ -885,7 +940,8 @@ impl Gather {
                         row
                     }))
                     .collect::<Vec<_>>());
-                v["live"] = if s.phase == OPEN { json!(s.first_choices(spec)) } else { Value::Null };
+                // No count while open: two reads around one vote would pair the voter with it
+                v["live"] = Value::Null;
                 v["result"] = tally_json(spec, s);
             }
         }
@@ -1242,6 +1298,7 @@ impl Kit for Gather {
             for slot in s.slots.iter_mut() {
                 slot.taken.retain(|t| t.id != player_id);
                 slot.waiting.retain(|w| w != player_id);
+                slot.notes.remove(player_id);
             }
             s.moved.remove(player_id);
         }
@@ -1331,7 +1388,11 @@ impl Kit for Gather {
                         t.note = note;
                     }
                 } else if s.waiting_of(me).map(|w| w.0) == Some(i) {
-                    // Already in line for it
+                    // Already in line for it: a new note replaces the old one, none clears it
+                    match note {
+                        Some(n) => s.slots[i].notes.insert(me.clone(), n),
+                        None => s.slots[i].notes.remove(me),
+                    };
                 } else {
                     let full = s.slots[i].taken.len() >= caps[i].1;
                     if full && !flag(spec, "waiting_list") {
@@ -1340,6 +1401,9 @@ impl Kit for Gather {
                     s.leave(ctx, me, &caps);
                     if full {
                         s.slots[i].waiting.push(me.clone());
+                        if let Some(n) = note {
+                            s.slots[i].notes.insert(me.clone(), n);
+                        }
                     } else {
                         s.slots[i].taken.push(Taken { id: me.clone(), note, at: Some(now) });
                     }
@@ -1410,7 +1474,7 @@ impl Kit for Gather {
                 let d = drafts.iter().find(|d| d["to"].as_str().map(key).as_deref() == Some(k.as_str())).ok_or_else(|| not_now(format!("There's no note for {to} right now.")))?;
                 if let Some(until) = d["next_copy_at"].as_str().and_then(|t| DateTime::parse_from_rfc3339(t).ok()) {
                     // The view carries the same time as next_copy_at
-                    return Err(not_now(format!("One nudge per person every {NUDGE_HOURS} hours. The next one for {to} is from {}.", until.with_timezone(&Utc).to_rfc3339())));
+                    return Err(not_now(format!("One nudge per person every {NUDGE_HOURS} hours. The next one for {to} is from {}.", host_time(spec, until.with_timezone(&Utc)))));
                 }
                 s.copied.insert(k, now);
             }
@@ -1496,6 +1560,15 @@ impl Kit for Gather {
 
     fn ticks_unwatched(&self) -> bool {
         true
+    }
+
+    fn scrub(&self, state: &mut Value) -> bool {
+        let mut s = load(state);
+        let changed = s.scrub();
+        if changed {
+            store(state, &s);
+        }
+        changed
     }
 
     fn stable_address_only(&self) -> bool {
@@ -1602,6 +1675,35 @@ mod tests {
         assert_eq!(t.rounds[0].dropped, vec![3]);
         assert_eq!(t.rounds[1].dropped, vec![2]);
         assert!(t.rounds[2].dropped.is_empty());
+    }
+
+    /// secret-ballot-unlinkable: the re-key keeps every order, leaves no salted key and no
+    /// salt, and does nothing to an open vote or a second time.
+    #[test]
+    fn unlinking_keeps_the_orders_and_drops_every_salted_key() {
+        let mut s = St { phase: OPEN.into(), ballot_salt: random_hex(16), ..St::default() };
+        let ids = ["pl_a", "pl_b", "pl_c", "pl_d"];
+        for (i, id) in ids.iter().enumerate() {
+            let k = s.ballot_key(id);
+            s.ballots.insert(k, vec![i % 2, 2]);
+        }
+        let before = s.clone();
+        assert!(!s.scrub(), "open: a voter still finds their own ballot");
+        assert_eq!(s, before);
+        s.phase = CLOSED.into();
+        assert!(s.scrub());
+        assert!(s.ballot_salt.is_empty());
+        let mut a: Vec<_> = s.ballots.values().cloned().collect();
+        let mut b: Vec<_> = before.ballots.values().cloned().collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        for id in ids {
+            assert!(!s.ballots.contains_key(&before.ballot_key(id)));
+            assert!(!s.ballots.contains_key(&s.ballot_key(id)));
+        }
+        assert!(s.ballots.keys().all(|k| k.len() == 24 && k.bytes().all(|c| c.is_ascii_hexdigit())));
+        assert!(!s.scrub(), "once");
     }
 
     #[test]
@@ -1807,5 +1909,15 @@ mod tests {
         let spec = json!({ "face": "rsvp", "title": "the club dinner", "when": "Sat", "place": "The Old Mill", "host_name": "Oleks", "templates": { "maybe": "Hi {name}! Still a maybe for {title} on {when} at {place}? Tap to change it: {link}" } });
         assert_eq!(fill(&spec, "maybe", "Leo", None), "Hi Leo! Still a maybe for the club dinner on Sat at The Old Mill? Tap to change it: {link}");
         assert!(fill(&spec, "not_paid", "Ana", None).contains("Pay Oleks"), "the default when there's no template");
+    }
+
+    /// signup-waiting-note m3: the default not-paid nudge names the price, and with no price
+    /// leaves no "()" behind.
+    #[test]
+    fn the_not_paid_default_names_the_price_or_drops_its_brackets() {
+        let spec = json!({ "face": "rsvp", "title": "Office party", "host_name": "Nina", "price": "EUR 15 each" });
+        assert_eq!(fill(&spec, "not_paid", "Cleo", None), "Hi Cleo, a quick one: your share for Office party (EUR 15 each) is still open. Pay Nina whenever suits you before the day. Thanks!");
+        let spec = json!({ "face": "rsvp", "title": "Office party", "host_name": "Nina" });
+        assert_eq!(fill(&spec, "not_paid", "Cleo", None), "Hi Cleo, a quick one: your share for Office party is still open. Pay Nina whenever suits you before the day. Thanks!");
     }
 }

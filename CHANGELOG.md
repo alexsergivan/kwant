@@ -8,6 +8,36 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+## [Mac 0.9.58] - 2026-11-27
+
+kwant 0.9.58: plain bot replies, no blank page after deleting a bot, a one-click Railway card on kwant.si, member bots' requests show in team chats, clearer small avatars and the perk-up on send is back.
+
+### Added
+- kwant.si has a Deploy on Railway card: run kwant in the cloud in one click, no server needed (#1343)
+
+### Changed
+- Bot replies are plain text on the page again, with a thin line in the bot's avatar colour beside them to show who is talking. Coloured boxes now only mean something needs you: an error, a warning, a stopped reply or a question. Your own messages and guests' keep their bubbles (#1330)
+
+### Fixed
+- Deleting a bot that belongs to a team no longer turns the whole page blank until you refresh. If that bot's own chat was open, you move to #general (or the next chat left), and if a page ever hits an error it now shows a short note and a Reload button instead of going white (#1337)
+- In a team chat, an approval request from a bot that is a member (not the lead) now shows in that chat, because kwant reads the chat's member list as a list of bots (#1349)
+- On small avatars (the sidebar, chat headers and phone replies), the mood, status and model marks now sit on the avatar's corner instead of covering its face, and only each bot's newest reply shows its mood (#1351)
+- When you send a bot a message in a direct chat, its avatar perks up again (wide eyes and a small hop) before it starts thinking; the thinking blink used to cut it off (#1354)
+
+## [Mac 0.9.57] - 2026-11-27
+
+kwant 0.9.57: living bot avatars.
+
+### Added
+- **Your bots come alive.** A bot's avatar now has a face for each mood, so you can see at a glance whether it is working, finished or needs you; only the newest reply shows the mood. In the sidebar, the chat header and a bot's home, avatars blink and glance around now and then, and look your way when you point at their row. A bot perks up when you message it, hops to say hello when it joins a space and hops once as its reply lands. Saving a new icon or colour in Space settings plays a short shine on that space's tile in the rail. With reduced motion on, nothing moves and only the faces change (#1287)
+
+## [Mac 0.9.56] - 2026-11-27
+
+kwant 0.9.56: a time on every chat row.
+
+### Changed
+- Your own messages and the reply that is still being written now show their time too, in the same place and format as a finished reply's (#1281)
+
 ## [Mac 0.9.55] - 2026-11-26
 
 kwant 0.9.55: bots use their tools at a sign-in page, Open Tools on a step that needs a fix, less memory at idle, the full tool directory, no browser start stall, the chat holds your place while you read and reply bubbles in each bot's colour.

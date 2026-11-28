@@ -26,6 +26,7 @@
   <a href="https://github.com/alexsergivan/kwant/actions/workflows/ci.yml"><img src="https://github.com/alexsergivan/kwant/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
   <a href="https://github.com/alexsergivan/kwant/releases/latest"><img src="https://img.shields.io/github/v/release/alexsergivan/kwant?label=release&color=5c3fd0" alt="Latest release"></a>
   <a href="#license"><img src="https://img.shields.io/badge/license-AGPL--3.0-blue.svg" alt="License: AGPL-3.0"></a>
+  <a href="#contributors"><img src="https://img.shields.io/github/all-contributors/alexsergivan/kwant?color=5c3fd0" alt="All Contributors"></a>
   <br>
   <sub>Free and open source. A ⭐ helps others find kwant.</sub>
 </p>
@@ -104,6 +105,9 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **New in 0.9.53.** **Restarts keep background programs**: the Linux systemd unit now sets `KillMode=process`, so restarting or updating kwant no longer stops programs a bot left running. If you copied the unit from this README, add the line, then run `systemctl daemon-reload` and restart; install.sh writes it on your next install. **No double Telegram messages**: when Telegram's answer to a send gets lost, kwant doesn't send the message a second time; the full reply is always in kwant. **A shorter sidebar**: a new space shows Search, Inbox and Routines on top. Mission board, Idea jar and Parallel Universe wait under More, and each one moves up once you've opened it in that space. **Cleaner Dev mode**: the blueprint grid stays at the edges of the chat and no longer runs behind your messages. **Scheduler in /api/health**: a new `scheduler` field shows when routines and follow-ups were last checked and says `stale` after 90 s without a pass; `status` and HTTP 200 are unchanged. **Scheduler step in /api/health**: the `scheduler` field also shows the `step` that is running and `step_started_at`; the log names a step that runs over 60 s. **Plain words**: the chat no longer shows a "Running on … tier" line, and pushes and the Mac menu say "kwant" instead of "kwant bots". **Small label fixes**: routine form labels are a little larger, and screen readers say "Needs you" like the screen does. **Greetings stay small**: saying hi, thanks or goodbye to a team gets one reply back instead of a round of hand-offs. **Steps in plain words**: each step says what a command did, like "Checking git status" or "Fetching shop.example.com", instead of "Running a command"; the full command stays behind Show command.
 - **New in 0.9.54.** **First bot opens #general**: a space's first bot opens #general, as the Get started checklist says; later bots open their own chat. **Get started names your bots**: the main space's "Keep the starter bots" line lists the bots that are really in #general. **One hello back**: saying hi to a team ("hi team!") gets one short hello instead of a reply from every bot. **README starter bots**: a fresh install starts with the @helpers team in #general: Assistant leads, with Researcher and Writer. **More space icons**: the space icon picker has 24 pixel icons, and the one you pick gets a holographic edge. **No dead label**: smart results made from a reply drop the "From this reply" chip that looked like a button; other sources keep a quiet line saying where the numbers came from.
 - **New in 0.9.55.** **Tools before sign-in pages**: a bot that hits a sign-in page for a site its tools cover uses those tools instead of asking you to sign in. **Open Tools**: a step that needs a new secret says "needs you in Tools", and Open Tools goes straight to that server. **Chat holds your place**: scroll up to read and nothing moves the chat until you come back to the bottom, send, or press jump to latest. **Bot colours in chat**: each bot's reply bubble wears a dark tint of its avatar's colour, so a team chat shows who is talking at a glance.
+- **New in 0.9.56.** A time on every chat row.
+- **New in 0.9.57.** **Your bots come alive**: avatars show a face for each mood, blink and glance around, perk up when you message them and say hello when they join (with reduced motion on, only the faces change).
+- **New in 0.9.58.** **Calmer chat**: bot replies are plain text with a thin line in the bot's colour beside them; coloured boxes only show up for errors, warnings and questions for you. **Deleting a bot is safe again**: the page no longer goes blank when you delete a bot that is in a team, and if a page ever hits an error it shows a short note and a Reload button. **Run it on Railway**: kwant.si now has a Deploy on Railway card that sets up kwant in the cloud in one click, no server needed. **Team chats show every member's requests**: an approval request from any bot in a team, not only the lead, now shows in that team's chat. **Clearer small avatars**: in the sidebar and on phone replies, a bot's mood, status and model marks sit on the avatar's corner instead of over its face, and only its newest reply shows how it feels. **Bots perk up when you message them**: in a direct chat, the bot's avatar widens its eyes and hops a little right after you send, then blinks into thinking.
 
 0.8 added bots that show their work, approvals off reaching every engine, drag and drop into any chat, import from more places, fresh-eyes reviews with the pre-push card, and Claude kept away from your secrets on a Mac. Every change is in the [CHANGELOG](CHANGELOG.md).
 
@@ -307,13 +311,17 @@ echo KWNT_ALLOWED_ORIGINS=https://kwant.example.com >> .env && docker compose up
 - **kwant's own `execute_shell` tool** runs in per-team Docker containers, so it isn't available inside this stack: that would need the host's Docker socket, which is root on the host. The CLIs' own shell tools work inside the kwnt container.
 - **Upgrading from an older image:** kwnt now runs as uid 10001, not root. If it says `/data isn't writable`, run once: `docker compose run --rm -u root kwnt chown -R 10001:10001 /data`.
 
-### Render, Railway, CasaOS, Umbrel and Coolify
+### Render, Railway, DigitalOcean, CasaOS, Umbrel and Coolify
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/alexsergivan/kwant) [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/kwant)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/alexsergivan/kwant) [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/kwant-1?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant) or [Deploy kwant + Laya](https://railway.com/deploy/kwant-laya?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant)
+
+*We earn commissions when you shop through the links below.*
+
+[Create a DigitalOcean account](https://www.awin1.com/cread.php?awinmid=123996&awinaffid=3169369&ued=https%3A%2F%2Fwww.digitalocean.com%2F) and run kwant on a 2 GB Droplet (4 GB with Laya). A DigitalOcean 1-Click App is coming soon.
 
 The button reads [`render.yaml`](render.yaml): one web service from the released image with a 1 GB disk on `/data`. **Render keeps files only on a disk, and disks need a paid instance** (Starter or up), so the free plan won't work. Render makes the sign-in token: copy `KWNT_API_TOKEN` from the service's **Environment** page and paste it on the sign-in screen.
 
-The Railway button builds the same `docker/render.Dockerfile` with a volume on `/data`, plus the bots' private browser from `docker/browser.Dockerfile` on Railway's private network. Railway makes the sign-in token: copy `KWNT_API_TOKEN` from the kwant service's **Variables** tab.
+The Railway button builds the same `docker/render.Dockerfile` with a volume on `/data`, plus the bots' private browser from `docker/browser.Dockerfile` on Railway's private network, without Laya: kwant then uses keyword routing. Deploy kwant + Laya also runs the Laya message router from `docker/laya.Dockerfile`, for smarter routing, and uses about 2 GB more RAM. Railway makes the sign-in token: copy `KWNT_API_TOKEN` from the kwant service's **Variables** tab.
 
 For home servers, [`deploy/`](deploy) has a listing for each store, pinned to the release: [CasaOS](deploy/casaos/Kwnt/docker-compose.yml) (sign in with `kwnt token --raw` from the app's **Terminal**), [Umbrel](deploy/umbrel/kwant) (sign in with the password Umbrel shows for kwant) and [Coolify](deploy/coolify/kwnt.yaml) (sign in with `SERVICE_PASSWORD_64_KWNT` from the service's environment variables). Until a store lists kwant, CasaOS can import the file under **Custom Install** and Coolify can run it as a **Docker Compose** resource; Umbrel needs the listing. These run kwnt alone, without Laya or the bots' browser; see [docs/self-host-stores.md](docs/self-host-stores.md).
 
@@ -413,6 +421,30 @@ kwant runs commands and holds API keys and passwords, so please report vulnerabi
 - Email: [contact@kwant.si](mailto:contact@kwant.si), for questions, a commercial license, privacy requests or press.
 - Bugs and ideas: [GitHub issues](https://github.com/alexsergivan/kwant/issues). Questions and setups to share: [GitHub Discussions](https://github.com/alexsergivan/kwant/discussions).
 - Security problems: report them privately, as [SECURITY.md](SECURITY.md) describes.
+
+## Contributors
+
+Thanks to everyone who reports bugs, writes docs and sends code 🙌 Bug reports, ideas, docs and tests all count, not just pull requests.
+
+<!-- ALL-CONTRIBUTORS-LIST:START - Do not remove or modify this section -->
+<!-- prettier-ignore-start -->
+<!-- markdownlint-disable -->
+<table>
+  <tbody>
+    <tr>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/alexsergivan"><img src="https://avatars.githubusercontent.com/u/7488348?v=4&size=80" width="80px" height="80px" alt="Oleksandr Ivanchenko"/><br /><sub><b>Oleksandr Ivanchenko</b></sub></a><br /><a href="https://github.com/alexsergivan/kwant/commits?author=alexsergivan" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/skullsdev"><img src="https://avatars.githubusercontent.com/u/262048839?v=4&size=80" width="80px" height="80px" alt="skullsdev"/><br /><sub><b>skullsdev</b></sub></a><br /><a href="https://github.com/alexsergivan/kwant/commits?author=skullsdev" title="Code">💻</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/greqone"><img src="https://avatars.githubusercontent.com/u/39676616?v=4&size=80" width="80px" height="80px" alt="Grzegorz Nowosielski"/><br /><sub><b>Grzegorz Nowosielski</b></sub></a><br /><a href="https://github.com/alexsergivan/kwant/commits?author=greqone" title="Documentation">📖</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/calintro"><img src="https://avatars.githubusercontent.com/u/2131649?v=4&size=80" width="80px" height="80px" alt="calintro"/><br /><sub><b>calintro</b></sub></a><br /><a href="https://github.com/alexsergivan/kwant/issues?q=author%3Acalintro" title="Bug reports">🐛</a></td>
+      <td align="center" valign="top" width="14.28%"><a href="https://github.com/ProbablePrime"><img src="https://avatars.githubusercontent.com/u/8791132?v=4&size=80" width="80px" height="80px" alt="ProbablePrime"/><br /><sub><b>ProbablePrime</b></sub></a><br /><a href="https://github.com/alexsergivan/kwant/issues?q=author%3AProbablePrime" title="Bug reports">🐛</a> <a href="#ideas-ProbablePrime" title="Ideas, Planning, & Feedback">🤔</a></td>
+    </tr>
+  </tbody>
+</table>
+
+<!-- markdownlint-restore -->
+<!-- prettier-ignore-end -->
+
+<!-- ALL-CONTRIBUTORS-LIST:END -->
 
 ## License
 
