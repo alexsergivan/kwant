@@ -395,6 +395,15 @@ impl Availability {
                 || self.signed_in.contains(&p.id))
     }
 
+    /// Whether `p` passes [`SignInBar::SignedIn`] apart from a usage limit: signed in on its
+    /// last check (an API-key profile: has its key) and not known to be signed out, whether or
+    /// not it is out of usage right now. For showing an account as set up while it waits for its
+    /// limit to reset; turn routing and failover use [`Self::admits`], which skips it.
+    pub fn signed_in_ignoring_limit(&self, p: &LlmProfile) -> bool {
+        let keyless = p.kind == "api_key" && !self.with_key.contains(&p.id);
+        !keyless && !self.signed_out.contains(&p.id) && (p.kind == "api_key" || self.signed_in.contains(&p.id))
+    }
+
     /// Whether `p` could take a turn now: not out of usage, not an API key without its key,
     /// not known to be signed out.
     pub fn usable(&self, p: &LlmProfile, now: DateTime<Utc>) -> bool {
