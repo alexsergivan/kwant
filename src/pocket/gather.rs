@@ -9,7 +9,9 @@
 //!   someone leaves, the first person waiting moves in at once and on their own.
 //! - `vote`: one pick (plurality) or ranked (instant runoff), as a **secret ballot**: who voted
 //!   is kept apart from the ballots, and no view, event row or log line pairs a person with a
-//!   ballot. The host sees who voted (to nudge) and the totals, never anyone's order.
+//!   ballot. The host sees who voted (to nudge) and, once voting closes, the totals; never
+//!   anyone's order. Nobody sees a count while voting is open (two reads around one vote would
+//!   give that vote away), and at the close the ballots lose their link to a person for good.
 //!
 //! Host-only: paid ticks, each person's food needs and plus-ones. Guests get names and
 //! Yes / Maybe / No only when `show_names` is on, their own record, and their own paid tick once
@@ -197,6 +199,8 @@ struct St {
     moved: BTreeMap<String, Moved>,
     // Vote. Who voted and the ballots are kept apart: `voted` has people and times, `ballots`
     // has orders under a key that is not a player id (salted hash), in key order, not time order.
+    // While open the salt lets a voter see and change their own ballot; at the close every
+    // ballot gets a random key and the salt is cleared, so no stored value pairs the two.
     ballot_salt: String,
     voted: BTreeMap<String, DateTime<Utc>>,
     ballots: BTreeMap<String, Vec<usize>>,
@@ -467,13 +471,33 @@ impl St {
         }
     }
 
-    /// 1st-choice totals per option in play (live bars).
-    fn first_choices(&self, spec: &Value) -> Vec<Value> {
-        let opts = self.in_play(spec);
-        let inn: BTreeSet<usize> = opts.iter().copied().collect();
-        let ballots: Vec<Vec<usize>> = self.ballots.values().cloned().collect();
-        let (counts, _) = round_counts(&ballots, &inn);
-        opts.iter().map(|o| json!({ "option": o, "votes": counts.get(o).copied().unwrap_or(0) })).collect()
+    /// secret-ballot-unlinkable: the ballots lose any link to a person. Each gets a new random
+    /// key (the map stays in key order, so neither the salted keys nor the voting order survive)
+    /// and the salt is cleared, so `sha256(salt:player_id)` can't be recomputed from what is
+    /// stored. The count is unchanged: it reads only the orders. False when there is no salt
+    /// (already unlinked, or deleted).
+    fn unlink_ballots(&mut self) -> bool {
+        if self.ballot_salt.is_empty() {
+            return false;
+        }
+        let orders: Vec<Vec<usize>> = std::mem::take(&mut self.ballots).into_values().collect();
+        for (i, order) in orders.into_iter().enumerate() {
+            // 12 random bytes don't collide; if the system's randomness failed (all zeros),
+            // a numbered key keeps every ballot without a link to anyone
+            let mut k = random_hex(12);
+            if self.ballots.contains_key(&k) {
+                k = format!("{k}{i:04}");
+            }
+            self.ballots.insert(k, order);
+        }
+        self.ballot_salt.clear();
+        true
+    }
+
+    /// A vote closed before secret-ballot-unlinkable still has its salt beside the ballots:
+    /// unlink it now (also any other face's unused salt). True when the state changed.
+    fn scrub(&mut self) -> bool {
+        self.phase != OPEN && self.unlink_ballots()
     }
 
     fn slot_of(&self, id: &str) -> Option<usize> {
@@ -518,6 +542,9 @@ impl St {
             self.done = !tie;
             ctx.event(None, if tie { "tie" } else { "closed" }, json!({ "ballots_counted": self.ballots.len() }));
             self.tally = Some(tally);
+            // A tie too: "vote again" starts over with no ballots and a new salt, and "pick"
+            // reads the tally
+            ctx.forgot |= self.unlink_ballots();
         } else {
             self.phase = CLOSED.into();
             ctx.event(None, "closed", json!({ "answers": self.answered_count(ctx) }));
@@ -871,10 +898,12 @@ impl Gather {
                 });
             }
             _ => {
-                let mine = s.voted.contains_key(me).then(|| s.ballots.get(&s.ballot_key(me)).cloned()).flatten();
+                // Their own order while open (to change it); after the close there's no link left
+                let mine = (s.phase == OPEN && s.voted.contains_key(me)).then(|| s.ballots.get(&s.ballot_key(me)).cloned()).flatten();
                 v["me"] = json!({ "voted": s.voted.contains_key(me), "ballot": mine });
-                let live = flag(spec, "show_live_count") && s.voted.contains_key(me) && s.phase == OPEN;
-                v["live"] = if live { json!(s.first_choices(spec)) } else { Value::Null };
+                // secret-ballot-unlinkable: no count while open, whatever `show_live_count` says
+                // (the 2nd voter would learn the 1st's pick); the totals are `result` at the close
+                v["live"] = Value::Null;
                 v["result"] = tally_json(spec, s);
             }
         }
@@ -974,7 +1003,8 @@ impl Gather {
                         row
                     }))
                     .collect::<Vec<_>>());
-                v["live"] = if s.phase == OPEN { json!(s.first_choices(spec)) } else { Value::Null };
+                // No count while open: two reads around one vote would pair the voter with it
+                v["live"] = Value::Null;
                 v["result"] = tally_json(spec, s);
             }
         }
@@ -1541,6 +1571,15 @@ impl Kit for Gather {
         true
     }
 
+    fn scrub(&self, state: &mut Value) -> bool {
+        let mut s = load(state);
+        let changed = s.scrub();
+        if changed {
+            store(state, &s);
+        }
+        changed
+    }
+
     fn stable_address_only(&self) -> bool {
         true
     }
@@ -1645,6 +1684,35 @@ mod tests {
         assert_eq!(t.rounds[0].dropped, vec![3]);
         assert_eq!(t.rounds[1].dropped, vec![2]);
         assert!(t.rounds[2].dropped.is_empty());
+    }
+
+    /// secret-ballot-unlinkable: the re-key keeps every order, leaves no salted key and no
+    /// salt, and does nothing to an open vote or a second time.
+    #[test]
+    fn unlinking_keeps_the_orders_and_drops_every_salted_key() {
+        let mut s = St { phase: OPEN.into(), ballot_salt: random_hex(16), ..St::default() };
+        let ids = ["pl_a", "pl_b", "pl_c", "pl_d"];
+        for (i, id) in ids.iter().enumerate() {
+            let k = s.ballot_key(id);
+            s.ballots.insert(k, vec![i % 2, 2]);
+        }
+        let before = s.clone();
+        assert!(!s.scrub(), "open: a voter still finds their own ballot");
+        assert_eq!(s, before);
+        s.phase = CLOSED.into();
+        assert!(s.scrub());
+        assert!(s.ballot_salt.is_empty());
+        let mut a: Vec<_> = s.ballots.values().cloned().collect();
+        let mut b: Vec<_> = before.ballots.values().cloned().collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        for id in ids {
+            assert!(!s.ballots.contains_key(&before.ballot_key(id)));
+            assert!(!s.ballots.contains_key(&s.ballot_key(id)));
+        }
+        assert!(s.ballots.keys().all(|k| k.len() == 24 && k.bytes().all(|c| c.is_ascii_hexdigit())));
+        assert!(!s.scrub(), "once");
     }
 
     #[test]
