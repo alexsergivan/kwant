@@ -203,14 +203,14 @@ fn m4_refuses_autocomplete_other_than_off() {
 #[test]
 fn m5_refuses_a_password_style_ask() {
     let r = lint(Surface::Phone, r#"<label>Enter your password<input id="p"></label>"#, "", "");
-    assert_refuses(&r, "M5", "It asked guests for a password. Pocket apps never ask for that.");
+    assert_refuses(&r, "M5", "It asked guests for their password. Pocket apps never ask for that.");
 }
 
 #[test]
 fn m5_warns_on_an_email_style_ask() {
     let r = lint(Surface::Phone, r#"<label>Your email<input id="e"></label>"#, "", "");
     let f = warning(&r, "M5").expect("expected an M5 warning");
-    assert_eq!(f.sentence, "It asked guests for a email. Pocket apps never ask for that.");
+    assert_eq!(f.sentence, "It asked guests for their email. Pocket apps don't need that.");
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn c7_refuses_a_z_index_above_10() {
 #[test]
 fn c8_refuses_webkit_text_security() {
     let r = lint(Surface::Phone, "", ".x { -webkit-text-security: disc; }", "");
-    assert_refuses(&r, "C8", "It used -webkit-text-security, which can disguise typed text as a password.");
+    assert_refuses(&r, "C8", "Its CSS hid typed letters like a password box.");
 }
 
 #[test]
@@ -393,9 +393,9 @@ fn ph1_refuses_autofill_tokens_beyond_off() {
 #[test]
 fn ph2_refuses_a_disguised_password_field() {
     let r = lint(Surface::Phone, "", ".x { -webkit-text-security: disc; }", "");
-    assert_refuses(&r, "C8", "It used -webkit-text-security, which can disguise typed text as a password.");
+    assert_refuses(&r, "C8", "Its CSS hid typed letters like a password box.");
     let r2 = lint(Surface::Phone, r#"<div contenteditable="true"></div>"#, "", "");
-    assert_refuses(&r2, "M2", "It put contenteditable on a <div>; style and events go in the CSS and the script.");
+    assert_refuses(&r2, "M2", "It let guests type into a <div>; use an input.");
     let r3 = lint(Surface::Phone, r#"<input type="password">"#, "", "");
     assert_refuses(&r3, "M3", "It asked for a password field, and pocket apps can't.");
 }
@@ -406,7 +406,7 @@ fn ph3_warns_on_a_plain_password_label_but_a_leetspeak_label_is_a_known_gap() {
     // documented in impl.md as a known, not-chased gap (style-guide.md section 7's own words
     // list isn't homoglyph/leetspeak aware either).
     let r = lint(Surface::Phone, r#"<label>password<input id="p"></label>"#, "", "");
-    assert_refuses(&r, "M5", "It asked guests for a password. Pocket apps never ask for that.");
+    assert_refuses(&r, "M5", "It asked guests for their password. Pocket apps never ask for that.");
     let r2 = lint(Surface::Phone, r#"<label>p4ssw0rd<input id="p"></label>"#, "", "");
     assert!(refusal(&r2, "M5").is_none(), "leetspeak bypass is a documented, not-chased gap");
 }
@@ -490,4 +490,274 @@ fn copy_warns_on_a_banned_button_word() {
 fn copy_warns_on_a_kwant_only_claim() {
     let r = lint(Surface::Phone, "<p>Verified by kwant</p>", "", "");
     assert!(warning(&r, "copy").is_some(), "expected a copy warning: {:?}", r.warnings);
+}
+
+// -------------------------------------------------------------------------------------------
+// Lin's backend review of #1407 (lin-review.md): 1a (M5 scoping), 1c (findings cap and the
+// C6 early return) and every row of section 2 that got fixed.
+// -------------------------------------------------------------------------------------------
+
+#[test]
+fn m5_1a_scopes_to_label_legend_button_not_the_whole_page() {
+    // lin-review.md 1a: an M1 heading like "Pin your favourite" must not trip M5.
+    let r = lint(Surface::Phone, "<h2>Pin your favourite</h2>", "", "");
+    assert!(refusal(&r, "M5").is_none(), "a heading outside label/legend/button must not trip M5: {:?}", r.refusals);
+
+    let r2 = lint(Surface::Phone, r#"<label>PIN<input id="p"></label>"#, "", "");
+    assert_refuses(&r2, "M5", "It asked guests for their PIN. Pocket apps never ask for that.");
+}
+
+#[test]
+fn c6_1c_oversized_input_returns_only_c6() {
+    let big_css = format!(".x {{ color: inherit; }} /* {} */", "a".repeat(130 * 1024));
+    let html = r#"<div onclick="go()">hi</div>"#;
+    let r = lint(Surface::Phone, html, &big_css, "var top = 1;");
+    assert_eq!(r.refusals.len(), 1, "an oversized input must return only C6: {:?}", r.refusals);
+    assert_refuses(&r, "C6", "It's too big for a phone.");
+}
+
+#[test]
+fn c6_1c_fifteen_thousand_distinct_attrs_caps_findings_at_20() {
+    let attrs: Vec<String> = (0..15_000).map(|i| format!("a{i}")).collect();
+    let html = format!("<b {}>", attrs.join(" "));
+    let r = lint(Surface::Phone, &html, "", "");
+    assert!(r.refusals.len() <= 20, "expected at most 20 findings, got {}", r.refusals.len());
+}
+
+#[test]
+fn c2_refuses_position_fixed_with_important() {
+    let r = lint(Surface::Phone, "", ".x { position: fixed !important; }", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn c7_refuses_a_z_index_above_10_with_important() {
+    let r = lint(Surface::Phone, "", ".x { z-index: 99 !important; }", "");
+    assert_refuses(&r, "C7", "It tried to cover part of the page.");
+}
+
+#[test]
+fn c5_refuses_animation_name_and_duration_outside_the_guard() {
+    let r = lint(Surface::Phone, "", ".x { animation-name: spin; animation-duration: 5s; }", "");
+    assert_refuses(&r, "C5", "It moves without checking 'reduce motion'.");
+}
+
+#[test]
+fn c5_refuses_transition_property_and_duration_outside_the_guard() {
+    let r = lint(Surface::Phone, "", ".x { transition-property: color; transition-duration: 3s; }", "");
+    assert_refuses(&r, "C5", "It moves without checking 'reduce motion'.");
+}
+
+#[test]
+fn c1_and_m6_refuse_an_off_kwant_url_inside_a_css_string_literal() {
+    let css = r#".x { background-image: image-set("https://evil.test/x.png" 1x); }"#;
+    let r = lint(Surface::Phone, "", css, "");
+    assert_refuses(&r, "C1", "Its CSS tried to load a file or a font.");
+    assert_refuses(&r, "M6", "It tried to load something from the web.");
+}
+
+#[test]
+fn m6_refuses_a_relative_src_path() {
+    let r = lint(Surface::Phone, r#"<img src="/api/pockets" alt="">"#, "", "");
+    assert_refuses(&r, "M6", "It tried to load something from the web.");
+}
+
+#[test]
+fn m6_refuses_a_backslash_disguised_host_in_src() {
+    let r = lint(Surface::Phone, r#"<img src="/\evil.test/x.png" alt="">"#, "", "");
+    assert_refuses(&r, "M6", "It tried to load something from the web.");
+}
+
+#[test]
+fn j1_refuses_fetch_with_a_space_before_the_parenthesis() {
+    let r = lint(Surface::Phone, "", "", "fetch ('/x');");
+    assert_refuses(&r, "J1", "Its script used fetch(, which pocket apps can't.");
+}
+
+#[test]
+fn j1_refuses_a_unicode_escape_used_to_hide_an_identifier_outside_a_string() {
+    // JS lets a bare identifier spell a letter through a unicode escape (this spells "top"),
+    // which would otherwise dodge the word-matched J1 check above without that literal token
+    // ever appearing in the source (lin-review.md section 2).
+    let hidden_top = format!("t{}u006fp", '\\');
+    let js = format!("var x = {hidden_top};");
+    let r = lint(Surface::Phone, "", "", &js);
+    assert_refuses(&r, "J1", "Its script hid a name behind a \\u escape, which pocket apps can't.");
+}
+
+#[test]
+fn j1_allows_a_unicode_escape_inside_a_string_literal() {
+    let escaped = format!("var x = '{}u00e9';", '\\');
+    let r = lint(Surface::Phone, "", "", &escaped);
+    assert!(refusal(&r, "J1").is_none(), "a unicode escape inside a string literal is not the J1 bypass: {:?}", r.refusals);
+}
+
+#[test]
+fn j2_bracket_property_event_assignment_is_a_known_gap() {
+    // `el['onclick'] = go` bypasses the literal `.onclick =` check (lin-review.md section 2);
+    // documented in impl.md as a known, not-chased gap alongside window["top"].
+    let r = lint(Surface::Phone, "", "", "el['onclick'] = go;");
+    assert!(refusal(&r, "J2").is_none(), "bracket-property event assignment is a documented, not-chased gap");
+}
+
+#[test]
+fn c3_refuses_a_named_color_on_border() {
+    let r = lint(Surface::Phone, "", ".x { border: 1px solid red; }", "");
+    assert_refuses(&r, "C3", "It used its own colour; use kwant's colour names.");
+}
+
+#[test]
+fn m2_1d_caps_a_long_attribute_name_in_the_sentence() {
+    let long_attr = "a".repeat(100);
+    let html = format!("<div {long_attr}=\"x\">hi</div>");
+    let r = lint(Surface::Phone, &html, "", "");
+    let expected = format!("It put {}? on a <div>; style and events go in the CSS and the script.", "a".repeat(40));
+    assert_refuses(&r, "M2", &expected);
+}
+
+#[test]
+fn m2_1d_replaces_a_non_printable_byte_in_the_attribute_name_with_a_marker() {
+    let html = format!("<div a{}b=\"x\">hi</div>", '\u{0007}');
+    let r = lint(Surface::Phone, &html, "", "");
+    assert_refuses(&r, "M2", "It put a?b on a <div>; style and events go in the CSS and the script.");
+}
+
+#[test]
+fn m3_1d_caps_a_long_input_type_value_in_the_sentence() {
+    let long_type = "x".repeat(100);
+    let html = format!(r#"<input type="{long_type}">"#);
+    let r = lint(Surface::Phone, &html, "", "");
+    let expected = format!("It asked for a {}? field, and pocket apps can't.", "x".repeat(40));
+    assert_refuses(&r, "M3", &expected);
+}
+
+#[test]
+fn m3_1d_replaces_a_non_printable_byte_in_the_input_type_with_a_marker() {
+    let html = format!("<input type=\"a{}b\">", '\u{0007}');
+    let r = lint(Surface::Phone, &html, "", "");
+    assert_refuses(&r, "M3", "It asked for a a?b field, and pocket apps can't.");
+}
+
+// -------------------------------------------------------------------------------------------
+// Rigel's QA of #1407 (qa.md): B2 (the CSS declaration scanner read a selector's or an at-rule's
+// own colon as a `name: value` pair, swallowing the real declaration that followed it), plus the
+// "not blocking, but worth fixing" items this round folds in (the image-set/CSS-escape gap, the
+// `.16s` duration false positive, `color-mix()` smuggling a named colour, and PH5's one-token add).
+// -------------------------------------------------------------------------------------------
+
+#[test]
+fn b2_a_pseudo_class_colon_does_not_swallow_the_declaration_that_follows_it() {
+    let r = lint(Surface::Phone, "", ".x:hover { position: fixed; }", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b2_a_pseudo_element_colon_does_not_swallow_the_declaration_that_follows_it() {
+    let r = lint(Surface::Phone, "", ".x::before { position: fixed; content: ''; }", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b2_a_pseudo_class_colon_does_not_hide_a_bad_colour() {
+    let r = lint(Surface::Phone, "", ".x:focus { color: #f00; }", "");
+    assert_refuses(&r, "C3", "It used its own colour; use kwant's colour names.");
+}
+
+#[test]
+fn b2_a_pseudo_class_colon_does_not_hide_a_changed_font() {
+    let r = lint(Surface::Phone, "", ".x:hover { font-family: Arial; }", "");
+    assert_refuses(&r, "C4", "It changed the font.");
+}
+
+#[test]
+fn b2_an_at_rule_feature_query_colon_does_not_swallow_the_rule_inside() {
+    let r = lint(Surface::Phone, "", "@media (min-width:1px) { .x { position: fixed; } }", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b2_the_reduced_motion_guard_condition_colon_does_not_swallow_position_fixed_inside_it() {
+    let css = "@media (prefers-reduced-motion: no-preference) { .x { position: fixed; } }";
+    let r = lint(Surface::Phone, "", css, "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b2_the_reduced_motion_guard_condition_colon_does_not_swallow_a_bad_z_index_inside_it() {
+    let css = "@media (prefers-reduced-motion: no-preference) { .x { z-index: 9999; } }";
+    let r = lint(Surface::Phone, "", css, "");
+    assert_refuses(&r, "C7", "It tried to cover part of the page.");
+}
+
+#[test]
+fn b2_an_at_supports_condition_colon_does_not_swallow_the_rule_inside() {
+    let r = lint(Surface::Phone, "", "@supports (display:grid) { .x { position: fixed; } }", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b2_still_refuses_position_fixed_with_important_now_that_declarations_are_block_scoped() {
+    let r = lint(Surface::Phone, "", ".x { position: fixed !important; }", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b2_still_refuses_an_oversized_z_index_with_important_now_that_declarations_are_block_scoped() {
+    let r = lint(Surface::Phone, "", ".x { z-index: 9999 !important; }", "");
+    assert_refuses(&r, "C7", "It tried to cover part of the page.");
+}
+
+#[test]
+fn b2_a_css_escape_of_fixed_does_not_dodge_position_fixed() {
+    let escaped = format!("position: {}66ixed;", '\\');
+    let css = format!(".x {{ {escaped} }}");
+    let r = lint(Surface::Phone, "", &css, "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b2_a_comment_hidden_inside_a_value_does_not_dodge_position_fixed() {
+    let r = lint(Surface::Phone, "", ".x { position: /**/ fixed; }", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn qa2_a_css_escape_of_url_does_not_dodge_an_off_kwant_load() {
+    let escaped = format!("background: {}75rl(//evil.test/x.png);", '\\');
+    let css = format!(".x {{ {escaped} }}");
+    let r = lint(Surface::Phone, "", &css, "");
+    assert_refuses(&r, "C1", "Its CSS tried to load a file or a font.");
+}
+
+#[test]
+fn qa3_color_mix_still_refuses_a_named_colour_inside_it() {
+    let r = lint(Surface::Phone, "", ".x { color: color-mix(in srgb, red 10%, blue); }", "");
+    assert_refuses(&r, "C3", "It used its own colour; use kwant's colour names.");
+}
+
+#[test]
+fn qa3_color_mix_over_kwant_tokens_still_passes() {
+    let css = ".x { color: color-mix(in srgb, var(--kw-surface-rail) 22%, transparent); }";
+    let r = lint(Surface::Phone, "", css, "");
+    assert!(refusal(&r, "C3").is_none(), "color-mix() over kwant's own tokens is allowed");
+}
+
+#[test]
+fn qa4_a_leading_dot_duration_is_read_as_the_fraction_of_a_second_it_is() {
+    let css = "@media (prefers-reduced-motion: no-preference) { .x { transition: transform .16s linear; } }";
+    let r = lint(Surface::Phone, "", css, "");
+    assert!(refusal(&r, "C5").is_none(), ".16s is 160ms, inside the 120-200ms window");
+}
+
+#[test]
+fn qa4_a_leading_dot_duration_outside_the_window_still_refuses() {
+    let css = "@media (prefers-reduced-motion: no-preference) { .x { transition: transform .9s linear; } }";
+    let r = lint(Surface::Phone, "", css, "");
+    assert_refuses(&r, "C5", "It moves without checking 'reduce motion'.");
+}
+
+#[test]
+fn qa5_refuses_execcommand() {
+    let r = lint(Surface::Phone, "", "", "document.execCommand('copy');");
+    assert_refuses(&r, "J1", "Its script used execCommand(, which pocket apps can't.");
 }

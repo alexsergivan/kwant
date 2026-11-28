@@ -8,6 +8,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Fixed
+- The pocket app screen lint now checks label/legend/button text (not the whole page) for banned words, caps how much it repeats back in a refusal, and closes several cheap wording bypasses (#1407)
+- The pocket app screen lint's CSS check no longer lets a pseudo-class, a media query or a CSS comment/escape hide a banned declaration (`position: fixed`, an off-kwant colour, an off-kwant url) from it (#1407)
+
 ## [Mac 0.9.58] - 2026-11-27
 
 kwant 0.9.58: plain bot replies, no blank page after deleting a bot, a one-click Railway card on kwant.si, member bots' requests show in team chats, clearer small avatars and the perk-up on send is back.

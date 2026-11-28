@@ -32,14 +32,25 @@ pub struct Report {
     pub warnings: Vec<Finding>,
 }
 
+/// No bot needs more than this many distinct findings in one list; past it, a linear dedup scan
+/// on every call turns quadratic (Lin's review, 1c). A length check is O(1), so capping here
+/// bounds the whole lint to O(n) in the input size again.
+const MAX_FINDINGS: usize = 20;
+
 impl Report {
     fn refuse(&mut self, rule: &'static str, sentence: String) {
+        if self.refusals.len() >= MAX_FINDINGS {
+            return;
+        }
         if !self.refusals.iter().any(|f| f.rule == rule && f.sentence == sentence) {
             self.refusals.push(Finding { rule, sentence });
         }
     }
 
     fn warn(&mut self, rule: &'static str, sentence: String) {
+        if self.warnings.len() >= MAX_FINDINGS {
+            return;
+        }
         if !self.warnings.iter().any(|f| f.rule == rule && f.sentence == sentence) {
             self.warnings.push(Finding { rule, sentence });
         }
@@ -50,11 +61,34 @@ impl Report {
 /// rule, plus the cheap additions. One finding per rule per distinct value.
 pub fn lint(surface: Surface, html: &str, css: &str, js: &str) -> Report {
     let mut r = Report::default();
-    lint_size(&mut r, html, css, js);
+    if lint_size(&mut r, html, css, js) {
+        // Oversized: C6 alone, nothing else scanned (Lin's review, 1c).
+        return r;
+    }
     lint_html(&mut r, html);
     lint_css(&mut r, css);
     lint_js(&mut r, surface, js);
     r
+}
+
+/// Caps `s` at 40 printable-ASCII characters for embedding app-supplied text (an attribute name
+/// or an input type) into a guest-facing sentence; anything past that, or any non-printable byte,
+/// becomes `?` (Lin's review, 1d: this text is unbounded and goes to the bot and the host).
+fn sanitize_for_sentence(s: &str) -> String {
+    const MAX_LEN: usize = 40;
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if i >= MAX_LEN {
+            out.push('?');
+            break;
+        }
+        if c.is_ascii() && (c.is_ascii_graphic() || c == ' ') {
+            out.push(c);
+        } else {
+            out.push('?');
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -127,6 +161,99 @@ fn is_off_kwant(value: &str) -> bool {
     false
 }
 
+/// Drops every `/* ... */` CSS comment (a comment inside a quoted string is left alone), so
+/// `position:/**/fixed` reads as `position:fixed` instead of hiding the value from every
+/// substring/keyword check below (Rigel's QA, B2).
+fn strip_css_comments(css: &str) -> String {
+    let b = css.as_bytes();
+    let mut out = String::with_capacity(css.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\'' | b'"' => {
+                let q = b[i];
+                let start = i;
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    i += if b[i] == b'\\' && i + 1 < b.len() { 2 } else { 1 };
+                }
+                if i < b.len() {
+                    i += 1;
+                }
+                out.push_str(&css[start..i.min(b.len())]);
+            }
+            b'/' if i + 1 < b.len() && b[i + 1] == b'*' => {
+                i += 2;
+                while i + 1 < b.len() && !(b[i] == b'*' && b[i + 1] == b'/') {
+                    i += 1;
+                }
+                i = (i + 2).min(b.len());
+            }
+            _ => {
+                let len = utf8_char_len(b[i]).min(b.len() - i);
+                out.push_str(&css[i..i + len]);
+                i += len;
+            }
+        }
+    }
+    out
+}
+
+/// Decodes a CSS escape (`\` + up to 6 hex digits, with one optional trailing space, or `\` +
+/// one literal character) wherever it sits outside a quoted string, so `\66ixed` reads as `fixed`
+/// instead of dodging every keyword/value check below (Rigel's QA, B2: C1/C2/C8 all spell their
+/// trigger word this way). A string literal's own content is copied through untouched, since
+/// `string_literals`/`is_off_kwant` already expect to see its original escapes.
+fn decode_css_escapes_outside_strings(css: &str) -> String {
+    let b = css.as_bytes();
+    let mut out = String::with_capacity(css.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\'' | b'"' => {
+                let q = b[i];
+                let start = i;
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    i += if b[i] == b'\\' && i + 1 < b.len() { 2 } else { 1 };
+                }
+                if i < b.len() {
+                    i += 1;
+                }
+                out.push_str(&css[start..i.min(b.len())]);
+            }
+            b'\\' if i + 1 < b.len() => {
+                let hex_start = i + 1;
+                let mut j = hex_start;
+                while j < b.len() && j - hex_start < 6 && b[j].is_ascii_hexdigit() {
+                    j += 1;
+                }
+                if j > hex_start {
+                    if let Ok(code) = u32::from_str_radix(&css[hex_start..j], 16) {
+                        if let Some(c) = char::from_u32(code) {
+                            out.push(c);
+                        }
+                    }
+                    if j < b.len() && b[j].is_ascii_whitespace() {
+                        j += 1;
+                    }
+                    i = j;
+                } else {
+                    let len = utf8_char_len(b[hex_start]).min(b.len() - hex_start);
+                    out.push_str(&css[hex_start..hex_start + len]);
+                    i = hex_start + len;
+                }
+            }
+            _ => {
+                let len = utf8_char_len(b[i]).min(b.len() - i);
+                out.push_str(&css[i..i + len]);
+                i += len;
+            }
+        }
+    }
+    out
+}
+
 /// Every string literal's content (quotes stripped, escapes left as-is: we only need substring
 /// and prefix checks, never the exact runtime value).
 fn string_literals(src: &str) -> Vec<&str> {
@@ -175,10 +302,50 @@ fn identifiers(src: &str) -> Vec<(usize, usize)> {
     out
 }
 
-/// `prop: value` pairs scanned flat over any CSS text (no selector/nesting awareness: cheap but
-/// enough to check a declaration's value).
-fn declarations(css: &str) -> Vec<(String, String)> {
+/// Byte ranges of every innermost `{ ... }` rule body in `css`: a block that itself contains no
+/// further `{`, so the content scanned as declarations is always a statement's actual body, never
+/// a selector's pseudo-class colon (`.x:hover`) or an at-rule's condition (`@media
+/// (min-width:1px)`), which a flat colon scan over the whole text would otherwise misread as its
+/// own `name: value` pair and swallow the real declaration that follows (Rigel's QA, B2). A `{`
+/// or `}` inside a quoted string is skipped so it can't shift the brace count.
+fn leaf_block_ranges(css: &str) -> Vec<(usize, usize)> {
     let b = css.as_bytes();
+    let mut stack: Vec<usize> = Vec::new();
+    let mut pairs: Vec<(usize, usize)> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'\'' | b'"' => {
+                let q = b[i];
+                i += 1;
+                while i < b.len() && b[i] != q {
+                    i += if b[i] == b'\\' && i + 1 < b.len() { 2 } else { 1 };
+                }
+                if i < b.len() {
+                    i += 1;
+                }
+            }
+            b'{' => {
+                stack.push(i + 1);
+                i += 1;
+            }
+            b'}' => {
+                if let Some(start) = stack.pop() {
+                    pairs.push((start, i));
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    pairs.retain(|(s, e)| !css[*s..*e].contains('{'));
+    pairs
+}
+
+/// `prop: value` pairs scanned flat over one rule body (no further `{`/`}` inside it, so a value
+/// never needs to stop early at a nested block's own close brace).
+fn declarations_in_block(block: &str) -> Vec<(String, String)> {
+    let b = block.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
     while i < b.len() {
@@ -192,7 +359,7 @@ fn declarations(css: &str) -> Vec<(String, String)> {
         if i == start {
             continue;
         }
-        let name = css[start..i].to_string();
+        let name = block[start..i].to_string();
         let mut j = i;
         while j < b.len() && b[j].is_ascii_whitespace() {
             j += 1;
@@ -203,9 +370,21 @@ fn declarations(css: &str) -> Vec<(String, String)> {
             while j < b.len() && b[j] != b';' && b[j] != b'}' {
                 j += 1;
             }
-            out.push((name, css[vstart..j].trim().to_string()));
+            out.push((name, block[vstart..j].trim().to_string()));
             i = j;
         }
+    }
+    out
+}
+
+/// `prop: value` pairs scanned over every innermost rule body in `css`: selector and at-rule
+/// prelude colons never produce a pair (Rigel's QA, B2). A declaration outside any `{ }` rule
+/// body (including one orphaned by an unbalanced brace) is invalid CSS a browser ignores too, so
+/// finding none here is the correct, safe reading of it, not a gap.
+fn declarations(css: &str) -> Vec<(String, String)> {
+    let mut out = Vec::new();
+    for (s, e) in leaf_block_ranges(css) {
+        out.extend(declarations_in_block(&css[s..e]));
     }
     out
 }
@@ -216,10 +395,15 @@ fn declarations(css: &str) -> Vec<(String, String)> {
 
 const MAX_SURFACE_BYTES: usize = 120 * 1024;
 
-fn lint_size(r: &mut Report, html: &str, css: &str, js: &str) {
+/// Returns `true` (and refuses C6) when the surface is oversized, so the caller can skip every
+/// other scan: those are what made a huge, mostly-repetitive input quadratically slow (Lin's
+/// review, 1c).
+fn lint_size(r: &mut Report, html: &str, css: &str, js: &str) -> bool {
     if html.len() + css.len() + js.len() > MAX_SURFACE_BYTES {
         r.refuse("C6", "It's too big for a phone.".to_string());
+        return true;
     }
+    false
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -263,18 +447,20 @@ const M5_REFUSE_WORDS: &[&str] = &[
 
 const M5_WARN_WORDS: &[&str] = &["email", "phone", "address", "birthday"];
 
-/// Tokens that let AutoFill reach past the guest-typed value into the phone's saved details
-/// (Rigel's F8, cheap at lint level): anything other than absent or `off`.
-const M4_LISTED_TOKENS: &[&str] = &[
-    "username",
-    "email",
-    "tel",
-    "street-address",
-    "name",
-    "current-password",
-    "new-password",
-    "one-time-code",
-];
+/// The guide's own casing for a matched M5 word (style-guide.md section 7's "Extra refusals"
+/// table), since the matched list entry itself is lowercase for case-insensitive matching.
+fn m5_display(word: &str) -> String {
+    match word {
+        "pin" => "PIN".to_string(),
+        "cvv" => "CVV".to_string(),
+        "cvc" => "CVC".to_string(),
+        "iban" => "IBAN".to_string(),
+        "expiry" => "card expiry date".to_string(),
+        "log in" | "sign in" => "login".to_string(),
+        "phone" => "phone number".to_string(),
+        other => other.to_string(),
+    }
+}
 
 /// One `<tag attr="value" ...>` or `</tag>`: `closing` is true for the latter, `attrs` is empty
 /// for it too.
@@ -429,24 +615,28 @@ fn lint_html(r: &mut Report, html: &str) {
         for (attr, value) in &t.attrs {
             let allowed = M2_ALLOWED_ATTRS.contains(&attr.as_str()) || attr.starts_with("aria-");
             let bad_tabindex = attr == "tabindex" && value.trim() != "0" && value.trim() != "-1";
-            if !allowed || bad_tabindex {
+            if (!allowed || bad_tabindex) && attr != "contenteditable" {
                 r.refuse(
                     "M2",
-                    format!("It put {attr} on a <{tag}>; style and events go in the CSS and the script.", attr = attr, tag = t.name),
+                    format!(
+                        "It put {attr} on a <{tag}>; style and events go in the CSS and the script.",
+                        attr = sanitize_for_sentence(attr),
+                        tag = t.name
+                    ),
                 );
             }
 
             if attr == "contenteditable" {
                 r.refuse(
                     "M2",
-                    format!("It put {attr} on a <{tag}>; style and events go in the CSS and the script.", attr = attr, tag = t.name),
+                    format!("It let guests type into a <{tag}>; use an input.", tag = t.name),
                 );
             }
 
             if t.name == "input" && attr == "type" {
                 let v = value.trim().to_ascii_lowercase();
                 if !M3_ALLOWED_INPUT_TYPES.contains(&v.as_str()) {
-                    r.refuse("M3", format!("It asked for a {} field, and pocket apps can't.", v));
+                    r.refuse("M3", format!("It asked for a {} field, and pocket apps can't.", sanitize_for_sentence(&v)));
                 }
             }
 
@@ -455,12 +645,15 @@ fn lint_html(r: &mut Report, html: &str) {
                 if v != "off" && !v.is_empty() {
                     r.refuse("M4", "It asked the phone to fill in saved details.".to_string());
                 }
-                if M4_LISTED_TOKENS.contains(&v.as_str()) || v.starts_with("cc-") {
-                    r.refuse("M4", "It asked the phone to fill in saved details.".to_string());
-                }
             }
 
             if is_off_kwant(value) {
+                r.refuse("M6", "It tried to load something from the web.".to_string());
+            }
+            // The guide says `src` is only ever an allowed data:image, stricter than the generic
+            // off-kwant check above: a relative path or a backslash-disguised host (Lin's review,
+            // section 2) isn't "off kwant" by scheme, but still isn't an allowed data:image.
+            if attr == "src" && !is_allowed_data_image(value) {
                 r.refuse("M6", "It tried to load something from the web.".to_string());
             }
 
@@ -484,29 +677,70 @@ fn lint_html(r: &mut Report, html: &str) {
         }
     }
 
-    // M5: refuse/warn words, scanned over visible text plus placeholder/aria-label attributes.
-    let mut haystack = strip_tags(html);
+    // M5: refuse/warn words, scanned only over the text the guide names ("in any label,
+    // placeholder, legend, aria-label or text near an input"), not the whole page (Lin's review,
+    // 1a): an M1 heading like "Pin your favourite" must not trip M5.
+    let mut m5_haystack = String::new();
+    for tag_name in ["label", "legend", "button"] {
+        append_tag_text(html, &flat, tag_name, &mut m5_haystack);
+    }
     for t in &tags {
         for (attr, value) in &t.attrs {
             if attr == "placeholder" || attr == "aria-label" {
-                haystack.push(' ');
-                haystack.push_str(value);
+                m5_haystack.push(' ');
+                m5_haystack.push_str(value);
             }
         }
     }
-    let haystack_lower = haystack.to_ascii_lowercase();
+    let m5_haystack_lower = m5_haystack.to_ascii_lowercase();
     for word in M5_REFUSE_WORDS {
-        if contains_word(&haystack_lower, word) {
-            r.refuse("M5", format!("It asked guests for a {word}. Pocket apps never ask for that."));
+        if contains_word(&m5_haystack_lower, word) {
+            r.refuse(
+                "M5",
+                format!("It asked guests for their {}. Pocket apps never ask for that.", m5_display(word)),
+            );
         }
     }
     for word in M5_WARN_WORDS {
-        if contains_word(&haystack_lower, word) {
-            r.warn("M5", format!("It asked guests for a {word}. Pocket apps never ask for that."));
+        if contains_word(&m5_haystack_lower, word) {
+            r.warn(
+                "M5",
+                format!("It asked guests for their {}. Pocket apps don't need that.", m5_display(word)),
+            );
         }
     }
 
-    lint_copy(r, html, &tags, &haystack_lower);
+    // The copy rules keep scanning the whole page (Lin's review, 1a: "the copy warnings can keep
+    // scanning the whole page"), plus placeholder/aria-label values the same way M5 used to.
+    let mut copy_haystack = strip_tags(html);
+    for t in &tags {
+        for (attr, value) in &t.attrs {
+            if attr == "placeholder" || attr == "aria-label" {
+                copy_haystack.push(' ');
+                copy_haystack.push_str(value);
+            }
+        }
+    }
+    let copy_haystack_lower = copy_haystack.to_ascii_lowercase();
+    lint_copy(r, html, &copy_haystack_lower);
+}
+
+/// Appends the visible text inside every `<tag_name>...</tag_name>` span in `html` to `out`
+/// (`lower` is `html`'s lowercase copy, reused by the caller to avoid recomputing it per tag).
+fn append_tag_text(html: &str, lower: &str, tag_name: &str, out: &mut String) {
+    let open = format!("<{tag_name}");
+    let close = format!("</{tag_name}");
+    let mut search_from = 0;
+    while let Some(open_pos) = lower[search_from..].find(open.as_str()) {
+        let tag_start = search_from + open_pos;
+        let Some(gt) = lower[tag_start..].find('>') else { break };
+        let body_start = tag_start + gt + 1;
+        let Some(close_rel) = lower[body_start..].find(close.as_str()) else { break };
+        let body_end = body_start + close_rel;
+        out.push(' ');
+        out.push_str(&strip_tags(&html[body_start..body_end]));
+        search_from = body_end + close.len();
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -516,10 +750,15 @@ fn lint_html(r: &mut Report, html: &str) {
 const BANNED_BUTTON_WORDS: &[&str] = &["submit", "ok", "click here"];
 const BANNED_CLAIM_WORDS: &[&str] = &["checked", "verified", "safe", "official"];
 
-fn lint_copy(r: &mut Report, html: &str, tags: &[Tag], haystack_lower: &str) {
+fn lint_copy(r: &mut Report, html: &str, haystack_lower: &str) {
     for word in BANNED_CLAIM_WORDS {
         if contains_word(haystack_lower, word) {
-            r.warn("copy", format!("It called something \"{word}\"; pocket apps don't claim that."));
+            let mut chars = word.chars();
+            let cap_word = match chars.next() {
+                Some(c) => c.to_ascii_uppercase().to_string() + chars.as_str(),
+                None => word.to_string(),
+            };
+            r.warn("copy", format!("It said \"{cap_word}\"; only kwant says that."));
         }
     }
 
@@ -536,11 +775,10 @@ fn lint_copy(r: &mut Report, html: &str, tags: &[Tag], haystack_lower: &str) {
         let trimmed = inner.trim();
         let trimmed_lower = trimmed.to_ascii_lowercase();
         if BANNED_BUTTON_WORDS.contains(&trimmed_lower.as_str()) {
-            r.warn("copy", format!("A button said \"{trimmed}\"; pocket apps use a word that says what it does."));
+            r.warn("copy", format!("A button said \"{trimmed}\"; say what happens instead, like \"Vote\"."));
         }
         search_from = body_end + 1;
     }
-    let _ = tags;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -548,7 +786,11 @@ fn lint_copy(r: &mut Report, html: &str, tags: &[Tag], haystack_lower: &str) {
 // ---------------------------------------------------------------------------------------------
 
 const C3_ALLOWED_KEYWORDS: &[&str] = &["transparent", "currentcolor", "inherit"];
-const C3_ALLOWED_FN_PREFIXES: &[&str] = &["var(--kw-", "var(--zinc-", "var(--sky-", "var(--team-", "color-mix("];
+// `color-mix(` is deliberately not in this allowlist: it's only let through when its own
+// arguments pass the same hex/rgb-function/named-color checks below, so `color-mix(in srgb, red
+// 10%, blue)` still gets refused instead of smuggling a named colour past the guide (Rigel's QA,
+// "not blocking, but worth fixing").
+const C3_ALLOWED_FN_PREFIXES: &[&str] = &["var(--kw-", "var(--zinc-", "var(--sky-", "var(--team-"];
 
 const C3_NAMED_COLORS: &[&str] = &[
     "aliceblue", "antiquewhite", "aqua", "aquamarine", "azure", "beige", "bisque", "black", "blanchedalmond", "blue",
@@ -595,7 +837,24 @@ fn is_allowed_color_value(value_lower: &str) -> bool {
     C3_ALLOWED_FN_PREFIXES.iter().any(|p| v.starts_with(p))
 }
 
-fn lint_css(r: &mut Report, css: &str) {
+/// Drops a trailing `!important` (any case, any spacing before it) so a value like
+/// `fixed !important` still compares equal to `fixed` (Lin's review, section 2: C2 and C7 both
+/// passed when a bot added `!important`).
+fn strip_important(value: &str) -> &str {
+    let v = value.trim();
+    let lower = v.to_ascii_lowercase();
+    match lower.find("!important") {
+        Some(pos) => v[..pos].trim_end(),
+        None => v,
+    }
+}
+
+fn lint_css(r: &mut Report, css_in: &str) {
+    // Comments and CSS escapes are resolved once, up front, so every check below (including
+    // `declarations()`'s own leaf-block scan) sees a bot's actual property names and values
+    // instead of a `/**/`- or `\XX`-obscured version of them (Rigel's QA, B2).
+    let normalized = decode_css_escapes_outside_strings(&strip_css_comments(css_in));
+    let css: &str = &normalized;
     let lower = css.to_ascii_lowercase();
 
     // C1: one stylesheet's rules only; no @import / @font-face / @namespace; url() only data:image.
@@ -606,9 +865,19 @@ fn lint_css(r: &mut Report, css: &str) {
     }
     scan_urls(css, r, "C1", "Its CSS tried to load a file or a font.");
 
-    // C2: no position: fixed.
+    // C1/M6: an off-kwant URL hidden in a CSS string literal (e.g. `image-set("https://...")`),
+    // the same check the JS side already runs over its own string literals (Lin's review,
+    // section 2).
+    for lit in string_literals(css) {
+        if is_off_kwant(lit) {
+            r.refuse("C1", "Its CSS tried to load a file or a font.".to_string());
+            r.refuse("M6", "It tried to load something from the web.".to_string());
+        }
+    }
+
+    // C2: no position: fixed, even with `!important` tacked on.
     for (name, value) in declarations(css) {
-        if name.eq_ignore_ascii_case("position") && value.trim().eq_ignore_ascii_case("fixed") {
+        if name.eq_ignore_ascii_case("position") && strip_important(&value).eq_ignore_ascii_case("fixed") {
             r.refuse("C2", "It tried to pin something over the page.".to_string());
         }
     }
@@ -618,11 +887,14 @@ fn lint_css(r: &mut Report, css: &str) {
         let nl = name.to_ascii_lowercase();
         if !(nl == "color"
             || nl.starts_with("background")
-            || nl == "border-color"
+            || nl.starts_with("border")
+            || nl.starts_with("outline")
             || nl.ends_with("-color")
             || nl == "fill"
             || nl == "stroke"
-            || nl == "outline-color")
+            || nl == "box-shadow"
+            || nl == "text-shadow"
+            || nl == "column-rule")
         {
             continue;
         }
@@ -678,7 +950,7 @@ fn lint_css(r: &mut Report, css: &str) {
     for (name, value) in declarations(css) {
         let nl = name.to_ascii_lowercase();
         if nl == "z-index" {
-            if let Ok(n) = value.trim().parse::<i64>() {
+            if let Ok(n) = strip_important(&value).parse::<i64>() {
                 if n > 10 {
                     r.refuse("C7", "It tried to cover part of the page.".to_string());
                 }
@@ -698,7 +970,7 @@ fn lint_css(r: &mut Report, css: &str) {
 
     // C8 (cheap addition): -webkit-text-security can disguise typed text as a password.
     if lower.contains("-webkit-text-security") {
-        r.refuse("C8", "It used -webkit-text-security, which can disguise typed text as a password.".to_string());
+        r.refuse("C8", "Its CSS hid typed letters like a password box.".to_string());
     }
 
     // C9 (cheap addition): a CSS payload trying to close the style tag early.
@@ -782,9 +1054,21 @@ fn durations_ms(s: &str) -> Vec<f64> {
     let mut out = Vec::new();
     let mut i = 0;
     while i < b.len() {
-        if b[i].is_ascii_digit() {
+        // A number starts at a digit (`160ms`) or at a leading dot immediately followed by one
+        // (`.16s`, valid CSS for 160ms): without the second arm, the leading `.` was skipped as
+        // punctuation and the scan started on the `16` that follows, misreading `.16s` as `16s`
+        // (16000ms, outside the 120-200ms window) instead of the 160ms it actually is (Rigel's
+        // QA, "not blocking, but worth fixing").
+        let starts_number =
+            b[i].is_ascii_digit() || (b[i] == b'.' && b.get(i + 1).is_some_and(|c| c.is_ascii_digit()));
+        if starts_number {
             let start = i;
-            while i < b.len() && (b[i].is_ascii_digit() || b[i] == b'.') {
+            let mut seen_dot = b[i] == b'.';
+            i += 1;
+            while i < b.len() && (b[i].is_ascii_digit() || (b[i] == b'.' && !seen_dot)) {
+                if b[i] == b'.' {
+                    seen_dot = true;
+                }
                 i += 1;
             }
             let num_str = &s[start..i];
@@ -815,9 +1099,6 @@ fn lint_css_motion(r: &mut Report, css: &str, lower: &str) {
         if let Some(after_guard) = match_media_guard(css, at) {
             if let Some((inner_start, inner_end)) = block_after(css.as_bytes(), after_guard) {
                 guarded.push((inner_start, inner_end));
-                for (name, _) in declarations(&css[inner_start..inner_end]) {
-                    let _ = name;
-                }
             }
         }
         from = at;
@@ -831,7 +1112,14 @@ fn lint_css_motion(r: &mut Report, css: &str, lower: &str) {
             let abs = from + pos;
             let before_ok = abs == 0 || !is_word_byte(lower.as_bytes()[abs - 1]);
             let end = abs + token.len();
-            let after_ok = end >= lower.len() || !is_word_byte(lower.as_bytes()[end]);
+            let after_byte = lower.as_bytes().get(end).copied();
+            // A longhand like `animation-name`/`transition-property` is still the property this
+            // rule means to catch; `is_word_byte` counts `-` as a word byte, so without this the
+            // boundary check below would treat it as a different, unmatched identifier (Lin's
+            // review, section 2).
+            let after_ok = after_byte.is_none()
+                || !is_word_byte(after_byte.unwrap())
+                || (after_byte == Some(b'-') && (token == "animation" || token == "transition"));
             if before_ok && after_ok && !in_guard(abs) {
                 r.refuse("C5", "It moves without checking 'reduce motion'.".to_string());
             }
@@ -931,6 +1219,7 @@ const J1_SUBSTRING_TOKENS: &[&str] = &[
     "self[",
     "globalThis[",
     "document[",
+    "execCommand(",
 ];
 
 fn lint_js(r: &mut Report, surface: Surface, js: &str) {
@@ -941,23 +1230,27 @@ fn lint_js(r: &mut Report, surface: Surface, js: &str) {
             r.refuse("J1", format!("Its script used {ident}, which pocket apps can't."));
         }
     }
+    // The substring checks below are punctuation-disambiguated (`fetch(`, `window[`, ...), so a
+    // bot can dodge them with a space before the punctuation (`fetch ('/x')`); run them over a
+    // whitespace-collapsed copy instead (Lin's review, section 2).
+    let collapsed = collapse_call_whitespace(js);
     // J1: punctuation-disambiguated substrings.
     for token in J1_SUBSTRING_TOKENS {
-        if js.contains(token) {
+        if collapsed.contains(token) {
             r.refuse("J1", format!("Its script used {token}, which pocket apps can't."));
         }
     }
     for q in ["setAttribute('style'", "setAttribute(\"style\""] {
-        if js.contains(q) {
+        if collapsed.contains(q) {
             r.refuse("J1", "Its script used setAttribute('style'), which pocket apps can't.".to_string());
         }
     }
     // J1: setTimeout/setInterval called with a string body, the classic eval-alike.
     for name in ["setTimeout(", "setInterval("] {
         let mut from = 0;
-        while let Some(pos) = js[from..].find(name) {
+        while let Some(pos) = collapsed[from..].find(name) {
             let after = from + pos + name.len();
-            let b = js.as_bytes();
+            let b = collapsed.as_bytes();
             let mut k = after;
             while k < b.len() && b[k].is_ascii_whitespace() {
                 k += 1;
@@ -967,6 +1260,13 @@ fn lint_js(r: &mut Report, surface: Surface, js: &str) {
             }
             from = after;
         }
+    }
+    // J1: a unicode escape outside any string/template literal is how a bare identifier can spell
+    // a refused word (e.g. "top") without that exact token ever appearing in the source, dodging
+    // the word-matched check above; a pocket app's JS never needs this outside a string (Lin's
+    // review, section 2).
+    if has_unicode_escape_outside_strings(js) {
+        r.refuse("J1", "Its script hid a name behind a \\u escape, which pocket apps can't.".to_string());
     }
 
     // J2: events only through addEventListener.
@@ -998,6 +1298,62 @@ fn lint_js(r: &mut Report, surface: Surface, js: &str) {
             r.refuse("M6", "It tried to load something from the web.".to_string());
         }
     }
+}
+
+/// Drops ASCII whitespace that sits directly before `(`, `[` or `.`, so `fetch ('/x')` and
+/// `window [ 'top' ]` match the same punctuation-disambiguated substrings as their un-spaced
+/// forms (Lin's review, section 2). Not full tokenizing: the checks this feeds already match on
+/// plain substrings, so collapsing is enough.
+fn collapse_call_whitespace(src: &str) -> String {
+    let chars: Vec<char> = src.chars().collect();
+    let mut out = String::with_capacity(src.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i].is_whitespace() {
+            let mut j = i;
+            while j < chars.len() && chars[j].is_whitespace() {
+                j += 1;
+            }
+            if j < chars.len() && matches!(chars[j], '(' | '[' | '.') {
+                i = j;
+                continue;
+            }
+        }
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
+}
+
+/// Whether a JS unicode escape appears outside any string/template literal: that's the one place
+/// a bare identifier can legitimately carry one, and it's exactly what lets a refused word (e.g.
+/// "top") dodge the word-matched J1 tokens above without that literal token ever appearing.
+fn has_unicode_escape_outside_strings(src: &str) -> bool {
+    let b = src.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        let c = b[i];
+        if c == b'\'' || c == b'"' || c == b'`' {
+            let q = c;
+            i += 1;
+            while i < b.len() && b[i] != q {
+                if b[i] == b'\\' && i + 1 < b.len() {
+                    i += 2;
+                } else {
+                    i += 1;
+                }
+            }
+            if i < b.len() {
+                i += 1;
+            }
+            continue;
+        }
+        if c == b'\\' && i + 1 < b.len() && b[i + 1] == b'u' {
+            return true;
+        }
+        i += 1;
+    }
+    false
 }
 
 fn has_on_assignment(js: &str) -> bool {
