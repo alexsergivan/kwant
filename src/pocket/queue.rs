@@ -386,10 +386,7 @@ impl St {
     /// `gaps_total + 1` never overstates the calls; it stands in for a state saved before
     /// `calls_total` was counted.
     fn avg_total_minutes(&self) -> Option<i64> {
-        if self.gaps_total == 0 || self.calls_total.max(self.gaps_total + 1) < AVG_AFTER_CALLS as u64 {
-            return None;
-        }
-        Some(((self.gap_secs_total as f64 / self.gaps_total as f64 / 60.0).round() as i64).max(1))
+        (self.gaps_total >= (AVG_AFTER_CALLS as u64 - 1)).then(|| ((self.gap_secs_total as f64 / self.gaps_total as f64 / 60.0).round() as i64).max(1))
     }
 
     fn longest_wait_minutes(&self, now: DateTime<Utc>) -> Option<i64> {
