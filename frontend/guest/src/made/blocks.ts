@@ -44,7 +44,7 @@ async function run(c: Ctx, key: string, name: string, body: Record<string, unkno
   c.ui.redraw();
 }
 
-const btn = (c: Ctx, key: string, label: string, onclick: () => void, cls = 'mbtn', extra: Record<string, string | boolean> = {}) =>
+const btn = (c: Ctx, key: string, label: string, onclick: () => void, cls = 'gbtn', extra: Record<string, string | boolean> = {}) =>
   h('button', { type: 'button', class: cls, disabled: c.ui.busy.has(key), 'aria-busy': c.ui.busy.has(key) ? 'true' : null, onclick, ...extra }, label);
 const errLine = (c: Ctx, key: string) => h('p', { class: 'err', role: 'alert', id: `${key}-err` }, c.ui.errors.get(key) ?? '');
 
@@ -54,7 +54,7 @@ function face(c: Ctx, id: string | null | undefined, cls = 'mface'): Kid {
 }
 const nameOf = (c: Ctx, id: string | null | undefined): string => (id && id === c.v.me ? 'You' : who(c.v, id)?.name ?? 'Someone');
 
-function card(type: string, title: Kid, ...kids: Kid[]): HTMLElement {
+function card(type: string, title: string | null, ...kids: Kid[]): HTMLElement {
   return h('section', { class: `mb mb-${type}`, 'data-block': type }, title ? h('h2', { class: 'mbh' }, title) : null, ...kids);
 }
 
@@ -85,9 +85,9 @@ function form(c: Ctx, b: Extract<Block, { type: 'form' }>, i: number): HTMLEleme
   if (c.surface === 'remote') {
     // The host doesn't fill guests' forms: the remote shows how many came in and the lock.
     const locked = col?.locked === true;
-    return card('form', b.into.replace(/_/g, ' '),
-      h('p', { class: 'mcount' }, plural(col?.count ?? 0, ['entry in', 'entries in']), locked ? ' · locked' : ''),
-      can(c, locked ? 'unlock' : 'lock') ? btn(c, key, locked ? 'Unlock' : 'Lock', () => void run(c, key, locked ? 'unlock' : 'lock', { collection: b.into }), 'mbtn ghost') : null,
+    return card('form', b.label,
+      h('p', { class: 'mcount' }, plural(col?.count ?? 0, b.noun), ' in', locked ? ' · locked' : ''),
+      can(c, locked ? 'unlock' : 'lock') ? btn(c, key, locked ? 'Unlock' : 'Lock', () => void run(c, key, locked ? 'unlock' : 'lock', { collection: b.into }), 'gbtn ghost') : null,
       errLine(c, key));
   }
   const locked = !col || col.locked;
@@ -109,7 +109,7 @@ function form(c: Ctx, b: Extract<Block, { type: 'form' }>, i: number): HTMLEleme
     }
     void run(c, key, b.action, { collection: b.into, values: vals }, () => b.fields.forEach((f) => c.ui.drafts.delete(`${key}-${f.name}`)));
   };
-  return card('form', null,
+  return card('form', b.label,
     h('form', { class: 'mform', novalidate: true, onsubmit: submit },
       ...b.fields.map((f) => input(c, key, f, locked)),
       h('button', { type: 'submit', class: 'gbtn', disabled: locked || c.ui.busy.has(key), 'aria-busy': c.ui.busy.has(key) ? 'true' : null }, locked ? 'Closed for now' : b.submit)),
@@ -124,7 +124,7 @@ function countOnly(col: Collection | undefined, noun: [string, string]): HTMLEle
 function list(c: Ctx, b: Extract<Block, { type: 'list' }>, i: number): HTMLElement {
   const col = c.v.collections[b.from];
   const key = `b${i}`;
-  const title = b.from.replace(/_/g, ' ');
+  const title = b.label;
   if (!col?.rows) return card('list', title, countOnly(col, b.noun));
   if (!col.rows.length) return card('list', title, h('p', { class: 'mempty muted' }, b.empty));
   const more = col.count - col.rows.length;
@@ -134,7 +134,7 @@ function list(c: Ctx, b: Extract<Block, { type: 'list' }>, i: number): HTMLEleme
         face(c, r.owner),
         h('span', { class: 'mtext' }, h('b', null, shown(r.values[b.show[0]])), ...b.show.slice(1).map((s) => (r.values[s] !== undefined ? h('span', { class: 'muted' }, ' · ', shown(r.values[s])) : null))),
         r.mine && c.surface === 'phone' ? h('span', { class: 'mtag' }, 'You') : null,
-        r.mine && b.take_back && c.surface === 'phone' && !col.locked ? btn(c, `${key}-${r.id}`, 'Take back', () => void run(c, `${key}-${r.id}`, 'take_back', { collection: b.from, id: r.id }), 'mbtn ghost sm', { 'aria-label': `Take back ${shown(r.values[b.show[0]])}` }) : null))),
+        r.mine && b.take_back && c.surface === 'phone' && !col.locked ? btn(c, `${key}-${r.id}`, 'Take back', () => void run(c, `${key}-${r.id}`, 'take_back', { collection: b.from, id: r.id }), 'gbtn ghost msm', { 'aria-label': `Take back ${shown(r.values[b.show[0]])}` }) : null))),
     more > 0 ? h('p', { class: 'small' }, `and ${plural(more, b.noun)} more`) : null,
     errLine(c, key));
 }
@@ -158,27 +158,29 @@ function board(c: Ctx, b: Extract<Block, { type: 'board' }>, i: number): HTMLEle
   const from = c.v.collections[b.from];
   const votes = c.v.collections[b.vote];
   const key = `b${i}`;
-  const title = b.from.replace(/_/g, ' ');
-  if (!from?.rows) return card('board', title, countOnly(from, ['entry', 'entries']));
+  const title = b.label;
+  if (!from?.rows) return card('board', title, countOnly(from, b.noun));
   if (!from.rows.length) return card('board', title, h('p', { class: 'mempty muted' }, b.empty));
   const tally = votes?.tally;
   const total = tally ? Object.values(tally).reduce((a, n) => a + n, 0) : 0;
   const myPick = votes?.rows?.find((r) => r.mine)?.values.pick;
   const open = c.surface === 'phone' && !!votes && !votes.locked;
   return card('board', title,
-    h('ul', { class: 'mboard', role: open ? 'group' : null, 'aria-label': open ? `Vote: ${title}` : null }, ...from.rows.map((r) => {
+    h('ul', { class: 'mboard', role: open ? 'group' : null, 'aria-label': open ? (title ? `Vote: ${title}` : 'Vote') : null }, ...from.rows.map((r) => {
       const label = shown(r.values[b.show]);
       const n = tally?.[r.id];
       const picked = myPick === r.id;
-      const body: Kid[] = [face(c, r.owner), h('span', { class: 'mtext' }, h('b', null, label)), tally ? h('span', { class: 'mn tab', 'aria-label': `${n ?? 0} votes` }, String(n ?? 0)) : null];
+      const body: Kid[] = [face(c, r.owner), h('span', { class: 'mtext' }, h('b', null, label)), tally ? h('span', { class: 'mn tab', 'aria-label': plural(n ?? 0, ['vote', 'votes']) }, String(n ?? 0)) : null];
       return h('li', { class: `mopt-row${picked ? ' on' : ''}` },
         open
           ? h('button', { type: 'button', class: 'mvote', 'aria-pressed': picked ? 'true' : 'false', disabled: c.ui.busy.has(key), onclick: () => void run(c, key, 'vote', { collection: b.vote, value: r.id }) }, ...body)
           : h('div', { class: 'mvote' }, ...body),
         tally ? bar(n ?? 0, total) : null);
     })),
-    !tally && votes ? h('p', { class: 'small' }, plural(votes.count, ['vote', 'votes']), ' in. The counts show after the reveal.') : null,
+    // With no tally the counts stay hidden. A phone holds only its own ballot, so it can't say how many are in.
+    !tally && votes ? h('p', { class: 'small' }, votes.rows ? 'The counts are hidden for now.' : votes.count === 0 ? 'No votes yet.' : votes.count === 1 ? '1 vote in.' : `${plural(votes.count, ['vote', 'votes'])} in. The counts are hidden for now.`) : null,
     open ? h('p', { class: 'small' }, myPick ? 'Tap another one to change your vote.' : 'Tap one to vote.') : null,
+    c.surface === 'phone' && votes?.locked ? h('p', { class: 'small' }, 'Voting is closed.') : null,
     errLine(c, key));
 }
 
@@ -191,7 +193,7 @@ function timer(c: Ctx, b: Extract<Block, { type: 'timer' }>, i: number): HTMLEle
     h('p', { class: `mclock tab${t?.running ? ' run' : ''}`, role: 'timer', 'aria-live': 'off', 'data-timer': t?.running ? '1' : null }, left === null ? '--:--' : clock(left)),
     !t ? h('p', { class: 'small' }, 'No timer running.') : null,
     can(c, 'timer_start') ? btn(c, key, 'Start', () => void run(c, key, 'timer_start', {})) : null,
-    can(c, 'timer_stop') ? btn(c, key, 'Stop', () => void run(c, key, 'timer_stop', {}), 'mbtn ghost') : null,
+    can(c, 'timer_stop') ? btn(c, key, 'Stop', () => void run(c, key, 'timer_stop', {}), 'gbtn ghost') : null,
     errLine(c, key));
 }
 
@@ -199,8 +201,8 @@ function scores(c: Ctx, b: Extract<Block, { type: 'scores' }>): HTMLElement {
   const s = c.v.scores;
   if (!s?.length) return card('scores', 'Scores', h('p', { class: 'mempty muted' }, 'No points yet.'));
   return card('scores', 'Scores',
-    h('ol', { class: 'mscores' }, ...s.slice(0, b.top).map((r) =>
-      h('li', { class: r.player === c.v.me ? 'me' : null }, face(c, r.player), h('span', { class: 'mtext' }, nameOf(c, r.player)), h('b', { class: 'tab' }, r.points.toLocaleString(undefined))))));
+    h('ol', { class: 'mscores' }, ...s.slice(0, b.top).map((r, i) =>
+      h('li', { class: r.player === c.v.me ? 'me' : null }, h('span', { class: 'mrank tab' }, String(r.rank ?? i + 1)), face(c, r.player), h('span', { class: 'mtext' }, nameOf(c, r.player)), h('b', { class: 'tab' }, r.points.toLocaleString(undefined))))));
 }
 
 function turn(c: Ctx, i: number): HTMLElement {
@@ -211,7 +213,7 @@ function turn(c: Ctx, i: number): HTMLElement {
     t ? h('div', { class: `mturn${mine ? ' me' : ''}` }, face(c, t.player, 'mface lg'), h('p', { class: 'mbig' }, mine ? 'Your turn' : `${who(c.v, t.player)?.name ?? 'Someone'}'s turn`)) : h('p', { class: 'muted' }, 'Turns start soon.'),
     t?.next ? h('p', { class: 'small' }, 'Then ', nameOf(c, t.next)) : null,
     can(c, 'turn_next') ? btn(c, `${key}n`, 'Next turn', () => void run(c, `${key}n`, 'turn_next', {})) : null,
-    can(c, 'turn_skip') ? btn(c, `${key}s`, 'Skip', () => void run(c, `${key}s`, 'turn_skip', {}), 'mbtn ghost') : null,
+    can(c, 'turn_skip') ? btn(c, `${key}s`, 'Skip', () => void run(c, `${key}s`, 'turn_skip', {}), 'gbtn ghost') : null,
     errLine(c, `${key}n`),
     errLine(c, `${key}s`));
 }
@@ -220,7 +222,7 @@ function reveal(c: Ctx, b: Extract<Block, { type: 'reveal' }>, i: number): HTMLE
   const items = c.v.revealed[b.secret];
   const key = `b${i}`;
   return card('reveal', b.label,
-    items ? h('ol', { class: 'mreveal' }, ...items.map((x) => h('li', null, shown(x[b.show])))) : h('p', { class: 'mhidden muted' }, b.hidden),
+    items ? h('ol', { class: 'mreveal' }, ...items.map((x) => h('li', null, shown(x[b.show])))) : h('p', { class: 'mhidden muted' }, b.hidden ?? (c.surface === 'remote' ? 'Hidden until you press Reveal.' : 'Revealed at the end.')),
     !items && can(c, 'reveal') ? btn(c, key, 'Reveal', () => void run(c, key, 'reveal', {})) : null,
     errLine(c, key));
 }

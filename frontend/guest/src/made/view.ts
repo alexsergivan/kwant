@@ -34,13 +34,13 @@ export interface Field {
 }
 export type Block =
   | { type: 'say'; text: string | null; big: boolean }
-  | { type: 'form'; into: string; action: 'put' | 'answer'; fields: Field[]; submit: string; done: string }
-  | { type: 'list'; from: string; show: string[]; empty: string; noun: [string, string]; take_back: boolean }
-  | { type: 'board'; from: string; show: string; vote: string; empty: string }
+  | { type: 'form'; into: string; label: string | null; noun: [string, string]; action: 'put' | 'answer'; fields: Field[]; submit: string; done: string }
+  | { type: 'list'; from: string; label: string | null; show: string[]; empty: string; noun: [string, string]; take_back: boolean }
+  | { type: 'board'; from: string; label: string | null; noun: [string, string]; show: string; vote: string; empty: string }
   | { type: 'timer'; label: string }
   | { type: 'scores'; top: number }
   | { type: 'turn' }
-  | { type: 'reveal'; secret: string; show: string; label: string; hidden: string };
+  | { type: 'reveal'; secret: string; show: string; label: string; hidden: string | null };
 export interface MadeView {
   title: string;
   words: Record<string, string>;
@@ -50,7 +50,7 @@ export interface MadeView {
   step: { index: number; of: number; say: string | null } | null;
   timer: { ends_at: number | null; seconds: number; running: boolean } | null;
   turn: { player: string; next: string | null } | null;
-  scores: { player: string; points: number }[] | null;
+  scores: { player: string; points: number; rank: number | null }[] | null;
   players: Player[];
   /** The host's buttons the box allows now (remote only), like the quiz remote's `host.can`. */
   can: string[];
@@ -83,6 +83,13 @@ const values = (x: unknown): Record<string, Value> => {
 };
 
 export const MAX_BLOCKS = 12;
+/** The author's heading for a block (`label`), shown as written; with none the block has no heading (never the key). */
+const label = (x: unknown): string | null => str(x, 60) ?? null;
+/** `noun: [one, many]`, for counts like "3 books in". */
+function noun(x: unknown): [string, string] {
+  const n = arr(x).map((s) => str(s, 30));
+  return [n[0] ?? 'entry', n[1] ?? n[0] ?? 'entries'];
+}
 const FIELD_TYPES = ['text', 'int', 'choice', 'bool'];
 
 function field(x: unknown): Field | undefined {
@@ -108,20 +115,19 @@ export function blockFrom(x: unknown): Block | undefined {
       const into = name(b.into);
       const fields = arr(b.fields).map(field).filter((f): f is Field => !!f).slice(0, 6);
       if (!into || !fields.length) return undefined;
-      return { type: 'form', into, action: b.action === 'answer' ? 'answer' : 'put', fields, submit: str(b.submit, 30) ?? 'Send', done: str(b.done, 120) ?? 'Sent.' };
+      return { type: 'form', into, label: label(b.label), noun: noun(b.noun), action: b.action === 'answer' ? 'answer' : 'put', fields, submit: str(b.submit, 30) ?? 'Send', done: str(b.done, 120) ?? 'Sent.' };
     }
     case 'list': {
       const from = name(b.from);
       const show = arr(b.show).map(name).filter((s): s is string => !!s).slice(0, 3);
       if (!from || !show.length) return undefined;
-      const noun = arr(b.noun).map((s) => str(s, 30));
-      return { type: 'list', from, show, empty: str(b.empty, 120) ?? 'Nothing here yet.', noun: [noun[0] ?? 'entry', noun[1] ?? noun[0] ?? 'entries'], take_back: b.take_back === true };
+      return { type: 'list', from, label: label(b.label), show, empty: str(b.empty, 120) ?? 'Nothing here yet.', noun: noun(b.noun), take_back: b.take_back === true };
     }
     case 'board': {
       const from = name(b.from);
       const show = name(b.show);
       const vote = name(b.vote);
-      return from && show && vote ? { type: 'board', from, show, vote, empty: str(b.empty, 120) ?? 'Nothing to vote on yet.' } : undefined;
+      return from && show && vote ? { type: 'board', from, label: label(b.label), noun: noun(b.noun), show, vote, empty: str(b.empty, 120) ?? 'Nothing to vote on yet.' } : undefined;
     }
     case 'timer':
       return { type: 'timer', label: str(b.label, 60) ?? 'Time left' };
@@ -133,7 +139,7 @@ export function blockFrom(x: unknown): Block | undefined {
       const secret = name(b.secret);
       const show = name(b.show);
       if (!secret || !show) return undefined;
-      return { type: 'reveal', secret, show, label: str(b.label, 60) ?? 'The answers', hidden: str(b.hidden, 120) ?? 'Revealed at the end.' };
+      return { type: 'reveal', secret, show, label: str(b.label, 60) ?? 'The answers', hidden: str(b.hidden, 120) ?? null };
     }
     default:
       return undefined;
@@ -199,9 +205,11 @@ export function madeFrom(json: unknown): { view: MadeView; version?: number } | 
           const q = obj(x);
           const player = str(q?.player, 64);
           const points = int(q?.points);
-          return player && points !== undefined ? { player, points } : undefined;
+          const rank = int(q?.rank);
+          // `rank` (proposed for L2) lets equal points share a place; without it the place is the row's position.
+          return player && points !== undefined ? { player, points, rank: rank !== undefined && rank > 0 ? rank : null } : undefined;
         })
-        .filter((x): x is { player: string; points: number } => !!x)
+        .filter((x): x is { player: string; points: number; rank: number | null } => !!x)
     : null;
   const me = str(obj(s.me)?.id, 64) ?? null;
   const view: MadeView = {

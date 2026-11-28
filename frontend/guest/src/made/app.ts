@@ -148,11 +148,11 @@ export class MadeApp {
 
   private bar(): HTMLElement {
     const v = this.view;
-    return h('header', { class: 'bar' }, creature('antenna', 'mface'), h('b', null, v?.title ?? LABEL[this.surface]), h('span', { class: 'sp' }), this.surface === 'phone' ? null : h('span', { class: 'muted' }, LABEL[this.surface]));
+    return h('header', { class: 'bar' }, creature('antenna', 'mface'), h('b', null, v?.title ?? LABEL[this.surface]), h('span', { class: 'sp' }), this.surface === 'phone' || !v?.title ? null : h('span', { class: 'muted' }, LABEL[this.surface]));
   }
 
-  private calm(title: string, lead: string, extra?: HTMLElement): HTMLElement {
-    return h('div', { class: 'body mid' }, creature('antenna', 'mface xl'), h('h2', null, title), h('p', { class: 'lead' }, lead), extra ?? null);
+  private calm(title: string, lead: string, extra?: HTMLElement | null, soft?: string): HTMLElement {
+    return h('div', { class: 'body mid' }, creature('antenna', 'mface xl'), h('h2', null, title), h('p', { class: 'lead' }, lead), soft ? h('p', { class: 'lead msoft' }, soft) : null, extra ?? null);
   }
 
   render(): void {
@@ -171,13 +171,22 @@ export class MadeApp {
         h('p', { class: 'err', id: 'mname-err', role: 'alert' }, this.joinErr));
     else if (this.screen === 'away') body = this.calm('Lost the connection', `Trying again in ${this.away.secs} s.`, h('button', { type: 'button', class: 'gbtn ghost', onclick: () => this.wake() }, 'Try now'));
     else if (this.screen === 'ended') body = this.calm('This has ended', v?.words.done ?? 'Thanks for taking part!');
+    // The spent-link copy is the team's: every TV says the same words (#1388), every remote the shared remote's.
     else if (this.screen === 'signed-out')
-      body = this.calm(this.surface === 'phone' ? 'Signed out' : 'This link was already used', this.surface === 'phone' ? 'Open the link again to come back.' : 'Each link opens one screen. Make a new one on the card in kwant.');
+      body =
+        this.surface === 'phone' ? this.calm('Signed out', 'Open the link again to come back.')
+        : this.surface === 'screen' ? this.calm('This big-screen link was already used', 'Each link opens one screen. To add another, press Big screen on its card in kwant.', null, "Links also stop working 10 minutes after they're made.")
+        : this.calm('This link was already used or is too old', 'Open a new one from the card: press Open the remote again. Each link works once, for 10 minutes.');
     else if (this.screen === 'gone') body = this.calm('Nothing here', 'Check the link with whoever sent it.');
     else {
       const ctx = { v: v!, surface: this.surface, send: this.send, ui: this.ui, now: this.env.now(), skew: this.skew };
       const blocks = drawBlocks(ctx);
-      body = h('div', { class: 'body mblocks' }, this.surface === 'remote' ? stepBar(ctx) : null, ...(blocks.length ? blocks : [h('p', { class: 'muted center' }, 'Nothing to show here yet.')]));
+      if (!blocks.length) body = h('div', { class: 'body mblocks' }, this.surface === 'remote' ? stepBar(ctx) : null, h('p', { class: 'muted center' }, 'Nothing to show here yet.'));
+      else if (this.surface === 'screen') {
+        // On the big screen the say lines run full width above the cards, so the cards' grid can use every column.
+        const says = blocks.filter((b) => b.dataset.block === 'say');
+        body = h('div', { class: 'body mtv' }, ...says, h('div', { class: 'mblocks' }, ...blocks.filter((b) => b.dataset.block !== 'say')));
+      } else body = h('div', { class: 'body mblocks' }, this.surface === 'remote' ? stepBar(ctx) : null, ...blocks);
     }
     this.main.dataset.screen = this.screen;
     this.main.replaceChildren(this.bar(), body);

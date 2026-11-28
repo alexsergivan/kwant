@@ -20,17 +20,17 @@ const SHELF = {
   screens: {
     phone: { blocks: [
       { type: 'say', text: 'Add a book you would swap, then vote for the next read.' },
-      { type: 'form', into: 'shelf', fields: [{ name: 'title', type: 'text', label: 'Book title', max: 80 }, { name: 'genre', type: 'choice', label: 'Kind of book', of: ['novel', 'poetry', 'other'] }], submit: 'Add to the shelf', done: 'Last added:' },
-      { type: 'board', from: 'shelf', show: 'title', vote: 'picks' },
+      { type: 'form', into: 'shelf', noun: ['book', 'books'], fields: [{ name: 'title', type: 'text', label: 'Book title', max: 80 }, { name: 'genre', type: 'choice', label: 'Kind of book', of: ['novel', 'poetry', 'other'] }], submit: 'Add to the shelf', done: 'Last added:' },
+      { type: 'board', from: 'shelf', label: 'Vote for the next read', noun: ['book', 'books'], show: 'title', vote: 'picks' },
     ] },
     screen: { blocks: [
       { type: 'say', text: 'Book swap: vote for the next read', size: 'big' },
-      { type: 'board', from: 'shelf', show: 'title', vote: 'picks' },
-      { type: 'list', from: 'shelf', show: ['title', 'genre'], noun: ['book', 'books'], empty: 'No books on the shelf yet.' },
+      { type: 'board', from: 'shelf', label: 'Vote for the next read', show: 'title', vote: 'picks' },
+      { type: 'list', from: 'shelf', label: 'On the shelf', show: ['title', 'genre'], noun: ['book', 'books'], empty: 'No books on the shelf yet.' },
     ] },
     remote: { blocks: [
-      { type: 'form', into: 'shelf', fields: [{ name: 'title', type: 'text', label: 'Book title' }] },
-      { type: 'board', from: 'shelf', show: 'title', vote: 'picks' },
+      { type: 'form', into: 'shelf', label: 'On the shelf', noun: ['book', 'books'], fields: [{ name: 'title', type: 'text', label: 'Book title' }] },
+      { type: 'board', from: 'shelf', label: 'Vote for the next read', show: 'title', vote: 'picks' },
     ] },
   },
 };
@@ -56,16 +56,43 @@ const OPENING = {
       { type: 'say', from: 'step', size: 'big' },
       { type: 'timer', label: 'Time left' },
       { type: 'turn' },
-      { type: 'list', from: 'guesses', show: ['text'], noun: ['guess', 'guesses'] },
+      { type: 'list', from: 'guesses', label: 'Guesses', show: ['text'], noun: ['guess', 'guesses'] },
       { type: 'scores', top: 8 },
       { type: 'reveal', secret: 'answers', show: 'text', label: 'The opening lines', hidden: 'The answers show after the last round.' },
     ] },
     remote: { blocks: [
       { type: 'timer', label: 'Time left' },
       { type: 'turn' },
-      { type: 'form', into: 'guesses', fields: [{ name: 'text', type: 'text', label: 'Guess' }] },
+      { type: 'form', into: 'guesses', label: 'Guesses', noun: ['guess', 'guesses'], fields: [{ name: 'text', type: 'text', label: 'Guess' }] },
       { type: 'scores', top: 60 },
       { type: 'reveal', secret: 'answers', show: 'text', label: 'The opening lines' },
+    ] },
+  },
+};
+
+// The states the two examples don't reach: the phone's own list with Take back, a vote whose counts stay hidden (no
+// `count` on the vote action, so the box sends no tally), a list this viewer sees as a count only, and a refusal (one
+// book per guest, and Mo has one already).
+const SWAP = {
+  format: 'made/1',
+  title: 'Book swap shelf',
+  collections: {
+    shelf: { read: 'everyone', write: 'guest_many', max_per_guest: 1, fields: { title: { type: 'text', max: 80 }, genre: { type: 'choice', of: ['novel', 'poetry', 'other'] } } },
+    picks: { read: 'mine', write: 'guest_one', fields: { pick: { type: 'row', of: 'shelf' } } },
+    wishes: { read: 'host', write: 'guest_many', fields: { title: { type: 'text', max: 80 } } },
+  },
+  actions: { vote: { collection: 'picks' } },
+  words: { join: 'Join the book swap', done: 'Thanks for swapping!' },
+  screens: {
+    phone: { blocks: [
+      { type: 'list', from: 'shelf', label: 'On the shelf', show: ['title', 'genre'], noun: ['book', 'books'], take_back: true },
+      { type: 'form', into: 'shelf', noun: ['book', 'books'], fields: [{ name: 'title', type: 'text', label: 'Book title', max: 80 }], submit: 'Add to the shelf', done: 'Last added:' },
+      { type: 'board', from: 'shelf', label: 'Vote for the next read', show: 'title', vote: 'picks' },
+      { type: 'list', from: 'wishes', label: 'Wish list', show: ['title'], noun: ['wish', 'wishes'] },
+    ] },
+    screen: { blocks: [
+      { type: 'board', from: 'shelf', label: 'Vote for the next read', show: 'title', vote: 'picks' },
+      { type: 'list', from: 'wishes', label: 'Wish list', show: ['title'], noun: ['wish', 'wishes'] },
     ] },
   },
 };
@@ -94,6 +121,8 @@ export const madeScenes = {
   'shelf-locked': { spec: SHELF, rows: { shelf: BOOKS, picks: VOTES }, locked: ['shelf', 'picks'] },
   opening: { spec: OPENING, rows: { guesses: GUESSES }, step: 1, timer: { seconds: 30, left: 22, running: true }, turn: { player: 'g1', next: 'g2' }, scores: [['g2', 2], ['g1', 1], ['g3', 1], ['g4', 0]] },
   'opening-revealed': { spec: OPENING, rows: { guesses: GUESSES }, step: 3, locked: ['guesses'], timer: { seconds: 0, running: false }, turn: { player: 'g3', next: 'g4' }, scores: [['g1', 2], ['g2', 2], ['g3', 1], ['g4', 0]], revealed: true },
+  // `counts` makes the box send a count only for these collections to this viewer (the read rule's count-only case).
+  swap: { spec: SWAP, rows: { shelf: BOOKS, picks: VOTES, wishes: [row('w1', 'g2', { title: 'Middlemarch' }), row('w2', 'g3', { title: 'Beloved' }), row('w3', 'g4', { title: 'Kindred' })] }, counts: ['wishes'] },
   ended: { spec: SHELF, rows: { shelf: BOOKS, picks: VOTES }, ended: true },
   // Hostile text from guests: a name and a title that look like markup are drawn as text, never parsed.
   hostile: { spec: SHELF, rows: { shelf: [row('s9', 'g9', { title: '<img src=x onerror=alert(1)>', genre: 'other' }), ...BOOKS.slice(0, 1)], picks: [] }, extra: [{ id: 'g9', name: '"><svg onload=alert(1)>', avatar: 'horns' }] },
@@ -131,6 +160,7 @@ export class MadeBox {
     const out = (rows) => ({ rows: rows.map((r) => ({ id: r.id, owner: r.owner, mine: viewer === 'guest' && r.owner === this.me, values: r.values })), count: rows.length, locked: this.locked.has(name) });
     const count = () => ({ count: all.length, locked: this.locked.has(name) });
     let p;
+    if (this.s.counts?.includes(name)) return count();
     if (c.read === 'everyone') p = out(all);
     else if (c.read === 'mine') p = viewer === 'guest' ? out(own) : count();
     else if (c.read === 'host') p = viewer === 'guest' ? out(own) : viewer === 'host' ? out(all) : null;

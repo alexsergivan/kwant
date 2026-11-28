@@ -136,7 +136,7 @@ test('phone: the opening-line game draws every block and sends `answer`', async 
   assert.match(d.text, /Your turn/);
   assert.match(d.text, /Then Ana/);
   assert.match(d.text, /Your guess: Moby-Dick/);
-  assert.deepEqual([...d.root.querySelectorAll('.mscores li')].map((li) => li.textContent), ['Ana2', 'You1', 'Ben1', 'Cleo0']);
+  assert.deepEqual([...d.root.querySelectorAll('.mscores li')].map((li) => li.textContent), ['1Ana2', '2You1', '3Ben1', '4Cleo0']);
   assert.match(d.text, /The answers show after the last round\./);
   assert.equal(d.root.querySelectorAll('button').length, 1, 'only the form’s own button: the host’s controls are not on a phone');
   d.ui.drafts.set('b3-text', 'Moby-Dick');
@@ -169,7 +169,7 @@ test('remote: the host’s buttons follow `can`, and write with host actions', a
   assert.match(d.text, /Step 2 of 4/);
   const labels = [...d.root.querySelectorAll('button')].map((b) => b.textContent);
   assert.deepEqual(labels, ['Next step', 'Stop', 'Next turn', 'Skip', 'Lock', 'Reveal']);
-  assert.match(d.text, /3 entries in/);
+  assert.match(d.text, /3 guesses in/, 'the form block names its count with its own noun');
   for (const b of d.root.querySelectorAll('button')) b.click();
   await settle();
   assert.deepEqual(d.sent.map((s) => s.name), ['step', 'timer_stop', 'turn_next', 'turn_skip', 'lock', 'reveal']);
@@ -177,6 +177,46 @@ test('remote: the host’s buttons follow `can`, and write with host actions', a
   const r = draw('remote-', 'opening-revealed');
   assert.deepEqual([...r.root.querySelectorAll('button')].map((b) => b.textContent), ['Start', 'Next turn', 'Skip', 'Unlock']);
   assert.equal(r.root.querySelectorAll('button.mvote').length, 0);
+});
+
+test('headings are the author’s labels, never a collection key; nouns, hidden counts, count-only, own rows', async () => {
+  const d = draw('', 'swap', { reply: 'You can add up to 1 here.' });
+  const heads = [...d.root.querySelectorAll('.mbh')].map((e) => e.textContent);
+  assert.deepEqual(heads, ['On the shelf', 'Vote for the next read', 'Wish list']);
+  assert.doesNotMatch(d.text, /\b(shelf|picks|wishes)\b(?! )/);
+  // Own row: "You" and Take back; others' rows have neither.
+  const mine = d.root.querySelector('.mrow.me');
+  assert.match(mine.textContent, /A Wizard of Earthsea.*You.*Take back/);
+  assert.equal(d.root.querySelectorAll('.mrow:not(.me) button').length, 0);
+  // No tally from the box: no numbers, the counts stay hidden.
+  assert.equal(d.root.querySelectorAll('.mn, .mbar').length, 0);
+  assert.match(d.text, /The counts are hidden for now\./);
+  assert.doesNotMatch(d.text, /votes? in/, 'a phone holds only its own ballot, so it never says how many are in');
+  assert.match(draw('screen-', 'swap').text, /4 votes in\. The counts are hidden for now\./);
+  assert.match(d.text, /3 wishes in/);
+  // A refusal shows under its block, in the box's words.
+  d.root.querySelector('[data-block=form] input').value = 'x';
+  d.ui.drafts.set('b1-title', 'Ulysses');
+  d.root.querySelector('[data-block=form] form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+  await settle();
+  assert.equal(d.ui.errors.get('b1'), 'You can add up to 1 here.');
+  // The vote line at 0 and 1, and a closed vote on the phone.
+  const v = viewOf('', 'swap');
+  const line = (n, locked = false) => {
+    const c = { v: { ...v, collections: { ...v.collections, picks: { count: n, locked } } }, surface: locked ? 'phone' : 'screen', send: async () => null, ui: m.newUi(() => {}), now: 0, skew: 0 };
+    return m.drawBlocks(c).find((e) => e.dataset.block === 'board').textContent;
+  };
+  assert.match(line(0), /No votes yet\./);
+  assert.match(line(1), /1 vote in\.$|1 vote in\.(?!.*hidden)/);
+  assert.match(line(2, true), /Voting is closed\./);
+  // The remote's reveal without a `hidden` line speaks to the host.
+  assert.match(draw('remote-', 'opening').text, /Hidden until you press Reveal\./);
+  // A box `rank` lets equal points share a place.
+  const e = env('', 'opening-revealed');
+  e.view.scores = [{ player: 'g1', points: 2, rank: 1 }, { player: 'g2', points: 2, rank: 1 }, { player: 'g3', points: 1, rank: 3 }];
+  const c = { v: m.madeFrom(e).view, surface: 'phone', send: async () => null, ui: m.newUi(() => {}), now: 0, skew: 0 };
+  const sc = m.drawBlocks(c).find((x) => x.dataset.block === 'scores');
+  assert.deepEqual([...sc.querySelectorAll('.mrank')].map((x) => x.textContent), ['1', '1', '3']);
 });
 
 test('hostile guest text is drawn as text, never as markup', () => {
@@ -215,7 +255,13 @@ test('app: an unseated phone joins, then draws; an ended pocket says so; a spent
     const tv = new m.MadeApp(s, appEnv, 'screen-made-shelf', 'screen', 'used');
     await tv.start(null);
     assert.equal(s.querySelector('main').dataset.screen, 'signed-out');
-    assert.match(s.textContent, /This link was already used/);
+    assert.match(s.textContent, /This big-screen link was already used/);
+    assert.match(s.textContent, /press Big screen on its card in kwant\.\s*Links also stop working 10 minutes after they're made\./);
+    const rr = document.createElement('div');
+    const rm = new m.MadeApp(rr, appEnv, 'remote-made-shelf', 'remote', 'used');
+    await rm.start(null);
+    assert.match(rr.textContent, /This link was already used or is too old/);
+    assert.match(rr.textContent, /press Open the remote again\. Each link works once, for 10 minutes\./);
   } finally {
     await f.close();
   }

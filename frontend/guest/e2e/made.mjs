@@ -50,6 +50,8 @@ async function check(name, { page, log }, { width }) {
       controls: document.querySelectorAll('main[data-surface=screen] button, main[data-surface=screen] input').length,
       blocks: [...document.querySelectorAll('[data-block]')].map((e) => e.dataset.block),
       screen: document.querySelector('main')?.dataset.screen,
+      // The big screen has no scrolling: a card or line cut off at the bottom would just be hidden.
+      clipped: document.querySelector('main[data-surface=screen]') ? [...document.querySelectorAll('[data-block], .body.mid > *')].filter((e) => e.getBoundingClientRect().bottom > innerHeight + 1).map((e) => e.dataset.block || e.tagName) : [],
     };
   });
   const bad = [...log, ...facts.violations.map((v) => `csp: ${v}`)];
@@ -57,6 +59,7 @@ async function check(name, { page, log }, { width }) {
   if (width <= 400 && facts.small.length) bad.push(`small targets: ${JSON.stringify(facts.small)}`);
   if (facts.injected) bad.push(`${facts.injected} element(s) from data`);
   if (facts.controls) bad.push('a control on the big screen');
+  if (facts.clipped.length) bad.push(`cut off at the bottom: ${facts.clipped}`);
   for (const b of bad) problems.push(`${name}: ${b}`);
   results[name] = { blocks: facts.blocks, screen: facts.screen, problems: bad };
 }
@@ -82,17 +85,25 @@ try {
   await shot('phone-opening-revealed', 'made-opening-revealed');
   await shot('phone-hostile', 'made-hostile');
   await shot('phone-ended', 'made-ended', {}, '[data-screen=ended]');
+  // The states the examples don't reach: own list with Take back, a vote with hidden counts, a count-only list.
+  await shot('phone-swap', 'made-swap');
   // Big screen, 1920x1080.
   await shot('screen-shelf', 'screen-made-shelf', TV);
   await shot('screen-opening', 'screen-made-opening', TV);
   await shot('screen-opening-revealed', 'screen-made-opening-revealed', TV);
   await shot('screen-hostile', 'screen-made-hostile', TV);
+  await shot('screen-swap', 'screen-made-swap', TV);
   await shot('screen-used-link', 'screen-made-shelf', { ...TV, hash: '#screen=used' }, '[data-screen=signed-out]');
+  // A smaller TV (1280x720): the same vw sizes must still fit with nothing cut off.
+  const TV720 = { ...TV, width: 1280, height: 720 };
+  await shot('screen-shelf-720', 'screen-made-shelf', TV720);
+  await shot('screen-opening-revealed-720', 'screen-made-opening-revealed', TV720);
   // Big screen at 390 (a phone opening a screen link) must not clip either.
   await shot('screen-opening-390', 'screen-made-opening', { hash: '#screen=t' });
   // Host remote, 390 px.
   await shot('remote-opening', 'remote-made-opening', REMOTE);
   await shot('remote-shelf', 'remote-made-shelf', REMOTE);
+  await shot('remote-used-link', 'remote-made-opening', { hash: '#remote=used' }, '[data-screen=signed-out]');
 
   // Walk 1: join, add a book, vote for it, take it back.
   {
@@ -115,6 +126,18 @@ try {
     if (JSON.stringify(sent) !== JSON.stringify(['put', 'vote'])) problems.push(`walk: sent ${sent}`);
     if (tally !== '1') problems.push(`walk: tally ${tally}`);
     await check('walk-shelf', o, { width: 390 });
+    await o.ctx.close();
+  }
+  // Walk 1b: one book per guest in the swap, so a second one is refused; the box's words show under the form.
+  {
+    const o = await open('made-swap');
+    const p = o.page;
+    await p.waitForSelector('[data-block=form]');
+    await p.fill('[data-block=form] input[name=title]', 'Ulysses');
+    await p.click('[data-block=form] button[type=submit]');
+    await p.waitForSelector('[data-block=form] .err:has-text("You can add up to 1 here.")');
+    await p.screenshot({ path: path.join(out, 'made-walk-refused.png'), fullPage: true });
+    await check('walk-refused', o, { width: 390 });
     await o.ctx.close();
   }
   // Walk 2: a guess on the phone, then the host reveals from the remote and the phone shows the answers.
