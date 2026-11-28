@@ -113,7 +113,18 @@ pub struct Delegation {
     /// `finished_batch`).
     #[sqlx(default)]
     pub lead_turn_id: Option<String>,
+    /// While a usage limit holds the hand-off: when its parked retry runs (the pending
+    /// "usage_limit" row in `parked_turns`; never a budget hold). Filled in by the readers the app
+    /// shows ([`Database::get_delegation`], `delegation_for_thread`, `list_delegations`), so the
+    /// card says "waits for the usage limit · back 16:42" instead of "is working on it".
+    #[sqlx(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<DateTime<Utc>>,
 }
+
+/// The delegation's columns plus its pending usage-limit retry (see `Delegation::retry_at`).
+const WITH_RETRY: &str = "SELECT d.*, (SELECT p.retry_at FROM parked_turns p WHERE p.delegation_id = d.id \
+     AND p.status = 'pending' AND p.reason = 'usage_limit' ORDER BY p.retry_at LIMIT 1) AS retry_at FROM delegations d";
 
 impl Delegation {
     pub fn is_open(&self) -> bool {
@@ -529,6 +540,7 @@ impl Database {
             after_delegation_id: None,
             relayed_from_delegation_id: None,
             lead_turn_id: None,
+            retry_at: None,
         };
         sqlx::query(
             "INSERT INTO delegations (id, thread_id, lead_kwant_id, specialist_kwant_id, origin_channel_id, origin_kwant_id, \
@@ -555,7 +567,7 @@ impl Database {
     }
 
     pub async fn get_delegation(&self, id: &str) -> Result<Option<Delegation>, DbError> {
-        Ok(sqlx::query_as::<_, Delegation>("SELECT * FROM delegations WHERE id = ?")
+        Ok(sqlx::query_as::<_, Delegation>(&format!("{WITH_RETRY} WHERE d.id = ?"))
             .bind(id)
             .fetch_optional(&self.pool)
             .await?)
@@ -563,7 +575,7 @@ impl Database {
 
     pub async fn delegation_for_thread(&self, thread_id: &str) -> Result<Option<Delegation>, DbError> {
         Ok(sqlx::query_as::<_, Delegation>(
-            "SELECT * FROM delegations WHERE thread_id = ? ORDER BY created_at DESC LIMIT 1",
+            &format!("{WITH_RETRY} WHERE d.thread_id = ? ORDER BY d.created_at DESC LIMIT 1"),
         )
         .bind(thread_id)
         .fetch_optional(&self.pool)
@@ -573,8 +585,10 @@ impl Database {
     /// Newest first; `lead` and `status` narrow it down.
     pub async fn list_delegations(&self, lead: Option<&str>, status: Option<&str>, limit: i64) -> Result<Vec<Delegation>, DbError> {
         Ok(sqlx::query_as::<_, Delegation>(
-            "SELECT * FROM delegations WHERE (? IS NULL OR lead_kwant_id = ?) AND (? IS NULL OR status = ?) \
-             ORDER BY created_at DESC, rowid DESC LIMIT ?",
+            &format!(
+                "{WITH_RETRY} WHERE (? IS NULL OR d.lead_kwant_id = ?) AND (? IS NULL OR d.status = ?) \
+                 ORDER BY d.created_at DESC, d.rowid DESC LIMIT ?"
+            ),
         )
         .bind(lead)
         .bind(lead)

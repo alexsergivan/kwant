@@ -3131,16 +3131,18 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   const renderDelegation = (msg: ChatMessage, meta: DelegationMeta, flash: boolean) => {
     const queued = turnsIn(turns, meta.thread_id).find((t) => t.state === 'queued');
     // 32j: a teammate blocked on the person's OK or answer says so here, not "working on it",
-    // naming the approval's action in the approval card's own words.
+    // naming the approval's action in the approval card's own words; one a usage limit holds
+    // says when it's back (limit-wait-says-so).
     const ask = delegationWaitingApproval(meta, pendingApprovals);
+    const live = delegations[meta.delegation_id];
     return (
       <DelegationCard
         meta={meta}
         text={msg.text}
         messageId={msg.id}
-        live={delegations[meta.delegation_id]}
+        live={live}
         queuePos={queued ? queuePosition(turns, queued.turn_id) : null}
-        waiting={delegationWaiting(meta, pendingApprovals, questions)}
+        waiting={delegationWaiting(meta, pendingApprovals, questions, live)}
         waitingAction={ask ? approvalAction(ask) : null}
         onOpenThread={(m) => openThread(m.specialist_id, m.thread_id)}
         onCancel={handleCancelDelegation}

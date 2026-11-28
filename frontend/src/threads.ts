@@ -20,6 +20,8 @@ export interface Delegation {
   created_at: string;
   started_at: string | null;
   ended_at: string | null;
+  /** While a usage limit holds the hand-off: when kwnt retries it (ISO). Absent otherwise. */
+  retry_at?: string | null;
 }
 
 export interface ActiveTurn {
@@ -529,8 +531,8 @@ export function parseDelegationMeta(raw: unknown): DelegationMeta | null {
   };
 }
 
-/** 32j: what a running teammate is waiting on the person for, if anything. */
-export type DelegationWaiting = 'approval' | 'question';
+/** 32j: what a running teammate is waiting on: the person (an approval or a question), or a usage limit to reset. */
+export type DelegationWaiting = 'approval' | 'question' | 'usage_limit';
 
 type WaitingApproval = { kwant_id: string | null; link: { thread_id?: string | null } | null; refused?: true };
 
@@ -553,16 +555,30 @@ export function delegationWaitingApproval<A extends WaitingApproval>(
 }
 
 /**
+ * When a usage limit holds the hand-off, the time kwnt retries it; null once that time has passed
+ * (the retry is starting), when it isn't held, or for an unreadable time.
+ */
+export function delegationRetryAt(live: Pick<Delegation, 'retry_at'> | null | undefined, now = Date.now()): Date | null {
+  if (!live?.retry_at) return null;
+  const at = new Date(live.retry_at);
+  return Number.isNaN(at.getTime()) || at.getTime() <= now ? null : at;
+}
+
+/**
  * 32j: whether the teammate on a delegation is blocked on the person: a pending approval (above),
- * else an open question in its thread. Structural types so threads.ts stays import-free.
+ * else an open question in its thread; else, with the live record, a usage limit it waits out
+ * (limit-wait-says-so). Structural types so threads.ts stays import-free.
  */
 export function delegationWaiting(
   meta: Pick<DelegationMeta, 'thread_id' | 'specialist_id'>,
   approvals: ReadonlyArray<WaitingApproval>,
   questions: Readonly<Record<string, { thread_id: string | null; status: string }>>,
+  live?: Pick<Delegation, 'retry_at'> | null,
+  now = Date.now(),
 ): DelegationWaiting | null {
   if (delegationWaitingApproval(meta, approvals)) return 'approval';
   for (const q of Object.values(questions)) if (q.status === 'open' && q.thread_id && q.thread_id === meta.thread_id) return 'question';
+  if (delegationRetryAt(live, now)) return 'usage_limit';
   return null;
 }
 
@@ -570,7 +586,14 @@ export function delegationWaiting(
 export function delegationStatusLine(
   status: DelegationStatus,
   specialist: string,
-  opts: { queuePos?: number | null; error?: string | null; waiting?: DelegationWaiting | null; action?: string | null } = {},
+  opts: {
+    queuePos?: number | null;
+    error?: string | null;
+    waiting?: DelegationWaiting | null;
+    action?: string | null;
+    /** For 'usage_limit': when it's back, on the person's clock ("16:42", "Wed 09:10"). */
+    back?: string | null;
+  } = {},
 ): string {
   switch (status) {
     case 'queued':
@@ -579,6 +602,7 @@ export function delegationStatusLine(
       // The action is the approval card's own words ("send an email"); without one, never guess.
       if (opts.waiting === 'approval') return opts.action ? `${specialist} needs your OK to ${opts.action}` : `${specialist} needs your OK`;
       if (opts.waiting === 'question') return `${specialist} asked you a question`;
+      if (opts.waiting === 'usage_limit') return opts.back ? `${specialist} waits for the usage limit · back ${opts.back}` : `${specialist} waits for the usage limit`;
       return `${specialist} is working on it`;
     case 'completed':
       return `${specialist} finished`;

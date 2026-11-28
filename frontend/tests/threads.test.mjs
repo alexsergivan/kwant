@@ -409,10 +409,54 @@ test('32j: without an ask, or once finished, the card is unchanged', () => {
   assert.doesNotMatch(done, /Go to it|needs your OK/);
 });
 
+// ---------------------------------------------------------------------------
+// limit-wait-says-so (m3 card half): a hand-off a usage limit holds says when it's back
+
+const NOW = Date.parse('2026-11-28T15:40:00Z');
+const held = (retry_at) => ({ ...delegation('running'), id: 'd1', retry_at });
+
+test('limit-wait-says-so: a live record with a future retry_at waits for the usage limit; past, unreadable or none does not', () => {
+  assert.equal(t.delegationWaiting(wMeta, [], {}, held('2026-11-28T15:42:00Z'), NOW), 'usage_limit');
+  assert.equal(t.delegationWaiting(wMeta, [], {}, held('2026-11-28T15:39:00Z'), NOW), null, 'the retry is starting: back to working');
+  assert.equal(t.delegationWaiting(wMeta, [], {}, held('soon'), NOW), null, 'unreadable time');
+  assert.equal(t.delegationWaiting(wMeta, [], {}, held(null), NOW), null);
+  assert.equal(t.delegationWaiting(wMeta, [], {}, { ...delegation('running'), id: 'd1' }, NOW), null, 'no retry_at at all');
+  assert.equal(t.delegationWaiting(wMeta, [], {}, undefined, NOW), null, 'no live record yet');
+  // An ask to the person outranks the limit
+  assert.equal(t.delegationWaiting(wMeta, [], { q1: ques() }, held('2026-11-28T15:42:00Z'), NOW), 'question');
+  assert.equal(t.delegationWaiting(wMeta, [appr()], {}, held('2026-11-28T15:42:00Z'), NOW), 'approval');
+  assert.equal(t.delegationRetryAt(held('2026-11-28T15:42:00Z'), NOW)?.toISOString(), '2026-11-28T15:42:00.000Z');
+});
+
+test('limit-wait-says-so: the line says the teammate waits for the usage limit and when it is back', () => {
+  assert.equal(t.delegationStatusLine('running', 'Researcher', { waiting: 'usage_limit', back: '16:42' }), 'Researcher waits for the usage limit · back 16:42');
+  assert.equal(t.delegationStatusLine('running', 'Researcher', { waiting: 'usage_limit' }), 'Researcher waits for the usage limit', 'no time: never guesses one');
+  assert.equal(t.delegationStatusLine('completed', 'Researcher', { waiting: 'usage_limit', back: '16:42' }), 'Researcher finished');
+});
+
+test('limit-wait-says-so: the card shows the wait in quiet amber with a clock, no spinner, and keeps its thread button', () => {
+  const at = new Date(Date.now() + 60 * 60_000);
+  const html = card.render(props({ meta: wMeta, live: held(at.toISOString()), waiting: 'usage_limit' }));
+  assert.match(html, /role="status"[^>]*>.*Writer waits for the usage limit · back (\w{3} )?\d{1,2}:\d{2}(\u00a0[AP]M)?</s, 'the time on the person\'s clock');
+  assert.doesNotMatch(html, /is working on it/);
+  assert.doesNotMatch(html, /animate-spin/, 'no spinner while it waits');
+  assert.match(html, /lucide-clock/, 'a clock icon');
+  assert.doesNotMatch(html, /lucide-hand/, 'not the hand: nothing for the person to do');
+  assert.match(html, /text-amber-300/);
+  assert.doesNotMatch(html, />Go to it</, 'not an ask');
+  assert.match(html, /Open Writer&#x27;s thread|Open Writer's thread/);
+  assert.match(html, /Stop “Draft the email”/, 'Stop stays');
+  // Once the retry starts (no retry_at), the same card is back to working
+  const working = card.render(props({ meta: wMeta, live: { ...delegation('running'), id: 'd1' }, waiting: null }));
+  assert.match(working, /Writer is working on it/);
+  assert.match(working, /animate-spin/);
+});
+
 test('32j: App passes the waiting state to the delegation card from pending approvals and questions', async () => {
   const app = await readFile(new URL('../src/App.tsx', import.meta.url), 'utf8');
   const fn = app.slice(app.indexOf('const renderDelegation'), app.indexOf('// Search result picked'));
-  assert.match(fn, /delegationWaiting\(meta, pendingApprovals, questions\)/);
+  assert.match(fn, /delegationWaiting\(meta, pendingApprovals, questions, live\)/, 'limit-wait-says-so: with the live record');
+  assert.match(fn, /const live = delegations\[meta\.delegation_id\]/);
   assert.match(fn, /delegationWaitingApproval\(meta, pendingApprovals\)/);
   assert.match(fn, /approvalAction\(/, 'the approval card\'s own words');
   assert.match(fn, /waiting=\{/);

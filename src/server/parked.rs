@@ -8,11 +8,37 @@ use crate::db::models::Kwant;
 use crate::db::parked::{NewParkedTurn, ParkedTurn};
 use chrono::{DateTime, Utc};
 
-/// The line added to the give-up notice when the turn was parked.
-pub fn retry_line(at: DateTime<Utc>, now: DateTime<Utc>) -> String {
+/// The line added to the give-up notice when the turn was parked, with the time on the person's
+/// clock: `tz` is the timezone setting ("" when unset). "at 16:42" on the same local day,
+/// "tomorrow at 09:10" on the next, "on Mon 1 Dec at 09:10" later. An unset or unreadable zone
+/// keeps UTC and says so, so the line never claims a zone it didn't convert to.
+pub fn retry_line(at: DateTime<Utc>, now: DateTime<Utc>, tz: &str) -> String {
     let mins = (at - now).num_minutes().max(1);
     let wait = if mins >= 90 { format!("about {} h", (mins + 30) / 60) } else { format!("about {mins} min") };
-    format!("⏳ kwnt will retry this once at {} UTC (in {wait}), when the limit resets.", at.format("%H:%M"))
+    let zone = Some(tz.trim()).filter(|t| !t.is_empty());
+    let local = zone.and_then(|t| Some((crate::routines::now_in(t, at).ok()?, crate::routines::now_in(t, now).ok()?)));
+    let (when, suffix) = match local {
+        Some((at, now)) => (day_and_time(at.date_naive(), now.date_naive(), at.time()), ""),
+        None => (day_and_time(at.date_naive(), now.date_naive(), at.time()), " UTC"),
+    };
+    format!("⏳ kwnt will retry this once {when}{suffix} (in {wait}), when the limit resets.")
+}
+
+/// "at 16:42", "tomorrow at 09:10" or "on Mon 1 Dec at 09:10", from dates on one clock.
+fn day_and_time(at: chrono::NaiveDate, today: chrono::NaiveDate, time: chrono::NaiveTime) -> String {
+    let clock = time.format("%H:%M");
+    if at <= today {
+        format!("at {clock}")
+    } else if Some(at) == today.succ_opt() {
+        format!("tomorrow at {clock}")
+    } else {
+        format!("on {} at {clock}", at.format("%a %-d %b"))
+    }
+}
+
+/// [`retry_line`] in the person's timezone setting.
+pub(super) async fn retry_line_for(state: &AppState, at: DateTime<Utc>) -> String {
+    retry_line(at, Utc::now(), &super::spend_stop::timezone(state).await)
 }
 
 /// Parks the turn that just hit a usage limit, if it can be retried: not already a retry, a
@@ -80,7 +106,21 @@ pub(super) async fn park_for(
     }
     tracing::info!(kwant = %kwant.id, parked = %row.id, retry_at = %at, "turn parked until the usage limit resets");
     scope.state.scheduler_wake.notify_one();
-    Some(retry_line(at, Utc::now()))
+    if let Some(d) = &row.delegation_id {
+        emit_delegation(&scope.state, d).await;
+    }
+    Some(retry_line_for(&scope.state, at).await)
+}
+
+/// Sends a hand-off's record again after its parked retry was set or ran, so its card in the
+/// lead's chat shows (or drops) "waits for the usage limit · back 16:42": `retry_at` comes from
+/// the pending parked row (see `Database::get_delegation`).
+async fn emit_delegation(state: &AppState, id: &str) {
+    if let Ok(Some(d)) = state.db.get_delegation(id).await {
+        let _ = state.event_sender.send(crate::drivers::events::RuntimeEvent::DelegationUpdated {
+            delegation: serde_json::to_value(&d).unwrap_or(serde_json::Value::Null),
+        });
+    }
 }
 
 /// The reason a reply a restart cut off waits to run again (see [`super::restart_resume`]); its
@@ -112,6 +152,9 @@ pub async fn run_due(state: &AppState, now: DateTime<Utc>) -> usize {
             started += 1;
         }
         let _ = state.db.set_parked_status(&p.id, "done").await;
+        if let Some(d) = &p.delegation_id {
+            emit_delegation(state, d).await;
+        }
     }
     started
 }

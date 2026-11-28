@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { ArrowRightLeft, CheckCircle2, Clock, ExternalLink, Hand, Loader2, Repeat, Square, XCircle, AlertTriangle } from 'lucide-react';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { ModernAvatar } from './ModernAvatar';
-import { Delegation, DelegationMeta, DelegationStatus, DelegationWaiting, delegationStatusLine, failoverText, isOpenDelegation } from '../threads';
+import { Delegation, DelegationMeta, DelegationStatus, DelegationWaiting, delegationRetryAt, delegationStatusLine, failoverText, isOpenDelegation } from '../threads';
+import { usageResetTime } from '../profiles';
 
 export interface DelegationCardProps {
   meta: DelegationMeta;
@@ -17,7 +18,7 @@ export interface DelegationCardProps {
   /** Stops the delegation; resolves to an error message on failure. */
   onCancel: (delegationId: string) => Promise<string | void>;
   flash?: boolean;
-  /** 32j: the teammate is blocked on the person (an approval or a question in its thread). */
+  /** 32j: the teammate is blocked on the person (an approval or a question in its thread), or waits out a usage limit. */
   waiting?: DelegationWaiting | null;
   /** 32j: for an approval, what it asks to do in the approval card's words ("send an email"). */
   waitingAction?: string | null;
@@ -36,6 +37,8 @@ const tone: Record<DelegationStatus, { icon: React.ReactNode; ring: string; text
 
 /** 32j: running but waiting on the person: queued's amber, a still hand instead of the spinner. */
 const waitingTone = { ...tone.queued, icon: <Hand size={13} aria-hidden="true" /> };
+/** limit-wait-says-so: running but held by a usage limit: the same quiet amber, a clock instead of the spinner. */
+const limitTone = { ...tone.queued, icon: <Clock size={13} aria-hidden="true" /> };
 
 /**
  * A delegation in the lead's chat: who got the task, its live status, a link to the specialist's
@@ -50,8 +53,17 @@ export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, mess
   const isResult = meta.kind === 'delegation_result';
   const running = isOpenDelegation({ status });
   const waitingOn = status === 'running' && waiting ? waiting : null;
-  const t = waitingOn ? waitingTone : tone[status] ?? tone.queued;
-  const line = delegationStatusLine(status, meta.specialist_name, { queuePos, error: live?.error, waiting: waitingOn, action: waitingAction });
+  const t = waitingOn === 'usage_limit' ? limitTone : waitingOn ? waitingTone : tone[status] ?? tone.queued;
+  const retryAt = waitingOn === 'usage_limit' ? delegationRetryAt(live) : null;
+  // A usage limit isn't an ask: the thread button keeps its own words, "Go to it" is for the person's OK or answer.
+  const asks = waitingOn === 'approval' || waitingOn === 'question';
+  const line = delegationStatusLine(status, meta.specialist_name, {
+    queuePos,
+    error: live?.error,
+    waiting: waitingOn,
+    action: waitingAction,
+    back: retryAt ? usageResetTime(retryAt) : null,
+  });
   const headingId = `dlg-${messageId}`;
   const long = isResult && text.length > LONG_RESULT;
   // 32m: only a finished result says it ran on another account; started, stalled, failed and stopped cards never do.
@@ -132,11 +144,11 @@ export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, mess
           <button
             type="button"
             onClick={() => onOpenThread(meta)}
-            aria-label={waitingOn ? `Go to ${meta.specialist_name}'s thread` : undefined}
-            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-sky-300 bg-sky-500/10 border border-sky-500/30 hover:bg-sky-500/20 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${waitingOn ? 'max-sm:min-h-[44px] max-sm:px-3.5' : ''}`}
+            aria-label={asks ? `Go to ${meta.specialist_name}'s thread` : undefined}
+            className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-sky-300 bg-sky-500/10 border border-sky-500/30 hover:bg-sky-500/20 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-sky-500 ${asks ? 'max-sm:min-h-[44px] max-sm:px-3.5' : ''}`}
           >
             <ExternalLink size={12} aria-hidden="true" />
-            {waitingOn ? 'Go to it' : `Open ${meta.specialist_name}'s thread`}
+            {asks ? 'Go to it' : `Open ${meta.specialist_name}'s thread`}
           </button>
           {running && (
             <button
@@ -144,7 +156,7 @@ export const DelegationCard: React.FC<DelegationCardProps> = ({ meta, text, mess
               onClick={stop}
               disabled={stopping}
               aria-label={`Stop “${meta.title}”`}
-              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-300 bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500 ${waitingOn ? 'max-sm:min-h-[44px] max-sm:px-3.5' : ''}`}
+              className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium text-rose-300 bg-rose-500/10 border border-rose-500/30 hover:bg-rose-500/20 transition-colors disabled:opacity-50 focus-visible:outline focus-visible:outline-2 focus-visible:outline-rose-500 ${asks ? 'max-sm:min-h-[44px] max-sm:px-3.5' : ''}`}
             >
               <Square size={10} fill="currentColor" aria-hidden="true" />
               {stopping ? 'Stopping…' : 'Stop'}
