@@ -20,6 +20,8 @@ on:
     paths:
       - "Cargo.toml"
       - "Cargo.lock"
+      - "build.rs"
+      - "packs/**"
       - "src/main.rs"
       - "src/serve.rs"
       - "src/config.rs"

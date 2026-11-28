@@ -23,7 +23,7 @@ Conventions (same as the rest of `/api`):
 
 ## 1. `GET /api/team-templates?space=`
 
-The catalogue. Static data from `src/teams/templates.rs` (which embeds Mira's generated `templates.json` byte for byte), plus one per-space flag. Cache it on the client for the offline preview.
+The catalogue. Static data from the built-in business packs in `packs/` (§10), embedded at build time and read by `src/teams/templates.rs`, plus one per-space flag. Cache it on the client for the offline preview.
 
 ```json
 {
@@ -64,7 +64,9 @@ The catalogue. Static data from `src/teams/templates.rs` (which embeds Mira's ge
 }
 ```
 
-- Order: inbox, sales, coding. `routine` is `null` for Coding.
+- Order: helpers, inbox, sales, coding, home, local-services (`packs/index.json`). `routine` is `null` for Helpers and Coding.
+- `asks` (only when the template asks something): `[{"id": "business_name", "label": "What is your business called?", "example": "Bright Spark Electrical"}, …]`. Each is one optional question for the create's `answers` (§3a). Only Local services asks (business_name, what_you_sell, area); the 0.9 templates have no `asks` key.
+- `routines` (only when a pack has two or more): every routine, in the same shape as `routine`, which stays the first. Local services has three; the 0.9 templates have none.
 - `slot` is the bot's key in `names` (§3). It is the template's own name for that bot and never changes. **Not the preset**: Coding has two `backend` bots (TechLead and Backend), so a preset can't be a key.
 - `skills[].body` is included so the preview's **Read** works offline.
 - `used_in_space`: a team in this space was made from this template and not undone (T10's "already used here").
@@ -110,6 +112,7 @@ Header `Idempotency-Key: <client uuid>` (optional, recommended): the same key in
 }
 ```
 
+- `answers` optional, only with `template_id`, for a template with `asks` (Local services: `{"business_name": "Bright Spark Electrical", "area": "North Leeds"}`) (with `suggestion_id` it is 400 `unknown_field`). Keys are `asks[].id` from §1; another key is 400 `unknown_field` with `field: "answers.<id>"`. Each value is text of at most 1000 characters (else 400 `bad_answer`); it is trimmed and hidden characters are taken out (new lines stay). The answer replaces `{{id}}` in the team's instructions, the bots' persona and SOUL, the skills' text and the routines' prompts. An empty or missing answer leaves out every line that needs it, so a create without `answers` makes the same team as 0.9.
 - `handle` optional, default the template's. Lower-case slug: `[a-z0-9-]{1,40}`, starting with a letter or digit. The client slugs as you type ("Inbox Team" → `inbox-team`); the server doesn't, it refuses (400 `bad_handle`).
 - `names` optional; keys are `slot`s from §1, missing slots keep the template name. Same rules as any bot name: no whitespace, no `@`, 1–40 characters.
 - **Never renames silently** (Q-T7): a taken name or handle is a 409 with the server's suggestion (§5), and nothing is made.
@@ -159,6 +162,7 @@ Header `Idempotency-Key: <client uuid>` (optional, recommended): the same key in
 }
 ```
 
+- `routines` (only when the template has two or more): every routine made, each `{id, name, enabled: false}`; `routine` stays the first.
 - For D, `template_id` is `"coding"` when it came from the Coding template, else `null`, and `slot` is the row `key`.
 - `channel_id` is the team chat to open. The Needs card is the client's overlay (Q-T5), not a message, so the chat starts empty.
 - The client gets the usual `team`, `kwant` and `bot_action` events too.
@@ -282,6 +286,7 @@ One draft per space at a time. **`DELETE /api/teams/suggest?space=`** stops it a
 | 400 | `unknown_field` | `field` | any field not listed above (top level, `edits`, a row) |
 | 400 | `bad_name` | `field: "names.<slot>"` or `"edits.rows.<key>.name"` | whitespace, `@`, empty or over 40 |
 | 400 | `bad_handle` | `field: "handle"` | not a lower-case slug |
+| 400 | `bad_answer` | `field: "answers.<id>"` | an answer isn't text, or is over 1000 characters |
 | 400 | `bad_preset` / `bad_row` / `lead_required` / `too_many_bots` / `too_few_bots` | `field` | D edits |
 | 400 | `bad_existing` | `field` | `use_existing` isn't a live bot in this space |
 | 400 | `folder_in_use` | `field: "workspace_path"` | the new team's folder overlaps one another space uses; Suggest already said so (§4) |
@@ -401,7 +406,7 @@ Every window a test has to cross reads "now" from **`kwnt::clock::now()`**. Nobo
 | Undo route | "Undo team" | the existing bot-action Undo, plus `GET /api/teams/:id/template` for the confirm | one Undo path, already person-only |
 | Clash code (test plan T-A5, T-W9, Q-API1) | 409 `clash` with `clashes[]` | 409 `name_taken` / `handle_taken` (`name_taken` is what imports already answer) **plus** `clashes[]` with every clash | one code family across kwant; the list is what the sheet needs |
 | Idempotency (test plan §0.5, T-W9) | `idempotency_key` in the body, required | optional `Idempotency-Key` header; 400 `bad_request` when sent empty or over 200 characters | a header keeps the body strict (`unknown_field`), and an older client without a key still works; the sheet always sends one |
-| Templates source | templates-copy.md | `templates.json` embedded byte for byte from `design/templates.js` | no hand copying |
+| Templates source | templates-copy.md | the business packs in `packs/` (§10), converted from 0.9's `templates.json`; a test checks they still give exactly that text (`tests/fixtures/team-templates-0.9.json`) | one format for built-in and shared teams |
 
 ## 9. Errors, everywhere in the HTTP API (14d)
 
@@ -431,3 +436,55 @@ Every refusal under `/api/` (any 4xx or 5xx) answers in one JSON shape:
   OAuth, registry, suggestions) get the shape like any other route.
 
 The layer is `src/server/error_shape.rs`, the outermost layer of the router.
+
+## 10. Business packs (`schema_version` 1)
+
+A ready-made team as a folder anyone can write, check and share. The built-in teams are packs (`packs/<id>/`, listed in order in `packs/index.json`); `build.rs` embeds them, so nothing is read from disk for them at run time. It refuses a link in `packs/`, and `index.json` must list exactly the pack folders.
+
+```text
+<id>/pack.json     the team
+<id>/skills/*.md   one starter skill per file
+<id>/README.md     what the team does, for people (required)
+<id>/LICENSE*      optional
+```
+
+`pack.json` is the 0.9 template plus `schema_version`, `version`, `field`, `asks` and `routines`:
+
+```json
+{
+  "schema_version": 1,
+  "id": "local-services",
+  "version": "1.0.0",
+  "field": "Local services",
+  "label": "Local services",
+  "icon": "store",
+  "handle": "front-desk",
+  "card_line": "Answers enquiries, keeps your bookings and drafts review replies for your OK.",
+  "mission": "…",
+  "instructions": "…\nAbout the business\n- Name: {{business_name}}\n- What we offer: {{what_you_sell}}\n- Where we work: {{area}}\n…",
+  "asks": [{"id": "business_name", "label": "What is your business called?", "example": "Bright Spark Electrical"}, "…"],
+  "needs": [{"id": "email", "label": "Connect email", "why": "…", "required": true, "opens": "loose_ends_imap", "done_when": "An IMAP source in Loose ends checks OK"}, "…"],
+  "never": ["Changes prices or quotes one that isn't on your price list.", "…"],
+  "routines": [{"name": "Morning enquiries", "when": "Weekdays at 8:00", "cron": "0 8 * * 1-5", "bot": "FrontDesk", "enabled": false, "prompt": "…"}, "…"],
+  "first_prompts": ["What enquiries need me today?", "…"],
+  "bots": [{"preset": "support", "lead": true, "name": "FrontDesk", "title": "Front Desk", "avatar_sprite": "tech_lead", "line": "…", "persona": "…", "soul": "…", "good_for": ["…"], "not_for": ["…"]}, "…"]
+}
+```
+
+- The old single `routine` object is still read (as one routine); a pack sets `routine` or `routines`, not both.
+- A skill file is front matter then the skill's text: `---`, `name: "Answer an enquiry"`, `description: "…"`, `owner: "FrontDesk"` (a bot `name`), `---`. Values may be plain or JSON-quoted. Skills are listed in bot order, then by file name.
+- `asks[].id` is `[a-z0-9_]`, at most 40 characters; text uses it as `{{id}}`. Placeholders work in `instructions`, `persona`, `soul`, skill text and routine `prompt`, nowhere else. A line whose answer is missing or empty is left out, so the text should still read well without it.
+- The five 0.9 templates (helpers, inbox, sales, coding, home) are packs with no asks and at most one routine, so their catalogue entries are exactly 0.9's.
+
+### `kwnt pack check <dir>`
+
+Reads the folder and nothing else (no config, data folder or server). It prints `ok: local-services 1.0.0 (Local services): 3 bots, 3 skills, 3 routines (off), 3 asks` and exits 0, or one `problem: …` line per problem and a count, and exits 1. The same check (`teams::packs::check_files`) runs on the built-in packs when kwant starts. It refuses a pack that:
+
+- holds what looks like a key, token or password in any file (the import scrubber's rules);
+- has a key that adds tools, MCP servers, approvals or Dev mode anywhere in `pack.json` or a skill's front matter, in any case or spelling (`tools`, `allowed_tools`, `allowed-tools`, `mcp`, `mcp_servers`, `mcpServers`, `approvals`, `approval_mode`, `permissions`, `execution_mode`, `dev_mode`, `devMode`, `Dev-Mode`, …: compared without case, `_`, `-` or spaces);
+- has a routine with `enabled: true`, a cron kwant can't read, or a `bot` that isn't in the pack;
+- names an unknown preset, a skill `owner` that isn't a bot in the pack, or a skill over 8000 characters (name 48, description 200);
+- uses a `{{placeholder}}` that `asks` doesn't declare, a placeholder outside the fields above, or declares an ask it never uses;
+- has another `schema_version`, unknown keys, not exactly one lead, more than 6 bots, a need whose `opens` isn't one kwant has (`loose_ends_imap`, `connections`, `composer_prompt`, `dev_mode_setup`, `home_assistant`, `accounts`), files other than the ones above, or a link.
+
+CI runs it on every built-in pack. Importing a pack from a zip, folder or GitHub link is not built yet.

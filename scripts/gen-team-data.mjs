@@ -1,18 +1,12 @@
-// Generates src/teams/templates.json (from Mira's design/templates.js) and
-// src/teams/presets.json (from frontend/src/agentPresets.ts). Run:
-//   node scripts/gen-team-data.mjs <path to next-077/design/templates.js>
-// Both outputs are checked in; src/teams tests check presets.json against agentPresets.ts.
+// Generates src/teams/presets.json (from frontend/src/agentPresets.ts). Run:
+//   node scripts/gen-team-data.mjs
+// The output is checked in; src/teams tests check presets.json against agentPresets.ts.
+// The ready-made teams are packs now: edit packs/<id>/ and run `kwnt pack check packs/<id>`.
 import fs from 'node:fs';
 import path from 'node:path';
 import vm from 'node:vm';
 
 const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
-const tplSrc = process.argv[2];
-if (tplSrc) {
-  const ctx = { window: {} };
-  vm.runInNewContext(fs.readFileSync(tplSrc, 'utf8'), ctx);
-  fs.writeFileSync(path.join(root, 'src/teams/templates.json'), JSON.stringify(ctx.window.TEMPLATES, null, 1) + '\n');
-}
 const ts = fs.readFileSync(path.join(root, 'frontend/src/agentPresets.ts'), 'utf8');
 const start = ts.indexOf('[', ts.indexOf('export const AGENT_PRESETS'));
 const end = ts.indexOf('\n];', start);

@@ -110,12 +110,12 @@ async fn undo(e: &Env, action_id: &str) -> (StatusCode, Value) {
 }
 
 #[tokio::test]
-async fn catalogue_lists_the_five_templates_and_preview_names_free_slots() {
+async fn catalogue_lists_the_six_templates_and_preview_names_free_slots() {
     let e = setup().await;
     let (s, v) = call(&e.app, "GET", "/api/team-templates", &[], None).await;
     assert_eq!(s, StatusCode::OK, "{v}");
     let ids: Vec<&str> = v["templates"].as_array().unwrap().iter().map(|t| t["id"].as_str().unwrap()).collect();
-    assert_eq!(ids, ["helpers", "inbox", "sales", "coding", "home"]);
+    assert_eq!(ids, ["helpers", "inbox", "sales", "coding", "home", "local-services"]);
 
     let (s, p) = call(&e.app, "GET", "/api/team-templates/inbox/preview", &[], None).await;
     assert_eq!(s, StatusCode::OK, "{p}");
@@ -517,7 +517,7 @@ fn plan(e: &Env, handle: &str, key: Option<&str>) -> Plan {
         },
         bots: vec![bot("lead", &format!("{handle}-lead"), true), bot("one", &format!("{handle}-one"), false), bot("two", &format!("{handle}-two"), false)],
         skills: vec![PlanSkill { owner_slot: "lead".into(), name: format!("{handle}-plan"), description: "Plans a change".into(), body: "Write a plan.".into() }],
-        routine: Some(PlanRoutine { owner_slot: "one".into(), name: "Morning check".into(), instructions: "Check the queue.".into(), cron: "0 9 * * 1-5".into() }),
+        routines: vec![PlanRoutine { owner_slot: "one".into(), name: "Morning check".into(), instructions: "Check the queue.".into(), cron: "0 9 * * 1-5".into() }],
         tz: "UTC".into(),
     }
 }
@@ -762,4 +762,84 @@ async fn composer_need_without_answer_prefix_ticks_on_any_message() {
     assert!(!db.composer_need_done(&chat_id, Some("What we sell:")).await.unwrap());
     post_user(&e, &chat_id, "what we sell: bookkeeping for dentists").await;
     assert!(db.composer_need_done(&chat_id, Some("What we sell:")).await.unwrap(), "case aside, it's an answer");
+}
+
+/// 34l: the Local services pack is a ready-made team in the same create flow. Its answers fill
+/// the team's texts, a bad answer makes nothing, all three routines start paused, and one Undo
+/// removes it all.
+#[tokio::test]
+async fn local_services_pack_creates_with_answers_paused_routines_and_one_undo() {
+    let e = setup().await;
+    let (s, cat) = call(&e.app, "GET", "/api/team-templates", &[], None).await;
+    assert_eq!(s, StatusCode::OK);
+    let entries = cat["templates"].as_array().unwrap();
+    let ls = entries.iter().find(|t| t["id"] == "local-services").unwrap();
+    let asks: Vec<&str> = ls["asks"].as_array().unwrap().iter().map(|a| a["id"].as_str().unwrap()).collect();
+    assert_eq!(asks, ["business_name", "what_you_sell", "area"]);
+    assert_eq!(ls["routines"].as_array().unwrap().len(), 3, "{ls}");
+    assert_eq!(ls["routine"]["name"], ls["routines"][0]["name"]);
+    assert!(ls.get("instructions").is_none() && ls["bots"][0].get("persona").is_none(), "{ls}");
+    // The five 0.9 templates are served as before: no asks, no routines list
+    assert!(entries.iter().filter(|t| t["id"] != "local-services").all(|t| t.get("asks").is_none() && t.get("routines").is_none()));
+
+    let before = counts(&e).await;
+    for (body, status, code, field) in [
+        (json!({"template_id": "local-services", "answers": {"budget": "10k"}}), StatusCode::BAD_REQUEST, "unknown_field", "answers.budget"),
+        (json!({"template_id": "inbox", "answers": {"area": "Leeds"}}), StatusCode::BAD_REQUEST, "unknown_field", "answers.area"),
+        (json!({"template_id": "local-services", "answers": {"area": 5}}), StatusCode::BAD_REQUEST, "bad_answer", "answers.area"),
+        (json!({"template_id": "local-services", "answers": {"area": "x".repeat(1001)}}), StatusCode::BAD_REQUEST, "bad_answer", "answers.area"),
+        (json!({"template_id": "local-services", "answers": "Leeds"}), StatusCode::BAD_REQUEST, "bad_request", "answers"),
+        (json!({"template_id": "coding", "suggestion_id": "s1", "answers": {}}), StatusCode::BAD_REQUEST, "unknown_field", "answers"),
+    ] {
+        let (s, v) = create(&e, body.clone()).await;
+        assert_eq!((s, v["code"].as_str(), v["field"].as_str()), (status, Some(code), Some(field)), "{body} → {v}");
+    }
+    assert_eq!(counts(&e).await, before);
+
+    let body = json!({"template_id": "local-services", "answers": {
+        "business_name": "  Bright Spark Electrical\u{200B} ",
+        "what_you_sell": "Rewiring, fuse boxes and EV chargers",
+        "area": "",
+    }});
+    let (s, v) = create(&e, body).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(v["team"]["name"], "front-desk", "{v}");
+    assert_eq!(v["bots"].as_array().unwrap().len(), 3);
+    assert_eq!(v["skills"].as_array().unwrap().len(), 3);
+    let routines = v["routines"].as_array().unwrap();
+    assert_eq!(routines.len(), 3, "{v}");
+    assert!(routines.iter().all(|r| r["enabled"] == false), "{v}");
+    assert_eq!(v["routine"], routines[0]);
+    let after = counts(&e).await;
+    assert_eq!(
+        after,
+        Counts {
+            bots: before.bots + 3,
+            teams: before.teams + 1,
+            chats: before.chats + 1,
+            skills: before.skills + 3,
+            routines: before.routines + 3,
+            actions: before.actions + 1,
+        }
+    );
+    let ids: Vec<&str> = v["bots"].as_array().unwrap().iter().map(|b| b["id"].as_str().unwrap()).collect();
+    let saved: Vec<_> = e.state.db.list_routines(&e.space).await.unwrap().into_iter().filter(|r| ids.contains(&r.kwant_id.as_str())).collect();
+    assert_eq!(saved.len(), 3);
+    assert!(saved.iter().all(|r| !r.enabled), "routines ship paused");
+
+    let texts = team_texts(&e, &v).await;
+    let instructions = text(&texts, "team instructions");
+    assert!(instructions.contains("\n- Name: Bright Spark Electrical\n"), "{instructions}");
+    assert!(instructions.contains("\n- What we offer: Rewiring, fuse boxes and EV chargers\n"), "{instructions}");
+    // An empty answer leaves its line out
+    assert!(!instructions.contains("Where we work"), "{instructions}");
+    assert!(text(&texts, "FrontDesk persona").contains("You work for Bright Spark Electrical."));
+    assert!(text(&texts, "skill Answer an enquiry").contains("Sign every draft as Bright Spark Electrical."));
+    assert!(texts.iter().all(|(_, t)| !t.contains("{{") && !t.contains('\u{200B}')), "{texts:?}");
+
+    // One Undo removes the bots, the chat, the skills and all three routines
+    let (s, u) = undo(&e, v["action_id"].as_str().unwrap()).await;
+    assert!(s.is_success(), "{s} {u}");
+    let undone = counts(&e).await;
+    assert_eq!(Counts { actions: undone.actions, ..before }, undone);
 }

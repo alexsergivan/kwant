@@ -125,12 +125,12 @@ pub struct Database {
 
 /// The template a fresh install's default space is seeded from: @helpers (Assistant, Researcher
 /// and Writer). The bots, their lead, the team's description and instructions all come from its
-/// entry in `src/teams/templates.json`, so the seed and the Get started tile can't drift apart.
+/// entry in `packs/` (the built-in packs), so the seed and the Get started tile can't drift apart.
 pub const STARTER_TEMPLATE: &str = "helpers";
 
 /// The template a fresh install is seeded from.
 pub fn starter_template() -> &'static crate::teams::templates::Template {
-    crate::teams::templates::get(STARTER_TEMPLATE).expect("src/teams/templates.json has the starter template")
+    crate::teams::templates::get(STARTER_TEMPLATE).expect("packs/ has the starter template")
 }
 
 /// The starters seeded before 0.9.8: (name, title, persona, soul, avatar). Nothing new is made from

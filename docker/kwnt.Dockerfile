@@ -16,6 +16,8 @@ RUN npm run build
 FROM rust:1-bookworm AS build
 WORKDIR /app
 COPY Cargo.toml Cargo.lock ./
+COPY build.rs ./
+COPY packs packs
 COPY src src
 COPY docker docker
 COPY --from=web /app/frontend/dist frontend/dist
