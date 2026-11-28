@@ -30,6 +30,10 @@ export const queueScenes = {
   turn: { q: { now_serving: 27, waiting: 2, avg_minutes: 3 }, ticket: T(27, 'called', { called_at: at(-0.2), call_ends_at: at(2.8) }) },
   // 9 skipped.
   skipped: { q: { now_serving: 28, waiting: 6, avg_minutes: 3 }, ticket: T(27, 'skipped', { called_at: at(-4), done_at: at(-1) }) },
+  // 9b skipped by the host's own tap seconds after the call (Mira's m1): the host can still bring it back.
+  'skipped-hand': { q: { now_serving: 28, waiting: 6, avg_minutes: 3 }, ticket: T(27, 'skipped', { called_at: at(-1), done_at: at(-0.9) }) },
+  // 9c the same, more than 10 minutes on: no bring-back line.
+  'skipped-hand-late': { q: { now_serving: 30, waiting: 4, avg_minutes: 3 }, ticket: T(27, 'skipped', { called_at: at(-14), done_at: at(-13.9) }) },
   // 10 served.
   served: { q: { now_serving: 27, waiting: 2, avg_minutes: 3 }, ticket: T(27, 'served', { called_at: at(-2), done_at: at(-1) }) },
   // 7 left (Leave the queue is walked from `ticket`; this is the page after).
