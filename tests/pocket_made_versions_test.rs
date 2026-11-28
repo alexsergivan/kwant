@@ -679,12 +679,13 @@ async fn the_additive_rule_refuses_removing_or_retyping_a_collection_with_rows_o
     added["collections"]["shelf"]["fields"]["author"] = json!({ "type": "text", "max": 60 });
     added["collections"].as_object_mut().unwrap().remove("notes");
     added["collections"]["likes"] = json!({ "read": "everyone", "write": "guest_one", "fields": { "book": { "type": "row", "of": "shelf" } } });
-    let v = live(&t, &code, added, "added").await;
+    let v = live(&t, &code, added.clone(), "added").await;
     assert_eq!(doc(&t, &code, v, "screen").await.0, StatusCode::OK);
-    // A bad spec or a part that would end its element early is refused at the draft
+    // A bad spec or a part that would end its element early is refused at the draft. The bad
+    // screen rides on the live spec, so only the screen is wrong (vspec() now drops `author`).
     let e = draft(&t, &code, json!({ "format": "made/1" }), "x").await.unwrap_err();
     assert_eq!((e.status, e.code), (StatusCode::BAD_REQUEST, "bad_spec"));
-    let bad = Draft { spec: vspec(), phone: Some(Screen { html: String::new(), css: String::new(), js: "x='</script>'".into() }), screen: None, made_by: None };
+    let bad = Draft { spec: added, phone: Some(Screen { html: String::new(), css: String::new(), js: "x='</script>'".into() }), screen: None, made_by: None };
     let e = versions::draft(&t.state, &code, bad).await.unwrap_err();
     assert_eq!((e.status, e.code), (StatusCode::BAD_REQUEST, "bad_screen"));
 }
