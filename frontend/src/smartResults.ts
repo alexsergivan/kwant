@@ -455,7 +455,7 @@ export interface GatherInfo {
   deletes_on: string;
   /** The host's first name ("Oleks"), for "Tie: Oleks picks". */
   host_name: string | null;
-  /** Members see names and Yes / Maybe / No (RSVP) or the live count after voting (vote). */
+  /** Members see names and Yes / Maybe / No (RSVP). A vote shows no count until it closes (secret-ballot-unlinkable). */
   show_names: boolean;
   /** RSVP / sign-up host view: people who answered before the host turned names on and are still unnamed to guests (#1324). 0 when missing. */
   names_hidden: number;
