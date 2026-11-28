@@ -302,12 +302,18 @@ fn identifiers(src: &str) -> Vec<(usize, usize)> {
     out
 }
 
-/// Byte ranges of every innermost `{ ... }` rule body in `css`: a block that itself contains no
-/// further `{`, so the content scanned as declarations is always a statement's actual body, never
-/// a selector's pseudo-class colon (`.x:hover`) or an at-rule's condition (`@media
-/// (min-width:1px)`), which a flat colon scan over the whole text would otherwise misread as its
-/// own `name: value` pair and swallow the real declaration that follows (Rigel's QA, B2). A `{`
-/// or `}` inside a quoted string is skipped so it can't shift the brace count.
+/// Byte ranges of every `{ ... }` rule body in `css`, at every nesting depth: a flat colon scan
+/// over the whole text would misread a selector's pseudo-class colon (`.x:hover`) or an at-rule's
+/// condition (`@media (min-width:1px)`) as its own `name: value` pair and swallow the real
+/// declaration that follows (Rigel's QA, B2), so declarations are only ever read from inside a
+/// `{ }` body. A body that itself contains a nested `{ }` (CSS nesting) still has its own
+/// declarations scanned: `declarations_in_block` reads flat over the body's text, so a nested
+/// block's own text is scanned twice (once as part of the outer body, once as its own range) —
+/// harmless, since a duplicate finding refuses the same rule a second time (Rigel's QA, B4;
+/// dropping the innermost-only filter this used to apply here is the fix). A `{` or `}` inside a
+/// quoted string is skipped so it can't shift the brace count. A block left open at the end of
+/// the input (an unbalanced `{`) is closed at end of input: a browser applies it up to there too,
+/// so a declaration inside it must still be scanned, not silently dropped (Rigel's QA, B4).
 fn leaf_block_ranges(css: &str) -> Vec<(usize, usize)> {
     let b = css.as_bytes();
     let mut stack: Vec<usize> = Vec::new();
@@ -338,7 +344,9 @@ fn leaf_block_ranges(css: &str) -> Vec<(usize, usize)> {
             _ => i += 1,
         }
     }
-    pairs.retain(|(s, e)| !css[*s..*e].contains('{'));
+    while let Some(start) = stack.pop() {
+        pairs.push((start, b.len()));
+    }
     pairs
 }
 

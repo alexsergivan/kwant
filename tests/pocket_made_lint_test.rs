@@ -761,3 +761,40 @@ fn qa5_refuses_execcommand() {
     let r = lint(Surface::Phone, "", "", "document.execCommand('copy');");
     assert_refuses(&r, "J1", "Its script used execCommand(, which pocket apps can't.");
 }
+
+#[test]
+fn b4_an_outer_block_declaration_before_a_nested_block_still_refuses_position_fixed() {
+    let r = lint(Surface::Phone, "", ".a { position: fixed; .b { margin: 0; } }", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b4_an_outer_block_declaration_after_a_nested_block_still_refuses_an_oversized_z_index() {
+    let r = lint(Surface::Phone, "", ".a { .b { margin: 0; } z-index: 9999; }", "");
+    assert_refuses(&r, "C7", "It tried to cover part of the page.");
+}
+
+#[test]
+fn b4_an_outer_block_declaration_alongside_a_nested_ampersand_rule_still_refuses_a_bad_colour() {
+    let r = lint(Surface::Phone, "", ".a { color: #f00; &:hover { text-decoration: underline; } }", "");
+    assert_refuses(&r, "C3", "It used its own colour; use kwant's colour names.");
+}
+
+#[test]
+fn b4_an_outer_block_declaration_still_refuses_a_changed_font_inside_a_media_query() {
+    let css = "@media (min-width:1px) { .a { font-family: Arial; .b { margin: 0; } } }";
+    let r = lint(Surface::Phone, "", css, "");
+    assert_refuses(&r, "C4", "It changed the font.");
+}
+
+#[test]
+fn b4_a_three_level_nest_still_refuses_the_outermost_blocks_own_declaration() {
+    let r = lint(Surface::Phone, "", ".a { .b { .c { margin: 0; } } position: fixed; }", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b4_an_unclosed_block_still_refuses_the_declaration_a_browser_would_apply_to_end_of_input() {
+    let r = lint(Surface::Phone, "", ".a { position: fixed", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}

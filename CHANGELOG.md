@@ -11,6 +11,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Fixed
 - The pocket app screen lint now checks label/legend/button text (not the whole page) for banned words, caps how much it repeats back in a refusal, and closes several cheap wording bypasses (#1407)
 - The pocket app screen lint's CSS check no longer lets a pseudo-class, a media query or a CSS comment/escape hide a banned declaration (`position: fixed`, an off-kwant colour, an off-kwant url) from it (#1407)
+- The pocket app screen lint's CSS check now scans an outer rule's own declarations even when it nests another rule inside it, and still checks a `{` left unclosed at end of input (#1407)
 
 ## [Mac 0.9.58] - 2026-11-27
 
