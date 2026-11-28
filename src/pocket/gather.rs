@@ -15,7 +15,9 @@
 //!
 //! Host-only: paid ticks, each person's food needs and plus-ones. Guests get names and
 //! Yes / Maybe / No only when `show_names` is on, their own record, and their own paid tick once
-//! it's ticked. The Chaser drafts nudges from templates the bot wrote when the pocket was made
+//! it's ticked. The host can turn names on or off later (RSVP and sign-up): turned on, anyone who
+//! answered while they were hidden stays counted but unnamed until they answer again or tap
+//! "Show my name". The Chaser drafts nudges from templates the bot wrote when the pocket was made
 //! (no model runs afterwards); nothing here ever sends anything: the host copies a draft and
 //! sends it from their own chat, at most once per person every 48 hours.
 //!
@@ -212,6 +214,19 @@ struct St {
     /// pa10c: the host's "Delete answers now" (or "Delete ballots now"): when, and the counts
     /// kept in place of everyone's answers. The vote's `tally` stays as it is (option counts).
     deleted: Option<Kept>,
+    // rsvp-names-switch (RSVP and sign-up only). Each is left out of the stored state while
+    // unset, so a pocket that never used the switch stores exactly what older builds stored.
+    /// The host's "Show names" switch, over the spec's `show_names` (None: the spec decides).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    names: Option<bool>,
+    /// When the host last turned names on (cleared when they turn them off).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    names_on_at: Option<DateTime<Utc>>,
+    /// Player ids who had answered (or held or queued for a slot) while names were hidden, taken
+    /// when the host turned names on. They stay counted but unnamed until they answer again or
+    /// tap "Show my name" (Ada's privacy rule); everyone else is named as usual.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    unnamed: BTreeSet<String>,
 }
 
 /// What stays after "Delete answers now": counts and the summary line, never a name, a note,
@@ -314,6 +329,11 @@ fn flag(spec: &Value, field: &str) -> bool {
     spec.get(field).and_then(Value::as_bool).unwrap_or(true)
 }
 
+/// Whether guests see names now: the host's switch, else the spec's `show_names`.
+fn names_on(spec: &Value, s: &St) -> bool {
+    s.names.unwrap_or_else(|| flag(spec, "show_names"))
+}
+
 /// The fields the host chose beyond the face's own (plus_ones, food_needs, slot_note).
 fn has_field(spec: &Value, field: &str) -> bool {
     spec.get("fields").and_then(Value::as_array).is_some_and(|a| a.iter().any(|f| f.as_str() == Some(field)))
@@ -396,6 +416,7 @@ impl St {
         self.ballots.clear();
         self.ballot_salt.clear();
         self.copied.clear();
+        self.unnamed.clear();
     }
 
     /// People who joined (kept after a delete: the players are gone then).
@@ -554,6 +575,41 @@ impl St {
             SIGNUP => self.slot_of(id).is_some() || self.waiting_of(id).is_some(),
             _ => self.voted.contains_key(id),
         }
+    }
+
+    /// Everyone with an answer (RSVP) or a held or queued slot (sign-up) now.
+    fn answered_ids(&self, spec: &Value) -> BTreeSet<String> {
+        match face(spec) {
+            RSVP => self.answers.keys().cloned().collect(),
+            SIGNUP => self.slots.iter().flat_map(|x| x.taken.iter().map(|t| t.id.clone()).chain(x.waiting.iter().cloned())).collect(),
+            _ => BTreeSet::new(),
+        }
+    }
+
+    /// Guests may see this player's name: names are on and they aren't waiting to opt in.
+    fn named(&self, spec: &Value, id: &str) -> bool {
+        names_on(spec, self) && !self.unnamed.contains(id)
+    }
+
+    /// An answer or slot change from this guest (Lin's review S1). Once the host has turned names
+    /// on, it names them only when the page they answered from showed names on (`"names": true` in
+    /// the body). A page painted while names were hidden, or an older guest page that doesn't send
+    /// the key, keeps them unnamed with the notice, so nobody is listed under a page that promised
+    /// they wouldn't be. Before any switch nothing changes.
+    fn answered_from(&mut self, id: &str, body: &Value) {
+        if self.names_on_at.is_some() && body.get("names").and_then(Value::as_bool) != Some(true) {
+            self.unnamed.insert(id.to_string());
+        } else {
+            self.unnamed.remove(id);
+        }
+    }
+
+    /// Answered while names were hidden and not shown yet (the host's `names_hidden`).
+    fn names_hidden(&self, spec: &Value) -> usize {
+        if !names_on(spec, self) {
+            return 0;
+        }
+        self.unnamed.iter().filter(|id| self.has_answered(spec, id)).count()
     }
 
     /// Listed members who haven't answered (or voted) yet, as the host typed them.
@@ -727,7 +783,7 @@ impl Gather {
             "closes_at": s.closes(spec),
             "event_at": spec.get("event_at").and_then(spec_date),
             "fields": fields,
-            "show_names": flag(spec, "show_names"),
+            "show_names": names_on(spec, s),
             "joined": s.joined(ctx),
             "members": members(spec).len(),
         });
@@ -774,7 +830,7 @@ impl Gather {
     fn guest_view(ctx: &KitCtx, s: &St, me: &str) -> Value {
         let spec = ctx.spec;
         let mut v = Self::facts(ctx, s);
-        let names = flag(spec, "show_names");
+        let names = names_on(spec, s);
         match face(spec) {
             RSVP => {
                 let c = Self::rsvp_counts(s);
@@ -784,6 +840,7 @@ impl Gather {
                     json!(ctx
                         .players
                         .iter()
+                        .filter(|p| s.named(spec, &p.id))
                         .filter_map(|p| s.answers.get(&p.id).map(|a| {
                             let mut row = Self::person(p);
                             row["answer"] = json!(a.answer);
@@ -814,6 +871,7 @@ impl Gather {
                         let people: Vec<Value> = slot
                             .taken
                             .iter()
+                            .filter(|t| s.named(spec, &t.id))
                             .filter_map(|t| {
                                 let p = ctx.player(&t.id)?;
                                 let mut row = Self::person(p);
@@ -821,7 +879,7 @@ impl Gather {
                                 Some(row)
                             })
                             .collect();
-                        let waiting: Vec<Value> = slot.waiting.iter().filter_map(|w| ctx.player(w).map(Self::person)).collect();
+                        let waiting: Vec<Value> = slot.waiting.iter().filter(|w| s.named(spec, w)).filter_map(|w| ctx.player(w).map(Self::person)).collect();
                         let (filled, queued) = s.slot_counts(i);
                         json!({
                             "slot": i, "name": name, "cap": cap, "filled": filled, "full": filled >= *cap,
@@ -848,6 +906,11 @@ impl Gather {
                 v["live"] = Value::Null;
                 v["result"] = tally_json(spec, s);
             }
+        }
+        if face(spec) != VOTE {
+            // Answered while names were hidden: the host has since turned them on, and this
+            // guest's name stays off everyone's list until they answer again or show it.
+            v["names_notice"] = json!(names && s.unnamed.contains(me) && s.has_answered(spec, me));
         }
         v
     }
@@ -952,6 +1015,10 @@ impl Gather {
         v["needs_you"] = json!(s.phase == TIE);
         v["summary"] = json!(Self::summary_line(ctx, s));
         v["answers_deleted_at"] = json!(s.deleted.as_ref().and_then(|k| k.at));
+        if face(spec) != VOTE {
+            v["names_on_at"] = json!(s.names_on_at);
+            v["names_hidden"] = json!(s.names_hidden(spec));
+        }
         v
     }
 
@@ -1176,8 +1243,8 @@ impl Kit for Gather {
             retention: Retention::AfterDate { fields: DATE_FIELDS, days: RETENTION_DAYS },
             needs_pin: true,
             max_players: DEFAULT_MAX_PLAYERS,
-            guest_actions: &["answer", "take", "leave", "let_go", "seen", "vote"],
-            host_actions: &["set_paid", "copied", "pick", "revote_24h", "close_now", "delete_answers"],
+            guest_actions: &["answer", "take", "leave", "let_go", "seen", "vote", "show_my_name"],
+            host_actions: &["set_paid", "copied", "pick", "revote_24h", "close_now", "delete_answers", "set_show_names"],
         }
     }
 
@@ -1208,6 +1275,7 @@ impl Kit for Gather {
         let mut s = load(state);
         s.answers.remove(player_id);
         s.paid.remove(player_id);
+        s.unnamed.remove(player_id);
         let caps = slot_specs(ctx.spec);
         if s.phase == OPEN {
             s.leave(ctx, player_id, &caps);
@@ -1233,7 +1301,8 @@ impl Kit for Gather {
         let f = face(spec);
         let wrong_face = |want: &str| bad(format!("This pocket is a {f}; {name} is for a {want}."));
         if let Viewer::Guest(_) = actor {
-            if name != "seen" && !s.taking_answers(spec, now) {
+            // Neither changes an answer, so both still work once answers close
+            if !["seen", "show_my_name"].contains(&name) && !s.taking_answers(spec, now) {
                 return Err(not_now(match s.phase.as_str() {
                     TIE => "Voting has closed: it's a tie, and the host picks.",
                     _ => "Answers are closed.",
@@ -1288,6 +1357,7 @@ impl Kit for Gather {
                 if !coming {
                     s.paid.remove(me);
                 }
+                s.answered_from(me, body);
             }
             (Viewer::Guest(me), "take") => {
                 if f != SIGNUP {
@@ -1325,6 +1395,7 @@ impl Kit for Gather {
                         s.slots[i].taken.push(Taken { id: me.clone(), note, at: Some(now) });
                     }
                 }
+                s.answered_from(me, body);
             }
             (Viewer::Guest(me), "leave" | "let_go") => {
                 if f != SIGNUP {
@@ -1334,11 +1405,22 @@ impl Kit for Gather {
                 if !s.leave(ctx, me, &caps) {
                     return Err(not_now("You're not in a slot or on a waiting list."));
                 }
+                // Nothing of theirs is listed now; a later take is an answer after the switch
+                s.unnamed.remove(me);
             }
             (Viewer::Guest(me), "seen") => {
                 if let Some(m) = s.moved.get_mut(me) {
                     m.seen = true;
                 }
+            }
+            (Viewer::Guest(me), "show_my_name") => {
+                if f == VOTE {
+                    return Err(bad("A vote never shows who picked what."));
+                }
+                if !names_on(spec, &s) {
+                    return Err(not_now("Names are hidden now, so only the host sees who answered."));
+                }
+                s.unnamed.remove(me);
             }
             (Viewer::Guest(me), "vote") => {
                 if f != VOTE {
@@ -1383,6 +1465,21 @@ impl Kit for Gather {
                 } else {
                     s.paid.remove(id);
                 }
+            }
+            (Viewer::Host, "set_show_names") => {
+                if f == VOTE {
+                    return Err(bad("A vote never shows who picked what."));
+                }
+                let on = body.get("on").and_then(Value::as_bool).ok_or_else(|| bad("on is true or false"))?;
+                if on && !names_on(spec, &s) {
+                    // Whoever answered while names were hidden stays unnamed until they've seen this
+                    s.unnamed = s.answered_ids(spec);
+                    s.names_on_at = Some(now);
+                } else if !on {
+                    s.unnamed.clear();
+                    s.names_on_at = None;
+                }
+                s.names = Some(on);
             }
             (Viewer::Host, "copied") => {
                 let to = body.get("to").and_then(Value::as_str).ok_or_else(|| bad("to is the name on the draft"))?;
