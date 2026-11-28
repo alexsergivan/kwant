@@ -404,7 +404,8 @@ export function whoSees(f: Facts, unnamed = false): [string, string][] {
   }
   const ranked = f.ballot?.kind === 'ranked';
   const out: [string, string][] = [[`${h} sees`, ` that you voted, not ${ranked ? 'your order' : 'what'}.`]];
-  if (f.show_live_count) out.push(['Everyone sees', ' the totals after voting.']);
+  // Every guest gets `result` at the close (gather.rs guest view), with or without show_live_count
+  out.push(['Everyone sees', ' the totals when voting closes.']);
   return out;
 }
 
