@@ -101,6 +101,11 @@ export const ONLY_THIS_COMPUTER_LINE = `${THIS_COMPUTER_WIFI_LINE} Pick From any
 export const SANTA_STAYS_LINE = 'Santa runs for weeks, so phones need an address that stays: your own https address or Tailscale Funnel.';
 /** Queue: it runs for days, so never a quick link either (src/pocket/kits.rs stable_address_only). */
 export const QUEUE_STAYS_LINE = 'A queue runs for days, so it needs an address that stays: turn on Same Wi-Fi, or use your own https address or Tailscale Funnel.';
+/** The queue's last two How-to steps: once the address is there, the card shows the QR and the counter sign. */
+export const QUEUE_HOW_TO_LAST = [
+  'This card then shows the QR and Print counter sign, with a link that stays the same.',
+  'Print the counter sign and put it by the till. It keeps working whenever this computer is on.',
+];
 
 export const NoLinkYet: React.FC<{ mode: PocketJoinMode; note?: string | null }> = ({ mode, note }) => (
   <p className="text-[13px] leading-5 text-zinc-400 sm:text-meta" data-no-link={mode === 'wifi' && note === THIS_COMPUTER_ONLY ? 'this-computer-only' : ''}>

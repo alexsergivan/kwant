@@ -104,6 +104,9 @@ for (const name of ['empty', 'waiting', 'paused']) {
     const steps = row.querySelector('[data-how-to]').textContent;
     assert.match(steps, /tailscale funnel --bg 18991/);
     assert.ok(!/Santa|family chat/.test(steps), steps);
+    assert.match(steps, /This card then shows the QR and Print counter sign, with a link that stays the same\./);
+    assert.match(steps, /Print the counter sign and put it by the till\. It keeps working whenever this computer is on\./);
+    assert.ok(!/From anywhere|Send that link/.test(steps), steps);
     for (const b of v.host.querySelectorAll('[data-later]')) {
       if (/Big screen|Print/.test(b.textContent)) assert.equal(b.dataset.later, "Needs the customers' link first: see above.");
     }

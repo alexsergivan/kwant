@@ -38,7 +38,7 @@ import { isIndex, isObj, isText, optText } from '../../smartResults';
 import type { Mood } from '../../kwantMood';
 import { linkUrl, pocketApi, PocketApiError } from '../../pocketApi';
 import { QrImage } from '../DeviceSignIn';
-import { Bar, Callout, CopyLink, GHOST, HALF, ICON, LaterButton, LinkField, NoLinkYet, PRIMARY, QUEUE_STAYS_LINE, Qr, Row, STOP, THIS_COMPUTER_ONLY, THIS_COMPUTER_WIFI_LINE } from './pocketParts';
+import { Bar, Callout, CopyLink, GHOST, HALF, ICON, LaterButton, LinkField, NoLinkYet, PRIMARY, QUEUE_HOW_TO_LAST, QUEUE_STAYS_LINE, Qr, Row, STOP, THIS_COMPUTER_ONLY, THIS_COMPUTER_WIFI_LINE } from './pocketParts';
 import { GuestCreature, HowTo, useGuestPort, validSantaJoin } from './PocketSanta';
 
 // ---------------------------------------------------------------------------------------------------
@@ -891,7 +891,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
           <NoLinkYet mode="wifi" />
         )}
       </div>
-      {onlyHere && <HowTo port={port} bot="your bot" chat="your customers" />}
+      {onlyHere && <HowTo port={port} last={QUEUE_HOW_TO_LAST} />}
     </div>
   );
 

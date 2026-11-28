@@ -427,15 +427,18 @@ export const portOf = (url: string | null) => {
 };
 
 /** The 5-step How-to for Tailscale Funnel, frontend copy (card-impl.md "How-to copy"). */
-export const howToSteps = (port: string | null, bot = 'Santa', chat = 'the family chat'): { text: string; cmd?: string }[] => [
+export const howToSteps = (port: string | null, bot = 'Santa', chat = 'the family chat', last?: string[]): { text: string; cmd?: string }[] => [
   { text: 'Install Tailscale on this Mac from tailscale.com and sign in. The personal plan is free.' },
   { text: 'In the Tailscale admin page, turn on HTTPS certificates and allow Funnel for this Mac.' },
   { text: 'Open Terminal and run:', cmd: `tailscale funnel --bg ${port ?? '<the port in the Wi-Fi link>'}` },
-  { text: `Ask ${bot} to check the address again. This card then shows From anywhere and a link that stays the same.` },
-  { text: `Send that link to ${chat}. It keeps working whenever this Mac is on.` },
+  ...(last ?? [
+    `Ask ${bot} to check the address again. This card then shows From anywhere and a link that stays the same.`,
+    `Send that link to ${chat}. It keeps working whenever this Mac is on.`,
+  ]).map((text) => ({ text })),
 ];
 
-export const HowTo: React.FC<{ port: string | null; bot?: string; chat?: string; defaultOpen?: boolean }> = ({ port, bot, chat, defaultOpen = false }) => {
+/** `last` swaps the two closing steps (the queue's card shows a QR, not From anywhere). */
+export const HowTo: React.FC<{ port: string | null; bot?: string; chat?: string; last?: string[]; defaultOpen?: boolean }> = ({ port, bot, chat, last, defaultOpen = false }) => {
   const [open, setOpen] = useState(defaultOpen);
   const id = useId();
   return (
@@ -446,7 +449,7 @@ export const HowTo: React.FC<{ port: string | null; bot?: string; chat?: string;
       </button>
       {open && (
         <ol id={id} className="kw-fade-in flex list-decimal flex-col gap-1.5 pl-5 text-[15px] leading-[22px] text-zinc-200 marker:text-zinc-400 sm:text-[13px] sm:leading-5" data-how-to>
-          {howToSteps(port, bot, chat).map((st) => (
+          {howToSteps(port, bot, chat, last).map((st) => (
             <li key={st.text}>
               {st.text}
               {st.cmd && (
