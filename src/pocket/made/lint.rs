@@ -319,7 +319,12 @@ fn identifiers(src: &str) -> Vec<(usize, usize)> {
 /// return or form feed ends it first, same as a browser (a CSS string can't contain a literal
 /// newline), so everything after a dropped closing quote isn't swallowed into it and hidden from
 /// this scan (Rigel's QA, B6); that stray newline byte is then read again by the outer loop as
-/// ordinary text, since it's no longer inside the string.
+/// ordinary text, since it's no longer inside the string. A backslash followed by CRLF is one
+/// escaped newline, same as a browser (the string continues past it, not stopped by the CR or the
+/// LF individually): it's skipped as one 3-byte unit, same as any other backslash-escaped byte is
+/// skipped as a unit, so it can't be split into a consumed `\r` plus a `\n` that then reads as the
+/// end of the string, opening a bogus new string at the next quote that swallows everything after
+/// it (Rigel's QA, B7).
 fn declarations(css: &str) -> Vec<(String, String)> {
     let b = css.as_bytes();
     let mut out = Vec::new();
@@ -331,7 +336,13 @@ fn declarations(css: &str) -> Vec<(String, String)> {
                 let q = b[i];
                 i += 1;
                 while i < b.len() && b[i] != q && b[i] != b'\n' && b[i] != b'\r' && b[i] != 0x0c {
-                    i += if b[i] == b'\\' && i + 1 < b.len() { 2 } else { 1 };
+                    i += if b[i] == b'\\' && i + 2 < b.len() && b[i + 1] == b'\r' && b[i + 2] == b'\n' {
+                        3
+                    } else if b[i] == b'\\' && i + 1 < b.len() {
+                        2
+                    } else {
+                        1
+                    };
                 }
                 if i < b.len() && b[i] == q {
                     i += 1;

@@ -843,3 +843,14 @@ fn b6_a_string_left_open_by_a_bare_crlf_still_refuses_what_follows_it() {
     let r = lint(Surface::Phone, "", ".a{content:\"x\r\n}.b{position:fixed}", "");
     assert_refuses(&r, "C2", "It tried to pin something over the page.");
 }
+
+#[test]
+fn b7_a_backslash_escaped_crlf_keeps_the_string_open_and_still_refuses_what_follows_it() {
+    // Rigel's QA (B7): a backslash followed by CRLF is one escaped newline in CSS, same as a
+    // browser, so the string isn't ended by it and keeps going to its real closing quote.
+    // Splitting the escape into "backslash + CR" (2 bytes) left the LF to be read on its own as
+    // a bare newline, ending the string early and opening a bogus new string at the next quote
+    // that swallowed everything after it, including this C2 refusal.
+    let r = lint(Surface::Phone, "", ".a{content:\"x\\\r\ny\"}.b{position:fixed}", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
