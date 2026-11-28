@@ -139,6 +139,8 @@ export class QueueApp {
         this.buzz.cue('turn');
         this.said.textContent = `Your turn! Number #${v.my_ticket!.number}.`;
       }
+      // m6 (queue-guest-minors): once the turn is over, a screen reader must not land on a stale "Your turn!".
+      if (this.last === 'turn' && p !== 'turn') this.said.textContent = '';
       this.welcome = false;
     }
     if (p !== this.last) this.confirm = false;
