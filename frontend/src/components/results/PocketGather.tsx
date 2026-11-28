@@ -410,7 +410,7 @@ export function validGather(v: unknown, fallbackTitle?: string, now = new Date()
 /** The holo "Picked": only on a closed vote with a winner (design "Holo only when earned"). */
 export const earnedPicked = (g: Pick<GatherInfo, 'face' | 'phase' | 'vote'>): boolean => g.face === 'vote' && g.phase === 'closed' && !!g.vote?.winner;
 
-/** Tally's mood for this pocket (design §5): idle while open, working on the Chaser or a live vote, finished when closed or someone moved up, needs_you on a tie. */
+/** Tally's mood for this pocket (design §5): idle while open, working on the Chaser or an open vote, finished when closed or someone moved up, needs_you on a tie. */
 export function gatherMood(g: Pick<GatherInfo, 'face' | 'phase' | 'moved_up'>, nudgesOpen = false): Mood {
   if (g.phase === 'tie') return 'needs_you';
   if (g.phase === 'closed' || g.moved_up) return 'finished';
@@ -1212,14 +1212,8 @@ const SignupRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
   );
 };
 
-const leaders = (counts: GatherCount[]) => {
-  const top = Math.max(0, ...counts.map((c) => c.votes));
-  return top > 0 ? counts.filter((c) => c.votes === top).map((c) => c.name) : [];
-};
-
 const VoteRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
   const v = g.vote!;
-  const total = v.counts.reduce((n, c) => n + c.votes, 0);
   if (g.phase === 'open')
     return (
       <>
@@ -1237,22 +1231,21 @@ const VoteRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
             </li>
           )}
         </ul>
-        <div className="flex flex-col gap-2">
-          <div className="text-[13px] font-semibold text-zinc-200 sm:text-2xs">Live count{v.kind === 'ranked' ? ' · 1st choices' : ''}</div>
-          <VoteBars counts={v.counts} total={total} lead={leaders(v.counts)} />
-        </div>
+        {/* secret-ballot-unlinkable: no count while voting is open, for the host either (two looks around one
+            vote would show that person's pick); the totals come at the close. */}
         <ul className="flex flex-col gap-2">
           {v.kind === 'ranked' && (
             <Row icon={<ListOrdered size={15} aria-hidden="true" />}>
               Ranked: if no place has more than half, the last one drops out and its votes move to each voter's next choice. Final count at close.
             </Row>
           )}
-          <Row icon={<EyeOff size={15} aria-hidden="true" />}>You see who voted, never what they picked.{g.show_names ? ' Members see the live count after they vote.' : ''}</Row>
+          <Row icon={<EyeOff size={15} aria-hidden="true" />}>You see who voted, never what they picked. Totals show when voting closes.</Row>
           {g.closes_at && <Row icon={<Clock size={15} aria-hidden="true" />}>Closes {g.closes_at}.</Row>}
           <KeptRow g={g} />
         </ul>
       </>
     );
+  const total = v.counts.reduce((n, c) => n + c.votes, 0);
   if (g.phase === 'tie') {
     const tied = v.tied.map(({ name, votes }) => ({ name, votes }));
     return (

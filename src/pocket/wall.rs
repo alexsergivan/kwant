@@ -21,7 +21,9 @@
 //! `host_name`, `photo_cap_mb` (1-25, default 15), `pocket_cap_mb` (1-4096, default 1024),
 //! `per_guest_max` (1-500, default 40), `captions` (default true). Older walls sent `when` as a
 //! date: on create a `when` that is a date or an RFC 3339 time moves to `event_at` when that is
-//! empty ([`when_to_event_at`]), and a stored spec with a date `when` still reads as its date. A caption comes with the photo in the `X-Caption` header (percent-encoded
+//! empty ([`when_to_event_at`]), and a stored spec with a date `when` still reads as its date.
+//! A text `when` is only the line people read; set `event_at` for opens/closes and the reminder.
+//! A caption comes with the photo in the `X-Caption` header (percent-encoded
 //! UTF-8) and can be changed with the guest `caption` action until the host approves the photo;
 //! it is cut to 80 characters and goes through the word filter (a caught one is dropped and the
 //! photo says `caption_removed`).
@@ -111,15 +113,19 @@ fn event_time(spec: &Value) -> Option<DateTime<Utc>> {
     spec.get("event_at").and_then(spec_date).or_else(|| spec.get("when").and_then(spec_date))
 }
 
-/// The line people read (`when` that isn't a date; an older wall's date `when` has none).
+/// The line people read: `when` that isn't a date. With `event_at` set, a bare-date `when` is the
+/// person's own text too (wall-dates-followups 3). Only a `when` that is the event's time (an older
+/// wall's date `when`, with no `event_at`) has none.
 fn when_line(spec: &Value) -> Option<&str> {
-    spec_str(spec, "when").filter(|w| spec_date(&json!(w)).is_none())
+    let has_event_at = spec.get("event_at").and_then(spec_date).is_some();
+    spec_str(spec, "when").filter(|w| spec_date(&json!(w)).is_none() || (has_event_at && DateTime::parse_from_rfc3339(w).is_err()))
 }
 
 /// wall-dates-agree m14: on create, a `when` that is a date or an RFC 3339 time (what a bot sent
 /// before `when` became the line people read) moves to `event_at` when that is empty, so such a
 /// spec keeps working. With `event_at` set too it stays, and [`Kit::validate_spec`] refuses an
-/// RFC 3339 one with gather's sentence (a bare date then reads as text).
+/// RFC 3339 one with gather's sentence; a bare date then is the line people read ([`when_line`]).
+/// A text `when` is only the line people read; set `event_at` for opens/closes and the reminder.
 pub fn when_to_event_at(spec: &mut Value) {
     let Some(obj) = spec.as_object_mut() else { return };
     let dated = obj.get("when").filter(|w| spec_date(w).is_some()).cloned();
@@ -1261,16 +1267,25 @@ pub enum ZipPick {
     Best,
 }
 
-/// wall-dates-agree m12: the zone the zip's times are read in: the pocket's schedule zone when it
-/// is the person's named zone (TIMEZONE_SETTING when the wall was made, as the wall's chat lines
-/// use), else their TIMEZONE_SETTING now, else `None`: the box's own local time, as before.
+/// wall-dates-agree m12: the zone the zip's times are read in ([`zip_zone_of`]).
 async fn zip_zone(state: &AppState, s: &Snapshot) -> Option<super::schedule::Zone> {
-    use super::schedule::Zone;
-    if let Some(z @ Zone::Named(_)) = &s.zone {
-        return Some(z.clone());
-    }
     let tz = state.db.get_setting(crate::server::bot_actions::TIMEZONE_SETTING).await.ok().flatten();
-    match super::schedule::zone_for(tz.as_deref(), None) {
+    zip_zone_of(s.zone.as_ref(), tz.as_deref())
+}
+
+/// The pocket's schedule zone when it is a real clock: the person's named zone (TIMEZONE_SETTING
+/// when the wall was made), or the offset an older bot's `when` was written in (wall-dates-followups
+/// 2: `delete_on` reads it too). Else the person's TIMEZONE_SETTING now, else `None`: the box's own
+/// local time, as before. A `+00:00` schedule zone is what a wall made with no zone and no dated
+/// `when` gets, so it counts as none.
+fn zip_zone_of(pocket: Option<&super::schedule::Zone>, setting: Option<&str>) -> Option<super::schedule::Zone> {
+    use super::schedule::Zone;
+    match pocket {
+        Some(z @ Zone::Named(_)) => return Some(z.clone()),
+        Some(z @ Zone::Fixed(o)) if o.local_minus_utc() != 0 => return Some(z.clone()),
+        _ => {}
+    }
+    match super::schedule::zone_for(setting, None) {
         z @ Zone::Named(_) => Some(z),
         Zone::Fixed(_) => None,
     }
@@ -1534,6 +1549,9 @@ mod tests {
         // A wall made now
         assert_eq!(facts(json!({ "title": "W", "when": "Sat, Dec 12", "event_at": "2026-12-12" })), (json!("2026-12-12T23:59:59Z"), json!("Sat, Dec 12")));
         assert_eq!(facts(json!({ "title": "W", "when": "Sat, Dec 12" })), (Value::Null, json!("Sat, Dec 12")));
+        // wall-dates-followups 3: with event_at set, a bare-date `when` is the person's text
+        assert_eq!(facts(json!({ "title": "W", "when": "2026-12-12", "event_at": "2026-12-12T19:30:00+01:00" })), (json!("2026-12-12T18:30:00Z"), json!("2026-12-12")));
+        assert_eq!(facts(json!({ "title": "W", "when": "2026-12-12", "event_at": null })).1, Value::Null, "no event_at: the date is the event's time");
     }
 
     #[test]
@@ -1542,6 +1560,17 @@ mod tests {
         let lj = super::super::schedule::Zone::parse("Europe/Ljubljana");
         assert_eq!(entry_name(1, Some("Ana"), Some(zip_clock(Some(&lj), at)), Kind::Jpeg), "001-ana-0147.jpg");
         assert_eq!(zip_clock(None, at), at.with_timezone(&chrono::Local).naive_local(), "no zone: the box's clock");
+        // wall-dates-followups 2: a fixed-offset wall reads its own offset, ahead of the setting
+        let plus13 = super::super::schedule::Zone::parse("+13:00");
+        let z = zip_zone_of(Some(&plus13), None);
+        assert_eq!(z, Some(plus13.clone()));
+        assert_eq!(entry_name(1, Some("Ana"), Some(zip_clock(z.as_ref(), at)), Kind::Jpeg), "001-ana-1347.jpg");
+        assert_eq!(zip_zone_of(Some(&plus13), Some("Europe/Ljubljana")), Some(plus13));
+        assert_eq!(zip_zone_of(Some(&lj), Some("Asia/Kolkata")), Some(lj.clone()), "the wall's named zone first");
+        let utc = super::super::schedule::Zone::parse("+00:00");
+        assert_eq!(zip_zone_of(Some(&utc), Some("Europe/Ljubljana")), Some(lj), "+00:00 is no zone: the setting");
+        assert_eq!(zip_zone_of(Some(&utc), None), None, "then the box's clock");
+        assert_eq!(zip_zone_of(None, Some("Mars/Base")), None);
     }
 
     #[test]

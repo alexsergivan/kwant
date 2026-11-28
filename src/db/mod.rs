@@ -330,7 +330,10 @@ impl Database {
 
         // Said out loud rather than left to sqlx's default: every writer, a goal proposal
         // included, waits this long for the lock before "database is locked"
-        let options = SqliteConnectOptions::from_str(&conn_str)?.busy_timeout(busy_timeout);
+        // secret-ballot-unlinkable F2: a row's old version is zeroed when it is replaced or
+        // deleted, so freed space in the file never keeps data the app forgot (a closed vote's
+        // ballot salt). Copies still in the write-ahead log go with [`Self::wipe_old_rows`]
+        let options = SqliteConnectOptions::from_str(&conn_str)?.busy_timeout(busy_timeout).pragma("secure_delete", "ON");
         let pool = SqlitePoolOptions::new()
             .max_connections(10)
             .connect_with(options)
@@ -339,6 +342,15 @@ impl Database {
         let db = Self { pool, data_dir: data_dir.to_path_buf(), dev_on: Default::default() };
         db.refresh_dev_on().await;
         Ok(db)
+    }
+
+    /// Copies the write-ahead log into the database file and truncates it to zero bytes, so the
+    /// old row versions it still holds (a closed vote's ballot salt, which the row no longer
+    /// has) leave the disk. The file's freed space is already zeroed (`secure_delete`). False
+    /// when a reader kept part of the log; try again later.
+    pub async fn wipe_old_rows(&self) -> Result<bool, DbError> {
+        let (busy, _, _): (i64, i64, i64) = sqlx::query_as("PRAGMA wal_checkpoint(TRUNCATE)").fetch_one(&self.pool).await?;
+        Ok(busy == 0)
     }
 
     /// A transaction that holds SQLite's write lock from the start, for one that reads before it

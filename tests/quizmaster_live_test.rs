@@ -7,6 +7,7 @@
 mod quizmaster_support;
 
 use async_trait::async_trait;
+use chrono::{DateTime, FixedOffset, TimeZone, Utc};
 use kwnt::db::models::NewChannel;
 use kwnt::db::pocket::{ENDED, OPEN};
 use kwnt::db::spaces::SpaceId;
@@ -97,14 +98,29 @@ where
     panic!("timed out waiting for: {what}");
 }
 
+/// The quiz's start time in these tests: two days from now, on the hour, so it is always ahead of
+/// the real clock. (The fixed 2026-11-27T20:00Z the helper writes passed on Nov 27 2026, and a past
+/// time plans no start, which broke this file's schedule checks.)
+fn quiz_time() -> DateTime<Utc> {
+    let t = (Utc::now() + chrono::Duration::days(2)).timestamp();
+    Utc.timestamp_opt(t - t.rem_euclid(3600), 0).unwrap()
+}
+
 /// A Ready Friday quiz, opened in `channel`; returns (env, token, draft id, pocket code).
 async fn opened(channel: &str) -> (Env, String, String, String) {
+    opened_at(channel, quiz_time()).await
+}
+
+/// [`opened`], with the draft's time set to `when` before it opens.
+async fn opened_at(channel: &str, when: DateTime<Utc>) -> (Env, String, String, String) {
     judge_model();
     let (pages_url, _) = start_pages().await;
     let e = setup(true).await;
     let origin = chat(&e, channel).await;
     let token = turn_in(&e, &e.bot, &format!("t-{channel}"), origin).await;
     let (id, _) = ready_friday_quiz(&e, &token, &pages_url).await;
+    let (text, err) = tool(&e, &token, "pocket_update", json!({"id": id, "when": when.to_rfc3339()})).await;
+    assert!(!err, "{text}");
     let (text, err) = tool(&e, &token, "pocket_open", json!({"id": id})).await;
     assert!(!err, "{text}");
     let code = card(&text)["pocket"].as_str().expect("the card shows the pocket's code").to_string();
@@ -158,7 +174,8 @@ async fn judge_calls(e: &Env, id: &str) -> u32 {
 
 #[tokio::test]
 async fn a_ready_quiz_opens_a_real_pocket_moves_and_closes() {
-    let (e, token, id, code) = opened("ch-open").await;
+    let at = quiz_time();
+    let (e, token, id, code) = opened_at("ch-open", at).await;
     let s = pocket::snapshot(&e.state, &code).await.unwrap().expect("the pocket exists");
     assert_eq!((s.row.kit.as_str(), s.row.state.as_str(), s.row.title.as_str()), ("quiz", OPEN, "Friday Pub Quiz"));
     assert_eq!(s.row.owner_kwant_id.as_deref(), Some(e.bot.id.as_str()));
@@ -166,18 +183,20 @@ async fn a_ready_quiz_opens_a_real_pocket_moves_and_closes() {
     let origin: Value = serde_json::from_str(sched.origin.as_deref().expect("pa7 keeps the chat")).unwrap();
     assert_eq!(origin["kwant_id"], json!(e.bot.id), "{origin}");
     assert!(origin["channel_id"].as_str().is_some_and(|c| !c.is_empty()), "the turn's chat is the origin: {origin}");
-    assert_eq!(sched.starts_at.map(|t| t.to_rfc3339()), Some("2026-11-27T20:00:00+00:00".into()));
+    assert_eq!(sched.starts_at.map(|t| t.to_rfc3339()), Some(at.to_rfc3339()));
 
-    // `when` moves the pocket itself (pa7 set_when), not just the card
-    let (text, err) = tool(&e, &token, "pocket_update", json!({"id": id, "when": "2026-11-27T21:30:00+01:00"})).await;
+    // `when` moves the pocket itself (pa7 set_when), not just the card; sent at +01:00, kept in UTC
+    let moved = at + chrono::Duration::minutes(30);
+    let moved_local = moved.with_timezone(&FixedOffset::east_opt(3600).unwrap()).to_rfc3339();
+    let (text, err) = tool(&e, &token, "pocket_update", json!({"id": id, "when": moved_local})).await;
     assert!(!err, "{text}");
     let sched = e.state.db.pocket_schedule(&code).await.unwrap().unwrap();
-    assert_eq!(sched.starts_at.map(|t| t.to_rfc3339()), Some("2026-11-27T20:30:00+00:00".into()));
-    assert!(pocket::snapshot(&e.state, &code).await.unwrap().unwrap().spec["when"].as_str().unwrap().starts_with("2026-11-27T21:30:00"));
+    assert_eq!(sched.starts_at.map(|t| t.to_rfc3339()), Some(moved.to_rfc3339()));
+    assert!(pocket::snapshot(&e.state, &code).await.unwrap().unwrap().spec["when"].as_str().unwrap().starts_with(&moved_local[..19]));
     // A time that isn't RFC 3339 is refused in words, and nothing moves
     let (why, err) = tool(&e, &token, "pocket_update", json!({"id": id, "when": "Friday 8pm"})).await;
     assert!(err, "{why}");
-    assert_eq!(e.state.db.pocket_schedule(&code).await.unwrap().unwrap().starts_at.map(|t| t.to_rfc3339()), Some("2026-11-27T20:30:00+00:00".into()));
+    assert_eq!(e.state.db.pocket_schedule(&code).await.unwrap().unwrap().starts_at.map(|t| t.to_rfc3339()), Some(moved.to_rfc3339()));
 
     // Close ends the pocket
     let (text, err) = tool(&e, &token, "pocket_close", json!({"id": id})).await;
@@ -185,7 +204,7 @@ async fn a_ready_quiz_opens_a_real_pocket_moves_and_closes() {
     assert_eq!(card(&text)["state"], json!("closed"));
     assert_eq!(pocket::snapshot(&e.state, &code).await.unwrap().unwrap().row.state, ENDED);
     // pa7 refuses to move an ended pocket; the tool says the quiz is closed first
-    let (why, err) = tool(&e, &token, "pocket_update", json!({"id": id, "when": "2026-11-28T20:00:00+00:00"})).await;
+    let (why, err) = tool(&e, &token, "pocket_update", json!({"id": id, "when": (at + chrono::Duration::days(1)).to_rfc3339()})).await;
     assert!(err && why.contains("closed"), "{why}");
 }
 

@@ -61,14 +61,16 @@ test('house gets eyes only, every cell sits on the 26-grid, and each mood draws 
   assert.equal(faces.size, MOODS.length, 'seven different faces');
 });
 
-test('face swaps only the face cells: the badge stays, and plain keeps the idle face whatever the mood', () => {
+test('face swaps only the face cells: the badge stays, and plain keeps the idle face (and no badge) whatever the mood', () => {
   const idle = s.svg({ role: 'mouse', name: 'Pixel' });
   const plainFailed = s.svg({ role: 'mouse', name: 'Pixel', mood: 'failed', face: 'plain' });
   const failed = s.svg({ role: 'mouse', name: 'Pixel', mood: 'failed' });
-  const body = (h) => rects(h.replace(/<svg viewBox="0 0 7 7"[\s\S]*?<\/svg>/g, ''));
+  // The mood plate is the svg with a width (7x7 from 36 px, the 5x5 glyph only under 36: small-avatar-badges).
+  const body = (h) => rects(h.replace(/<svg viewBox="[\d ]+" width=[\s\S]*?<\/svg>/g, ''));
   assert.deepEqual(body(plainFailed), body(idle), 'plain = the idle face');
   assert.notDeepEqual(body(failed), body(idle));
   assert.match(failed, /data-mood="failed"/, 'the badge is still there');
+  assert.doesNotMatch(plainFailed, /data-mood=/, 'an older reply row shows no live mood');
   // Outside x9-17 / y8-16 nothing changes between moods.
   const outside = (h) => body(h).filter((r) => r.x + r.w <= 9 || r.x >= 17 || r.y + r.h <= 8 || r.y >= 16);
   for (const m of MOODS.slice(1)) assert.deepEqual(outside(s.svg({ role: 'mouse', name: 'Pixel', mood: m })), outside(idle), m);

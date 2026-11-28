@@ -43,7 +43,7 @@ export interface Me {
 export interface WallView {
   title: string;
   ended: boolean;
-  /** pocket.expires_at, else the kit's delete_on: the day everything is deleted. */
+  /** The kit's delete_on (the server's day on the person's clock), else pocket.expires_at: the day everything is deleted. */
   deletes_on?: string;
   host_name?: string;
   when?: string;
@@ -120,7 +120,8 @@ export function wallFrom(json: unknown): { view: WallView; version?: number } | 
   const view: WallView = {
     title: text(kv.title) ?? str(pocket.title) ?? '',
     ended,
-    deletes_on: day(pocket.expires_at) ?? day(kv.delete_on),
+    // The server's day on the person's clock; expires_at (UTC) only when it has none
+    deletes_on: day(kv.delete_on) ?? day(pocket.expires_at),
     host_name: text(kv.host_name),
     when: day(kv.when),
     closes_at: str(kv.closes_at),

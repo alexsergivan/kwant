@@ -124,6 +124,14 @@ export function normalizeTeams<T extends { member_kwants?: unknown }>(raw: unkno
     .map((t) => ({ ...t, member_kwants: memberIdsOfTeam(t.member_kwants) }));
 }
 
+/**
+ * Channels as the app keeps them, from an /api/channels answer. The server sends `member_kwants` as a JSON
+ * string there too, and App spread it into characters, so a non-lead member's approval missed its channel.
+ */
+export function normalizeChannels<T extends { member_kwants?: unknown }>(raw: unknown): Array<Omit<T, 'member_kwants'> & { member_kwants: string[] }> {
+  return normalizeTeams<T>(raw);
+}
+
 /** The teams right after a bot is deleted, before the server's lists come back: it's no longer a member. */
 export function dropBotFromTeams<T extends { member_kwants: string[] }>(teams: T[], botId: string): T[] {
   return teams.map((t) => (t.member_kwants.includes(botId) ? { ...t, member_kwants: t.member_kwants.filter((m) => m !== botId) } : t));
