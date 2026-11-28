@@ -754,6 +754,200 @@ async fn paid_ticks_food_and_plus_ones_are_the_hosts_and_show_names_off_leaves_c
     assert!(!v.to_string().contains("Ana"), "{v}");
 }
 
+// ---- rsvp-names-switch: the host turns names on or off after people answered ----
+
+/// The names a guest's RSVP view lists (None: names are off).
+fn rsvp_names(v: &Value) -> Option<Vec<String>> {
+    v["people"].as_array().map(|a| a.iter().map(|p| p["name"].as_str().unwrap().to_string()).collect())
+}
+
+/// The names a guest's sign-up view lists in slot `i`: (holding it, waiting for it).
+fn slot_names(v: &Value, i: usize) -> (Vec<String>, Vec<String>) {
+    let names = |k: &str| v["slots"][i][k].as_array().map(|a| a.iter().map(|p| p["name"].as_str().unwrap().to_string()).collect()).unwrap_or_default();
+    (names("people"), names("waiting_people"))
+}
+
+#[tokio::test]
+async fn names_turned_on_later_keep_earlier_rsvps_counted_but_unnamed_until_they_show_them() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, host_key) = make(&t, spec(now, "rsvp", json!({ "show_names": false }))).await;
+    let (_, ana) = joined(&t, &code, "Ana").await;
+    let (_, ben) = joined(&t, &code, "Ben").await;
+    let (_, cleo) = joined(&t, &code, "Cleo").await;
+    let (_, dev) = joined(&t, &code, "Dev").await;
+    ok(&t, &code, &ana, "answer", json!({ "answer": "yes" })).await;
+    ok(&t, &code, &ben, "answer", json!({ "answer": "no" })).await;
+    ok(&t, &code, &cleo, "answer", json!({ "answer": "maybe" })).await;
+    let v = view_of(&t, &code, &ben).await;
+    assert_eq!((v["show_names"].as_bool(), rsvp_names(&v), v["names_notice"].as_bool()), (Some(false), None, Some(false)));
+    let h = host_view(&t, &code).await;
+    assert_eq!((h["show_names"].as_bool(), h["names_hidden"].as_u64(), h["names_on_at"].clone()), (Some(false), Some(0), Value::Null));
+
+    // Only the host can switch, and the body says which way
+    assert_eq!(act(&t, &code, &ana, "set_show_names", json!({ "on": true })).await.status, StatusCode::BAD_REQUEST, "a host action from a guest");
+    let r = host_act(&t, &code, "set_show_names", json!({}));
+    assert_eq!(r.await.status, StatusCode::BAD_REQUEST);
+
+    // Names on: the three who answered while names were hidden stay counted but unnamed
+    assert_eq!(host_act(&t, &code, "set_show_names", json!({ "on": true })).await.status, StatusCode::OK);
+    let h = host_view(&t, &code).await;
+    assert_eq!((h["show_names"].as_bool(), h["names_hidden"].as_u64(), h["names_on_at"].is_string()), (Some(true), Some(3), true));
+    assert_eq!(h["people"].as_array().unwrap().iter().filter(|p| p["answer"].is_string()).count(), 3, "the host still sees everyone");
+    let v = view_of(&t, &code, &ben).await;
+    assert_eq!((v["show_names"].as_bool(), rsvp_names(&v), v["names_notice"].as_bool()), (Some(true), Some(vec![]), Some(true)));
+    assert_eq!(v["counts"], json!({ "yes": 1, "maybe": 1, "no": 1, "coming": 1 }), "counts are unchanged");
+    let text = v.to_string();
+    assert!(!text.contains("Ana") && !text.contains("Cleo"), "{text}");
+    // The host remote says the same
+    let r = send(&t.guest, "GET", &format!("/api/pocket/{code}/host/state"), None, &host_req(&host_key)).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    assert!(r.body.to_string().contains("\"names_hidden\":3"), "{}", r.body);
+
+    // Lin S1: a page painted while names were hidden (no "names": true) keeps even a first answer unnamed
+    ok(&t, &code, &dev, "answer", json!({ "answer": "yes" })).await;
+    let v = view_of(&t, &code, &dev).await;
+    assert_eq!((rsvp_names(&v), v["names_notice"].as_bool()), (Some(vec![]), Some(true)));
+    assert_eq!(host_view(&t, &code).await["names_hidden"], 4);
+    // Answering from a page that shows names on lists them as usual, with no notice
+    ok(&t, &code, &dev, "answer", json!({ "answer": "yes", "names": true })).await;
+    let v = view_of(&t, &code, &dev).await;
+    assert_eq!((rsvp_names(&v), v["names_notice"].as_bool()), (Some(vec!["Dev".to_string()]), Some(false)));
+
+    // "Show my name" opts Ben in; Ana answering again does too
+    ok(&t, &code, &ben, "show_my_name", json!({})).await;
+    ok(&t, &code, &ben, "show_my_name", json!({})).await;
+    let v = view_of(&t, &code, &ben).await;
+    assert_eq!((rsvp_names(&v), v["names_notice"].as_bool()), (Some(vec!["Ben".into(), "Dev".into()]), Some(false)));
+    ok(&t, &code, &ana, "answer", json!({ "answer": "maybe", "names": true })).await;
+    // Cleo changes her answer from a page still showing names off: she stays unnamed
+    ok(&t, &code, &cleo, "answer", json!({ "answer": "maybe", "names": false })).await;
+    let v = view_of(&t, &code, &cleo).await;
+    assert_eq!((rsvp_names(&v), v["names_notice"].as_bool()), (Some(vec!["Ana".into(), "Ben".into(), "Dev".into()]), Some(true)));
+    assert!(!v["people"].to_string().contains("Cleo"), "Cleo hasn't seen the change yet");
+    assert_eq!(host_view(&t, &code).await["names_hidden"], 1);
+
+    // Names off: everyone's name goes at once, and nobody is waiting to be shown
+    assert_eq!(host_act(&t, &code, "set_show_names", json!({ "on": false })).await.status, StatusCode::OK);
+    for k in [&ana, &ben, &cleo, &dev] {
+        let v = view_of(&t, &code, k).await;
+        assert_eq!((v["show_names"].as_bool(), rsvp_names(&v), v["names_notice"].as_bool()), (Some(false), None, Some(false)));
+        assert!(!v.to_string().contains("Ana\""), "{v}");
+    }
+    let h = host_view(&t, &code).await;
+    assert_eq!((h["show_names"].as_bool(), h["names_hidden"].as_u64(), h["names_on_at"].clone()), (Some(false), Some(0), Value::Null));
+    let st = kit_state(&t, &code).await;
+    assert_eq!((st["names"].clone(), st.get("names_on_at"), st.get("unnamed")), (json!(false), None, None), "{st}");
+    let r = act(&t, &code, &cleo, "show_my_name", json!({})).await;
+    assert_eq!(r.status, StatusCode::CONFLICT);
+    assert_eq!(r.body["message"], "Names are hidden now, so only the host sees who answered.");
+
+    // On again: everyone answered while names were hidden, so nobody is named until they've seen it
+    assert_eq!(host_act(&t, &code, "set_show_names", json!({ "on": true })).await.status, StatusCode::OK);
+    assert_eq!(host_view(&t, &code).await["names_hidden"], 4);
+    assert_eq!(rsvp_names(&view_of(&t, &code, &dev).await), Some(vec![]));
+    // On while already on changes nobody
+    assert_eq!(host_act(&t, &code, "set_show_names", json!({ "on": true })).await.status, StatusCode::OK);
+    ok(&t, &code, &dev, "show_my_name", json!({})).await;
+    assert_eq!(host_act(&t, &code, "set_show_names", json!({ "on": true })).await.status, StatusCode::OK);
+    assert_eq!(rsvp_names(&view_of(&t, &code, &ana).await), Some(vec!["Dev".to_string()]));
+
+    // "Show my name" still works once answers close; the switch does too
+    assert_eq!(host_act(&t, &code, "close_now", json!({})).await.status, StatusCode::OK);
+    ok(&t, &code, &cleo, "show_my_name", json!({})).await;
+    assert_eq!(rsvp_names(&view_of(&t, &code, &ana).await), Some(vec!["Cleo".to_string(), "Dev".to_string()]));
+    assert_eq!(host_act(&t, &code, "set_show_names", json!({ "on": false })).await.status, StatusCode::OK);
+    assert_eq!(rsvp_names(&view_of(&t, &code, &ana).await), None);
+}
+
+#[tokio::test]
+async fn a_sign_up_switched_to_names_lists_only_people_who_saw_it() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "signup", json!({ "show_names": false, "fields": ["slot_note"] }))).await;
+    let (_, ana) = joined(&t, &code, "Ana").await;
+    let (_, ben) = joined(&t, &code, "Ben").await;
+    let (_, cleo) = joined(&t, &code, "Cleo").await;
+    let (_, dev) = joined(&t, &code, "Dev").await;
+    ok(&t, &code, &ana, "take", json!({ "slot": 0 })).await;
+    ok(&t, &code, &ben, "take", json!({ "slot": 0 })).await; // full: Ben waits
+    ok(&t, &code, &cleo, "take", json!({ "slot": 1, "note": "Lemonade" })).await;
+    assert_eq!(host_act(&t, &code, "set_show_names", json!({ "on": true })).await.status, StatusCode::OK);
+    assert_eq!(host_view(&t, &code).await["names_hidden"], 3);
+    ok(&t, &code, &dev, "take", json!({ "slot": 1, "names": true })).await;
+
+    let v = view_of(&t, &code, &cleo).await;
+    assert_eq!(v["names_notice"], true);
+    assert_eq!(slot_names(&v, 0), (vec![], vec![]));
+    assert_eq!(slot_names(&v, 1), (vec!["Dev".to_string()], vec![]));
+    let counts: Vec<(u64, u64)> = (0..2).map(|i| (v["slots"][i]["filled"].as_u64().unwrap(), v["slots"][i]["waiting"].as_u64().unwrap())).collect();
+    assert_eq!(counts, [(1, 1), (2, 0)], "counts are unchanged");
+    assert!(!v["slots"].to_string().contains("Lemonade"), "an unnamed person's note isn't listed either");
+    assert_eq!(view_of(&t, &code, &dev).await["names_notice"], false);
+
+    // Ana lets go: Ben moves up and stays unnamed; Ana has nothing listed, so no notice
+    ok(&t, &code, &ana, "let_go", json!({})).await;
+    assert_eq!(view_of(&t, &code, &ana).await["names_notice"], false);
+    let v = view_of(&t, &code, &dev).await;
+    assert_eq!((v["slots"][0]["filled"].as_u64(), slot_names(&v, 0)), (Some(1), (vec![], vec![])));
+    assert_eq!(view_of(&t, &code, &ben).await["names_notice"], true);
+    assert_eq!(host_view(&t, &code).await["names_hidden"], 2);
+
+    // Cleo shows her name; Ben sending his slot again from a page showing names is answering again
+    ok(&t, &code, &cleo, "show_my_name", json!({})).await;
+    ok(&t, &code, &ben, "take", json!({ "slot": 0, "note": "Pie" })).await;
+    assert_eq!(view_of(&t, &code, &ben).await["names_notice"], true, "a page without names on doesn't opt in");
+    ok(&t, &code, &ben, "take", json!({ "slot": 0, "note": "Pie", "names": true })).await;
+    let v = view_of(&t, &code, &ana).await;
+    assert_eq!(slot_names(&v, 0), (vec!["Ben".to_string()], vec![]));
+    assert_eq!(slot_names(&v, 1), (vec!["Cleo".to_string(), "Dev".to_string()], vec![]));
+    assert_eq!(host_view(&t, &code).await["names_hidden"], 0);
+
+    // Off hides every slot's names at once
+    assert_eq!(host_act(&t, &code, "set_show_names", json!({ "on": false })).await.status, StatusCode::OK);
+    let v = view_of(&t, &code, &ana).await;
+    assert_eq!((v["slots"][0]["people"].clone(), v["slots"][1]["people"].clone(), v["slots"][1]["waiting_people"].clone()), (Value::Null, Value::Null, Value::Null));
+}
+
+#[tokio::test]
+async fn a_vote_refuses_the_names_switch() {
+    let t = setup().await;
+    let now = Utc::now();
+    let (code, _) = make(&t, spec(now, "vote", json!({}))).await;
+    let (_, a) = joined(&t, &code, "Ana").await;
+    ok(&t, &code, &a, "vote", json!({ "ranking": [0] })).await;
+    let r = host_act(&t, &code, "set_show_names", json!({ "on": true })).await;
+    assert_eq!((r.status, r.body["message"].as_str()), (StatusCode::BAD_REQUEST, Some("A vote never shows who picked what.")));
+    let r = act(&t, &code, &a, "show_my_name", json!({})).await;
+    assert_eq!((r.status, r.body["message"].as_str()), (StatusCode::BAD_REQUEST, Some("A vote never shows who picked what.")));
+    let st = kit_state(&t, &code).await;
+    assert!(st.get("names").is_none() && st.get("unnamed").is_none(), "{st}");
+    let (h, v) = (host_view(&t, &code).await, view_of(&t, &code, &a).await);
+    assert!(h.get("names_hidden").is_none() && v.get("names_notice").is_none(), "{h} {v}");
+}
+
+#[tokio::test]
+async fn a_pocket_from_an_older_build_shows_names_as_its_spec_says() {
+    let t = setup().await;
+    let now = Utc::now();
+    for (show, listed) in [(json!(false), None), (json!(true), Some(vec!["Ana".to_string(), "Ben".to_string()]))] {
+        let (code, _) = make(&t, spec(now, "rsvp", json!({ "show_names": show }))).await;
+        let (ana_id, ana) = joined(&t, &code, "Ana").await;
+        let (_, ben) = joined(&t, &code, "Ben").await;
+        ok(&t, &code, &ana, "answer", json!({ "answer": "yes" })).await;
+        ok(&t, &code, &ben, "answer", json!({ "answer": "no" })).await;
+        // Stored exactly as before the switch existed, and read back from that shape
+        let st = kit_state(&t, &code).await;
+        assert!(["names", "names_on_at", "unnamed"].iter().all(|k| st.get(k).is_none()), "{st}");
+        save_kit_state(&t, &code, &st, &ana_id).await;
+        let v = view_of(&t, &code, &ben).await;
+        assert_eq!((v["show_names"].clone(), rsvp_names(&v)), (show.clone(), listed.clone()));
+        assert_ne!(v["names_notice"], true);
+        ok(&t, &code, &ben, "answer", json!({ "answer": "yes" })).await;
+        assert_eq!(rsvp_names(&view_of(&t, &code, &ana).await), listed);
+    }
+}
+
 // ---- Sign-up ----
 
 #[tokio::test]
