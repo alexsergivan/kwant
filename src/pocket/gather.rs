@@ -72,7 +72,6 @@ const SPEC_KEYS: &[&str] = &[
 // ---- Counting (pure) ----
 
 pub use super::toolkit::{count_one_pick, count_ranked, Outcome, Round, Tally};
-use super::toolkit::round_counts;
 
 // ---- Kit state ----
 
