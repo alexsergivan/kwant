@@ -669,7 +669,8 @@ impl QuizGame {
     }
 
     pub fn adjust(&mut self, target: Target, points: i64) -> Result<ActionOutcome, ActionError> {
-        if points == 0 || points.abs() > MAX_ADJUST {
+        // A range check, not `abs()`: `i64::MIN.abs()` overflows (it wraps in a release build)
+        if points == 0 || !(-MAX_ADJUST..=MAX_ADJUST).contains(&points) {
             return Err(ActionError::BadInput(format!("give between -{MAX_ADJUST} and {MAX_ADJUST} points, not 0")));
         }
         match &target {

@@ -533,6 +533,34 @@ fn a_timer_locks_its_collection_through_tick_and_stop_or_unlock_undo_it() {
     // lock on the vote closes voting
     Made.act(&mut at(64), &mut st, &Viewer::Host, "lock", &json!({ "vote": true })).unwrap();
     assert!(matches!(Made.act(&mut at(65), &mut st, &guest("p0"), "vote", &json!({ "pick": id })), Err(KitError::NotNow(m)) if m.contains("Voting has closed")));
+    // A closed vote freezes its options too: taking back the winning option would change the tally
+    let mut st = Made.init(&spec);
+    let mut ctx = KitCtx::new(&spec, &ps, t0);
+    for (p, t) in [("p0", "Emma"), ("p1", "Dune")] {
+        Made.act(&mut ctx, &mut st, &guest(p), "put", &json!({ "collection": "shelf", "values": { "title": t } })).unwrap();
+    }
+    let emma = st["rows"]["shelf"][0]["id"].as_str().unwrap().to_string();
+    for p in ["p0", "p1", "p2"] {
+        Made.act(&mut ctx, &mut st, &guest(p), "vote", &json!({ "pick": emma })).unwrap();
+    }
+    Made.act(&mut ctx, &mut st, &Viewer::Host, "lock", &json!({ "vote": true })).unwrap();
+    let tally = Made.view(&ctx, &st, &Viewer::BigScreen)["vote"]["tally"].clone();
+    assert_eq!(tally["outcome"], json!({ "kind": "winner", "id": emma }), "{tally}");
+    assert!(matches!(Made.act(&mut ctx, &mut st, &guest("p0"), "take_back", &json!({ "collection": "shelf", "id": emma })), Err(KitError::NotNow(m)) if m == "Voting has closed."));
+    assert!(matches!(Made.act(&mut ctx, &mut st, &guest("p2"), "put", &json!({ "collection": "shelf", "values": { "title": "Late" } })), Err(KitError::NotNow(m)) if m == "Voting has closed."));
+    assert_eq!(Made.view(&ctx, &st, &Viewer::BigScreen)["vote"]["tally"], tally, "the tally is unchanged");
+    assert_eq!(Made.view(&ctx, &st, &guest("p0"))["collections"]["shelf"]["locked"], true, "the options show closed");
+    // The same through a vote timer that ran out, before its tick
+    Made.act(&mut ctx, &mut st, &Viewer::Host, "unlock", &json!({ "vote": true })).unwrap();
+    Made.act(&mut ctx, &mut st, &Viewer::Host, "timer_start", &json!({ "vote": true, "seconds": 5 })).unwrap();
+    assert!(matches!(Made.act(&mut at(6), &mut st, &guest("p0"), "take_back", &json!({ "collection": "shelf", "id": emma })), Err(KitError::NotNow(m)) if m == "Voting has closed."));
+    // Stopping or replacing a timer that ran out (before its tick) keeps the lock every poll showed
+    assert!(matches!(Made.act(&mut at(6), &mut st, &Viewer::Host, "timer_stop", &json!({})), Err(KitError::NotNow(_))), "it had ended");
+    assert_eq!((st["vote_locked"].clone(), st["timer"].clone()), (json!(true), Value::Null), "stopping an ended timer locks, never reopens");
+    let mut st2 = Made.init(&spec);
+    Made.act(&mut ctx, &mut st2, &Viewer::Host, "timer_start", &json!({ "collection": "guesses", "seconds": 5 })).unwrap();
+    Made.act(&mut at(6), &mut st2, &Viewer::Host, "timer_start", &json!({ "vote": true, "seconds": 30 })).unwrap();
+    assert_eq!((st2["locked"]["guesses"].clone(), st2["timer"]["vote"].clone()), (json!(true), json!(true)), "the ended guesses timer locked before the vote's replaced it");
 }
 
 /// Sends a turn action as the host: (whose turn, round, who was skipped) on the big screen.
@@ -643,6 +671,8 @@ fn step_walks_the_steps_and_adjust_is_capped() {
         (json!({ "player": "p1", "points": 7 }), true),
         (json!({ "player": "p1", "points": 101 }), false),
         (json!({ "player": "p1", "points": -101 }), false),
+        (json!({ "player": "p1", "points": -9223372036854775808_i64 }), false),
+        (json!({ "player": "p1", "points": 9223372036854775807_i64 }), false),
         (json!({ "player": "p1", "points": 0 }), false),
         (json!({ "player": "p1", "points": 1.5 }), false),
         (json!({ "player": "nobody", "points": 1 }), false),
@@ -724,6 +754,7 @@ fn the_spec_checks_actions_secrets_and_steps_in_plain_sentences() {
         (with(&["steps"], json!([{ "timer": 30 }])), "Step 1: a timer goes with open"),
         (with(&["steps"], json!([{ "open": "nope" }])), "Step 1: there's no collection called \"nope\" to open."),
         (with(&["steps"], json!([{ "reveal": ["nope"] }])), "Step 1: there's no secret group called"),
+        (with(&["actions", "reveal", "secrets"], json!(["hidden"])), "actions.reveal: secrets must include \"answers\", the group answer is played against."),
     ];
     for (spec, want) in cases {
         let got = Made.validate_spec(&spec).expect_err(want);

@@ -215,6 +215,16 @@ pub fn coll_locked(state: &Value, name: &str, now: DateTime<Utc>) -> bool {
     is_locked(state, &Target::Coll(name.to_string()), now)
 }
 
+/// The vote's options are the rows of its collection, so while the vote is closed (flag or a
+/// timer that ran out) guests can't put or take back rows there either: taking back an option
+/// would silently change the tally. The host may still put, as with any lock.
+pub fn vote_closes(spec: &Value, state: &Value, name: &str, now: DateTime<Utc>) -> bool {
+    vote_cfg(spec).is_some_and(|c| c.collection == name) && is_locked(state, &Target::Vote, now)
+}
+
+/// The sentence a guest gets for a vote, or its options, once voting is closed.
+pub const VOTE_CLOSED: &str = "Voting has closed.";
+
 fn seconds(v: Option<&Value>, what: &str) -> Result<Option<u64>, KitError> {
     match v {
         None | Some(Value::Null) => Ok(None),
@@ -222,12 +232,32 @@ fn seconds(v: Option<&Value>, what: &str) -> Result<Option<u64>, KitError> {
     }
 }
 
+/// Stores the end in milliseconds, rounded up, so a 30-second timer never ends early (whole
+/// seconds would cut up to 1 s off it).
 fn start_timer(ctx: &KitCtx, state: &mut Value, t: &Target, secs: u64) {
-    let end = ctx.now + Duration::seconds(secs as i64);
+    let mut end = ctx.now + Duration::seconds(secs as i64);
+    let sub_ms = end.timestamp_subsec_nanos() % 1_000_000;
+    if sub_ms > 0 {
+        end += Duration::nanoseconds(i64::from(1_000_000 - sub_ms));
+    }
     let mut v = target_json(t);
     v["seconds"] = json!(secs);
-    v["ends_at"] = json!(end.to_rfc3339_opts(SecondsFormat::Secs, true));
+    v["ends_at"] = json!(end.to_rfc3339_opts(SecondsFormat::Millis, true));
     state["timer"] = v;
+}
+
+/// A timer that has run out locks its target and goes: the tick's step, also run before a
+/// timer is stopped or replaced, so a lock every poll already showed can't be lost before the
+/// tick. `true` when it did.
+fn settle_timer(state: &mut Value, now: DateTime<Utc>) -> bool {
+    match timer_end(state) {
+        Some((t, end)) if end <= now => {
+            set_lock(state, &t, true);
+            state["timer"] = Value::Null;
+            true
+        }
+        _ => false,
+    }
 }
 
 pub fn timer_start(ctx: &mut KitCtx, state: &mut Value, body: &Value) -> Result<(), KitError> {
@@ -237,12 +267,16 @@ pub fn timer_start(ctx: &mut KitCtx, state: &mut Value, body: &Value) -> Result<
         Some(s) => s,
         None => seconds(config(ctx.spec, "timer").and_then(|c| c.get("seconds")), "seconds")?.ok_or_else(|| bad("timer_start: say how long (seconds)."))?,
     };
+    settle_timer(state, ctx.now);
     start_timer(ctx, state, &t, secs);
     Ok(())
 }
 
-pub fn timer_stop(state: &mut Value, body: &Value) -> Result<(), KitError> {
+pub fn timer_stop(ctx: &KitCtx, state: &mut Value, body: &Value) -> Result<(), KitError> {
     only(body, &[], "timer_stop")?;
+    // A timer that has run out already locked its target (every poll shows it locked); stopping
+    // it now must not open it again
+    settle_timer(state, ctx.now);
     if state["timer"].is_null() {
         return Err(not_now("No timer is running."));
     }
@@ -365,7 +399,7 @@ fn scores(spec: &Value, state: &Value, players: &[Player], now: DateTime<Utc>) -
 pub fn adjust(ctx: &mut KitCtx, state: &mut Value, body: &Value) -> Result<(), KitError> {
     let o = only(body, &["player", "points"], "adjust")?;
     let player = o.get("player").and_then(Value::as_str).filter(|p| ctx.player(p).is_some()).ok_or_else(|| bad("player: there's no such player."))?;
-    let points = o.get("points").and_then(Value::as_i64).filter(|n| *n != 0 && n.abs() <= MAX_ADJUST).ok_or_else(|| bad(format!("points: give between -{MAX_ADJUST} and {MAX_ADJUST} points, not 0.")))?;
+    let points = o.get("points").and_then(Value::as_i64).filter(|n| *n != 0 && (-MAX_ADJUST..=MAX_ADJUST).contains(n)).ok_or_else(|| bad(format!("points: give between -{MAX_ADJUST} and {MAX_ADJUST} points, not 0.")))?;
     if !state["adjust"].is_array() {
         state["adjust"] = json!([]);
     }
@@ -404,7 +438,7 @@ pub fn vote(ctx: &mut KitCtx, state: &mut Value, actor: &Viewer, body: &Value) -
     let cfg = vote_cfg(ctx.spec).ok_or_else(|| bad("This app has no vote."))?;
     let o = only(body, if cfg.ranked { &["ranking"] } else { &["pick"] }, "vote")?;
     if is_locked(state, &Target::Vote, ctx.now) {
-        return Err(not_now("Voting has closed."));
+        return Err(not_now(VOTE_CLOSED));
     }
     let options: Vec<&str> = collections::rows(state, cfg.collection).iter().filter_map(|r| r["id"].as_str()).collect();
     let ballot: Vec<String> = if cfg.ranked {
@@ -681,6 +715,8 @@ pub fn step(ctx: &mut KitCtx, state: &mut Value, body: &Value) -> Result<(), Kit
     let Some(entry) = steps.get(i) else {
         return Err(not_now("That was the last step."));
     };
+    // `open` with a timer replaces the running one: an ended one locks first, as the tick would
+    settle_timer(state, ctx.now);
     if let Some(c) = entry["open"].as_str() {
         let t = Target::Coll(c.to_string());
         set_lock(state, &t, false);
@@ -723,14 +759,7 @@ fn step_view(spec: &Value, state: &Value) -> Value {
 /// A timer that ran out locks its collection (or the vote); `reveal_at` passing is the full
 /// reveal. `true` when the state changed.
 pub fn tick(ctx: &KitCtx, state: &mut Value) -> bool {
-    let mut changed = false;
-    if let Some((t, end)) = timer_end(state) {
-        if end <= ctx.now {
-            set_lock(state, &t, true);
-            state["timer"] = Value::Null;
-            changed = true;
-        }
-    }
+    let mut changed = settle_timer(state, ctx.now);
     if reveal_at_passed(ctx.spec, ctx.now) {
         changed |= do_reveal(ctx.spec, state, &full_reveal_groups(ctx.spec), true);
     }
@@ -751,7 +780,8 @@ pub fn view_parts(spec: &Value, state: &Value, players: &[Player], viewer: &View
         Some((t, end)) if end > now => {
             let mut v = target_json(&t);
             v["ends_at"] = state["timer"]["ends_at"].clone();
-            v["seconds_left"] = json!((end - now).num_seconds().max(0));
+            // Rounded up: a guest sees 30 the moment a 30-second timer starts, and 1 in its last second
+            v["seconds_left"] = json!(((end - now).num_milliseconds().max(0) as u64).div_ceil(1000));
             v
         }
         _ => Value::Null,
@@ -960,6 +990,13 @@ fn check_simple(spec: &Value) -> Result<(), String> {
         for g in r["secrets"].as_array().map_or(&[][..], Vec::as_slice) {
             if g.as_str().is_none_or(|g| spec["secrets"].get(g).is_none()) {
                 return Err(format!("actions.reveal: there's no secret group called {:?}.", short(&g.to_string())));
+            }
+        }
+        // A full reveal (or reveal_at) that leaves out the answer's group would never publish the
+        // answers, or lock the guesses before they're out
+        if let (Some(list), Some(a)) = (r["secrets"].as_array(), answer_cfg(spec)) {
+            if !list.iter().any(|g| g.as_str() == Some(a.group)) {
+                return Err(format!("actions.reveal: secrets must include {:?}, the group answer is played against.", short(a.group)));
             }
         }
     }

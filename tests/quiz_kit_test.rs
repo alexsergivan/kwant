@@ -498,6 +498,10 @@ fn scores_teams_ties_adjustments_and_removal() {
     g.act(&Actor::Host, "adjust", &json!({"player": "b", "points": 1}), at(5)).unwrap();
     g.act(&Actor::Host, "adjust", &json!({"team": "Dogs", "points": -1}), at(5)).unwrap();
     assert!(matches!(g.act(&Actor::Host, "adjust", &json!({"player": "b", "points": 0}), at(5)), Err(ActionError::BadInput(_))));
+    // i64::MIN has no abs(): the cap is a range, so the extremes are refused, not wrapped
+    for points in [json!(i64::MIN), json!(i64::MAX), json!(101), json!(-101)] {
+        assert!(matches!(g.act(&Actor::Host, "adjust", &json!({"player": "b", "points": points}), at(5)), Err(ActionError::BadInput(_))), "{points}");
+    }
     let teams: Vec<(String, i64, usize, bool)> = g.team_board().into_iter().map(|t| (t.team, t.score, t.rank, t.tied)).collect();
     assert_eq!(teams, [("Owls".into(), 4, 1, false), ("Cats".into(), 3, 2, false), ("Dogs".into(), 2, 3, false)]);
     g.act(&Actor::Host, "remove", &json!({"player": "a"}), at(6)).unwrap();

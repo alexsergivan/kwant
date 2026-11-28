@@ -116,7 +116,7 @@ pub fn view(spec: &Value, state: &Value, viewer: &Viewer, now: DateTime<Utc>) ->
     };
     let mut out = Map::new();
     for c in all(spec) {
-        let lock = super::actions::coll_locked(state, c.name, now);
+        let lock = super::actions::coll_locked(state, c.name, now) || super::actions::vote_closes(spec, state, c.name, now);
         let v = match part(&c, state, viewer, revealed) {
             Part::Rows { rows, count } => {
                 let rows: Vec<Value> = rows
@@ -175,6 +175,9 @@ pub fn put(ctx: &KitCtx, state: &mut Value, actor: &Viewer, body: &Value) -> Res
     if matches!(actor, Viewer::Guest(_)) && super::actions::coll_locked(state, c.name, ctx.now) {
         return Err(KitError::NotNow(format!("{:?} is closed right now.", c.name)));
     }
+    if matches!(actor, Viewer::Guest(_)) && super::actions::vote_closes(ctx.spec, state, c.name, ctx.now) {
+        return Err(KitError::NotNow(super::actions::VOTE_CLOSED.into()));
+    }
     let values = check_values(ctx, state, &c, actor, body.get("values"))?;
     let at = ctx.now.to_rfc3339_opts(SecondsFormat::Secs, true);
     if !state["rows"].is_object() {
@@ -210,6 +213,9 @@ pub fn take_back(ctx: &KitCtx, state: &mut Value, actor: &Viewer, body: &Value) 
     let id = body.get("id").and_then(Value::as_str).ok_or_else(|| KitError::BadInput("Say which row (id).".into()))?;
     if super::actions::coll_locked(state, c.name, ctx.now) {
         return Err(KitError::NotNow(format!("{:?} is closed right now.", c.name)));
+    }
+    if super::actions::vote_closes(ctx.spec, state, c.name, ctx.now) {
+        return Err(KitError::NotNow(super::actions::VOTE_CLOSED.into()));
     }
     let list = state["rows"][c.name].as_array_mut();
     let at = list.as_ref().and_then(|l| l.iter().position(|r| r["id"].as_str() == Some(id) && owner(r) == who));

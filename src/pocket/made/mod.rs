@@ -93,7 +93,7 @@ impl Kit for Made {
             // The core lets only the host send these (HOST_ACTIONS)
             "draw" => actions::draw(ctx, state, body),
             "timer_start" => actions::timer_start(ctx, state, body),
-            "timer_stop" => actions::timer_stop(state, body),
+            "timer_stop" => actions::timer_stop(ctx, state, body),
             "lock" => actions::lock(ctx, state, body, true),
             "unlock" => actions::lock(ctx, state, body, false),
             "turn_next" => actions::turn(ctx, state, body, false),
