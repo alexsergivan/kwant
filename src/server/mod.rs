@@ -64,6 +64,7 @@ pub mod quiz_draft_api;
 pub mod quizmaster_tools;
 pub mod santa_tool;
 pub mod desk_tool;
+pub mod pocket_make_tool;
 pub mod quizmaster_live;
 pub mod desk_turns;
 pub mod outsider_turns;

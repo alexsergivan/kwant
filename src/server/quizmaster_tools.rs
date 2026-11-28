@@ -321,7 +321,7 @@ pub async fn call(state: &AppState, scope: &SelfScope, name: &str, args: &Value)
     }
 }
 
-fn template() -> String {
+pub(crate) fn template() -> String {
     format!(
         "{}\n\nTemplate (a complete, valid quiz; its quotes are samples, so write your own from pages you name):\n{}\n\nCall pocket_create again with `spec` set to your whole quiz.",
         preset::SKILL.trim(),
