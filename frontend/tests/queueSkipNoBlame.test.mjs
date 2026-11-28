@@ -28,6 +28,10 @@ test('hand skip within 10 minutes: skipped at, and the host can bring it back un
   assert.doesNotMatch(sk.lead, /nobody came|missed/);
   assert.equal(sk.after, 'Now 6 waiting, about 18 minutes. Or ask at the counter.');
   assert.match(m.skippedLines(t, view({ host_name: '' }), T0).lead, /the host can bring it back/);
+  // A host line that names a place: both lines name the same counter (Mira's design check, change 2).
+  const side = m.skippedLines(t, view({ line: 'Pick up at the side counter' }), T0 + 2 * 60000);
+  assert.match(side.lead, /show this at the side counter: Tine can bring it back/);
+  assert.match(side.after, /Or ask at the side counter\.$/);
 });
 
 test('hand skip after 10 minutes: the plain "was skipped at" lead, no bring-back, no blame', () => {

@@ -139,12 +139,12 @@ export function skippedByHand(t: Ticket, v: QueueView): boolean {
 /** The skipped ticket's word, its lead and the line under Take. `now` is the box's clock in ms (for the 10-minute window). */
 export function skippedLines(t: Ticket, v: QueueView, now = Date.now()): { word: string; lead: string; after: string } {
   const m = minutesFor(v.waiting, v.avg_minutes);
-  const after = `Now ${fmt(v.waiting)} waiting${m == null ? '' : `, about ${minutes(m)}`}. Or ask at the counter.`;
+  const after = `Now ${fmt(v.waiting)} waiting${m == null ? '' : `, about ${minutes(m)}`}. Or ask at ${where(v)}.`;
   if (skippedByHand(t, v)) {
     const done = Date.parse(t.done_at ?? '');
     const until = done + RECALL_MINUTES * 60_000;
     const lead = `Number #${t.number} was skipped at ${clock(t.done_at ?? '')}.`;
-    const back = now < until ? ` If you're here, show this at the counter: ${hostOf(v)} can bring it back until ${clock(new Date(until).toISOString())}.` : '';
+    const back = now < until ? ` If you're here, show this at ${where(v)}: ${hostOf(v)} can bring it back until ${clock(new Date(until).toISOString())}.` : '';
     return { word: 'Skipped', lead: lead + back, after };
   }
   const at = t.called_at ? clock(t.called_at) : '';
