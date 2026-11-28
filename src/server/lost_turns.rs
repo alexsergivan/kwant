@@ -191,7 +191,8 @@ async fn waits_on_person(state: &AppState, turn_id: &str) -> bool {
 /// every app clears the chat's working status.
 async fn force_end(state: &AppState, turn: &ActiveTurn) {
     let _ = state.turns.end_hold(&turn.turn_id);
-    state.turns.end_turn(&turn.turn_id);
+    // "failed", as the turn_ended below says
+    state.turns.end_turn_as(&turn.turn_id, "failed");
     let _ = state.db.remove_running_turn(&turn.turn_id).await;
     let _ = state.event_sender.send(RuntimeEvent::TurnEnded {
         kwant_id: turn.kwant_id.clone(),

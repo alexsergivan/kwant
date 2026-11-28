@@ -161,3 +161,47 @@ async fn racing_duplicates_carry_the_first_messages_id() {
     assert_eq!(s, StatusCode::OK);
     assert_eq!((v["status"].as_str(), v["user_message_id"].as_str(), v["pending"].as_bool()), (Some("already_delivered"), Some(id.as_str()), Some(false)), "{v}");
 }
+
+/// last-outcome-in-status: GET /api/bots/status says how the bot's last turn ended, so an app that
+/// reloads can still show a bot whose last turn failed as failed.
+#[tokio::test]
+async fn the_status_says_how_the_last_turn_ended() {
+    let env = setup().await;
+    let fresh = status_of(&env, &env.a).await;
+    assert!(fresh.get("last_outcome").is_none() && fresh.get("last_finished_at").is_none(), "no turn yet, no keys: {fresh}");
+
+    let ended_as = |outcome: &'static str| {
+        let env = &env;
+        async move {
+            wait_for(&format!("the last turn to show as {outcome}"), || async {
+                let st = status_of(env, &env.a).await;
+                st["turn"].is_null() && st["last_outcome"] == outcome
+            })
+            .await;
+            let st = status_of(env, &env.a).await;
+            assert!(st["last_finished_at"].is_string(), "{st}");
+            st
+        }
+    };
+
+    send_direct(&env, &env.a, "hello REPLYTAG:lo1", json!({})).await;
+    wait_reply(&env, &env.a, "answer lo1").await;
+    let done = ended_as("completed").await;
+
+    // completed, then failed: failed
+    send_direct(&env, &env.a, "FAILTURN", json!({})).await;
+    let failed = ended_as("failed").await;
+    assert!(failed["last_finished_at"].as_str() >= done["last_finished_at"].as_str(), "{done} then {failed}");
+    let other = status_of(&env, &env.b).await;
+    assert!(other.get("last_outcome").is_none(), "another bot's status is its own: {other}");
+
+    // failed, then completed: completed (in a thread of its own: the mock engine reads the chat's
+    // history, where FAILTURN would fail every later turn)
+    let (s, thread) = call(&env.app, "POST", &format!("/api/kwants/{}/threads", env.a), Some(json!({"title": "after"}))).await;
+    assert_eq!(s, StatusCode::CREATED, "{thread}");
+    let tid = thread["id"].as_str().unwrap().to_string();
+    let (s, v) = send(&env, json!({"prompt": "again REPLYTAG:lo2", "sender_id": "user", "thread_id": tid})).await;
+    assert_eq!((s, v["status"].as_str()), (StatusCode::OK, Some("dispatched")), "{v}");
+    wait_reply(&env, &tid, "answer lo2").await;
+    ended_as("completed").await;
+}
