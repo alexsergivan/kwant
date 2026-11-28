@@ -93,7 +93,8 @@ pub fn part<'s>(c: &Coll, state: &'s Value, viewer: &Viewer, revealed: bool) -> 
     match (c.read, viewer) {
         ("everyone", _) => every(),
         ("after_reveal", _) if revealed => every(),
-        ("mine", Viewer::Guest(id)) => own(id.as_str(), None),
+        // RED PROOF (do not merge): mine leaks every row to every guest
+        ("mine", Viewer::Guest(_)) => every(),
         ("mine", _) => Part::Count(all.len()),
         ("host", Viewer::Guest(id)) => own(id.as_str(), None),
         ("host", Viewer::Host) => every(),
