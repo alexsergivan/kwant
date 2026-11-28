@@ -641,6 +641,12 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
             list.push(super::desk_tool::tool());
         }
     }
+    // pa12-V1: "Make your own", path (a) remix, only while L1's switch lets `made` through
+    if super::pocket_make_tool::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
+            list.push(super::pocket_make_tool::tool());
+        }
+    }
     // party-create-from-chat: RSVP / sign-up / vote and the photo wall, each behind the switch (on, or naming `gather` / `wall`)
     if super::gather_tool::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
@@ -692,6 +698,12 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
     if super::desk_tool::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.push(super::desk_tool::tool());
+        }
+    }
+    // pa12-V1: "Make your own", path (a) remix, only while L1's switch lets `made` through
+    if super::pocket_make_tool::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
+            list.push(super::pocket_make_tool::tool());
         }
     }
     // party-create-from-chat: RSVP / sign-up / vote and the photo wall, each behind the switch (on, or naming `gather` / `wall`)
@@ -1608,6 +1620,7 @@ async fn call_tool(
         n if super::quizmaster_tools::handles(n) => super::quizmaster_tools::call(state, scope, n, args).await,
         n if super::santa_tool::handles(n) => super::santa_tool::call(state, scope, args).await,
         n if super::desk_tool::handles(n) => super::desk_tool::call(state, scope, args).await,
+        n if super::pocket_make_tool::handles(n) => super::pocket_make_tool::call(state, scope, args).await,
         n if super::gather_tool::handles(n) => super::gather_tool::call(state, scope, args).await,
         n if super::wall_tool::handles(n) => super::wall_tool::call(state, scope, args).await,
         n if super::smart_results::present_result_handles(n) => super::smart_results::present_result_call(state, scope, n, args).await,
