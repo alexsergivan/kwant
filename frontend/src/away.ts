@@ -25,6 +25,10 @@ export interface AwayItem {
   link: AwayLink;
   /** Questions only. */
   choices?: string[];
+  /** inbox-question-job-and-time (m8), questions only: the hand-off the question was asked in and its lead's name.
+   * Null for a question in a direct chat, a channel or a plain thread; older servers leave them out. */
+  job_title?: string | null;
+  job_lead?: string | null;
   /** routine-run-again-id, routine_run items only: the run's routine (`POST /api/routines/:id/run`). Null on other
    * kinds; older servers leave it out. */
   routine_id?: string | null;
@@ -143,6 +147,19 @@ export function windowLabel(since: string, now: number = Date.now()): string {
 export type Tone = 'amber' | 'emerald' | 'rose' | 'sky' | 'zinc';
 
 /** Short label and colour for an item's kind and status. */
+/**
+ * inbox-question-job-and-time (m8): the muted line under a question asked inside a hand-off, so two running jobs
+ * can be told apart: "for Compare three caterers · Planner" ("for <job>" when the lead is gone). Empty for any other
+ * item, and for a question with no job.
+ */
+export function questionJob(item: Pick<AwayItem, 'job_title' | 'job_lead'> & { kind: string }): string {
+  if (item.kind !== 'question') return '';
+  const job = typeof item.job_title === 'string' ? item.job_title.trim() : '';
+  if (!job) return '';
+  const lead = typeof item.job_lead === 'string' ? item.job_lead.trim() : '';
+  return lead ? `for ${job} · ${lead}` : `for ${job}`;
+}
+
 export function itemLabel(item: Pick<AwayItem, 'kind' | 'status' | 'cause'> & Partial<Pick<AwayItem, 'fix_in'>>): { label: string; tone: Tone } {
   switch (item.kind) {
     case 'question':

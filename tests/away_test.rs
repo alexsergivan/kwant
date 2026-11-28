@@ -82,6 +82,25 @@ async fn set_time(state: &AppState, table: &str, column: &str, id: &str, t: Date
     pool.close().await;
 }
 
+/// Backdates a finished delegation: its `ended_at` and, when it has one, its result message, so
+/// the row's time (the later of the two, inbox-question-job-and-time m9) is `t` as in real use,
+/// where the result message is written before the delegation ends.
+async fn set_ended(state: &AppState, id: &str, t: DateTime<Utc>) {
+    set_time(state, "delegations", "ended_at", id, t).await;
+    let pool = SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect(&format!("sqlite://{}", state.config.data_dir.join("kwnt.db").display()))
+        .await
+        .unwrap();
+    sqlx::query("UPDATE messages SET created_at = ? WHERE id = (SELECT result_message_id FROM delegations WHERE id = ?)")
+        .bind(t)
+        .bind(id)
+        .execute(&pool)
+        .await
+        .unwrap();
+    pool.close().await;
+}
+
 fn reply(kwant: &str, text: &str) -> NewMessage {
     NewMessage {
         channel_id: None,
@@ -200,9 +219,9 @@ async fn away_lists_every_kind_filters_caps_and_marks_seen() {
     // Finished: a delegation with a result, a successful routine run; one too old for the default window
     let (done, done_thread) = delegation(&state, &lead.id, &spec.id, "Write the brief", "completed", Some("## Brief\nAll three sections drafted.")).await;
     let (old, _) = delegation(&state, &lead.id, &spec.id, "Ancient", "completed", Some("old")).await;
-    set_time(&state, "delegations", "ended_at", &old, now - Duration::days(8)).await;
+    set_ended(&state, &old, now - Duration::days(8)).await;
     let (two_days, _) = delegation(&state, &lead.id, &spec.id, "Two days ago", "completed", Some("ok")).await;
-    set_time(&state, "delegations", "ended_at", &two_days, now - Duration::days(2)).await;
+    set_ended(&state, &two_days, now - Duration::days(2)).await;
     let routine = state
         .db
         .create_routine(&NewRoutine {
@@ -367,7 +386,7 @@ async fn away_lists_are_capped_at_50_newest_first() {
     let mut failed = Vec::new();
     for i in 0..60 {
         let (d, _) = delegation(&state, lead, spec, &format!("done {i}"), "completed", Some("ok")).await;
-        set_time(&state, "delegations", "ended_at", &d, now - Duration::minutes(60 - i)).await;
+        set_ended(&state, &d, now - Duration::minutes(60 - i)).await;
         done.push(d);
         let (f, _) = delegation(&state, lead, spec, &format!("failed {i}"), "failed", Some("boom")).await;
         set_time(&state, "delegations", "ended_at", &f, now - Duration::minutes(60 - i)).await;

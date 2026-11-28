@@ -34,7 +34,7 @@ import { CheckMarker, DoneCheck } from './DoneCheck';
 import { usePhoneLayout } from '../usePhoneLayout';
 import { approvalFromAway, awayTitle, lateAnswerText } from '../approvals';
 import { type HumanStep, toolsFixOf } from '../humanSteps';
-import { ApprovalDecision, AwayItem, awayApi, failureNotice, resolveFromList, awaySummary, itemLabel, stoppedAction, windowLabel } from '../away';
+import { ApprovalDecision, AwayItem, awayApi, failureNotice, resolveFromList, awaySummary, itemLabel, questionJob, stoppedAction, windowLabel } from '../away';
 import { InboxGroup, InboxItem, ReviewItem, isBeingChecked, isReview, pendingHeld, reviewWord } from '../api/inbox';
 import {
   BatchRow,
@@ -337,6 +337,8 @@ const AnyRow: React.FC<RowProps> = ({ item: raw, selected, focusable, wide, busy
   const doneRow = !review && isDoneGroup(item.group) && opensInPane(item);
   // done-check: one word before the summary on done rows whose item says how it was checked.
   const check = isDoneGroup(item.group) ? knownChecked(item.checked) : null;
+  // m8: which job a teammate's question belongs to, "for Compare three caterers · Planner"
+  const job = questionJob(item);
   return (
     <li role="presentation" className={`relative rounded-xl border transition-colors ${tint}`} data-row={item.id} data-group={item.group}>
       <div
@@ -378,6 +380,11 @@ const AnyRow: React.FC<RowProps> = ({ item: raw, selected, focusable, wide, busy
             </time>
           </span>
           <span className="block mt-0.5 text-sm font-semibold text-zinc-100 break-words max-md:line-clamp-3 md:truncate">{title}</span>
+          {job && (
+            <span className="block mt-0.5 text-xs text-zinc-400 truncate" title={job} data-question-job>
+              {job}
+            </span>
+          )}
           <span className="block mt-1 text-xs">
             {review && (doneSummary || check) ? (
               <span className="block text-zinc-400 max-md:line-clamp-2 md:truncate" data-done-summary>

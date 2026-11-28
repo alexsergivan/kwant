@@ -272,6 +272,10 @@ pub(super) fn item(row: AwayRow) -> Value {
         v["details"] = masked_details(details);
     }
     if row.kind == "question" {
+        // inbox-question-job-and-time (m8): the hand-off it was asked in and its lead, null for a
+        // question in a direct chat, a channel or a plain thread ("for <job> · <lead>" under it)
+        v["job_title"] = json!(row.job_title);
+        v["job_lead"] = json!(row.job_lead);
         v["choices"] = row
             .choices
             .as_deref()
@@ -762,6 +766,8 @@ mod tests {
             choices: None,
             routine_id: None,
             fallback: None,
+            job_title: None,
+            job_lead: None,
         };
         let limit = item(row("You've hit your session limit · resets 3am (Europe/Berlin)"));
         assert_eq!(limit["summary"], "Finished");
@@ -773,5 +779,36 @@ mod tests {
     fn summaries_mask_url_passwords_and_bearer_tokens() {
         let s = summarize("failed: postgres://bob:hunter2@db:5432/x with Authorization: Bearer abc123");
         assert_eq!(s, "failed: postgres://bob:[redacted]@db:5432/x with Authorization: Bearer [redacted]");
+    }
+
+
+    /// inbox-question-job-and-time (m8): a question item carries its hand-off's title and lead,
+    /// null when it has none; other kinds don't carry them.
+    #[test]
+    fn a_question_item_carries_its_job() {
+        let row = |kind: &str, job: Option<&str>, lead: Option<&str>| AwayRow {
+            kind: kind.into(),
+            id: "q1".into(),
+            kwant_id: "k1".into(),
+            kwant_name: Some("Researcher".into()),
+            title: "Which caterer budget?".into(),
+            status: "open".into(),
+            body: None,
+            at: chrono::Utc::now(),
+            thread_id: Some("t1".into()),
+            channel_id: None,
+            direct_kwant_id: None,
+            choices: Some("[]".into()),
+            routine_id: None,
+            fallback: None,
+            job_title: job.map(Into::into),
+            job_lead: lead.map(Into::into),
+        };
+        let v = item(row("question", Some("Compare three caterers"), Some("Planner")));
+        assert_eq!((v["job_title"].clone(), v["job_lead"].clone()), (json!("Compare three caterers"), json!("Planner")));
+        let v = item(row("question", None, None));
+        assert_eq!((v["job_title"].clone(), v["job_lead"].clone()), (Value::Null, Value::Null));
+        let v = item(row("delegation", Some("Compare three caterers"), Some("Planner")));
+        assert!(v.get("job_title").is_none() && v.get("job_lead").is_none(), "{v}");
     }
 }

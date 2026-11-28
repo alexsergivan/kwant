@@ -19,6 +19,7 @@ import {
   awayApi,
   isAwayEmpty,
   itemLabel,
+  questionJob,
   relativeTime,
   windowLabel,
   withoutItem,
@@ -92,6 +93,11 @@ export const AwayView: React.FC<AwayViewProps> = ({ data, loading, error, notice
             </div>
             {/* The question is the point of the card: up to 3 lines on a phone (0.6.13 spec C3), one line on desktop. */}
             <p className="mt-0.5 text-sm font-medium text-zinc-100 break-words max-md:line-clamp-6 md:truncate">{title}</p>
+            {questionJob(item) && (
+              <p className="text-xs text-zinc-400 truncate" title={questionJob(item)} data-question-job>
+                {questionJob(item)}
+              </p>
+            )}
             {/* A question's summary just lists its choices, which are buttons below. */}
             {awaySummary(item) && item.kind !== 'approval' && !(item.kind === 'question' && item.choices?.length) && <p className="text-xs text-zinc-400 truncate">{awaySummary(item)}</p>}
           </div>
