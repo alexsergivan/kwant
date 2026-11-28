@@ -5695,6 +5695,8 @@ pub struct SettingsResponse {
     /// Pocket apps: `off` (the default), `on` (every kit) or the kits that are on (`santa`,
     /// `quiz,santa`), in the normal form `POST` stores (see `crate::pocket::Switch`).
     pub pocket_apps: String,
+    /// pa12 L1: "Make your own" (`made`), `on` or `off` (the default); it also needs `pocket_apps`.
+    pub pocket_make: String,
     /// Every kit this build has, for the Settings control.
     pub pocket_kits: Vec<&'static str>,
 }
@@ -5762,6 +5764,8 @@ pub struct SaveSettingsPayload {
     /// `off`, `on` or a comma list of kit ids; stored in its normal form (`crate::pocket::setting_value`).
     /// A value that names no kit is refused; unknown names next to known ones are dropped.
     pub pocket_apps: Option<String>,
+    /// pa12 L1: `on` or `off` (`crate::pocket::make_setting_value`); anything else is refused.
+    pub pocket_make: Option<String>,
 }
 
 pub async fn get_settings(State(state): State<AppState>) -> Result<Json<SettingsResponse>, StatusCode> {
@@ -5834,7 +5838,8 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         automation_discovery_daily_cap: super::missions::discovery::daily_cap(&state).await,
         truth_ledger: super::missions::truth_ledger::mode(&state).await.into(),
         fact_dispute_scan: super::missions::truth_ledger::scan_enabled(&state).await,
-        pocket_apps: crate::pocket::switch(&state.db).await.stored(),
+        pocket_apps: crate::pocket::stored_setting(&state.db).await,
+        pocket_make: if crate::pocket::make_on(&state.db).await { "on" } else { "off" }.into(),
         pocket_kits: crate::pocket::kits::kit_ids(),
     }))
 }
@@ -5922,6 +5927,11 @@ pub async fn save_settings(
         return bad(e);
     }
     let pocket_apps = match payload.pocket_apps.as_deref().map(crate::pocket::setting_value) {
+        Some(Err(e)) => return bad(e),
+        Some(Ok(v)) => Some(v),
+        None => None,
+    };
+    let pocket_make = match payload.pocket_make.as_deref().map(crate::pocket::make_setting_value) {
         Some(Err(e)) => return bad(e),
         Some(Ok(v)) => Some(v),
         None => None,
@@ -6138,13 +6148,26 @@ pub async fn save_settings(
     if let Some(city) = location {
         let _ = state.db.set_setting(super::bot_actions::LOCATION_SETTING, &city).await;
     }
+    if let Some(v) = pocket_make {
+        if let Err(e) = state.db.set_setting(crate::pocket::MAKE_SETTING, v).await {
+            tracing::warn!("pocket apps: saving pocket_make failed: {e}");
+            return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Could not save pocket_make" }))));
+        }
+    }
     // The guest port's listener reads the switch every few seconds, so no restart is needed
     if let Some(v) = pocket_apps {
         if let Err(e) = state.db.set_setting(crate::pocket::SETTING, &v).await {
             tracing::warn!("pocket apps: saving the switch failed: {e}");
             return Err((StatusCode::INTERNAL_SERVER_ERROR, Json(json!({ "error": "Could not save pocket_apps" }))));
         }
-        return Ok(Json(json!({ "status": "saved", "pocket_apps": v })));
+        let mut out = json!({ "status": "saved", "pocket_apps": v });
+        if let Some(m) = pocket_make {
+            out["pocket_make"] = json!(m);
+        }
+        return Ok(Json(out));
+    }
+    if let Some(m) = pocket_make {
+        return Ok(Json(json!({ "status": "saved", "pocket_make": m })));
     }
 
     Ok(Json(json!({ "status": "saved" })))
