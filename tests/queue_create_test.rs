@@ -4,10 +4,17 @@
 //! fields and rules; a queue makes a pocket of kit `queue` owned by the bot, with the turn's chat
 //! as its origin and `until` kept as the kit's `hours.until`. A bad `call_minutes` or `until` is
 //! refused in words and makes nothing.
+//!
+//! queue-card-in-chat (Mira's ux-pass-queue-ticket fix #2): the reply that carries the call gets a
+//! `pocket` block of kit `queue` whose `queue` part is what `GET /api/pockets/:code` gives the
+//! card (the kit's host view, its join and `ended_at`). Another bot's or another space's reply
+//! never carries this bot's queue, and the switch off attaches no card.
 
 mod quizmaster_support;
 
-use kwnt::db::models::Kwant;
+use kwnt::db::models::{Kwant, Message, MessageExtra, NewChannel, NewKwant, NewMessage};
+use kwnt::db::spaces::{NewSpace, SpaceId};
+use kwnt::mcp::SELF_SERVER_NAME;
 use kwnt::server::continuity::TurnOrigin;
 use quizmaster_support::{setup, tool, tool_names, turn, turn_in, Env};
 use serde_json::{json, Value};
@@ -137,4 +144,189 @@ async fn the_switch_off_refuses_and_makes_nothing() {
         assert!(err, "{value}: {t}");
     }
     assert!(e.state.db.pocket_list().await.unwrap().is_empty(), "nothing made");
+}
+
+/// A turn's record of its own `queue_create` call, as the self server writes it.
+fn call(args: Value, status: &str, result: &str) -> Value {
+    json!({"id": "call-queue_create", "name": format!("{SELF_SERVER_NAME}__queue_create"), "server": SELF_SERVER_NAME, "tool": "queue_create",
+           "arguments": args, "status": status, "result": result})
+}
+
+/// A call as the Claude CLI engine records it: "allowed", with no `result`.
+fn claude_call(args: Value) -> Value {
+    json!({"id": "toolu-queue_create", "name": format!("mcp__{SELF_SERVER_NAME}__queue_create"), "server": SELF_SERVER_NAME,
+           "tool": "queue_create", "arguments": args, "status": "allowed"})
+}
+
+/// `bot`'s final reply in a chat (a bot's direct chat, or a channel), with the turn's tool calls
+/// and the card's `meta`.
+async fn reply_in(e: &Env, bot: &Kwant, direct: Option<&str>, channel: Option<&str>, calls: Vec<Value>, meta: Option<Value>) -> Message {
+    let msg = NewMessage {
+        channel_id: channel.map(Into::into),
+        direct_kwant_id: direct.map(Into::into),
+        sender_role: "kwant".into(),
+        sender_id: bot.name.clone(),
+        text: "Your queue is open: share the link.".into(),
+        reasoning_content: None,
+        tool_calls: Some(Value::Array(calls)),
+        tokens_used: 0,
+    };
+    e.state.db.insert_message_with(&msg, &MessageExtra { meta, ..Default::default() }).await.unwrap()
+}
+
+async fn reply_as(e: &Env, bot: &Kwant, direct: &str, calls: Vec<Value>) -> Message {
+    reply_in(e, bot, Some(direct), None, calls, None).await
+}
+
+/// The person's message in a chat: the ask a turn answers.
+async fn ask_in(e: &Env, direct: Option<&str>, channel: Option<&str>) {
+    let msg = NewMessage {
+        channel_id: channel.map(Into::into),
+        direct_kwant_id: direct.map(Into::into),
+        sender_role: "user".into(),
+        sender_id: "user".into(),
+        text: "Give my bakery a take-a-number queue".into(),
+        reasoning_content: None,
+        tool_calls: None,
+        tokens_used: 0,
+    };
+    e.state.db.insert_message_with(&msg, &MessageExtra::default()).await.unwrap();
+}
+
+fn pocket(m: &Message) -> Option<Value> {
+    let b = m.results.as_ref()?.get("blocks")?.get(0)?.clone();
+    (b["type"] == json!("pocket")).then_some(b)
+}
+
+/// What the chat's `validQueue` (PocketQueue.tsx) needs to take the block, checked on the wire.
+fn assert_valid_queue_block(b: &Value) {
+    assert_eq!(b["kit"], "queue", "{b}");
+    assert!(["writing", "live", "ended"].contains(&b["state"].as_str().unwrap()), "{b}");
+    assert!(b["join"].is_null() && b["santa"].is_null() && b["desk"].is_null() && b["results"].is_null() && b["draft"].is_null(), "{b}");
+    let q = &b["queue"];
+    assert!(q.is_object(), "{b}");
+    assert!(["open", "paused", "closed", "ended"].contains(&q["state"].as_str().unwrap()), "{q}");
+    let title = q["spec"]["title"].as_str().unwrap();
+    assert!(!title.trim().is_empty() && title.chars().count() <= 80, "{q}");
+    let cm = q["spec"]["call_minutes"].as_u64().unwrap();
+    assert!((1..=10).contains(&cm), "{q}");
+    assert!(q["tickets"].is_array() && q["summary"].is_object(), "{q}");
+    assert!(q["next_number"].as_u64().is_some(), "{q}");
+    assert!(q.get("join").is_some() && q.get("ended_at").is_some(), "join and ended_at ride in the part: {q}");
+    for k in ["guest", "guest_id", "key", "host_key", "token", "pin"] {
+        assert!(!b.to_string().contains(&format!("\"{k}\":")), "{k} in {b}");
+    }
+}
+
+#[tokio::test]
+async fn the_reply_that_made_a_queue_gets_its_card_with_the_cards_own_host_view() {
+    let e = setup(true).await;
+    let bot = e.bot.clone();
+    let (code, text) = make_as(&e, &bot, bakery()).await;
+    assert!(text.contains("The person's chat already shows its card"), "{text}");
+    let m = reply_as(&e, &bot, &bot.id, vec![call(bakery(), "ok", &text)]).await;
+    let b = pocket(&m).unwrap_or_else(|| panic!("a pocket block on the reply: {:?}", m.results));
+    eprintln!("queue block: {b}");
+    assert_valid_queue_block(&b);
+    assert_eq!((b["code"].clone(), b["name"].clone(), b["state"].clone()), (json!(code), json!("Tine's Bakery"), json!("live")));
+    assert_eq!(b["provenance"]["ref"], json!(format!("pocket:{code}")));
+    let q = &b["queue"];
+    assert_eq!(q["state"], "open", "{q}");
+    assert_eq!(q["spec"]["title"], "Tine's Bakery", "{q}");
+    assert_eq!(q["spec"]["line"], "Pick up at the side counter", "{q}");
+    assert_eq!(q["spec"]["host_name"], "Tine", "{q}");
+    assert_eq!(q["spec"]["hours"], json!({"until": "12:00"}), "{q}");
+    assert_eq!(q["hours_until"], "12:00", "{q}");
+    assert_eq!((q["next_number"].clone(), q["tickets"].clone(), q["ended_at"].clone()), (json!(1), json!([]), Value::Null), "{q}");
+    assert_eq!(q["summary"]["waiting"], json!(0), "{q}");
+
+    // The card's live read (GET /api/pockets/:code) gives the host's view of the same pocket
+    let snap = kwnt::pocket::snapshot(&e.state, &code).await.unwrap().expect("the pocket");
+    let read = kwnt::pocket::view_json(&snap, &kwnt::pocket::kits::Viewer::Host, chrono::Utc::now());
+    let hv = &read["view"];
+    for k in ["spec", "state", "hours_until", "closes_at", "next_number", "tickets", "now_serving", "pause_text", "close_text"] {
+        assert_eq!(q[k], hv[k], "{k}: {q} vs {hv}");
+    }
+    for k in ["served_today", "waiting", "days", "served_total"] {
+        assert_eq!(q["summary"][k], hv["summary"][k], "summary {k}");
+    }
+}
+
+#[tokio::test]
+async fn another_bots_or_another_spaces_reply_never_carries_this_bots_queue() {
+    let e = setup(true).await;
+    let bot = e.bot.clone();
+    let (code, text) = make_as(&e, &bot, bakery()).await;
+    // Another bot's reply naming this bot's queue, in its own chat or in this bot's
+    let other = e.other.clone();
+    let m = reply_as(&e, &other, &other.id, vec![call(bakery(), "ok", &text)]).await;
+    assert_eq!(pocket(&m), None, "{:?}", m.results);
+    let m = reply_as(&e, &bot, &other.id, vec![call(bakery(), "ok", &text)]).await;
+    assert_eq!(pocket(&m), None, "{:?}", m.results);
+
+    // A reply under this bot's name in a channel of another space, naming this bot or not
+    let side = e.state.db.create_space(&NewSpace { name: "Side".into(), icon: "S".into(), color: None, this_machine_enabled: true }).await.unwrap();
+    let side_id = SpaceId::new(side.id.clone());
+    let twin = e
+        .state
+        .db
+        .create_kwant(
+            &side_id,
+            &NewKwant {
+                name: bot.name.clone(),
+                title: "Twin".into(),
+                persona_prompt: String::new(),
+                soul: String::new(),
+                avatar_sprite: String::new(),
+                driver_type: bot.driver_type.clone(),
+                preferred_model: bot.preferred_model.clone(),
+            },
+        )
+        .await
+        .unwrap();
+    let channel = e
+        .state
+        .db
+        .create_channel(
+            &side_id,
+            &NewChannel { name: "bakery".into(), description: None, lead_kwant_id: twin.id.clone(), member_kwants: vec![twin.id.clone()], routing_mode: "lead".into() },
+        )
+        .await
+        .unwrap();
+    for meta in [None, Some(json!({"kwant_id": bot.id}))] {
+        let m = reply_in(&e, &bot, None, Some(&channel.id), vec![call(bakery(), "ok", &text)], meta.clone()).await;
+        assert_eq!(pocket(&m), None, "another space's queue ({meta:?}): {:?}", m.results);
+        assert!(!serde_json::to_string(&m.results).unwrap().contains(&code));
+    }
+
+    // A code no queue has is no card
+    let no_such = "Pocket app · Queue [NOSUCH1] \"x\" is made.";
+    let m = reply_as(&e, &bot, &bot.id, vec![call(bakery(), "ok", no_such)]).await;
+    assert_eq!(pocket(&m), None, "no such queue: {:?}", m.results);
+}
+
+#[tokio::test]
+async fn a_claude_engine_reply_gets_the_queue_it_made_this_turn_and_the_switch_off_none() {
+    let e = setup(true).await;
+    let bot = e.bot.clone();
+    ask_in(&e, Some(&bot.id), None).await;
+    let (code, text) = make_as(&e, &bot, bakery()).await;
+    let m = reply_as(&e, &bot, &bot.id, vec![claude_call(bakery())]).await;
+    let b = pocket(&m).unwrap_or_else(|| panic!("the queue card under a Claude reply: {:?}", m.results));
+    assert_valid_queue_block(&b);
+    assert_eq!((b["code"].clone(), b["name"].clone()), (json!(code), json!("Tine's Bakery")), "{b}");
+    // The rules and a denied call made nothing
+    for args in [json!({}), json!({"spec": null}), json!({"title": ""})] {
+        assert_eq!(pocket(&reply_as(&e, &bot, &bot.id, vec![claude_call(args.clone())]).await), None, "{args}");
+    }
+    let mut denied = claude_call(bakery());
+    denied["status"] = json!("denied");
+    assert_eq!(pocket(&reply_as(&e, &bot, &bot.id, vec![denied]).await), None, "denied");
+
+    // Switched off, or on for other kits only: no card
+    for value in ["off", "desk", "santa, quiz"] {
+        e.state.db.set_setting(kwnt::pocket::SETTING, value).await.unwrap();
+        let m = reply_as(&e, &bot, &bot.id, vec![call(bakery(), "ok", &text)]).await;
+        assert_eq!(pocket(&m), None, "{value}");
+    }
 }

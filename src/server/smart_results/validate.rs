@@ -565,6 +565,110 @@ fn check_pocket(p: &super::Pocket) -> Result<(), String> {
     if let Some(d) = &p.desk {
         check_desk(p, d)?;
     }
+    // queue-card-in-chat: kit `queue` carries `queue` and nothing else does
+    if (p.kit == crate::pocket::queue::ID) != p.queue.is_some() {
+        return Err("a pocket's queue part".into());
+    }
+    if let Some(q) = &p.queue {
+        check_queue(p, q)?;
+    }
+    Ok(())
+}
+
+/// A customer's or the host's own words on a queue's card (the client's `optPlain`): absent, null,
+/// empty or a string within `max` with no control character but a tab or newline. The card shows it
+/// as plain text, so a `<` a guest typed doesn't refuse the host's card.
+fn opt_plain(v: Option<&serde_json::Value>, max: usize) -> bool {
+    match v {
+        None | Some(serde_json::Value::Null) => true,
+        Some(serde_json::Value::String(t)) => utf16_len(t) <= max && !t.chars().any(|c| (c as u32) < 0x20 && c != '\t' && c != '\n'),
+        Some(_) => false,
+    }
+}
+
+/// Keys that would let someone act as a customer or the host on a queue's card: a guest's id, a key
+/// or a token, at any depth.
+const QUEUE_SECRET_KEYS: [&str; 8] = ["guest", "guest_id", "player_id", "key", "host_key", "guest_key", "token", "pin"];
+
+/// A take-a-number queue's card (frontend `validQueue` and `validPocket`'s queue rules): writing,
+/// live or ended; its join rides inside it (never at the top, never a quick tunnel); a known
+/// state, whole counts, at most 260 tickets with distinct numbers and at most one called, first
+/// names within 40 characters; no guest id, key or token.
+fn check_queue(p: &super::Pocket, q: &serde_json::Value) -> Result<(), String> {
+    use serde_json::Value;
+    if !matches!(p.state.as_str(), "writing" | "live" | "ended") {
+        return Err(format!("a queue pocket {:?}", p.state));
+    }
+    if p.join.is_some() || p.santa.is_some() || p.desk.is_some() || p.results.is_some() {
+        return Err("a queue pocket with another kit's part".into());
+    }
+    let Some(o) = q.as_object() else { return Err("a queue part that isn't an object".into()) };
+    if let Some(k) = find_key(q, &QUEUE_SECRET_KEYS, 0) {
+        return Err(format!("a queue part carrying {k}"));
+    }
+    match o.get("state").and_then(Value::as_str) {
+        Some("setup" | "open" | "paused" | "closed" | "ended") => {}
+        None if p.state == "writing" => {}
+        _ => return Err("queue state".into()),
+    }
+    let spec = o.get("spec").filter(|s| !s.is_null());
+    if let Some(sp) = spec {
+        if !sp.is_object() {
+            return Err("queue spec".into());
+        }
+        opt_pocket_text(sp.get("title").filter(|t| t.as_str() != Some("")), 80, "queue title")?;
+        opt_pocket_text(sp.get("line"), 80, "queue line")?;
+        opt_pocket_text(sp.get("host_name"), 40, "queue host")?;
+        if sp.get("call_minutes").is_some_and(|c| !c.is_null() && c.as_u64().is_none_or(|n| !(1..=10).contains(&n))) {
+            return Err("queue call minutes".into());
+        }
+    }
+    let count_ok = |v: Option<&Value>| v.is_none_or(|v| v.is_null() || v.as_u64().is_some_and(|n| n <= 1_000_000));
+    for k in ["closed_waiting", "now_serving", "next_number"] {
+        if !count_ok(o.get(k)) {
+            return Err(format!("queue {k}"));
+        }
+    }
+    if let Some(s) = o.get("summary").filter(|s| !s.is_null()) {
+        let Some(s) = s.as_object() else { return Err("queue summary".into()) };
+        for k in ["served_today", "skipped_today", "left_today", "waiting", "avg_minutes", "longest_wait_minutes", "days", "served_total", "avg_total_minutes"] {
+            if !count_ok(s.get(k)) {
+                return Err(format!("queue summary {k}"));
+            }
+        }
+    }
+    for (k, max) in [("pause_text", 60), ("close_text", 140)] {
+        if !opt_plain(o.get(k), max) {
+            return Err(format!("queue {k}"));
+        }
+    }
+    let tickets = match o.get("tickets") {
+        None | Some(Value::Null) => &[][..],
+        Some(Value::Array(a)) if a.len() <= 260 => a.as_slice(),
+        Some(_) => return Err("queue tickets".into()),
+    };
+    let mut numbers = std::collections::HashSet::new();
+    let mut called = 0;
+    for t in tickets {
+        let n = t["number"].as_u64().filter(|n| (1..=100_000).contains(n)).ok_or("queue ticket number")?;
+        if !numbers.insert(n) {
+            return Err("queue ticket numbers".into());
+        }
+        match t["state"].as_str() {
+            Some("waiting" | "skipped") => {}
+            Some("called") => called += 1,
+            _ => return Err("queue ticket state".into()),
+        }
+        if !opt_plain(t.get("name"), 40) {
+            return Err("queue ticket name".into());
+        }
+    }
+    if called > 1 {
+        return Err("queue tickets called".into());
+    }
+    if let Some(j) = o.get("join").filter(|j| !j.is_null()) {
+        check_stable_join(j, "queue")?;
+    }
     Ok(())
 }
 

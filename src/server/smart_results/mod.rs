@@ -297,6 +297,12 @@ pub struct Pocket {
     /// booking times; never a guest's words, a PIN or a key. Absent on the wire when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desk: Option<serde_json::Value>,
+    /// queue-card-in-chat: a take-a-number queue's card (frontend `validQueue`), on kit `queue` only
+    /// and only there: what `GET /api/pockets/:code` gives the card (the kit's host view, its own
+    /// `join` and `ended_at`). Numbers, counts and the first names the host view shows; never a
+    /// guest's id, key or token. Absent on the wire when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queue: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

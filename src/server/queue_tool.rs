@@ -13,7 +13,7 @@
 //!   itself. There is no opening time yet (`opens_at` is later work), so the rules tell the bot never
 //!   to promise one.
 //! - Its answer starts with [`CARD_TEXT_HEAD`] and the pocket's code, the way `desk_create`'s does,
-//!   so the chat card (fix #2, a separate item) can find it.
+//!   so the chat card (queue-card-in-chat) can find it.
 //!
 //! Each bot reaches only the queues it made.
 
@@ -120,6 +120,11 @@ pub(crate) fn queue_arg(args: &Value) -> Result<Option<Value>, String> {
     Ok(has_title.then_some(v))
 }
 
+/// Whether a call's arguments hold a queue (what a made-this-turn card looks for).
+pub(crate) fn holds_queue(args: Option<&Value>) -> bool {
+    args.is_some_and(|a| matches!(queue_arg(a), Ok(Some(_))))
+}
+
 /// `until` as the kit takes it, `HH:MM` (an `H:MM` like "8:30" gets its leading zero). Also read
 /// from `hours.until`, the kit's own name for it.
 fn until_of(q: &Value) -> Result<Option<String>, String> {
@@ -220,6 +225,7 @@ fn made_text(code: &str, title: &str, closes: Option<&str>, join: Option<&Value>
     };
     format!(
         "{CARD_TEXT_HEAD}{code}] \"{title}\" is made. {hours}\n\
+         The person's chat already shows its card (who's waiting, Call next, Pause and Close for today), so don't repeat what's on it.\n\
          {link_line}\n\
          Keep your reply to two or three lines. Nobody can take a number until the person shares the link or the counter sign.\n\
          Never promise an opening time (kwant can't open a queue later) and never invent a phone or SMS reminder: customers are \
@@ -297,6 +303,7 @@ mod tests {
         let t = made_text("PQ7XK2", "Tine's Bakery", Some("12:00"), None);
         assert!(t.starts_with("Pocket app · Queue [PQ7XK2] \"Tine's Bakery\" is made."), "{t}");
         assert!(t.contains("It's open now and closes by itself at 12:00."), "{t}");
+        assert!(t.contains("The person's chat already shows its card (who's waiting, Call next, Pause and Close for today)"), "{t}");
         assert!(t.contains("No customer link works yet") && t.contains("so phones can't reach the queue. Tell the person that plainly, and don't write a link yourself."), "{t}");
         assert!(t.ends_with("never invent a phone or SMS reminder: customers are only told on the queue's own page."), "{t}");
         let t = made_text("PQ7XK2", "Q", None, Some(&json!({"mode": "anywhere", "anywhere_url": "https://q.example/j/PQ7XK2"})));
