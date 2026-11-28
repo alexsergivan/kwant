@@ -60,7 +60,7 @@ import {
 import { localClock } from '../clock';
 import { runAgain, runAgainId } from '../routineRunAgain';
 import { fixLabel } from '../toolFailures';
-import { type DeskItem, DeskNeedsRow, openDeskItems, useDeskAnswers, useDeskItems, withoutDeskItems } from './results/PocketDesk';
+import { type DeskChatLink, type DeskItem, DeskNeedsRow, openDeskItems, useDeskAnswers, useDeskItems, withoutDeskItems } from './results/PocketDesk';
 
 export const WIDE_QUERY = '(min-width: 1024px)';
 
@@ -929,6 +929,24 @@ export const InboxNew: React.FC<InboxNewProps> = ({
     writeItemParam(selValid && selectedId !== 'batch' ? selectedId : null);
   }, [selValid, selectedId]);
 
+  // desk-cap-row: "Answer in Bell's chat" opens the desk bot's chat the way a pocket row does (thread, else its 1:1).
+  const openDeskChat = useCallback(
+    (it: DeskItem, l: DeskChatLink) =>
+      onOpen({
+        kind: 'pocket',
+        id: it.id,
+        kwant_id: l.kwant_id,
+        kwant_name: it.kwant_name,
+        title: `${it.guest_name} needs you`,
+        summary: it.text,
+        status: 'waiting',
+        timestamp: it.asked_at,
+        link: { thread_id: l.thread_id, channel_id: null, direct_kwant_id: l.kwant_id },
+        message_id: null,
+      } as unknown as AwayItem),
+    [onOpen],
+  );
+
   const pick = useCallback(
     (i: InboxItem) => {
       if (opensInPane(i)) {
@@ -1115,7 +1133,7 @@ export const InboxNew: React.FC<InboxNewProps> = ({
                   {count > 0 || withBatch ? (
                     <ul role="presentation" className="space-y-2">
                       {deskRows.map((it) => (
-                        <DeskNeedsRow key={it.id} item={it} />
+                        <DeskNeedsRow key={it.id} item={it} onOpenChat={openDeskChat} />
                       ))}
                       {rows.slice(0, key === 'done' ? reviewsEnd : rows.length).map(row)}
                       {withBatch && (

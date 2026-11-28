@@ -5,6 +5,7 @@ import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf, realAskCount } from './components/Sidebar';
+import { chatAfterBotDelete, dropBotFromTeams, normalizeChannels, normalizeTeams } from './botDelete';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import type { MessageTarget } from './components/DoneDetail';
@@ -953,14 +954,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         // The space header counts bots too.
         onSpacesChangedRef.current();
         if (Array.isArray(tRes)) {
-          setTeams(tRes.map((t: any) => ({
-            ...t,
-            member_kwants: Array.isArray(t.member_kwants)
-              ? t.member_kwants
-              : typeof t.member_kwants === 'string'
-              ? JSON.parse(t.member_kwants || '[]')
-              : [],
-          })));
+          setTeams(normalizeTeams<Team>(tRes));
         }
       } catch {
         // The next change or a reload tries again; the list on screen stays as it was.
@@ -1313,18 +1307,11 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
             .catch(() => []),
         ]);
 
-        const normalizedTeams: Team[] = (tRes || []).map((t: any) => ({
-          ...t,
-          member_kwants: Array.isArray(t.member_kwants)
-            ? t.member_kwants
-            : typeof t.member_kwants === 'string'
-            ? JSON.parse(t.member_kwants || '[]')
-            : [],
-        }));
+        const normalizedTeams: Team[] = normalizeTeams<Team>(tRes);
 
         setKwants(kRes);
         if (Array.isArray(kRes)) setRosterFresh(true);
-        setChannels(cRes);
+        setChannels(normalizeChannels<Channel>(cRes));
         setTeams(normalizedTeams);
 
         // The chat asked for (a link, a reload, a notification, the last one open here) if it still exists.
@@ -2376,7 +2363,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setMessages(messagesCacheRef.current[team.id] || []);
       fetch('/api/channels')
         .then((r) => (r.ok ? r.json() : []))
-        .then((freshChannels: Channel[]) => {
+        .then((answer: unknown) => {
+          const freshChannels: Channel[] = normalizeChannels<Channel>(answer);
           setChannels(freshChannels);
           const match = teamChannelOf(freshChannels, team);
           if (match) {
@@ -3323,7 +3311,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         const readChannels = (): Promise<Channel[] | null> =>
           fetch('/api/channels')
             .then((r) => (r.ok ? r.json() : null))
-            .then((c) => (Array.isArray(c) ? (c as Channel[]) : null))
+            .then((c) => (Array.isArray(c) ? (normalizeChannels<Channel>(c) as Channel[]) : null))
             .catch(() => null);
         const fresh = opens === 'general' ? await readChannels() : null;
         setKwants((prev) => [...prev, created]);
@@ -3376,7 +3364,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         const data = await res.json().catch(() => null);
         return typeof data?.error === 'string' ? data.error : `Could not create the channel (HTTP ${res.status}).`;
       }
-      const created: Channel = await res.json();
+      const created: Channel = normalizeChannels<Channel>([await res.json()])[0];
       setChannels((prev) => (prev.some((c) => c.id === created.id) ? prev : [...prev, created]));
       messagesCacheRef.current[created.id] = [];
       setIsNewChannelOpen(false);
@@ -3422,7 +3410,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         // Fetch refreshed channels because backend auto-creates team-${created.name}
         const cRes = await fetch('/api/channels');
         if (cRes.ok) {
-          const freshChannels: Channel[] = await cRes.json();
+          const freshChannels: Channel[] = normalizeChannels<Channel>(await cRes.json());
           setChannels(freshChannels);
           const teamChan = teamChannelOf(freshChannels, created);
           if (teamChan) {
@@ -3460,7 +3448,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const cRes = await fetch('/api/channels');
       if (cRes.ok) {
-        const freshChannels: Channel[] = await cRes.json();
+        const freshChannels: Channel[] = normalizeChannels<Channel>(await cRes.json());
         setChannels(freshChannels);
         chan = freshChannels.find((c) => c.id === channelId) ?? teamChannelOf(freshChannels, created as Team);
       }
@@ -3505,7 +3493,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const cRes = await fetch('/api/channels');
       if (!cRes.ok) return;
-      const fresh: Channel[] = await cRes.json();
+      const fresh: Channel[] = normalizeChannels<Channel>(await cRes.json());
       const ids = new Set(fresh.map((c) => c.id));
       const gone = new Set(channelsRef.current.filter((c) => !ids.has(c.id)).map((c) => c.id));
       setChannels(fresh);
@@ -3579,7 +3567,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         // Refresh channels in case team name or description changed
         const cRes = await fetch('/api/channels');
         if (cRes.ok) {
-          const freshChannels: Channel[] = await cRes.json();
+          const freshChannels: Channel[] = normalizeChannels<Channel>(await cRes.json());
           setChannels(freshChannels);
         }
 
@@ -3614,7 +3602,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       });
       if (!res.ok) throw new Error((await serverError(res)) ?? `HTTP ${res.status}`);
       const cRes = await fetch('/api/channels');
-      if (cRes.ok) setChannels(await cRes.json());
+      if (cRes.ok) setChannels(normalizeChannels<Channel>(await cRes.json()));
       playSfx('click');
     } catch (err) {
       console.error('Failed updating team members:', err);
@@ -3642,7 +3630,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const cRes = await fetch('/api/channels');
       if (cRes.ok) {
-        const freshChannels: Channel[] = await cRes.json();
+        const freshChannels: Channel[] = normalizeChannels<Channel>(await cRes.json());
         setChannels(freshChannels);
       }
     } catch (err) {
@@ -4228,21 +4216,44 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     setDeletingKwant(null);
     setEditingKwant(null);
     setKwants((prev) => prev.filter((k) => k.id !== id));
-    if (!isChannel && selectedId === id) {
+    // #1301: it leaves its teams now; its messages there stay and render without it.
+    setTeams((prev) => dropBotFromTeams(prev, id));
+    const next = chatAfterBotDelete({
+      deletedId: id,
+      selectedId: selectedIdRef.current,
+      isChannel: isChannelRef.current,
+      channels: channelsRef.current,
+      botsLeft: kwants.filter((k) => k.id !== id),
+      generalChannelId: space.general_channel_id,
+    });
+    if (next.kind === 'channel') handleSelectChannel(next.channel);
+    else if (next.kind === 'bot') handleSelectKwant(next.bot);
+    else if (next.kind === 'none') {
       setOpenThreadId(null);
-      if (channels.length > 0) {
-        setSelectedId(channels[0].id);
-        setIsChannel(true);
-      }
+      setSelectedId('');
+      selectedIdRef.current = '';
+      setSelectedTeamId(null);
+      setMessages([]);
     }
+    if (next.kind === 'stay' || next.kind === 'none') playSfx('click');
+    delete messagesCacheRef.current[id];
     try {
       const [cRes, tRes] = await Promise.all([fetch('/api/channels'), fetch('/api/teams')]);
-      if (cRes.ok) setChannels(await cRes.json());
-      if (tRes.ok) setTeams(await tRes.json());
+      if (cRes.ok) {
+        const answer = await cRes.json();
+        if (Array.isArray(answer)) {
+          const fresh: Channel[] = normalizeChannels<Channel>(answer);
+          setChannels(fresh);
+          channelsRef.current = fresh;
+        }
+      }
+      // /api/teams sends member_kwants as a JSON string: stored raw, the next render threw and blanked the page.
+      if (tRes.ok) setTeams(normalizeTeams<Team>(await tRes.json()));
     } catch {
       /* the next refresh picks it up */
     }
-    playSfx('click');
+    // The space header counts bots too.
+    onSpacesChangedRef.current();
     pushToast(gone ? `Deleted ${gone.name}.` : 'Bot deleted.');
   };
 
@@ -4346,7 +4357,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     refreshRoster();
     fetch('/api/channels')
       .then((r) => (r.ok ? r.json() : null))
-      .then((c) => Array.isArray(c) && setChannels(c))
+      .then((c) => Array.isArray(c) && setChannels(normalizeChannels<Channel>(c)))
       .catch(() => undefined);
   };
   const getStartedCard =

@@ -173,6 +173,9 @@ async fn read_json(state: &AppState, s: &Snapshot) -> PResult<Value> {
     let now = chrono::Utc::now();
     let ctx = super::kits::KitCtx::new(&s.spec, &s.players, now);
     let mut summary = s.kit().map(|k| k.host_summary(&ctx, &s.kit_state));
+    if let Some(sum) = summary.as_mut() {
+        super::wall_pick::fill_delete_on(s, sum);
+    }
     // pa13a: the front desk card names the answering bot and its model (for the cost line)
     if s.kit().is_some_and(|k| k.answer_bot()) {
         if let Some(sum) = summary.as_mut() {
@@ -183,7 +186,11 @@ async fn read_json(state: &AppState, s: &Snapshot) -> PResult<Value> {
             }
         }
     }
-    let host_view = s.kit().map(|k| super::host_view_with_locks(s, k.view(&ctx, &s.kit_state, &Viewer::Host)));
+    let host_view = s.kit().map(|k| {
+        let mut v = super::host_view_with_locks(s, k.view(&ctx, &s.kit_state, &Viewer::Host));
+        super::wall_pick::fill_delete_on(s, &mut v);
+        v
+    });
     let join = super::address::join(state, s).await;
     Ok(json!({ "pocket": card(s), "summary": summary, "removed": counts.removed, "host_view": host_view, "join": join }))
 }

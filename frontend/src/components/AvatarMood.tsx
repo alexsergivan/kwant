@@ -1,5 +1,6 @@
 import React, { useCallback, useMemo, useSyncExternalStore } from 'react';
 import { moodOf, noticesOf, subscribeMood, type Mood } from '../kwantMood';
+import { smallMark } from '../avatarMarks';
 
 const noop = () => undefined;
 
@@ -81,11 +82,14 @@ function glyph(mood: Mood): React.ReactNode[] {
   }
 }
 
-/** Badge geometry for an avatar size: 2 px cells up to 40 px, 4 px from 64 px (96 px Bot home). */
-export function moodBadge(size: number): { cellPx: number; px: number; offset: number; radius: number; cut: number } {
+/** Badge geometry for an avatar size. Under 36 px (small-avatar-badges): a 10 px plate, the 5x5 glyph only (no ink pad
+ *  ring), square, at -4 px, so it never touches the face. 36-63 px: the 14 px 7x7 plate; 64 px and up: 4 px cells. */
+export function moodBadge(size: number): { cellPx: number; px: number; offset: number; radius: number; cut: number; pad: boolean } {
+  const sm = smallMark(size, 'mood');
+  if (sm) return { cellPx: 2, px: sm.px, offset: -sm.out, radius: 0, cut: 1, pad: false };
   const big = size >= 64;
   const cellPx = big ? 4 : 2;
-  return { cellPx, px: cellPx * 7, offset: big ? -6 : -4, radius: big ? 4 : 2, cut: big ? 2 : 1 };
+  return { cellPx, px: cellPx * 7, offset: big ? -6 : -4, radius: big ? 4 : 2, cut: big ? 2 : 1, pad: true };
 }
 
 export interface AvatarMoodProps {
@@ -107,7 +111,7 @@ export const AvatarMood: React.FC<AvatarMoodProps> = ({ mood, size }) => {
   const b = moodBadge(size);
   return (
     <svg
-      viewBox="0 0 7 7"
+      viewBox={b.pad ? '0 0 7 7' : '1 1 5 5'}
       width={b.px}
       height={b.px}
       className={`kw-mood kw-mood-${mood} pointer-events-none absolute`}

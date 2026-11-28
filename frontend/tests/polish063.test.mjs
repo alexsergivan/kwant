@@ -78,7 +78,8 @@ test('1: on desktop Settings fills the space area and leaves the space rail unco
   assert.match(root, /role="region"/);
   // The space app it sits in is the positioning box; the rail is its sibling in the shell.
   assert.match(src('App.tsx'), /<div className="relative flex-1 min-w-0 h-full flex flex-col[^"]*" data-space=\{space\.id\}>/);
-  assert.match(src('Shell.tsx'), /<SpaceRail [\s\S]*?\/>\s*<SpaceApp/);
+  // #1301: an error boundary around the space may sit between them; nothing else does.
+  assert.match(src('Shell.tsx'), /<SpaceRail [\s\S]*?\/>\s*(\{\/\*[^]*?\*\/\}\s*<AppErrorBoundary [^>]*>\s*)?<SpaceApp/);
 });
 
 test('1: on phones Settings is still a full-screen dialog', () => {

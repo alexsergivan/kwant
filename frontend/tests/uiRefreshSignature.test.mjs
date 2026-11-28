@@ -126,12 +126,13 @@ test('AvatarMood draws a mark per mood, nothing for working or idle', () => {
   assert.equal(m.mood({ mood: 'working', size: 32 }), '');
   assert.equal(m.mood({ mood: 'idle', size: 32 }), '');
 });
-test('AvatarMood badge: own 7x7 grid, 2 px cells to 40 px, 4 px at 96 px; "!" for needs you', () => {
-  assert.deepEqual(m.moodBadge(24), { cellPx: 2, px: 14, offset: -4, radius: 2, cut: 1 });
-  assert.deepEqual(m.moodBadge(40), { cellPx: 2, px: 14, offset: -4, radius: 2, cut: 1 });
-  assert.deepEqual(m.moodBadge(96), { cellPx: 4, px: 28, offset: -6, radius: 4, cut: 2 });
+test('AvatarMood badge: 10 px glyph plate under 36 px, own 7x7 grid with 2 px cells to 63 px, 4 px at 96 px; "!" for needs you', () => {
+  assert.deepEqual(m.moodBadge(24), { cellPx: 2, px: 10, offset: -4, radius: 0, cut: 1, pad: false });
+  assert.deepEqual(m.moodBadge(40), { cellPx: 2, px: 14, offset: -4, radius: 2, cut: 1, pad: true });
+  assert.deepEqual(m.moodBadge(96), { cellPx: 4, px: 28, offset: -6, radius: 4, cut: 2, pad: true });
   assert.match(m.mood({ mood: 'failed', size: 96 }), /width="28"/);
-  assert.match(m.mood({ mood: 'failed', size: 28 }), /viewBox="0 0 7 7"/);
+  assert.match(m.mood({ mood: 'failed', size: 28 }), /viewBox="1 1 5 5"/);
+  assert.match(m.mood({ mood: 'failed', size: 36 }), /viewBox="0 0 7 7"/);
   assert.deepEqual(m.MOOD_GLYPHS.needs_you.cells, [[2, 0], [2, 1], [2, 2], [2, 4]]);
   assert.equal(m.MOOD_GLYPHS.needs_you.color, '#ffb020');
   for (const g of Object.values(m.MOOD_GLYPHS)) for (const [x, y] of g.cells) assert.ok(x >= 0 && x < 5 && y >= 0 && y < 5);

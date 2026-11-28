@@ -46,9 +46,49 @@ export function at(iso: string): string {
   return `${d.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' })} at ${clock(iso)}`;
 }
 
+// "12 coming, incl. 3 plus-ones": coming counts plus-ones (gather.rs), so name them only when there are some.
+// verb: false drops "coming" where the heading already asks it ("Who's coming · 12, incl. 3 plus-ones").
+export function comingLine(c: { yes: number; coming: number }, o: { verb?: boolean } = {}): string {
+  const p = c.coming - c.yes;
+  const n = o.verb === false ? fmt(c.coming) : `${fmt(c.coming)} coming`;
+  return p > 0 ? `${n}, incl. ${fmt(p)} ${p === 1 ? 'plus-one' : 'plus-ones'}` : n;
+}
 const poss = (name: string): string => `${name}'s`;
 /** "A", "A and B", "A, B and C". */
 const and = (xs: string[]): string => (xs.length < 2 ? (xs[0] ?? '') : `${xs.slice(0, -1).join(', ')} and ${xs[xs.length - 1]}`);
+/** Whether the server still holds an answer of this guest's that "Keep my answer as it was" could go back to. */
+const holds = (v: GatherView): boolean => {
+  const m = v.mine;
+  if (!v.seat || !m) return false;
+  if (v.facts.face === 'signup') return m.slot !== undefined || !!m.waiting;
+  return v.facts.face === 'rsvp' ? !!m.answer : m.voted;
+};
+
+/** The RSVP price as the host typed it, without a trailing "each" under the "Each" label (m2: not "Each EUR 15 each"). */
+export function eachPrice(price: string): string {
+  const t = price.replace(/[\s,;:.-]*\beach\s*\.?\s*$/i, '').trim();
+  return t || price;
+}
+
+/**
+ * The done panel's words after a let-go or leave, from the view before the call and the one the server sent back.
+ * Nothing is counted here: who moved up is the name new to the slot, and "was anyone waiting" is the box's own count.
+ */
+export function letGoLines(before: GatherView, after: GatherView | undefined): { title: string; line: string } {
+  const m = before.mine;
+  const id = m?.waiting?.slot ?? m?.slot;
+  const s = before.facts.slots.find((x) => x.slot === id);
+  const label = s?.name ?? 'your';
+  if (m?.waiting) return { title: s ? `You left the waiting list for ${s.name}.` : 'You left the waiting list.', line: '' };
+  const title = s ? `You let your ${label} spot go.` : 'You let your spot go.';
+  if (!s || s.waiting === 0) return { title, line: 'Nobody was waiting.' };
+  const now = after?.facts.slots.find((x) => x.slot === id);
+  const had = new Set((s.people ?? []).map((p) => p.id));
+  const meId = before.seat?.id;
+  const up = now?.people?.find((p) => p.id !== meId && !had.has(p.id));
+  return { title, line: up ? `${up.name} moved up.` : 'The first person waiting has it now.' };
+}
+
 /** A creature for a new guest: the page has no picker (G1), so it follows the name. Not a number anyone sees. */
 export const avatarFor = (name: string): string => AVATARS[[...name.trim().toLowerCase()].reduce((a, c) => a + c.codePointAt(0)!, 0) % AVATARS.length];
 /** A bar's width in 5% steps (classes, since the page's CSP allows no style attributes). */
@@ -85,6 +125,8 @@ export class GatherApp {
   private rejoin = false;
   private edit = false;
   private letGo = false;
+  /** What a let-go or leave just did, for the done panel (worked out from the views before and after the call). */
+  private gave: { title: string; line: string } | null = null;
   /** Drafts filled from the server once per seat, so "Change my answer" starts from what was sent. */
   private filled = '';
   private jd: Draft = { name: '', pin: '', plus: 0, food: [], otherOn: false, other: '', note: '', order: [] };
@@ -283,19 +325,22 @@ export class GatherApp {
     return this.view?.facts.host_name ?? 'the host';
   }
 
-  screenNow(): Screen | 'away' | 'removed' | 'missing' | 'loading' {
+  screenNow(): Screen | 'let-go' | 'away' | 'removed' | 'missing' | 'loading' {
     if (this.gone) return this.gone;
     if (this.away) return 'away';
     const v = this.view;
     if (!v) return 'loading';
-    return screenOf(v, { rejoin: this.rejoin, edit: this.edit });
+    const scr = screenOf(v, { rejoin: this.rejoin, edit: this.edit });
+    // After "Yes, let it go" the guest sees what happened, not the empty form, until they ask for the form.
+    if (scr === 'join' && this.gave && v.seat && !holds(v)) return 'let-go';
+    return scr;
   }
 
   /** Draws the screen when something it shows changed. Typing never redraws; focus and caret survive a redraw. */
   paint(force = false): void {
     const scr = this.screenNow();
     const d = this.jd;
-    const sig = JSON.stringify([scr, this.view, this.problem, this.busy, this.bd.reset, this.letGo, this.freshMove, this.away?.tries, d.answer, d.plus, d.food, d.otherOn, d.slot, d.pick, d.order]);
+    const sig = JSON.stringify([scr, this.view, this.problem, this.busy, this.bd.reset, this.letGo, this.gave, this.freshMove, this.away?.tries, d.answer, d.plus, d.food, d.otherOn, d.slot, d.pick, d.order]);
     if (!force && sig === this.sig) return;
     this.sig = sig;
     const active = document.activeElement as HTMLInputElement | null;
@@ -329,6 +374,8 @@ export class GatherApp {
         return this.awayScreen();
       case 'join':
         return this.form(v!);
+      case 'let-go':
+        return this.letGoDone(v!);
       case 'rejoin':
         return this.back(v!);
       case 'in':
@@ -350,7 +397,7 @@ export class GatherApp {
     const v = this.view;
     let right = '';
     if (v && ['join', 'rejoin'].includes(scr) && v.facts.phase === 'open' && v.facts.closes_at) right = `closes ${closesShort(v.facts.closes_at)}`;
-    else if (v?.seat && ['in', 'waiting', 'moved', 'voted'].includes(scr)) right = v.seat.name;
+    else if (v?.seat && ['in', 'waiting', 'moved', 'voted', 'let-go'].includes(scr)) right = v.seat.name;
     else if (v && scr === 'result') right = 'Voting closed';
     return h('header', { class: 'bar' }, tally(28), h('b', null, v?.title ?? ''), h('span', { class: 'sp' }), h('span', { class: 'muted tab', 'data-bar': '' }, right));
   }
@@ -446,7 +493,7 @@ export class GatherApp {
       tiles.push([ev.toLocaleDateString(undefined, { weekday: 'long' }), ev.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })]);
       tiles.push(['Time', clock(f.event_at!)]);
     } else if (f.when) tiles.push(['When', f.when]);
-    if (f.price) tiles.push(['Each', f.price]);
+    if (f.price) tiles.push(['Each', eachPrice(f.price)]);
     if (!tiles.length) return null;
     return h('div', { class: 'facts' }, tiles.map(([k, val]) => h('div', { class: 'fact' }, h('small', null, k), h('b', null, val))));
   }
@@ -501,8 +548,11 @@ export class GatherApp {
       pinBlock,
       this.problemBox(),
       btn,
+      // Only an answer the server still holds can be kept (after a let-go there is none).
       seated
-        ? h('p', { class: 'center' }, this.linkButton('Keep my answer as it was', () => this.cancelEdit(), 'cancel'))
+        ? holds(v)
+          ? h('p', { class: 'center' }, this.linkButton('Keep my answer as it was', () => this.cancelEdit(), 'cancel'))
+          : null
         : h('p', { class: 'center' }, this.linkButton("I've joined before", () => this.goRejoin(), 'to-rejoin')),
     );
     form.addEventListener('submit', (e) => {
@@ -633,8 +683,9 @@ export class GatherApp {
       let line: string;
       if (mineHere) line = "You're in this one";
       else if (mine?.waiting?.slot === s.slot) line = `You're ${nth(mine.waiting.position)} in line`;
-      else if (s.full && !f.waiting_list) line = ['Full', ...names].join(' · ');
-      else if (s.full) line = [s.waiting === 0 ? "Full: you'd be 1st in line" : `Full · ${fmt(s.waiting)} waiting`, ...(names.length ? [names.join(', ')] : [])].join(' · ');
+      // The people in the slot come first, so the waiting count never reads as their names (m7).
+      else if (s.full && !f.waiting_list) line = [...(names.length ? [names.join(', ')] : []), 'Full'].join(' · ');
+      else if (s.full) line = [...(names.length ? [names.join(', ')] : []), s.waiting === 0 ? "Full: you'd be 1st in line" : `Full · ${fmt(s.waiting)} waiting`].join(' · ');
       else line = names.length ? names.join(', ') : s.filled === 0 ? 'Nobody yet' : '';
       const closed = s.full && !f.waiting_list && !mineHere;
       const pips = s.cap <= 12 ? h('span', { class: 'pips', 'aria-hidden': 'true' }, Array.from({ length: s.cap }, (_, i) => h('i', { class: i < s.filled ? 'on' : '' }))) : null;
@@ -834,6 +885,7 @@ export class GatherApp {
     this.busy = '';
     if (a.ok) {
       this.edit = false;
+      this.gave = null;
       this.filled = '';
       if (a.view) this.show(a.view);
       else this.paint();
@@ -1003,7 +1055,7 @@ export class GatherApp {
       who = h(
         'div',
         null,
-        h('div', { class: 'lbl', id: 'lbl-who' }, "Who's coming ", v.counts ? h('small', null, `${fmt(v.counts.coming)} with plus-ones`) : null),
+        h('div', { class: 'lbl', id: 'lbl-who' }, "Who's coming ", v.counts ? h('small', null, comingLine(v.counts, { verb: false })) : null),
         yes.length
           ? h('ul', { class: 'who-grid', 'aria-labelledby': 'lbl-who' }, yes.map((p) => h('li', null, creature(p.avatar, 'sm'), h('div', { class: 'nm' }, p.name))))
           : h('p', { class: 'soft fine' }, 'Nobody has said yes yet.'),
@@ -1013,7 +1065,7 @@ export class GatherApp {
       who = h(
         'div',
         null,
-        h('div', { class: 'lbl' }, 'So far ', h('small', null, `${fmt(v.counts.coming)} coming with plus-ones`)),
+        h('div', { class: 'lbl' }, 'So far ', h('small', null, comingLine(v.counts))),
         h('div', { class: 'facts' }, ([['Yes', v.counts.yes], ['Maybe', v.counts.maybe], ['No', v.counts.no]] as [string, number][]).map(([k, n]) => h('div', { class: 'fact' }, h('small', null, k), h('b', null, fmt(n))))),
       );
     }
@@ -1084,17 +1136,46 @@ export class GatherApp {
     if (this.busy) return;
     this.busy = 'let_go';
     this.paint();
-    const r = await this.api.act(this.view?.mine?.waiting ? 'leave' : 'let_go');
+    const before = this.view;
+    const r = await this.api.act(before?.mine?.waiting ? 'leave' : 'let_go');
     this.busy = '';
     this.letGo = false;
     if (r.ok) {
       this.jd.slot = undefined;
+      this.jd.note = '';
+      this.edit = false;
       this.freshMove = false;
+      this.gave = before ? letGoLines(before, r.view ?? undefined) : null;
       if (r.view) this.show(r.view);
       else this.paint();
       return;
     }
     this.failAct(r);
+  }
+
+  /** After a let-go or leave: what happened, and one way on. */
+  private letGoDone(v: GatherView): HTMLElement {
+    const g = this.gave!;
+    const again = h('button', { type: 'button', class: 'gbtn', 'data-again': '' }, 'Sign up for something else');
+    again.addEventListener('click', () => this.signUpAgain());
+    return h(
+      'div',
+      { class: 'body', 'data-let-go-done': '' },
+      h('div', { class: 'panel center you' }, creature(v.seat!.avatar, 'big'), h('h2', { tabindex: -1, 'data-autofocus': '' }, g.title)),
+      g.line ? h('div', { class: 'say', role: 'status' }, tally(36), h('div', { class: 'b' }, g.line)) : null,
+      again,
+      this.keep(v),
+    );
+  }
+
+  private signUpAgain(): void {
+    this.gave = null;
+    this.problem = null;
+    this.jd.slot = undefined;
+    this.jd.note = '';
+    this.paint();
+    window.scrollTo?.(0, 0);
+    this.root.querySelector<HTMLElement>('input[name="slot"]')?.focus();
   }
 
   private slotIn(v: GatherView, moved: boolean): HTMLElement {
