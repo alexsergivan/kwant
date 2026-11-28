@@ -352,7 +352,7 @@ pub fn engine_label(e: crate::drivers::engines::EngineId) -> &'static str {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct WaitsOn {
-    /// "model", "tool", "person", "bot", "queue" or "budget".
+    /// "model", "tool", "person", "bot", "queue", "budget" or "usage_limit".
     pub kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub label: Option<String>,
@@ -460,6 +460,9 @@ pub struct Status {
     pub held: Vec<HeldItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_finished_at: Option<DateTime<Utc>>,
+    /// queued/usage_limit: when the engine's usage limit resets and the parked turn runs again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub back_at: Option<DateTime<Utc>>,
 }
 
 impl Status {
@@ -482,6 +485,7 @@ impl Status {
             also: Vec::new(),
             held: Vec::new(),
             last_finished_at: None,
+            back_at: None,
         }
     }
 
@@ -525,6 +529,15 @@ pub struct BotInput {
     pub questions: Vec<QuestionRef>,
     pub marks: BotMarks,
     pub held: Vec<HeldItem>,
+    /// The bot's turns parked until its engine's usage limit resets (pending), see `parked`.
+    pub limit_waits: Vec<LimitWait>,
+}
+
+/// A turn of the bot parked on a usage limit: parked at `since`, runs again at `retry_at`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct LimitWait {
+    pub retry_at: DateTime<Utc>,
+    pub since: DateTime<Utc>,
 }
 
 fn is_handoff_tool(name: &str) -> bool {
@@ -690,6 +703,16 @@ pub fn compute(b: &BotInput, now: DateTime<Utc>) -> Status {
             parts.push(s);
         }
     }
+    // limit-wait-status (m3): with nothing else going on, a turn parked on a usage limit means the bot
+    // waits for the limit to reset, not "available": the earliest retry says when it's back
+    if parts.is_empty() {
+        if let Some(w) = b.limit_waits.iter().min_by_key(|w| (w.retry_at, w.since)) {
+            let mut s = Status::new(&b.kwant_id, "queued", "usage_limit", Some(w.since));
+            s.waits_on = Some(WaitsOn { kind: "usage_limit", label: None });
+            s.back_at = Some(w.retry_at);
+            parts.push(s);
+        }
+    }
     let started = |s: &Status| s.turn.as_ref().map(|t| t.started_at).or(s.since);
     parts.sort_by(|a, b| rank(a.status).cmp(&rank(b.status)).then_with(|| started(b).cmp(&started(a))));
     let mut parts = parts.into_iter();
@@ -773,6 +796,7 @@ fn parse_time(s: &str) -> Option<DateTime<Utc>> {
 pub async fn inputs(state: &AppState, space: &SpaceId, kwant_ids: &[String]) -> Vec<BotInput> {
     let turns = state.turns.active_turns();
     let questions = state.db.list_questions(Some("open"), None, Some(space)).await.unwrap_or_default();
+    let parked = state.db.pending_usage_limit_parked().await.unwrap_or_default();
     let (signals, marks, held) = state.turns.board(|b| {
         let wanted: HashSet<&str> = kwant_ids.iter().map(String::as_str).collect();
         let signals: HashMap<String, TurnSignals> = turns
@@ -822,6 +846,11 @@ pub async fn inputs(state: &AppState, space: &SpaceId, kwant_ids: &[String]) -> 
                 questions: qs,
                 marks: marks.get(k).cloned().unwrap_or_default(),
                 held: held.iter().filter(|h| &h.kwant_id == k).cloned().collect(),
+                limit_waits: parked
+                    .iter()
+                    .filter(|p| &p.kwant_id == k)
+                    .map(|p| LimitWait { retry_at: p.retry_at, since: p.created_at })
+                    .collect(),
             }
         })
         .collect()
@@ -1153,7 +1182,7 @@ mod tests {
     }
 
     fn bot(turns: Vec<TurnInput>) -> BotInput {
-        BotInput { kwant_id: "k1".into(), turns, questions: Vec::new(), marks: BotMarks::default(), held: Vec::new() }
+        BotInput { kwant_id: "k1".into(), turns, questions: Vec::new(), marks: BotMarks::default(), held: Vec::new(), limit_waits: Vec::new() }
     }
 
     fn question(id: &str, ctx: &str, asked: DateTime<Utc>, turn: Option<&str>) -> QuestionRef {
@@ -1453,6 +1482,49 @@ mod tests {
         let s = compute(&bot(vec![t]), at(2));
         assert_eq!((s.status, s.reason_code, s.since), ("queued", "in_line", Some(at(1))));
         assert_eq!(s.queue, Some(Queue { position: 2, reason: "server_busy".into() }));
+    }
+
+    fn limit_wait(retry_at: DateTime<Utc>, since: DateTime<Utc>) -> LimitWait {
+        LimitWait { retry_at, since }
+    }
+
+    #[test]
+    fn a_turn_parked_on_the_usage_limit_waits_for_it_with_the_retry_time() {
+        let mut b = bot(Vec::new());
+        b.marks.last_finished_at = Some(at(0));
+        b.limit_waits = vec![limit_wait(at(62), at(1)), limit_wait(at(60), at(2))];
+        let s = compute(&b, at(3));
+        assert_eq!((s.status, s.reason_code, s.since), ("queued", "usage_limit", Some(at(2))), "the earliest retry");
+        assert_eq!(s.back_at, Some(at(60)));
+        assert_eq!(s.waits_on, Some(WaitsOn { kind: "usage_limit", label: None }));
+        assert!(s.turn.is_none() && s.queue.is_none() && s.also.is_empty());
+        assert_eq!(s.last_finished_at, Some(at(0)));
+        let wire = json!(s);
+        assert_eq!(wire["back_at"], json!(at(60)), "{wire}");
+        assert_eq!(wire["waits_on"], json!({ "kind": "usage_limit" }), "{wire}");
+        // The retry ran (or the chat moved on): no pending row, so it's available again
+        b.limit_waits.clear();
+        let s = compute(&b, at(61));
+        assert_eq!((s.status, s.reason_code, s.since, s.back_at), ("available", "idle", Some(at(0)), None));
+        assert!(json!(s).get("back_at").is_none());
+    }
+
+    #[test]
+    fn a_running_turn_or_an_open_question_wins_over_a_usage_limit_wait() {
+        let mut b = bot(vec![running("t1", at(5))]);
+        b.limit_waits = vec![limit_wait(at(60), at(1))];
+        let s = compute(&b, at(6));
+        assert_eq!((s.status, s.reason_code, s.back_at), ("working", "thinking", None));
+        assert!(s.also.is_empty(), "the wait isn't listed beside a running turn");
+        let mut asked = bot(Vec::new());
+        asked.limit_waits = vec![limit_wait(at(60), at(1))];
+        asked.questions = vec![question("q1", "c9", at(2), None)];
+        let s = compute(&asked, at(3));
+        assert_eq!((s.status, s.reason_code, s.back_at), ("needs_you", "asked_question", None));
+        let mut gave_up = bot(Vec::new());
+        gave_up.limit_waits = vec![limit_wait(at(60), at(1))];
+        gave_up.marks.gave_up = Some(GaveUp { at: at(2), tries: 2, secs: 120, turn_id: "t0".into(), context_id: "c1".into(), thread_id: None });
+        assert_eq!(compute(&gave_up, at(3)).reason_code, "stalled_gave_up");
     }
 
     #[test]
