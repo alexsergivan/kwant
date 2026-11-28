@@ -283,6 +283,17 @@ fn is_guest_404(status: StatusCode, headers: &HeaderMap, bytes: &[u8]) -> bool {
         && headers.get("x-frame-options").map(|v| v.as_bytes()) == Some(b"DENY".as_slice())
 }
 
+async fn guest_state(t: &T, code: &str, key: &str) -> Res {
+    send(&t.guest, "GET", &format!("/api/pocket/{code}/state"), None, &guest_req(code, key)).await
+}
+
+/// A WebSocket upgrade's headers plus `more`.
+fn upgrade<'a>(more: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+    let mut h = vec![("connection", "upgrade"), ("upgrade", "websocket"), ("sec-websocket-version", "13"), ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")];
+    h.extend_from_slice(more);
+    h
+}
+
 fn view_app_version(r: &Res) -> Value {
     r.body["view"]["app"]["version"].clone()
 }
@@ -363,7 +374,6 @@ async fn every_other_guest_answer_keeps_todays_csp_and_frame_denial() {
     let (_, key) = joined(&t, &code, "Ann").await;
     let cookie = format!("{}={key}", guest::guest_cookie(&code));
     let same = ("origin", "http://pocket.example.net");
-    let ws = [("connection", "upgrade"), ("upgrade", "websocket"), ("sec-websocket-version", "13"), ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")];
     let auth = format!("Bearer {host}");
     let cases: Vec<(&str, String, Vec<(&str, &str)>)> = vec![
         ("GET", format!("/p/{code}"), vec![]),
@@ -373,7 +383,7 @@ async fn every_other_guest_answer_keeps_todays_csp_and_frame_denial() {
         ("GET", format!("/api/pocket/{code}/info"), vec![]),
         ("GET", format!("/api/pocket/{code}/state"), vec![("cookie", cookie.as_str())]),
         ("POST", format!("/api/pocket/{code}/action"), vec![("cookie", cookie.as_str()), same, ("content-type", "application/json")]),
-        ("GET", format!("/api/pocket/{code}/ws"), [&ws[..], &[same, ("cookie", cookie.as_str())]].concat()),
+        ("GET", format!("/api/pocket/{code}/ws"), upgrade(&[same, ("cookie", cookie.as_str())])),
         ("GET", "/nothing/here".into(), vec![]),
         ("GET", format!("/api/pocket/{code}/host/state"), vec![("authorization", auth.as_str())]),
     ];
@@ -400,8 +410,7 @@ async fn a_null_origin_write_or_websocket_is_refused() {
     assert_eq!(s, StatusCode::FORBIDDEN);
     assert_eq!(serde_json::from_slice::<Value>(&b).unwrap()["error"], "bad_origin");
     assert_eq!(hd.get("x-frame-options").map(|v| v.as_bytes()), Some(b"DENY".as_slice()));
-    let ws = [("connection", "upgrade"), ("upgrade", "websocket"), ("sec-websocket-version", "13"), ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")];
-    let (s, _, b) = raw(&t.guest, "GET", &format!("/api/pocket/{code}/ws"), &[&ws[..], &[null, ("cookie", cookie.as_str())]].concat()).await;
+    let (s, _, b) = raw(&t.guest, "GET", &format!("/api/pocket/{code}/ws"), &upgrade(&[null, ("cookie", cookie.as_str())])).await;
     assert_eq!(s, StatusCode::FORBIDDEN);
     assert_eq!(serde_json::from_slice::<Value>(&b).unwrap()["error"], "bad_origin");
     // And over a real socket
@@ -417,8 +426,7 @@ async fn live_pointer_rollback_and_the_state_machine() {
     let t = setup(true).await;
     let (code, _) = made(&t, vspec()).await;
     let (_, key) = joined(&t, &code, "Ann").await;
-    let state = || send(&t.guest, "GET", &format!("/api/pocket/{code}/state"), None, &guest_req(&code, &key));
-    assert_eq!(view_app_version(&state().await), Value::Null, "no version is live yet");
+    assert_eq!(view_app_version(&guest_state(&t, &code, &key).await), Value::Null, "no version is live yet");
     // A draft or a failed version can't go live
     let v1 = draft(&t, &code, vspec(), "one").await.unwrap();
     let e = versions::go_live(&t.state, &code, v1).await.unwrap_err();
@@ -431,7 +439,7 @@ async fn live_pointer_rollback_and_the_state_machine() {
     assert_eq!(versions::set_check(&t.state, &code, v1, versions::LIVE, None).await.unwrap_err().code, "bad_version_state");
     assert_eq!(versions::go_live(&t.state, &code, 42).await.unwrap_err().code, "no_such_version");
     versions::go_live(&t.state, &code, v1).await.unwrap();
-    assert_eq!(view_app_version(&state().await), json!(v1));
+    assert_eq!(view_app_version(&guest_state(&t, &code, &key).await), json!(v1));
     let failed = draft(&t, &code, vspec(), "bad").await.unwrap();
     versions::set_check(&t.state, &code, failed, versions::FAILED, Some("K2 lint: eval")).await.unwrap();
     assert_eq!(versions::go_live(&t.state, &code, failed).await.unwrap_err().code, "not_passed");
@@ -439,7 +447,7 @@ async fn live_pointer_rollback_and_the_state_machine() {
     let mut spec2 = vspec();
     spec2["title"] = json!("Book swap 2");
     let v2 = live(&t, &code, spec2, "two").await;
-    let r = state().await;
+    let r = guest_state(&t, &code, &key).await;
     assert_eq!(view_app_version(&r), json!(v2));
     assert_eq!(r.body["pocket"]["title"], "Book swap 2", "pocket_apps.spec and title follow the live version");
     assert_eq!(doc(&t, &code, v1, "phone").await.0, StatusCode::NOT_FOUND);
@@ -461,7 +469,7 @@ async fn live_pointer_rollback_and_the_state_machine() {
     let (s, h, b) = doc(&t, &code, v1, "phone").await;
     assert_eq!(s, StatusCode::OK);
     check_document(&h, &b, "phone", "one");
-    let r = state().await;
+    let r = guest_state(&t, &code, &key).await;
     assert_eq!(view_app_version(&r), json!(v1));
     assert_eq!(r.body["pocket"]["title"], "Book swap");
     let v2_row = r_list(&t, &code).await.into_iter().find(|v| v.0 == v2).unwrap();
@@ -472,9 +480,9 @@ async fn live_pointer_rollback_and_the_state_machine() {
     assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::CONFLICT, Some("nothing_to_roll_back")));
     // A later version rolls back to v1 again, never to the rolled-back v2
     let v4 = live(&t, &code, vspec(), "four").await;
-    assert_eq!(view_app_version(&state().await), json!(v4));
+    assert_eq!(view_app_version(&guest_state(&t, &code, &key).await), json!(v4));
     assert_eq!(versions::rollback(&t.state, &code).await.unwrap(), v1);
-    assert_eq!(view_app_version(&state().await), json!(v1));
+    assert_eq!(view_app_version(&guest_state(&t, &code, &key).await), json!(v1));
 }
 
 async fn r_list(t: &T, code: &str) -> Vec<(i64, String, Option<String>)> {
@@ -569,14 +577,10 @@ async fn two_guests_get_byte_identical_documents() {
     let v = live(&t, &code, vspec(), "one").await;
     let (_, a) = joined(&t, &code, "Ann").await;
     let (_, b) = joined(&t, &code, "Bob").await;
-    let get = |cookie: String| {
-        let uri = format!("/p/{code}/app/{v}/phone");
-        let t = &t;
-        async move { raw(&t.guest, "GET", &uri, &[IFRAME, ("cookie", cookie.as_str())]).await }
-    };
-    let ra = get(format!("{}={a}", guest::guest_cookie(&code))).await;
-    let rb = get(format!("{}={b}", guest::guest_cookie(&code))).await;
-    let rh = get(format!("{}={host}", guest::host_cookie(&code))).await;
+    let uri = format!("/p/{code}/app/{v}/phone");
+    let ra = raw(&t.guest, "GET", &uri, &[IFRAME, ("cookie", format!("{}={a}", guest::guest_cookie(&code)).as_str())]).await;
+    let rb = raw(&t.guest, "GET", &uri, &[IFRAME, ("cookie", format!("{}={b}", guest::guest_cookie(&code)).as_str())]).await;
+    let rh = raw(&t.guest, "GET", &uri, &[IFRAME, ("cookie", format!("{}={host}", guest::host_cookie(&code)).as_str())]).await;
     assert_eq!(ra.0, StatusCode::OK);
     assert_eq!(ra.2, rb.2);
     assert_eq!(ra.2, rh.2);
