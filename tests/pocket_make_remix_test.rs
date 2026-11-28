@@ -2,8 +2,8 @@
 //! `pocket_make` tool is offered only while pa12 L1's switch lets `made` through, and its one
 //! action, `remix`, routes to the kit that already exists: it names the kit's own create tool and
 //! carries that kit's own rules, and makes nothing itself. The pocket is then made by the kit's
-//! tool, so the reply gets the kit's normal card. `kit: none` answers "I can make that as a custom
-//! app" and makes nothing. A kit that's off, or has no chat tool on this build, gets a plain
+//! tool, so the reply gets the kit's normal card. `kit: none` answers that no ready-made app fits
+//! and kwant can't make a custom app from chat yet, and makes nothing else. A kit that's off, or has no chat tool on this build, gets a plain
 //! "nothing was made". The fake model here is the test calling the bot's own tools endpoint.
 
 mod quizmaster_support;
@@ -146,6 +146,12 @@ async fn with_no_arguments_it_answers_the_order_and_the_kits_that_are_on() {
     let t = v["result"]["tools"].as_array().unwrap().iter().find(|t| t["name"] == pocket_make_tool::TOOL).unwrap().clone();
     let d = t["description"].as_str().unwrap();
     assert!(d.contains("It makes nothing itself") && d.contains("custom app"), "{d}");
+    // Scoped to apps guests open on their phones, and it never promises a custom app (Mira F4)
+    assert!(d.contains("open on their phones"), "{d}");
+    assert!(d.contains("can't make a custom app from chat yet") && !d.contains("can make it as a custom app"), "{d}");
+    // The code rule is about pocket apps only (Mira F2)
+    assert!(text.contains("Don't write the code or screens for a pocket app yourself"), "{text}");
+    assert!(!text.contains("I can make that as a custom app"), "{text}");
     assert!(pocket_kits(&e).await.is_empty());
 }
 
@@ -159,6 +165,7 @@ async fn remix_santa_routes_to_santa_create_and_the_reply_gets_the_santa_card() 
     let (routed, err) = tool(&e, &token, pocket_make_tool::TOOL, args.clone()).await;
     assert!(!err, "{routed}");
     assert!(routed.starts_with("Remix: make it as a Secret Santa with santa_create."), "{routed}");
+    assert!(routed.contains("not \"remix\" or \"kit\""), "the person hears their own words: {routed}");
     assert!(routed.ends_with(santa_tool::RULES), "the kit's own rules, whole: {routed}");
     assert!(pocket_kits(&e).await.is_empty(), "the remix itself makes nothing");
     // The fake model follows the answer: santa_create with the kit's own spec
@@ -230,6 +237,11 @@ async fn kit_none_says_custom_app_and_makes_nothing() {
     assert!(!err, "{text}");
     assert!(text.contains(&format!("\"{}\"", pocket_make_tool::CUSTOM_APP)), "{text}");
     assert!(text.contains("nothing was made") && text.contains("no code"), "{text}");
+    // V1 can't keep a custom-app promise (Mira F1/F3): it says so, offers a close kit, makes nothing else
+    assert!(text.contains("I can't make a custom app from chat yet."), "{text}");
+    assert!(!text.contains("I can make that as a custom app"), "{text}");
+    assert!(text.contains("If a kit comes close, say what it would leave out and offer it."), "{text}");
+    assert!(text.contains("Make nothing else") && text.contains("unless the person picks that kit"), "{text}");
     assert!(!text.contains("_create"), "names no kit tool: {text}");
     assert!(pocket_kits(&e).await.is_empty(), "no pocket row");
     let m = reply_as(&e, &e.bot, vec![call(pocket_make_tool::TOOL, args, "ok", &text)]).await;
@@ -245,7 +257,7 @@ async fn a_kit_thats_off_or_has_no_chat_tool_gets_a_plain_answer_and_nothing_is_
     for kit in ["quiz", "desk"] {
         let (text, err) = tool(&e, &token, pocket_make_tool::TOOL, remix(kit)).await;
         assert!(err, "{text}");
-        assert!(text.contains("isn't on in this kwant, so nothing was made"), "{text}");
+        assert!(text.contains("kit is off on this kwant, so nothing was made"), "{text}");
         assert!(text.ends_with("On this kwant now: santa (santa_create)."), "{text}");
         assert!(!text.contains("Template ("), "no rules for a kit that's off: {text}");
     }

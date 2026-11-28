@@ -12,8 +12,9 @@
 //! - A kit that is off, or that has no chat tool on this build (queue, gather, wall here): a plain
 //!   "nothing was made" naming the kits that are on.
 //! - `kit` none (the ask needs its own lists, fields or steps that no kit has): the answer tells
-//!   the bot to say it can make that as a custom app, and to make nothing. No `made` pocket, no
-//!   spec and no code: that is V2/V3.
+//!   the bot to say no ready-made app fits and kwant can't make a custom app from chat yet, to
+//!   offer a kit that comes close, and to make nothing else. No `made` pocket, no spec and no
+//!   code: that is V2/V3.
 //!
 //! Nothing from the arguments is echoed back (`why` is checked for size and kept out of the
 //! answer), and no call writes anything.
@@ -31,7 +32,7 @@ pub const REMIX: &str = "remix";
 /// The `kit` that means no kit fits.
 pub const NONE: &str = "none";
 /// What a `kit: none` answer tells the bot to say, word for word.
-pub const CUSTOM_APP: &str = "I can make that as a custom app.";
+pub const CUSTOM_APP: &str = "None of kwant's ready-made apps fits this, and I can't make a custom app from chat yet.";
 /// The longest `why` (one line) a call may carry.
 const WHY_MAX_CHARS: usize = 300;
 
@@ -58,11 +59,11 @@ pub async fn enabled(state: &AppState) -> bool {
 pub fn tool() -> Value {
     json!({
         "name": TOOL,
-        "description": "Use this first when the person asks you to make an app, game or page for a group (\"make me an app for our book \
-            swap\", \"a game for the party\"). It finds which of kwant's ready-made pocket apps fits and tells you which tool makes it: \
-            a quiz, a Secret Santa or a front desk, with the person's own words. It makes nothing itself. Call it first with no \
-            arguments to get the rules, then with action \"remix\" and the kit. If no kit fits, use kit \"none\": then tell the \
-            person you can make it as a custom app, and make nothing.",
+        "description": "Use this first when the person asks for an app, game or page that their guests or group open on their phones \
+            (\"make me an app for our book swap\", \"a game for the party\"). It finds which of kwant's ready-made pocket apps fits (a \
+            quiz, a Secret Santa or a front desk) and tells you which tool makes it with the person's own words. It makes nothing \
+            itself. Call it first with no arguments to get the rules, then with action \"remix\" and the kit. If no kit fits, use kit \
+            \"none\": then tell the person kwant can't make a custom app from chat yet, and make nothing.",
         "inputSchema": {"type": "object", "properties": {
             "action": {"type": "string", "enum": [REMIX], "description": "remix: find the kit that makes this"},
             "kit": {"type": "string", "enum": ["quiz", "santa", "desk", "queue", "gather", "wall", NONE],
@@ -81,9 +82,10 @@ Secret Santa, and \"a pub quiz about poetry\" is a quiz. Pick the kit and call p
 \"<kit>\", \"why\": \"<one line>\"}. Its answer names the tool that makes it and gives that kit's own rules. Make it with that tool, so \
 the person gets the kit's normal card and checks.
 (b) Only if no kit fits, because the app needs its own lists, fields or steps that no kit has, call pocket_make with kit \"none\". Then \
-tell the person \"I can make that as a custom app.\" and make nothing: no pocket and no code.
+tell the person \"None of kwant's ready-made apps fits this, and I can't make a custom app from chat yet.\" and make nothing: no pocket \
+and no code. If a kit comes close, say in one line what it would leave out and offer it.
 
-Never write an app's code or screens yourself, and never make two pockets for one ask.
+Don't write the code or screens for a pocket app yourself, and never make two pockets for one ask.
 
 Kits:";
 
@@ -91,7 +93,11 @@ Kits:";
 fn rules(on: &[&str]) -> String {
     let mut out = String::from(RULES);
     for (id, name, what) in KITS {
-        out.push_str(&format!("\n- {id} ({name}): {what}."));
+        if id == name {
+            out.push_str(&format!("\n- {id}: {what}."));
+        } else {
+            out.push_str(&format!("\n- {id} ({name}): {what}."));
+        }
     }
     out.push_str(&format!("\n\n{}", on_now(on)));
     out
@@ -170,8 +176,9 @@ pub async fn call(state: &AppState, _scope: &SelfScope, args: &Value) -> ToolRes
     if kit == NONE {
         return (
             format!(
-                "No kit fits, so nothing was made. Tell the person, in one line: \"{CUSTOM_APP}\" Make nothing now: no pocket, no spec and \
-                 no code, and don't make it with another kit's tool."
+                "No kit fits, so nothing was made. Tell the person, in one line: \"{CUSTOM_APP}\" If a kit comes close, say what it would \
+                 leave out and offer it. Make nothing else: no pocket, no spec and no code, and don't make it with another kit's tool \
+                 unless the person picks that kit."
             ),
             false,
         );
@@ -188,12 +195,16 @@ pub async fn call(state: &AppState, _scope: &SelfScope, args: &Value) -> ToolRes
         ));
     };
     if !on.contains(&kit.as_str()) {
-        return fail(format!("The {name} kit isn't on in this kwant, so nothing was made. Tell the person plainly. {}", on_now(&on)));
+        return fail(format!(
+            "The {name} kit is off on this kwant, so nothing was made. Tell the person plainly, and offer a kit that's on if one fits. {}",
+            on_now(&on)
+        ));
     }
     (
         format!(
             "Remix: make it as a {name} with {next}. Nothing was made yet. Call {next} next, with the person's own words in the kit's own \
-             fields, and follow its rules below. Its card and checks come with it.\n\n{kit_rules}"
+             fields, and follow its rules below. Its card and checks come with it. Tell the person what you're making in their words (\"a \
+             Secret Santa for your book swap\"), not \"remix\" or \"kit\".\n\n{kit_rules}"
         ),
         false,
     )
@@ -219,7 +230,7 @@ mod tests {
         assert!(r.find("(a) Remix a kit first").unwrap() < r.find("(b) Only if no kit fits").unwrap(), "{r}");
         assert!(r.contains(CUSTOM_APP), "{r}");
         for (id, ..) in KITS {
-            assert!(r.contains(&format!("\n- {id} (")), "{id} in {r}");
+            assert!(r.contains(&format!("\n- {id}")), "{id} in {r}");
         }
         assert!(r.ends_with("On this kwant now: quiz (pocket_create), santa (santa_create)."), "{r}");
         assert!(rules(&[]).ends_with("On this kwant now: no kit you can make from chat."));
