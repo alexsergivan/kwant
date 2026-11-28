@@ -743,7 +743,12 @@ pub fn tick(ctx: &KitCtx, state: &mut Value) -> bool {
 /// `scores`, `vote` and `draw`.
 pub fn view_parts(spec: &Value, state: &Value, players: &[Player], viewer: &Viewer, now: DateTime<Utc>) -> Map<String, Value> {
     let mut revealed = Map::new();
-    for g in shown(spec, state, now) {
+    // RED PROOF (do not merge): the big screen's view skips the reveal filter and gets every group
+    let groups: Vec<String> = match viewer {
+        Viewer::BigScreen => spec["secrets"].as_object().map(|o| o.keys().cloned().collect()).unwrap_or_default(),
+        _ => shown(spec, state, now),
+    };
+    for g in groups {
         let texts: Vec<Value> = group(spec, &g).into_iter().map(|s| json!(s.text)).collect();
         revealed.insert(g, Value::Array(texts));
     }
