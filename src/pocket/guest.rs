@@ -44,6 +44,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/p/:code", get(page))
         .route("/p/_a/:file", get(page_file))
+        // pa12 L5: a bot-made app's document, only framed by the page (security-review.md section 3)
+        .route("/p/:code/app/:version/:surface", get(app_document))
         .route("/api/pocket/:code/info", get(info))
         .route("/api/pocket/:code/join", post(join))
         .route("/api/pocket/:code/rejoin", post(rejoin))
@@ -87,14 +89,62 @@ async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Respon
             res
         }
     };
+    // pa12 L5 (G1): only the app document brings its own policy and may be framed (by the page,
+    // through its frame-ancestors 'self'); no other handler sets one, so every other answer is unchanged
+    let app_document = res.extensions().get::<AppDocument>().is_some();
     let h = res.headers_mut();
-    h.insert("content-security-policy", HeaderValue::from_static(CSP));
+    h.entry(header::CONTENT_SECURITY_POLICY).or_insert(HeaderValue::from_static(CSP));
     h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
-    h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    if !app_document {
+        h.insert("x-frame-options", HeaderValue::from_static("DENY"));
+    }
     // The page (no-cache) and its hashed files (immutable) set their own; everything else is no-store
     h.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("no-store"));
     res
+}
+
+/// Marks the one response that keeps its own CSP and gets no X-Frame-Options (see [`gate`]).
+#[derive(Clone, Copy)]
+struct AppDocument;
+
+/// `GET /p/<code>/app/<version>/<surface>`: the stored document of a `made` pocket's live version,
+/// with security-review.md section 3's headers. Only an iframe's request gets it
+/// (`Sec-Fetch-Dest: iframe`: not a tab, a `<frame>`, a fetch or an `<object>`); a version that
+/// isn't live, a surface it hasn't got and anything else answer the normal guest 404.
+async fn app_document(State(state): State<AppState>, Path((code, version, surface)): Path<(String, String, String)>, headers: HeaderMap) -> Response {
+    app_document_inner(&state, &code, &version, &surface, &headers).await.unwrap_or_else(|e| e.into_response())
+}
+
+async fn app_document_inner(state: &AppState, code: &str, version: &str, surface: &str, headers: &HeaderMap) -> PResult<Response> {
+    use super::made::versions::{self, Surface};
+    if headers.get("sec-fetch-dest").map(HeaderValue::as_bytes) != Some(b"iframe".as_slice()) {
+        return Err(PocketError::not_found());
+    }
+    let surface = Surface::parse(surface).ok_or_else(PocketError::not_found)?;
+    // One spelling per version: no sign, no leading zero, no 10-digit numbers
+    let canonical = !version.is_empty() && version.len() <= 9 && version.bytes().all(|b| b.is_ascii_digit()) && !version.starts_with('0');
+    let version: i64 = version.parse().ok().filter(|_| canonical).ok_or_else(PocketError::not_found)?;
+    let s = pocket(state, code).await?;
+    if s.row.kit != super::kits::MADE_ID {
+        return Err(PocketError::not_found());
+    }
+    let (doc, csp) = versions::live_document(state, code, version, surface).await?.ok_or_else(PocketError::not_found)?;
+    let csp = HeaderValue::from_str(&csp).map_err(|_| PocketError::not_found())?;
+    let mut res = (
+        [
+            (header::CONTENT_TYPE, HeaderValue::from_static("text/html; charset=utf-8")),
+            (header::CACHE_CONTROL, HeaderValue::from_static("private, no-cache")),
+            (header::CONTENT_SECURITY_POLICY, csp),
+            (header::HeaderName::from_static("permissions-policy"), HeaderValue::from_static(versions::PERMISSIONS_POLICY)),
+            (header::X_DNS_PREFETCH_CONTROL, HeaderValue::from_static("off")),
+            (header::HeaderName::from_static("cross-origin-resource-policy"), HeaderValue::from_static("same-origin")),
+        ],
+        doc,
+    )
+        .into_response();
+    res.extensions_mut().insert(AppDocument);
+    Ok(res)
 }
 
 /// No Origin (curl, a test) is fine: only browsers carry cookies across sites, and they send it.

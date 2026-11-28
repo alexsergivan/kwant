@@ -22,6 +22,8 @@ pub const MAX_KEYS_PER_PLAYER: i64 = 5;
 pub const MAX_LINK_SESSIONS_PER_ROLE: i64 = 5;
 /// Unspent host-link tokens one pocket keeps per role; the oldest goes first.
 pub const MAX_LINK_TOKENS_PER_ROLE: i64 = 10;
+/// pa12 L5: versions of a bot-made app one pocket keeps; the oldest that isn't live goes first.
+pub const MAX_APP_VERSIONS: i64 = 10;
 
 #[derive(Debug, Clone, FromRow, PartialEq)]
 pub struct PocketRow {
@@ -67,6 +69,45 @@ pub struct PlayerRow {
     pub pin_reset_at: Option<DateTime<Utc>>,
     pub joined_at: DateTime<Utc>,
     pub removed_at: Option<DateTime<Utc>>,
+}
+
+/// pa12 L5: one version of a bot-made app. `phone_doc` and `screen_doc` are whole documents,
+/// byte for byte as served; `hashes` holds the CSP hashes taken over them when the version was made.
+#[derive(Debug, Clone, FromRow, PartialEq)]
+pub struct AppVersionRow {
+    pub pocket_code: String,
+    pub version: i64,
+    pub spec: String,
+    pub phone_doc: Option<String>,
+    pub screen_doc: Option<String>,
+    pub hashes: String,
+    pub state: String,
+    pub report: Option<String>,
+    pub made_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+/// A version as the person's list shows it (no documents).
+#[derive(Debug, Clone, FromRow, PartialEq, Serialize)]
+pub struct AppVersionInfo {
+    pub version: i64,
+    pub state: String,
+    pub report: Option<String>,
+    pub made_by: Option<String>,
+    pub created_at: DateTime<Utc>,
+}
+
+const APP_VERSION_COLS: &str = "pocket_code, version, spec, phone_doc, screen_doc, hashes, state, report, made_by, created_at";
+
+/// A new draft version as `crate::pocket::made::versions::draft` makes it.
+pub struct NewAppVersion<'a> {
+    pub code: &'a str,
+    pub spec: &'a str,
+    pub phone_doc: Option<&'a str>,
+    pub screen_doc: Option<&'a str>,
+    pub hashes: &'a str,
+    pub made_by: Option<&'a str>,
+    pub now: DateTime<Utc>,
 }
 
 /// The counts the main port's pocket list shows (no names, no guest text).
@@ -210,6 +251,24 @@ impl Database {
                 message_id TEXT PRIMARY KEY,
                 pocket_code TEXT NOT NULL
             )",
+            // pa12 L5: the versions of a bot-made app (`made` kit): its spec and, per surface, the
+            // whole document as served, with the CSP hashes taken over exactly those bytes. At most
+            // one live per pocket; at most `MAX_APP_VERSIONS`; deleted with the pocket
+            "CREATE TABLE IF NOT EXISTS pocket_app_versions (
+                pocket_code TEXT NOT NULL,
+                version INTEGER NOT NULL,
+                spec TEXT NOT NULL,
+                phone_doc TEXT,
+                screen_doc TEXT,
+                hashes TEXT NOT NULL DEFAULT '{}',
+                state TEXT NOT NULL DEFAULT 'draft'
+                    CHECK (state IN ('draft', 'checking', 'passed', 'failed', 'live', 'retired')),
+                report TEXT,
+                made_by TEXT,
+                created_at TEXT NOT NULL,
+                PRIMARY KEY (pocket_code, version)
+            )",
+            "CREATE UNIQUE INDEX IF NOT EXISTS pocket_app_versions_live ON pocket_app_versions(pocket_code) WHERE state = 'live'",
         ] {
             sqlx::query(stmt).execute(&self.pool).await?;
         }
@@ -354,10 +413,10 @@ impl Database {
         Ok(done.rows_affected() > 0)
     }
 
-    /// Deletes the pocket, its players, keys and events. Final: there is no undo.
+    /// Deletes the pocket, its players, keys, events and app versions. Final: there is no undo.
     pub async fn pocket_delete(&self, code: &str) -> Result<bool, DbError> {
         let mut tx = self.pool.begin().await?;
-        for table in ["pocket_events", "pocket_guest_keys", "pocket_host_links", "pocket_players", "pocket_schedule"] {
+        for table in ["pocket_events", "pocket_guest_keys", "pocket_host_links", "pocket_players", "pocket_schedule", "pocket_app_versions"] {
             sqlx::query(&format!("DELETE FROM {table} WHERE pocket_code = ?")).bind(code).execute(&mut *tx).await?;
         }
         let done = sqlx::query("DELETE FROM pocket_apps WHERE code = ?").bind(code).execute(&mut *tx).await?;
@@ -861,5 +920,135 @@ impl Database {
             .execute(&self.pool)
             .await?;
         Ok(done.rows_affected() > 0)
+    }
+
+    // pa12 L5: app versions (callers hold the pocket's lock)
+
+    /// Adds a draft as the next version number and drops versions beyond [`MAX_APP_VERSIONS`]
+    /// (failed and draft ones first, oldest first; never the live one, the new one or the newest
+    /// rollback target), in one transaction. Returns the new version number.
+    pub async fn pocket_app_version_insert(&self, v: NewAppVersion<'_>) -> Result<i64, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let (version,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(version), 0) + 1 FROM pocket_app_versions WHERE pocket_code = ?")
+            .bind(v.code)
+            .fetch_one(&mut *tx)
+            .await?;
+        sqlx::query(
+            "INSERT INTO pocket_app_versions (pocket_code, version, spec, phone_doc, screen_doc, hashes, state, made_by, created_at) \
+             VALUES (?, ?, ?, ?, ?, ?, 'draft', ?, ?)",
+        )
+        .bind(v.code)
+        .bind(version)
+        .bind(v.spec)
+        .bind(v.phone_doc)
+        .bind(v.screen_doc)
+        .bind(v.hashes)
+        .bind(v.made_by)
+        .bind(v.now)
+        .execute(&mut *tx)
+        .await?;
+        let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pocket_app_versions WHERE pocket_code = ?").bind(v.code).fetch_one(&mut *tx).await?;
+        if count > MAX_APP_VERSIONS {
+            // Never the live one, the one just made, or the newest passed/retired one below the
+            // live one (what a rollback would pick; with nothing live, what go-live would): a bot
+            // spamming drafts can't evict it (QA F4). Failed and draft ones go first, oldest first.
+            sqlx::query(
+                "DELETE FROM pocket_app_versions WHERE pocket_code = ?1 AND version IN \
+                 (SELECT version FROM pocket_app_versions WHERE pocket_code = ?1 AND state != 'live' AND version != ?2 \
+                    AND version IS NOT (SELECT MAX(version) FROM pocket_app_versions WHERE pocket_code = ?1 \
+                      AND state IN ('passed', 'retired') AND version < COALESCE((SELECT version FROM pocket_app_versions \
+                        WHERE pocket_code = ?1 AND state = 'live'), 9223372036854775807)) \
+                  ORDER BY CASE WHEN state IN ('failed', 'draft') THEN 0 ELSE 1 END, version LIMIT ?3)",
+            )
+            .bind(v.code)
+            .bind(version)
+            .bind(count - MAX_APP_VERSIONS)
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+        Ok(version)
+    }
+
+    pub async fn pocket_app_version(&self, code: &str, version: i64) -> Result<Option<AppVersionRow>, DbError> {
+        Ok(sqlx::query_as(&format!("SELECT {APP_VERSION_COLS} FROM pocket_app_versions WHERE pocket_code = ? AND version = ?"))
+            .bind(code)
+            .bind(version)
+            .fetch_optional(&self.pool)
+            .await?)
+    }
+
+    /// Newest first, without the documents.
+    pub async fn pocket_app_versions(&self, code: &str) -> Result<Vec<AppVersionInfo>, DbError> {
+        Ok(sqlx::query_as("SELECT version, state, report, made_by, created_at FROM pocket_app_versions WHERE pocket_code = ? ORDER BY version DESC")
+            .bind(code)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
+    pub async fn pocket_app_live_version(&self, code: &str) -> Result<Option<i64>, DbError> {
+        let row: Option<(i64,)> = sqlx::query_as("SELECT version FROM pocket_app_versions WHERE pocket_code = ? AND state = 'live'")
+            .bind(code)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|r| r.0))
+    }
+
+    /// Moves a version that is still `draft` or `checking` to `to` (`checking`, `passed` or
+    /// `failed`), with the check's report. `false` when it isn't there or has moved on.
+    pub async fn pocket_app_version_set_state(&self, code: &str, version: i64, to: &str, report: Option<&str>) -> Result<bool, DbError> {
+        let done = sqlx::query(
+            "UPDATE pocket_app_versions SET state = ?, report = COALESCE(?, report) \
+             WHERE pocket_code = ? AND version = ? AND state IN ('draft', 'checking')",
+        )
+        .bind(to)
+        .bind(report)
+        .bind(code)
+        .bind(version)
+        .execute(&self.pool)
+        .await?;
+        Ok(done.rows_affected() > 0)
+    }
+
+    /// Makes `version` the live one, if its state is one of `from`: the live one before it
+    /// becomes `old_to` (with `old_report`, if given), and the pocket takes the version's spec and
+    /// title and bumps its own version, in one transaction. `false` (nothing changed) when the
+    /// version isn't in `from`.
+    pub async fn pocket_app_make_live(
+        &self,
+        code: &str,
+        version: i64,
+        from: &[&str],
+        (old_to, old_report): (&str, Option<&str>),
+        spec: &str,
+        title: &str,
+    ) -> Result<bool, DbError> {
+        let mut tx = self.pool.begin().await?;
+        let (state,): (Option<String>,) = sqlx::query_as("SELECT (SELECT state FROM pocket_app_versions WHERE pocket_code = ? AND version = ?)")
+            .bind(code)
+            .bind(version)
+            .fetch_one(&mut *tx)
+            .await?;
+        if !state.is_some_and(|s| from.contains(&s.as_str())) {
+            return Ok(false);
+        }
+        sqlx::query("UPDATE pocket_app_versions SET state = ?, report = COALESCE(?, report) WHERE pocket_code = ? AND state = 'live'")
+            .bind(old_to)
+            .bind(old_report)
+            .bind(code)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("UPDATE pocket_app_versions SET state = 'live' WHERE pocket_code = ? AND version = ?").bind(code).bind(version).execute(&mut *tx).await?;
+        let done = sqlx::query("UPDATE pocket_apps SET spec = ?, title = ?, version = version + 1 WHERE code = ?")
+            .bind(spec)
+            .bind(title)
+            .bind(code)
+            .execute(&mut *tx)
+            .await?;
+        if done.rows_affected() == 0 {
+            return Ok(false);
+        }
+        tx.commit().await?;
+        Ok(true)
     }
 }
