@@ -84,13 +84,14 @@ card_art: avatar:brand
 </ol>
 
 <h2 id="fit">Who it fits, and who should pick something else</h2>
-<p>kwant fits if you are comfortable building from source or running a binary on a VPS, want several bots with different roles that hand work to each other, and want approvals before risky steps. It is a poorer fit if you want no machine to look after: you run it yourself, the Mac app isn't notarized by Apple yet (macOS asks you to open it once under System Settings), and routines only run while your machine is on.</p>
+<p>kwant fits if you are comfortable building from source or running a binary on a VPS, want several bots with different roles that hand work to each other, and want approvals before risky steps. It is a poorer fit if you want no machine to look after: you run it yourself, the Mac app isn't notarized by Apple yet (macOS asks you to open it once under System Settings), and routines only run while your machine is on. If you'd rather not keep a machine on, <a href="docs/install.html#railway">deploy it on Railway</a> in one click.</p>
 <p>Coming from another agent? The <a href="alternatives/grok-bot.html">Grok Bot</a>, <a href="alternatives/openclaw.html">OpenClaw</a> and <a href="alternatives/hermes-agent.html">Hermes Agent</a> alternative pages show how the import works. Weighing open-source options? See <a href="alternatives/grok-bot.html#open-source">open-source Grok Bot alternatives compared</a>.</p>
 
 <h2 id="start">Get started</h2>
 <p>Build <code>kwnt</code>, add one login or key, and ask your team a question.</p>
 <ul>
   <li><a href="docs/install.html">Install kwnt</a> on a laptop, a VPS or with Docker</li>
+  <li><a href="{{railway_url}}" rel="noopener">Deploy on Railway</a> in one click, with no server of your own</li>
   <li><a href="docs/quickstart.html">Quickstart</a></li>
   <li>See <a href="features.html">all features</a></li>
   <li><a href="https://github.com/alexsergivan/kwant" rel="noopener">Source and releases on GitHub</a></li>
@@ -105,7 +106,7 @@ card_art: avatar:brand
 <h3>What do I need to run kwant?</h3>
 <p>A computer or VPS that stays on, Rust and Node.js to build it, and at least one AI login, API key or a local Ollama model. Once built, the <code>kwnt</code> binary needs no Node.js. Docker is only needed for VM mode and the bots' shared browser. kwant also sets up a small Python service called Laya to pick which bot answers.</p>
 <h3>Can the bots run while I am away?</h3>
-<p>Yes. Routines run a prompt on a schedule, such as daily, weekly or a cron rule, and post the answer in a chat. They run on your own machine, so they run while that machine is on. A small VPS keeps them going around the clock.</p>
+<p>Yes. Routines run a prompt on a schedule, such as daily, weekly or a cron rule, and post the answer in a chat. They run on your own machine, so they run while that machine is on. A small VPS, or a one-click deploy on Railway, keeps them going around the clock.</p>
 <h3>How do I stop a bot doing something I did not want?</h3>
 <p>kwant shows an approval card with the exact command or arguments before risky steps. You can allow once, always allow or deny. Payments always ask. The default "ask only when risky" mode guards against accidents but is not a sandbox, so use the stricter ask mode for bots or folders you do not trust.</p>
 <h3>Is kwant free?</h3>

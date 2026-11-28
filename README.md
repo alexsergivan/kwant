@@ -107,6 +107,7 @@ It's written in Rust (Tokio, Axum, SQLite) with a React web app embedded in the 
 - **New in 0.9.55.** **Tools before sign-in pages**: a bot that hits a sign-in page for a site its tools cover uses those tools instead of asking you to sign in. **Open Tools**: a step that needs a new secret says "needs you in Tools", and Open Tools goes straight to that server. **Chat holds your place**: scroll up to read and nothing moves the chat until you come back to the bottom, send, or press jump to latest. **Bot colours in chat**: each bot's reply bubble wears a dark tint of its avatar's colour, so a team chat shows who is talking at a glance.
 - **New in 0.9.56.** A time on every chat row.
 - **New in 0.9.57.** **Your bots come alive**: avatars show a face for each mood, blink and glance around, perk up when you message them and say hello when they join (with reduced motion on, only the faces change).
+- **New in 0.9.58.** **Calmer chat**: bot replies are plain text with a thin line in the bot's colour beside them; coloured boxes only show up for errors, warnings and questions for you. **Deleting a bot is safe again**: the page no longer goes blank when you delete a bot that is in a team, and if a page ever hits an error it shows a short note and a Reload button. **Run it on Railway**: kwant.si now has a Deploy on Railway card that sets up kwant in the cloud in one click, no server needed. **Team chats show every member's requests**: an approval request from any bot in a team, not only the lead, now shows in that team's chat. **Clearer small avatars**: in the sidebar and on phone replies, a bot's mood, status and model marks sit on the avatar's corner instead of over its face, and only its newest reply shows how it feels. **Bots perk up when you message them**: in a direct chat, the bot's avatar widens its eyes and hops a little right after you send, then blinks into thinking.
 
 0.8 added bots that show their work, approvals off reaching every engine, drag and drop into any chat, import from more places, fresh-eyes reviews with the pre-push card, and Claude kept away from your secrets on a Mac. Every change is in the [CHANGELOG](CHANGELOG.md).
 
@@ -310,9 +311,13 @@ echo KWNT_ALLOWED_ORIGINS=https://kwant.example.com >> .env && docker compose up
 - **kwant's own `execute_shell` tool** runs in per-team Docker containers, so it isn't available inside this stack: that would need the host's Docker socket, which is root on the host. The CLIs' own shell tools work inside the kwnt container.
 - **Upgrading from an older image:** kwnt now runs as uid 10001, not root. If it says `/data isn't writable`, run once: `docker compose run --rm -u root kwnt chown -R 10001:10001 /data`.
 
-### Render, Railway, CasaOS, Umbrel and Coolify
+### Render, Railway, DigitalOcean, CasaOS, Umbrel and Coolify
 
-[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/alexsergivan/kwant) [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/kwant-1?utm_medium=integration&utm_source=button&utm_campaign=kwant) or [Deploy kwant + Laya](https://railway.com/deploy/kwant-laya?utm_medium=integration&utm_source=button&utm_campaign=kwant)
+[![Deploy to Render](https://render.com/images/deploy-to-render-button.svg)](https://render.com/deploy?repo=https://github.com/alexsergivan/kwant) [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/kwant-1?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant) or [Deploy kwant + Laya](https://railway.com/deploy/kwant-laya?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant)
+
+*We earn commissions when you shop through the links below.*
+
+[Create a DigitalOcean account](https://www.awin1.com/cread.php?awinmid=123996&awinaffid=3169369&ued=https%3A%2F%2Fwww.digitalocean.com%2F) and run kwant on a 2 GB Droplet (4 GB with Laya). A DigitalOcean 1-Click App is coming soon.
 
 The button reads [`render.yaml`](render.yaml): one web service from the released image with a 1 GB disk on `/data`. **Render keeps files only on a disk, and disks need a paid instance** (Starter or up), so the free plan won't work. Render makes the sign-in token: copy `KWNT_API_TOKEN` from the service's **Environment** page and paste it on the sign-in screen.
 

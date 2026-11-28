@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client';
 import { App } from './Shell';
 import { SandboxViewer } from './components/SandboxViewer';
 import { AuthGate } from './components/AuthGate';
+import { AppErrorBoundary } from './components/AppErrorBoundary';
 import { installFileDropGuard } from './dragPreview';
 import { captureInstallPrompt, registerServiceWorker, trackAppHeight } from './pwa';
 import './styles/fonts.css';
@@ -29,8 +30,10 @@ const sandboxMatch = window.location.pathname.match(/^\/sandbox\/([^/]+)\/?$/);
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <AuthGate>
-      {sandboxMatch ? <SandboxViewer teamId={decodeURIComponent(sandboxMatch[1])} /> : <App />}
-    </AuthGate>
+    <AppErrorBoundary full>
+      <AuthGate>
+        {sandboxMatch ? <SandboxViewer teamId={decodeURIComponent(sandboxMatch[1])} /> : <App />}
+      </AuthGate>
+    </AppErrorBoundary>
   </React.StrictMode>,
 );
