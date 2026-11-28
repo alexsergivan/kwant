@@ -268,7 +268,8 @@ test('G2 in: summary, paid line only for them, who is coming, change my answer s
   assert.match(t.text(), /You're in, Mia!/);
   assert.match(t.$('[data-paid]').textContent, /Dana marked you as paid · Dec 4 · only you see this/);
   assert.equal(t.$('#lbl-who small').textContent, '12, incl. 3 plus-ones', 'the heading already says coming');
-  assert.equal(t.root.querySelectorAll('.who-grid li').length, 4);
+  assert.equal(t.root.querySelectorAll('.who-grid li:not([data-who-more])').length, 4);
+  assert.equal(t.$('[data-who-more] .empty').textContent, '+5', 'the fake counts 9 yes and names 4');
   assert.match(t.text(), /Maybe: Ana/);
   assert.equal(holo(t), 0);
   await click(t.$('[data-change]'));
@@ -288,6 +289,41 @@ test('G2 without names: counts only', async () => {
   assert.match(t.text(), /Got it, Mia/);
   t.app.stop();
 });
+
+// Rigel F1 on #1326: names on, but the people who said yes are still unnamed. The yes count is the server's.
+for (const [yes, people, want, more] of [
+  [2, 0, '2 people said yes. Their names are hidden.', null],
+  [1, 0, '1 person said yes. Their name is hidden.', null],
+  [3, 2, null, '+1'],
+  [5, 2, null, '+3'],
+  [1200, 2, null, '+1,198'],
+  [2, 2, null, null],
+  [0, 0, null, null],
+]) {
+  test(`G2 names on: ${yes} said yes, ${people} named`, async () => {
+    const t = harness('gather-rsvp-in');
+    const v = t.box.seat.view;
+    const named = v.people.filter((p) => p.answer === 'yes').slice(0, people);
+    assert.equal(named.length, people, 'the fake has enough named people');
+    v.people = [...named, ...v.people.filter((p) => p.answer !== 'yes')];
+    v.counts = { ...v.counts, yes, coming: yes };
+    await t.app.start(null);
+    await flush();
+    assert.equal(t.screen(), 'in');
+    const nobody = /Nobody has said yes yet\./.test(t.text());
+    assert.equal(nobody, yes === 0, 'the old line only when nobody said yes');
+    const line = t.$('[data-who-hidden]');
+    assert.equal(line?.textContent ?? null, want);
+    const tile = t.$('[data-who-more]');
+    assert.equal(tile ? tile.querySelector('.empty').textContent : null, more);
+    if (more) {
+      assert.equal(tile.parentElement, t.$('.who-grid'), 'the +N tile ends the grid');
+      const n = more.slice(1);
+      assert.equal(tile.querySelector('.vh').textContent, n === '1' ? '1 more person said yes. Their name is hidden.' : `${n} more people said yes. Their names are hidden.`);
+    }
+    t.app.stop();
+  });
+}
 
 // m8 (signup-coming-count): `coming` already counts plus-ones, so name plus-ones only when there are some.
 // Names on, the heading "Who's coming" already says the verb, so the count drops it (Mira, copy-check.md 1).

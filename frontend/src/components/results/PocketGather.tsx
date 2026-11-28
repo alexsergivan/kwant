@@ -1663,7 +1663,7 @@ export function namesHelper(face: GatherFace, on: boolean, hidden: number): stri
     : `${num(hidden)} people ${did} before you turned names on. Guests won't see their names until they choose to.`;
 }
 
-export const NamesSwitch: React.FC<{ g: GatherInfo; busy: boolean; onFlip: () => void }> = ({ g, busy, onFlip }) => {
+export const NamesSwitch: React.FC<{ g: GatherInfo; busy: boolean; onFlip: () => void; error?: string | null }> = ({ g, busy, onFlip, error }) => {
   const on = g.show_names;
   const id = `names-${g.face}`;
   return (
@@ -1690,6 +1690,13 @@ export const NamesSwitch: React.FC<{ g: GatherInfo; busy: boolean; onFlip: () =>
       <p id={`${id}-help`} className="pb-2.5 pl-[27px] pt-0.5 text-[13px] leading-[1.45] text-zinc-400 sm:text-2xs" data-names-help>
         {namesHelper(g.face, on, g.names_hidden)}
       </p>
+      {/* Rigel finding 1 (#1341): a failed flip says why right here, not in the card's done slot far below. */}
+      {error ? (
+        <p role="status" className="flex items-start gap-2 pb-2.5 pl-[27px] text-[15px] text-bad sm:text-[13px]" data-names-error>
+          <AlertTriangle size={15} className={ICON} aria-hidden="true" />
+          {error}
+        </p>
+      ) : null}
     </div>
   );
 };
@@ -1702,7 +1709,11 @@ export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void
   // The names switch's own value until the next view arrives: the optimistic flip, then what set_show_names returned.
   const [names, setNames] = useState<{ on: boolean; hidden: number } | null>(null);
   const [namesBusy, setNamesBusy] = useState(false);
-  useEffect(() => setNames(null), [block.gather]);
+  const [namesError, setNamesError] = useState<string | null>(null);
+  useEffect(() => {
+    setNames(null);
+    setNamesError(null);
+  }, [block.gather]);
   const g = useMemo(() => {
     const withTicks = withPaid(block.gather!, paid);
     return names ? { ...withTicks, show_names: names.on, names_hidden: names.hidden } : withTicks;
@@ -1741,6 +1752,7 @@ export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void
     const on = !was.on;
     setNames({ on, hidden: on ? was.hidden : 0 });
     setNamesBusy(true);
+    setNamesError(null);
     setDone(null);
     try {
       const view = await pocketApi.setShowNames(block.code, on);
@@ -1749,7 +1761,7 @@ export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void
       setNames({ on: typeof v.show_names === 'boolean' ? v.show_names : on, hidden: isCount(v.names_hidden) ? v.names_hidden : on ? was.hidden : 0 });
     } catch (e) {
       setNames(was);
-      setDone({ kind: 'error', text: `Couldn't do that: ${e instanceof PocketApiError ? e.message : 'something went wrong.'} Try again.`, final: false });
+      setNamesError(`Couldn't do that: ${e instanceof PocketApiError ? e.message : 'something went wrong.'} Try again.`);
     } finally {
       setNamesBusy(false);
     }
@@ -1796,7 +1808,7 @@ export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void
         {g.face === 'rsvp' && (results ? <RsvpResult g={g} /> : <RsvpRows g={g} nudges={g.nudges.length} />)}
         {g.face === 'signup' && (results ? <SignupResult g={g} /> : <SignupRows g={g} />)}
         {g.face === 'vote' && <VoteRows g={g} />}
-        {namesSwitch && <NamesSwitch g={g} busy={namesBusy} onFlip={() => void flipNames()} />}
+        {namesSwitch && <NamesSwitch g={g} busy={namesBusy} onFlip={() => void flipNames()} error={namesError} />}
         {showsPanel === 'people' && <PeoplePaidPanel block={block} g={g} setPaid={setPaid} />}
         {showsPanel === 'nudges' && <NudgesPanel block={block} g={g} />}
         {join}
