@@ -29,8 +29,6 @@ use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub const ID: &str = "santa";
-/// Fewest people a draw takes.
-pub const MIN_PEOPLE: usize = 3;
 /// Longest Santa question or answer, in characters.
 pub const ASK_MAX: usize = 200;
 /// Longest wish list, in characters.
@@ -48,127 +46,7 @@ pub const REVEALED: &str = "revealed";
 
 // ---- The draw (pure, seeded in tests) ----
 
-/// A small seedable generator (SplitMix64): tests replay draws by seed; real draws seed it from
-/// the operating system.
-pub struct Rng(u64);
-
-impl Rng {
-    pub fn seeded(seed: u64) -> Self {
-        Rng(seed)
-    }
-
-    pub fn from_os() -> Self {
-        let mut b = [0u8; 8];
-        let _ = ring::rand::SystemRandom::new().fill(&mut b);
-        Rng(u64::from_le_bytes(b))
-    }
-
-    fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
-    /// `0..n` (n ≤ 60, so the modulo bias is far below anything a person could notice).
-    pub fn below(&mut self, n: usize) -> usize {
-        (self.next() % n.max(1) as u64) as usize
-    }
-
-    pub fn shuffle<T>(&mut self, v: &mut [T]) {
-        for i in (1..v.len()).rev() {
-            let j = self.below(i + 1);
-            v.swap(i, j);
-        }
-    }
-}
-
-/// Why names can't be drawn.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Block {
-    /// Fewer than [`MIN_PEOPLE`].
-    TooFew,
-    /// This person is kept apart from everyone but one (a loop needs a giver and a receiver).
-    NoOneLeft(usize),
-    /// Everyone has two people left, yet no single loop fits the pairs.
-    NoLoop,
-}
-
-/// Tries before the backtracking search; a random order of 9 people with 2 couples fits about
-/// half the time, so this almost never runs out.
-const SHUFFLES: usize = 2000;
-/// Steps the backtracking search may take before it gives up (well under a second).
-const SEARCH_STEPS: u64 = 2_000_000;
-
-/// One random loop through `n` people: `order[k]` gives to `order[k + 1]`, the last to the
-/// first. `apart(a, b)` (symmetric) keeps two people from giving to each other. A single loop
-/// means nobody draws themselves and, from 3 people on, no two people draw each other.
-pub fn draw_loop(n: usize, apart: &dyn Fn(usize, usize) -> bool, rng: &mut Rng) -> Result<Vec<usize>, Block> {
-    if n < MIN_PEOPLE {
-        return Err(Block::TooFew);
-    }
-    let ok = |a: usize, b: usize| a != b && !apart(a, b) && !apart(b, a);
-    if let Some(i) = (0..n).find(|&i| (0..n).filter(|&j| ok(i, j)).count() < 2) {
-        return Err(Block::NoOneLeft(i));
-    }
-    // Uniform over the loops that fit: shuffle and keep the first that fits
-    let mut order: Vec<usize> = (0..n).collect();
-    for _ in 0..SHUFFLES {
-        rng.shuffle(&mut order);
-        if (0..n).all(|k| ok(order[k], order[(k + 1) % n])) {
-            return Ok(order);
-        }
-    }
-    // Tight rules: a randomised depth-first search finds a loop or shows there is none
-    let start = rng.below(n);
-    let mut path = vec![start];
-    let mut used = vec![false; n];
-    used[start] = true;
-    let mut steps = SEARCH_STEPS;
-    if extend(&mut path, &mut used, n, &ok, rng, &mut steps) {
-        return Ok(path);
-    }
-    Err(Block::NoLoop)
-}
-
-fn extend(path: &mut Vec<usize>, used: &mut [bool], n: usize, ok: &dyn Fn(usize, usize) -> bool, rng: &mut Rng, steps: &mut u64) -> bool {
-    let last = path[path.len() - 1];
-    if path.len() == n {
-        return ok(last, path[0]);
-    }
-    if *steps == 0 {
-        return false;
-    }
-    *steps -= 1;
-    let mut next: Vec<usize> = (0..n).filter(|&j| !used[j] && ok(last, j)).collect();
-    rng.shuffle(&mut next);
-    for j in next {
-        used[j] = true;
-        path.push(j);
-        if extend(path, used, n, ok, rng, steps) {
-            return true;
-        }
-        path.pop();
-        used[j] = false;
-    }
-    false
-}
-
-/// A late joiner `new` goes between one giver and their receiver, so exactly one existing
-/// person's match changes. `None` when the pairs leave no such spot.
-pub fn insert_into_loop(order: &[usize], new: usize, apart: &dyn Fn(usize, usize) -> bool, rng: &mut Rng) -> Option<Vec<usize>> {
-    let n = order.len();
-    let ok = |a: usize, b: usize| a != b && !apart(a, b) && !apart(b, a);
-    let spots: Vec<usize> = (0..n).filter(|&k| ok(order[k], new) && ok(new, order[(k + 1) % n])).collect();
-    if spots.is_empty() {
-        return None;
-    }
-    let k = spots[rng.below(spots.len())];
-    let mut out = order.to_vec();
-    out.insert(k + 1, new);
-    Some(out)
-}
+pub use super::toolkit::{draw_loop, insert_into_loop, Block, Rng, MIN_PEOPLE};
 
 // ---- Kit state ----
 

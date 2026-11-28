@@ -9,6 +9,7 @@ card_art: avatar:devops
 <p class="kicker">Docs</p>
 <h1>Install &amp; run on a laptop, VPS or Docker</h1>
 <p class="intro"><code>kwnt</code> is one self-contained binary with the web app and SQLite built in. Build it once, then run it on your own computer or on a server. New to this? Read <a href="../self-hosted-ai-agents.html">what self-hosting an AI agent team involves</a>.</p>
+<p class="note">We earn commissions when you shop through the links below.</p>
 {{railway:install:h2}}
 
 <h2 id="build">Build the release binary</h2>
@@ -106,6 +107,8 @@ card_art: avatar:devops
 </ul>
 
 <h2 id="vps">On a VPS</h2>
+<h3 id="digitalocean">Run kwant on a DigitalOcean Droplet</h3>
+<p>A 2 GB Droplet is enough for kwant. If you also run Laya, pick 4 GB. <a href="https://www.awin1.com/cread.php?awinmid=123996&amp;awinaffid=3169369&amp;ued=https%3A%2F%2Fwww.digitalocean.com%2F" rel="sponsored noopener">Create a DigitalOcean account</a>, then follow the Docker or binary steps below. A DigitalOcean 1-Click App is coming soon.</p>
 <pre><code><span class="c"># 1. Copy the binary to your server</span>
 scp target/release/kwnt user@your-vps:/usr/local/bin/kwnt
 
