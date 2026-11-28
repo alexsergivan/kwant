@@ -158,6 +158,10 @@ async fn the_sweep_ends_a_listed_turn_no_job_holds() {
     assert!(!state.turns.has_turn("wa-1"));
     assert!(state.turns.has_turn("wa-2"));
     assert_eq!(ends_of(&mut rx, "wa-1"), 1, "every app hears it ended");
+    // …and its status keeps how: failed, as the turn_ended said (last-outcome-in-status)
+    let marks = state.turns.board(|b| b.marks.get("quant").cloned()).unwrap_or_default();
+    assert_eq!(marks.last_outcome, Some("failed"));
+    assert!(marks.last_finished_at.is_some());
 }
 
 #[tokio::test]

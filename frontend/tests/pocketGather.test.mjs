@@ -276,17 +276,16 @@ test('Sign-up open: pips, Full, waiting list and plain chips', async () => {
   assert.equal(button(v, 'People').getAttribute('title'), m.GATHER_LATER.signupPeople);
 });
 
-test('Vote open: who voted, live bars with the leader, no ballot words', async () => {
+test('Vote open: who voted, no count until the close (even if one arrives), no ballot words', async () => {
+  // secret-ballot-unlinkable: the server sends live: null while open; this fixture still carries
+  // counts, and the open card draws none of them
   const v = await card('voteOpen');
   const t = v.host.textContent;
   assert.match(t, /Voting · 15 of 22/);
   assert.match(t, /15 of 22 members voted/);
-  assert.match(t, /Live count · 1st choices/);
-  assert.match(t, /You see who voted, never what they picked\./);
-  const lead = v.host.querySelectorAll('[data-vbars] [data-lead]');
-  assert.equal(lead.length, 1);
-  assert.match(lead[0].textContent, /The Old Mill/);
-  assert.match(lead[0].querySelector('i').className, /bg-sky-400/);
+  assert.doesNotMatch(t, /Live count/);
+  assert.equal(v.host.querySelectorAll('[data-vbars]').length, 0);
+  assert.match(t, /You see who voted, never what they picked\. Totals show when voting closes\./);
   assert.equal(v.host.querySelector('[data-mood]').dataset.mood, 'working');
 });
 
@@ -557,4 +556,112 @@ test('kept line and the quiz and santa cards are untouched', async () => {
   assert.equal(m.keptLine({ deletes_on: 'Wed, Dec 9', event_at: null }), 'Kept until Wed, Dec 9 (7 days after it closes), then deleted.');
   ok(structuredClone(m.POCKET_FIXTURES.ready.results.blocks[0]));
   ok(structuredClone(m.SANTA_FIXTURES.collecting.results.blocks[0]));
+});
+
+// ---------------------------------------------------------------------------------------------------
+// rsvp-names-card-switch: the host's "Show names to guests" switch (copy-check.md 5 and 5b, #1324's set_show_names)
+
+const sw = (v) => v.host.querySelector('[role="switch"]');
+const help = (v) => v.host.querySelector('[data-names-help]')?.textContent.trim();
+
+test('names switch: on RSVP and sign-up while open or closed, never on a vote or once the pocket ended', async () => {
+  for (const name of ['rsvpOpen', 'rsvpNamesOff', 'rsvpNamesHidden', 'signupOpen', 'signupMoved', 'rsvpResult', 'signupResult']) {
+    const v = await card(name);
+    const s = sw(v);
+    assert.ok(s, `${name} has the switch`);
+    assert.equal(s.tagName, 'BUTTON', 'a real button, so Space and Enter flip it');
+    assert.equal(v.host.querySelector(`#${s.getAttribute('aria-labelledby')}`).textContent.trim(), 'Show names to guests');
+    assert.equal(v.host.querySelector(`#${s.getAttribute('aria-describedby')}`).textContent.trim(), help(v));
+    v.done();
+  }
+  for (const name of ['voteOpen', 'voteClosed', 'voteTie']) {
+    const v = await card(name);
+    assert.equal(sw(v), null, `${name}: no switch`);
+    v.done();
+  }
+  for (const name of ['rsvpResult', 'signupResult']) {
+    const b = raw(name);
+    b.state = 'ended';
+    b.ended = { at: '9:00 PM', winner: null, stats: null, deletes_on: null };
+    const v = await card(name, b);
+    assert.ok(v.host.querySelector('[data-gather]'), `${name} ended still renders`);
+    assert.equal(sw(v), null, `${name}: the pocket ended, no switch`);
+    v.done();
+  }
+  g.fetch = respond([]);
+  const v = await card('rsvpOpen');
+  await click(button(v, 'Stop'));
+  await click(v.host.querySelector('[data-action="confirm-stop"]'));
+  assert.equal(sw(v), null, 'Stop here: no switch');
+});
+
+test('names switch: label and helper per face and state, and the names_hidden 1 vs n wording', async () => {
+  const cases = [
+    ['rsvpNamesOff', {}, 'false', 'Guests see the totals, not who answered.'],
+    ['rsvpOpen', {}, 'true', "Guests see who's coming and who isn't."],
+    ['rsvpOpen', { names_hidden: 1 }, 'true', "1 person answered before you turned names on. Guests won't see their name until they choose to."],
+    ['rsvpNamesHidden', {}, 'true', "2 people answered before you turned names on. Guests won't see their names until they choose to."],
+    ['signupOpen', { show_names: false }, 'false', 'Guests see how full each slot is, not who signed up.'],
+    ['signupOpen', {}, 'true', "Guests see who's in each slot."],
+    ['signupOpen', { names_hidden: 1 }, 'true', "1 person signed up before you turned names on. Guests won't see their name until they choose to."],
+    ['signupOpen', { names_hidden: 3 }, 'true', "3 people signed up before you turned names on. Guests won't see their names until they choose to."],
+  ];
+  for (const [name, over, checked, text] of cases) {
+    const v = await card(name, withG(name, over));
+    assert.equal(sw(v).getAttribute('aria-checked'), checked, `${name} ${JSON.stringify(over)}`);
+    assert.equal(help(v), text);
+    v.done();
+  }
+});
+
+test('names switch: sends set_show_names with on, takes the returned view, no confirm', async () => {
+  const calls = [];
+  g.fetch = respond(calls, { host_view: { face: 'rsvp', show_names: true, names_hidden: 4 } });
+  const v = await card('rsvpNamesOff');
+  await click(sw(v));
+  assert.deepEqual(calls[0], ['POST', '/api/pockets/runclub/action', { name: 'set_show_names', body: { on: true } }]);
+  assert.equal(v.host.querySelector('[role="dialog"], [data-confirm]'), null, 'no confirm dialog');
+  assert.equal(sw(v).getAttribute('aria-checked'), 'true');
+  assert.equal(help(v), "4 people answered before you turned names on. Guests won't see their names until they choose to.");
+  g.fetch = respond(calls, { host_view: { face: 'rsvp', show_names: false, names_hidden: 0 } });
+  await click(sw(v));
+  assert.deepEqual(calls[1][2], { name: 'set_show_names', body: { on: false } });
+  assert.equal(sw(v).getAttribute('aria-checked'), 'false');
+  assert.equal(help(v), 'Guests see the totals, not who answered.');
+});
+
+test('names switch: flips at once and is busy while the request runs', async () => {
+  let release;
+  g.fetch = () => new Promise((r) => (release = () => r(new Response('{}', { status: 200 }))));
+  const v = await card('signupOpen');
+  await click(sw(v));
+  assert.equal(sw(v).getAttribute('aria-checked'), 'false', 'optimistic');
+  assert.equal(sw(v).getAttribute('aria-busy'), 'true');
+  assert.equal(help(v), 'Guests see how full each slot is, not who signed up.');
+  release();
+  await settle();
+  assert.equal(sw(v).getAttribute('aria-busy'), null);
+  assert.equal(sw(v).getAttribute('aria-checked'), 'false', 'a reply without a view keeps the flip');
+});
+
+test('names switch: a refusal rolls back and shows the card error line; the switch stays', async () => {
+  const calls = [];
+  g.fetch = respond(calls, { error: 'conflict', message: 'Answers were deleted.' }, 409);
+  const v = await card('rsvpNamesHidden');
+  await click(sw(v));
+  assert.equal(calls[0][2].body.on, false);
+  assert.equal(sw(v).getAttribute('aria-checked'), 'true', 'rolled back');
+  assert.match(help(v), /^2 people answered before/);
+  const err = v.host.querySelector('[data-done="error"]');
+  assert.match(err.textContent, /Couldn't do that: Answers were deleted\. Try again\./);
+  assert.ok(sw(v), 'still there');
+});
+
+test('names_hidden: missing (an older server) parses as 0; junk rejects the block', () => {
+  const b = raw('rsvpOpen');
+  delete b.gather.names_hidden;
+  assert.equal(m.validPocket(b).gather.names_hidden, 0);
+  assert.equal(m.validPocket(withG('rsvpNamesHidden', {})).gather.names_hidden, 2);
+  bad(withG('rsvpOpen', { names_hidden: -1 }), 'negative names_hidden');
+  bad(withG('rsvpOpen', { names_hidden: '2' }), 'names_hidden as text');
 });

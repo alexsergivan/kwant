@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- A fixture and e2e script (`frontend/guest/e2e/frame-policy/`) prove the pa12 custom-app frame policy (opaque origin, sandbox, CSP, Trusted Types, WebRTC removal) holds in real Chromium and WebKit, not just on paper (autonomy/pocket-apps/pa12/frame-policy.md)
+
 ## [Mac 0.9.58] - 2026-11-27
 
 kwant 0.9.58: plain bot replies, no blank page after deleting a bot, a one-click Railway card on kwant.si, member bots' requests show in team chats, clearer small avatars and the perk-up on send is back.
