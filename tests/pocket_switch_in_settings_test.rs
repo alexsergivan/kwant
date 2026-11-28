@@ -81,7 +81,8 @@ async fn settings_shows_the_switch_off_by_default_and_every_kit() {
     let s = settings(&e).await;
     assert_eq!(s["pocket_apps"], json!("off"), "{s}");
     let kits: Vec<&str> = s["pocket_kits"].as_array().unwrap_or_else(|| panic!("no pocket_kits: {s}")).iter().filter_map(Value::as_str).collect();
-    assert_eq!(kits, kwnt::pocket::kits::kit_ids(), "{s}");
+    assert_eq!(kits, kwnt::pocket::kits::plain_kit_ids(), "{s}");
+    assert!(!kits.contains(&kwnt::pocket::kits::MADE_ID), "made has its own switch: {s}");
     for k in ["quiz", "santa"] {
         assert!(kits.contains(&k), "{k}: {kits:?}");
     }
@@ -147,7 +148,7 @@ async fn the_value_is_stored_in_its_normal_form() {
     save(&e, json!({ "pocket_apps": "" })).await;
     assert!(!kwnt::pocket::enabled(&e.state.db).await);
     save(&e, json!({ "pocket_apps": "on" })).await;
-    assert_eq!(kwnt::pocket::switch(&e.state.db).await, kwnt::pocket::Switch::All);
+    assert_eq!(kwnt::pocket::switch(&e.state.db).await, kwnt::pocket::Switch::All { make: false });
 }
 
 #[tokio::test]

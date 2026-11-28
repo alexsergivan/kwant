@@ -11,6 +11,14 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 - A fixture and e2e script (`frontend/guest/e2e/frame-policy/`) prove the pa12 custom-app frame policy (opaque origin, sandbox, CSP, Trusted Types, WebRTC removal) holds in real Chromium and WebKit, not just on paper (autonomy/pocket-apps/pa12/frame-policy.md)
 
+### Fixed
+- The pocket app screen lint now checks label/legend/button text (not the whole page) for banned words, caps how much it repeats back in a refusal, and closes several cheap wording bypasses (#1407)
+- The pocket app screen lint's CSS check no longer lets a pseudo-class, a media query or a CSS comment/escape hide a banned declaration (`position: fixed`, an off-kwant colour, an off-kwant url) from it (#1407)
+- The pocket app screen lint's CSS check now scans an outer rule's own declarations even when it nests another rule inside it, and still checks a `{` left unclosed at end of input (#1407)
+- The pocket app screen lint's CSS check reads declarations in one linear pass instead of re-scanning a nested rule's text once per level it's nested at, so a deeply nested or unbalanced stylesheet no longer costs seconds of CPU per check (#1407)
+- The pocket app screen lint's CSS check now ends a quoted string at a bare newline, the same as a browser, so a declaration after a dropped closing quote is no longer hidden from it (#1407)
+- The pocket app screen lint's CSS check now treats a backslash followed by a CRLF line ending as one escaped newline, the same as a browser, instead of letting it end the string early and hide what follows (#1407)
+
 ## [Mac 0.9.58] - 2026-11-27
 
 kwant 0.9.58: plain bot replies, no blank page after deleting a bot, a one-click Railway card on kwant.si, member bots' requests show in team chats, clearer small avatars and the perk-up on send is back.

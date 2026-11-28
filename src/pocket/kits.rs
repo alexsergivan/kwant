@@ -314,6 +314,11 @@ pub trait Kit: Send + Sync + 'static {
     }
 }
 
+/// pa12 "Make your own": the kit for pockets a bot made (spec `made/1`, [`super::made`]). It needs
+/// `pocket_make` on as well as `pocket_apps` (see `super::Switch`), so `pocket_apps=on` alone
+/// turns on [`plain_kit_ids`], not every id in [`kit_ids`].
+pub const MADE_ID: &str = "made";
+
 /// The kit registered under `id`. `test` exists only in debug builds or with
 /// `KWNT_POCKET_TEST_KIT=1` (QA on a release image).
 pub fn kit(id: &str) -> Option<&'static dyn Kit> {
@@ -325,13 +330,20 @@ pub fn kit(id: &str) -> Option<&'static dyn Kit> {
         super::wall::ID => Some(&super::wall::Wall),
         super::desk::ID => Some(&super::desk::Desk),
         super::queue::ID => Some(&super::queue::Queue),
+        MADE_ID => Some(&super::made::Made),
         _ => None,
     }
 }
 
 /// Every kit id this build can make a pocket with.
 pub fn kit_ids() -> Vec<&'static str> {
-    ["test", crate::kits::quiz::KIT_ID, super::santa::ID, super::gather::ID, super::wall::ID, super::desk::ID, super::queue::ID].into_iter().filter(|id| kit(id).is_some()).collect()
+    ["test", crate::kits::quiz::KIT_ID, super::santa::ID, super::gather::ID, super::wall::ID, super::desk::ID, super::queue::ID, MADE_ID].into_iter().filter(|id| kit(id).is_some()).collect()
+}
+
+/// Every kit id but [`MADE_ID`] (pa12 L2): what `pocket_apps=on` turns on by itself and what
+/// Settings lists, since `made` has its own switch, `pocket_make`.
+pub fn plain_kit_ids() -> Vec<&'static str> {
+    kit_ids().into_iter().filter(|id| *id != MADE_ID).collect()
 }
 
 fn test_kit_allowed() -> bool {
