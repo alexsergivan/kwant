@@ -323,6 +323,8 @@ export function validGather(v: unknown, fallbackTitle?: string, now = new Date()
   const host_name = v.host_name === undefined || v.host_name === null ? null : firstName(v.host_name) ? v.host_name : undefined;
   if ([when, place, price, closes, event, host_name].includes(undefined)) return undefined;
   if (v.show_names !== undefined && v.show_names !== null && typeof v.show_names !== 'boolean') return undefined;
+  const namesHidden = v.names_hidden === undefined || v.names_hidden === null ? 0 : isCount(v.names_hidden) ? v.names_hidden : undefined;
+  if (namesHidden === undefined) return undefined;
   const membersN = v.members === undefined || v.members === null ? 0 : isCount(v.members) ? v.members : undefined;
   const notAnswered = arr(v.not_answered, MAX_PEOPLE);
   if (membersN === undefined || !notAnswered || !notAnswered.every(firstName)) return undefined;
@@ -390,6 +392,7 @@ export function validGather(v: unknown, fallbackTitle?: string, now = new Date()
     deletes_on: showDate(v.expires_at),
     host_name: host_name ?? null,
     show_names: v.show_names !== false,
+    names_hidden: namesHidden,
     members,
     not_answered: notAnswered as string[],
     rsvp,
@@ -1643,11 +1646,65 @@ const GatherActions: React.FC<{
 };
 
 // ---------------------------------------------------------------------------------------------------
+// The host's "Show names to guests" switch (rsvp-names-card-switch; copy-check.md 5 and 5b). RSVP and sign-up
+// only, until the pocket ends. No confirm either way: turning names on never outs anyone (#1324 keeps earlier
+// answers unnamed), turning them off only hides more.
+
+/** The helper line under the switch, per face and state (copy-check.md 5b, and 5 when names_hidden > 0). */
+export function namesHelper(face: GatherFace, on: boolean, hidden: number): string {
+  const rsvp = face === 'rsvp';
+  if (!on) return rsvp ? 'Guests see the totals, not who answered.' : 'Guests see how full each slot is, not who signed up.';
+  if (hidden <= 0) return rsvp ? "Guests see who's coming and who isn't." : "Guests see who's in each slot.";
+  const did = rsvp ? 'answered' : 'signed up';
+  return hidden === 1
+    ? `1 person ${did} before you turned names on. Guests won't see their name until they choose to.`
+    : `${num(hidden)} people ${did} before you turned names on. Guests won't see their names until they choose to.`;
+}
+
+export const NamesSwitch: React.FC<{ g: GatherInfo; busy: boolean; onFlip: () => void }> = ({ g, busy, onFlip }) => {
+  const on = g.show_names;
+  const id = `names-${g.face}`;
+  return (
+    <div className="rounded-2xl border border-hairline-strong bg-surface-rail/40 px-3.5" data-names-switch={on ? 'on' : 'off'}>
+      <button
+        type="button"
+        role="switch"
+        aria-checked={on}
+        aria-labelledby={`${id}-label`}
+        aria-describedby={`${id}-help`}
+        aria-busy={busy || undefined}
+        onClick={() => !busy && onFlip()}
+        className={`-mx-3.5 flex min-h-[44px] w-[calc(100%+1.75rem)] items-center gap-3 rounded-2xl px-3.5 pt-2.5 text-left kw-focus ${busy ? 'cursor-progress' : ''}`}
+      >
+        <Users size={15} className="shrink-0 text-sky-300" aria-hidden="true" />
+        <span id={`${id}-label`} className="min-w-0 flex-1 text-[15px] font-semibold text-zinc-100 sm:text-meta">
+          Show names to guests
+        </span>
+        <span className={`relative block h-5 w-9 shrink-0 rounded-full transition-colors motion-reduce:transition-none ${on ? 'bg-sky-600' : 'bg-zinc-700'} ${busy ? 'opacity-60' : ''}`} aria-hidden="true">
+          <span className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white transition-transform duration-150 motion-reduce:transition-none ${on ? 'translate-x-4' : ''}`} />
+        </span>
+        {busy && <span className="sr-only">(saving)</span>}
+      </button>
+      <p id={`${id}-help`} className="pb-2.5 pl-[27px] pt-0.5 text-[13px] leading-[1.45] text-zinc-400 sm:text-2xs" data-names-help>
+        {namesHelper(g.face, on, g.names_hidden)}
+      </p>
+    </div>
+  );
+};
+
+// ---------------------------------------------------------------------------------------------------
 // The card
 
 export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void }> = ({ block, ask }) => {
   const [paid, setPaid] = useState<PaidOverrides>({});
-  const g = useMemo(() => withPaid(block.gather!, paid), [block.gather, paid]);
+  // The names switch's own value until the next view arrives: the optimistic flip, then what set_show_names returned.
+  const [names, setNames] = useState<{ on: boolean; hidden: number } | null>(null);
+  const [namesBusy, setNamesBusy] = useState(false);
+  useEffect(() => setNames(null), [block.gather]);
+  const g = useMemo(() => {
+    const withTicks = withPaid(block.gather!, paid);
+    return names ? { ...withTicks, show_names: names.on, names_hidden: names.hidden } : withTicks;
+  }, [block.gather, paid, names]);
   const [panel, setPanel] = useState<Panel>(null);
   const [confirm, setConfirm] = useState<ConfirmKind | null>(null);
   const [busy, setBusy] = useState(false);
@@ -1677,8 +1734,30 @@ export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void
     setConfirm(null);
     focusAfter(() => opener.current?.querySelector<HTMLButtonElement>(`[data-action="${k}"]`));
   };
+  const flipNames = async () => {
+    const was = { on: g.show_names, hidden: g.names_hidden };
+    const on = !was.on;
+    setNames({ on, hidden: on ? was.hidden : 0 });
+    setNamesBusy(true);
+    setDone(null);
+    try {
+      const view = await pocketApi.setShowNames(block.code, on);
+      // The action answers { host_view, ... } (as santa and the wall read it); a bare view also works.
+      const v = isObj(view) ? (isObj(view.host_view) ? view.host_view : view) : {};
+      setNames({ on: typeof v.show_names === 'boolean' ? v.show_names : on, hidden: isCount(v.names_hidden) ? v.names_hidden : on ? was.hidden : 0 });
+    } catch (e) {
+      setNames(was);
+      setDone({ kind: 'error', text: `Couldn't do that: ${e instanceof PocketApiError ? e.message : 'something went wrong.'} Try again.`, final: false });
+    } finally {
+      setNamesBusy(false);
+    }
+  };
   const open = g.phase === 'open';
   const stopped = done?.kind === 'ok' && done.final;
+  // A closed RSVP or sign-up block is always state "ended" (Pocket.tsx validates phase closed with it), so the
+  // pocket itself has ended only when the box read says so (`ended`, withRead) or the host pressed Stop here.
+  const pocketEnded = !!block.ended || (open && block.state !== 'live');
+  const namesSwitch = g.face !== 'vote' && (open || g.phase === 'closed') && !pocketEnded && !stopped;
   const showsPanel = open && !stopped ? panel : null;
   // State 2 and 3 swap the join box for their panel; state 6 has no join box (the link is already out).
   const joinFull = g.face === 'rsvp' || g.join?.mode !== 'anywhere';
@@ -1715,6 +1794,7 @@ export const GatherCard: React.FC<{ block: PocketBlock; ask: (t: string) => void
         {g.face === 'rsvp' && (results ? <RsvpResult g={g} /> : <RsvpRows g={g} nudges={g.nudges.length} />)}
         {g.face === 'signup' && (results ? <SignupResult g={g} /> : <SignupRows g={g} />)}
         {g.face === 'vote' && <VoteRows g={g} />}
+        {namesSwitch && <NamesSwitch g={g} busy={namesBusy} onFlip={() => void flipNames()} />}
         {showsPanel === 'people' && <PeoplePaidPanel block={block} g={g} setPaid={setPaid} />}
         {showsPanel === 'nudges' && <NudgesPanel block={block} g={g} />}
         {join}
