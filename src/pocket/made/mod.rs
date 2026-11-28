@@ -4,17 +4,18 @@
 //! (`super::Switch`, pa12 L1).
 //!
 //! L2 is the data part: collections of rows with one read rule and one write rule each
-//! ([`collections`]), the guest and host action `put`, and the guest action `take_back`. The
-//! other server actions (lock, answer, vote, draw, timer, turns, reveal, step, adjust) come in
-//! L4; the app document and its versions in L5.
+//! ([`collections`]), the guest and host action `put`, and the guest action `take_back`. L4 adds
+//! the other server actions ([`actions`]: answer, vote, draw, timer, lock, turns, reveal, step,
+//! adjust); the app document and its versions come in L5.
 //!
 //! Every viewer gets only its own view, built on the box from the read rules. `secrets` is in the
 //! spec only: no view, lobby or summary reads it, and the kit state never copies it.
 
+pub mod actions;
 pub mod collections;
 pub mod spec;
 
-use super::kits::{spec_date, Kit, KitCtx, KitError, KitRules, Player, Retention, Viewer, DEFAULT_MAX_PLAYERS, MADE_ID};
+use super::kits::{Kit, KitCtx, KitError, KitRules, Player, Retention, Viewer, DEFAULT_MAX_PLAYERS, MADE_ID};
 use super::words;
 use serde_json::{json, Map, Value};
 
@@ -23,6 +24,11 @@ const DATE_FIELDS: &[&str] = &["reveal_at"];
 const RETENTION_DAYS: i64 = 7;
 
 pub struct Made;
+
+/// L2's `put`/`take_back`, then [`actions::GUEST`].
+pub const GUEST_ACTIONS: &[&str] = &["put", "take_back", "answer", "vote"];
+/// L2's `put`, then [`actions::HOST`].
+pub const HOST_ACTIONS: &[&str] = &["put", "draw", "timer_start", "timer_stop", "lock", "unlock", "turn_next", "turn_skip", "reveal", "step", "adjust"];
 
 /// The spec's `words`, each cleaned as the validator checked it; one that no longer passes is left out.
 fn clean_words(spec: &Value) -> Value {
@@ -49,7 +55,7 @@ impl Kit for Made {
             _ => Retention::AfterEnd { days: RETENTION_DAYS },
         };
         let max_players = spec["max_players"].as_u64().map_or(DEFAULT_MAX_PLAYERS, |n| (n as usize).clamp(1, DEFAULT_MAX_PLAYERS));
-        KitRules { retention, needs_pin: false, max_players, guest_actions: &["put", "take_back"], host_actions: &["put"] }
+        KitRules { retention, needs_pin: false, max_players, guest_actions: GUEST_ACTIONS, host_actions: HOST_ACTIONS }
     }
 
     fn validate_spec(&self, spec: &Value) -> Result<(), String> {
@@ -62,45 +68,62 @@ impl Kit for Made {
     }
 
     fn init(&self, _spec: &Value) -> Value {
-        json!({ "rows": {}, "locked": {}, "revealed": false })
+        json!({ "rows": {}, "locked": {}, "revealed": false, "secrets_shown": [], "timer": null, "turn": null, "step": null, "draw": null, "ballots": {}, "vote_locked": false, "adjust": [] })
+    }
+
+    fn on_join(&self, ctx: &mut KitCtx, state: &mut Value, player: &Player) {
+        actions::on_join(ctx, state, player);
+    }
+
+    fn may_remove(&self, _ctx: &KitCtx, state: &Value, _player_id: &str) -> Result<(), KitError> {
+        actions::may_remove(state)
     }
 
     fn on_remove(&self, _ctx: &mut KitCtx, state: &mut Value, player_id: &str) {
         collections::forget(state, player_id);
+        actions::forget(state, player_id);
     }
 
     fn act(&self, ctx: &mut KitCtx, state: &mut Value, actor: &Viewer, name: &str, body: &Value) -> Result<(), KitError> {
         match name {
             "put" => collections::put(ctx, state, actor, body),
             "take_back" => collections::take_back(ctx, state, actor, body),
+            "answer" => actions::answer(ctx, state, actor, body),
+            "vote" => actions::vote(ctx, state, actor, body),
+            // The core lets only the host send these (HOST_ACTIONS)
+            "draw" => actions::draw(ctx, state, body),
+            "timer_start" => actions::timer_start(ctx, state, body),
+            "timer_stop" => actions::timer_stop(state, body),
+            "lock" => actions::lock(ctx, state, body, true),
+            "unlock" => actions::lock(ctx, state, body, false),
+            "turn_next" => actions::turn(ctx, state, body, false),
+            "turn_skip" => actions::turn(ctx, state, body, true),
+            "reveal" => actions::reveal(ctx, state, body),
+            "step" => actions::step(ctx, state, body),
+            "adjust" => actions::adjust(ctx, state, body),
             _ => Err(KitError::BadInput(format!("unknown action {name}"))),
         }
     }
 
-    /// Flips `revealed` once `reveal_at` passes, so open sockets get the revealed rows.
+    /// A timer that ran out locks its collection, and `reveal_at` passing is the full reveal
+    /// (the `after_reveal` rows and the reveal's secret groups), so open sockets get them.
     fn tick(&self, ctx: &mut KitCtx, state: &mut Value) -> bool {
-        let due = ctx.spec.get("reveal_at").and_then(spec_date).is_some_and(|t| t <= ctx.now);
-        if due && !state["revealed"].as_bool().unwrap_or(false) {
-            state["revealed"] = json!(true);
-            return true;
-        }
-        false
+        actions::tick(ctx, state)
     }
 
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value {
         let players: Vec<Value> = ctx.players.iter().map(|p: &Player| json!({ "id": p.id, "name": p.name, "avatar": p.avatar })).collect();
-        json!({
+        let mut out = json!({
             "title": self.title(ctx.spec),
             "words": clean_words(ctx.spec),
             "collections": collections::view(ctx.spec, state, viewer, ctx.now),
-            // L4's `reveal` copies named secret items here; until then nothing is revealed
-            "revealed": {},
-            "step": null,
-            "timer": null,
-            "turn": null,
-            "scores": null,
             "players": players,
-        })
+        });
+        // revealed, step, timer, turn, scores, vote and draw, each per viewer (actions.rs)
+        if let Some(o) = out.as_object_mut() {
+            o.extend(actions::view_parts(ctx.spec, state, ctx.players, viewer, ctx.now));
+        }
+        out
     }
 
     /// Before joining: the title, the words and how many rows each `everyone` collection has.

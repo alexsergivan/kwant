@@ -14,6 +14,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 pub use crate::kits::quiz::matching::{match_text, normalise, TextMatch};
+/// The largest +/- a host gives in one tap: the quiz's cap, re-exported for the made kit (pa12 L4).
+pub use crate::kits::quiz::engine::MAX_ADJUST;
 
 /// Fewest people a draw takes.
 pub const MIN_PEOPLE: usize = 3;
