@@ -129,7 +129,7 @@ impl Switch {
     pub fn allows(&self, kit: &str) -> bool {
         match self {
             Switch::Off => false,
-            Switch::All { make } => *make || kit != kits::MADE_ID,
+            Switch::All { .. } => true, // RED PROOF: the made exclusion deleted
             Switch::Kits(k) => k.contains(&kit),
         }
     }
