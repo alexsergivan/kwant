@@ -303,7 +303,7 @@ pub async fn on_delegation(state: &AppState, delegation_id: &str) {
                     attach_result(state, &t, &d).await;
                     // The lead's results turn ran while the card was blocked, so it never saw the card
                     if finish(state, &t, "review", "the hand-off had finished").await {
-                        crate::server::delegation::spawn_review_turn(state, &d, false);
+                        crate::server::delegation::spawn_review_turn(state, vec![d.clone()], false);
                     }
                 }
             } else if !crate::server::delegation::carry_on(state, &d).await {
@@ -522,12 +522,16 @@ pub async fn wants_lead_review(state: &AppState, task: &Task) -> bool {
     has_result && review_asks(state, &task.id).await.0 < MAX_REVIEW_ASKS
 }
 
-/// Hand-off cards in Review whose lead review never came: kwnt restarted before or during the
-/// lead's turn, or the reminder was lost. Each gets a review turn once nothing has asked for
-/// `grace` and no turn for its hand-off is running; one whose batch still runs waits for it.
+/// Hand-off cards in Review whose lead review never came (kwnt restarted before or during the
+/// lead's turn), and cards the lead was asked about once and didn't review: the one reminder comes
+/// from here, never straight after the review turn. Each gets a review turn once nothing has asked
+/// for `grace` and no turn for its hand-off is running; one whose batch still runs waits for it.
+/// Cards due together for one lead and chat share one turn, so a batch gets one reminder.
 /// Called from [`reconcile`] with [`REVIEW_GRACE`].
 pub async fn sweep_unreviewed(state: &AppState, grace: std::time::Duration) {
     let now = chrono::Utc::now();
+    type Place = (String, Option<String>, Option<String>, Option<String>, bool);
+    let mut due: Vec<(Place, Vec<crate::db::threads::Delegation>)> = Vec::new();
     for t in state.db.tasks_in_state("review").await.unwrap_or_default() {
         let Some(id) = t.source_id.as_deref().filter(|_| t.source_kind == "delegation") else { continue };
         let Ok(Some(d)) = state.db.get_delegation(id).await else { continue };
@@ -544,7 +548,20 @@ pub async fn sweep_unreviewed(state: &AppState, grace: std::time::Duration) {
         if (now - quiet_since).to_std().unwrap_or_default() < grace {
             continue;
         }
-        crate::server::delegation::spawn_review_turn(state, &d, asks > 0);
+        let place: Place = (
+            d.lead_kwant_id.clone(),
+            d.origin_context().map(str::to_string),
+            d.origin_channel_id.clone(),
+            d.origin_thread_id.clone(),
+            asks > 0,
+        );
+        match due.iter_mut().find(|(p, _)| *p == place) {
+            Some((_, batch)) => batch.push(d),
+            None => due.push((place, vec![d])),
+        }
+    }
+    for ((.., reminder), batch) in due {
+        crate::server::delegation::spawn_review_turn(state, batch, reminder);
     }
 }
 

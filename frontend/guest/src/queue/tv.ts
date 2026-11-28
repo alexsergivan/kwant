@@ -72,6 +72,13 @@ export function hm(iso?: string): string {
   return d && !Number.isNaN(d.getTime()) ? d.toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' }) : '';
 }
 
+/** The refused-link screen: title, line, and the 10-minute note (m4). */
+export const TV_LINK_USED = [
+  'This big-screen link was already used',
+  'Each link opens one screen. To add another screen, open a new link from the queue card in kwant.',
+  "Links also stop working 10 minutes after they're made.",
+] as const;
+
 export class QueueTV {
   private api: Api<QueueTvView>;
   private live: Live<QueueTvView>;
@@ -292,7 +299,10 @@ export class QueueTV {
         body = this.calm('This queue has ended', 'Thanks for waiting!');
         break;
       case 'signed-out':
-        body = this.calm('This screen link has expired', 'Open the big screen again from the Pocket card in kwant.');
+        // m4 (queue-guest-minors): the #screen= link is one-time and lasts 10 minutes; the box refuses a spent and an
+        // old one alike (401 link_used_or_expired), so the copy names the common case and still holds for the rest,
+        // including a screen that later lost its cookie.
+        body = this.calm(TV_LINK_USED[0], TV_LINK_USED[1], [h('p', { class: 'tvsoft' }, TV_LINK_USED[2])]);
         break;
       case 'missing':
         body = this.calm("This queue isn't here any more", 'The host may have deleted it.');
