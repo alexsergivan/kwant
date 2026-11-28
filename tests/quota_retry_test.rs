@@ -132,7 +132,30 @@ fn the_retry_line_uses_the_persons_timezone() {
     assert!(line.contains(" at 23:10 UTC") && !line.contains("tomorrow"), "{line}");
     // A weekly limit days away names the day
     let line = parked::retry_line(utc("2026-12-01T08:10:00Z"), now, "Europe/Ljubljana");
-    assert!(line.contains("on Tue 1 Dec at 09:10 (in about 65 h)"), "{line}");
+    assert!(line.contains("on Tue 1 Dec at 09:10 (in about 3 days)"), "{line}");
+}
+
+/// limit-wait-days: a wait of 48 h or more is said in whole days (rounded to the nearest), so the
+/// person doesn't do maths; under 48 h it stays in hours or minutes.
+#[test]
+fn a_wait_of_two_days_or_more_is_said_in_days() {
+    let now = utc("2026-11-28T15:40:00Z");
+    let wait = |mins: i64| parked::retry_line(now + chrono::Duration::minutes(mins), now, "");
+    // 65 h, a weekly limit days away
+    let line = wait(65 * 60);
+    assert!(line.contains("(in about 3 days)"), "{line}");
+    assert!(!line.contains(" h)"), "{line}");
+    // Just under 48 h stays in hours
+    assert!(wait(47 * 60).contains("(in about 47 h)"));
+    assert!(wait(48 * 60 - 1).contains("(in about 48 h)"));
+    // Exactly 48 h is 2 days; days round to the nearest
+    assert!(wait(48 * 60).contains("(in about 2 days)"));
+    assert!(wait(59 * 60 + 59).contains("(in about 2 days)"));
+    assert!(wait(60 * 60).contains("(in about 3 days)"));
+    assert!(wait(7 * 24 * 60).contains("(in about 7 days)"));
+    // Short waits are unchanged
+    assert!(wait(200).contains("(in about 3 h)"));
+    assert!(wait(20).contains("(in about 20 min)"));
 }
 
 /// m3 card half (limit-wait-says-so): a hand-off parked on a usage limit carries its retry time

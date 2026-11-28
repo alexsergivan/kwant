@@ -14,7 +14,14 @@ use chrono::{DateTime, Utc};
 /// keeps UTC and says so, so the line never claims a zone it didn't convert to.
 pub fn retry_line(at: DateTime<Utc>, now: DateTime<Utc>, tz: &str) -> String {
     let mins = (at - now).num_minutes().max(1);
-    let wait = if mins >= 90 { format!("about {} h", (mins + 30) / 60) } else { format!("about {mins} min") };
+    // From 48 h on, whole days (rounded) read better than "about 65 h"; the date names the exact time.
+    let wait = if mins >= 48 * 60 {
+        format!("about {} days", (mins + 720) / 1440)
+    } else if mins >= 90 {
+        format!("about {} h", (mins + 30) / 60)
+    } else {
+        format!("about {mins} min")
+    };
     let zone = Some(tz.trim()).filter(|t| !t.is_empty());
     let local = zone.and_then(|t| Some((crate::routines::now_in(t, at).ok()?, crate::routines::now_in(t, now).ok()?)));
     let (when, suffix) = match local {
