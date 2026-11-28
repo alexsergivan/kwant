@@ -170,6 +170,8 @@ async fn raw(app: &Router, method: &str, uri: &str, headers: &[(&str, &str)]) ->
     (status, headers, to_bytes(resp.into_body(), usize::MAX).await.unwrap().to_vec())
 }
 
+type Headers<'a> = Vec<(&'a str, &'a str)>;
+
 const IFRAME: (&str, &str) = ("sec-fetch-dest", "iframe");
 
 async fn doc(t: &T, code: &str, version: i64, surface: &str) -> (StatusCode, HeaderMap, Vec<u8>) {
@@ -288,7 +290,7 @@ async fn guest_state(t: &T, code: &str, key: &str) -> Res {
 }
 
 /// A WebSocket upgrade's headers plus `more`.
-fn upgrade<'a>(more: &[(&'a str, &'a str)]) -> Vec<(&'a str, &'a str)> {
+fn upgrade<'a>(more: &[(&'a str, &'a str)]) -> Headers<'a> {
     let mut h = vec![("connection", "upgrade"), ("upgrade", "websocket"), ("sec-websocket-version", "13"), ("sec-websocket-key", "dGhlIHNhbXBsZSBub25jZQ==")];
     h.extend_from_slice(more);
     h
@@ -375,7 +377,7 @@ async fn every_other_guest_answer_keeps_todays_csp_and_frame_denial() {
     let cookie = format!("{}={key}", guest::guest_cookie(&code));
     let same = ("origin", "http://pocket.example.net");
     let auth = format!("Bearer {host}");
-    let cases: Vec<(&str, String, Vec<(&str, &str)>)> = vec![
+    let cases: Vec<(&str, String, Headers)> = vec![
         ("GET", format!("/p/{code}"), vec![]),
         ("GET", format!("/p/{code}"), vec![IFRAME]),
         ("GET", "/p/_a/nope.js".into(), vec![]),
