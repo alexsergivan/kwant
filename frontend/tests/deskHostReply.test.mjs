@@ -232,6 +232,9 @@ test('ChatView swaps in the desk composer and the chip; the desk composer never 
   assert.match(view, /deskHandoff\(/);
   assert.match(view, /if \(deskGuest && isUser && deskSentTo\(msg\)\)\s*return <DeskSentRow /);
   assert.match(view, /placeSettled\(chatItems\.map\(itemTime\), deskGuest \? desk\.lines : \[\]\)/);
+  // F1 (Mira): Reply under Bell's messages is not drawn when deskGuest is set; every ReplyButton is gated on !deskGuest
+  assert.match(view, /\{!deskGuest && <ReplyButton /);
+  assert.doesNotMatch(view.replace(/\{!deskGuest && <ReplyButton /g, ''), /<ReplyButton /);
   assert.doesNotMatch(comp, /onSendMessage|sendMessage|\/api\/chat/);
   assert.match(comp, /pocketApi\.deskReply\(code, guestId, body\)/);
   const app = readFileSync(new URL('../src/App.tsx', import.meta.url), 'utf8');

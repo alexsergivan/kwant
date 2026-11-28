@@ -2643,7 +2643,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
               )}
               {msg.sender_role === 'kwant' && !workAhead && !msg.id.startsWith('temp-') && (
                 <>
-                  <ReplyButton botName={displayName} active={replyTo?.id === msg.id} onReply={() => startReply(msg)} />
+                  {/* desk-host-reply-composer F1: a guest thread has no bot composer, so Reply would be a dead control */}
+                  {!deskGuest && <ReplyButton botName={displayName} active={replyTo?.id === msg.id} onReply={() => startReply(msg)} />}
                   {onReact && (
                     <ReactionButtons
                       messageId={msg.id}
