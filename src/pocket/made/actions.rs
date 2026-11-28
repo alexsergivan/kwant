@@ -505,7 +505,7 @@ pub fn on_join(ctx: &KitCtx, state: &mut Value, player: &Player) {
         return;
     }
     let order: Vec<String> = state["draw"]["order"].as_array().map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
-    if order.iter().any(|id| *id == player.id) {
+    if order.contains(&player.id) {
         return;
     }
     // The players in the loop, then the new one, by index
