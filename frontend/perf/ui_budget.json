@@ -57,8 +57,9 @@
       "main": 49712
     },
     "guestAllGz": {
-      "max": 160531,
-      "main": 152887
+      "max": 171020,
+      "main": 162877,
+      "why": "pa12 P2: made kit blocks, lazy chunk via import('./made/made'), never in first load (#1391)"
     }
   },
   "dropped": {
