@@ -70,30 +70,13 @@ async fn not_found() -> Response {
     PocketError::not_found().into_response()
 }
 
-/// The pocket code a guest-port path names (`/p/<code>`, `/api/pocket/<code>/…`), if any.
-fn path_code(path: &str) -> Option<&str> {
-    let rest = path.strip_prefix("/api/pocket/").or_else(|| path.strip_prefix("/p/"))?;
-    rest.split('/').next().filter(|c| keys::valid_code(c))
-}
-
 /// Off means 404 for everything; a foreign Origin on a write or a WebSocket is refused; a
 /// method a path doesn't take is 404 too; every answer gets the safety headers.
-/// pa12 L1: a `made` pocket while "Make your own" is off is 404 too, like a code that doesn't
-/// exist (its page gets the gone screen), on every route and the WebSocket.
+/// (A `made` pocket while "Make your own" is off is hidden in [`pocket`], after the code is
+/// decoded, so every route answers it as a missing code.)
 async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let on = state.pocket.on.load(Ordering::SeqCst);
-    let hidden = match path_code(req.uri().path()) {
-        Some(code) if on => super::hidden(&state, code).await,
-        _ => false,
-    };
-    let mut res = if !on {
+    let mut res = if !state.pocket.on.load(Ordering::SeqCst) {
         PocketError::not_found().into_response()
-    } else if hidden {
-        if req.uri().path().starts_with("/p/") {
-            gone_response(page_asset(PAGE_INDEX))
-        } else {
-            PocketError::not_found().into_response()
-        }
     } else if (req.method() != Method::GET || req.headers().contains_key(header::UPGRADE)) && !same_origin(req.headers()) {
         PocketError::new(StatusCode::FORBIDDEN, "bad_origin", "This request came from another site.").into_response()
     } else {
@@ -164,11 +147,18 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(str::trim)
 }
 
+/// Every guest route starts here (or in [`host_as`], which calls it), with the code as the
+/// router decoded it. pa12 L1: a `made` pocket while "Make your own" is off answers exactly like a
+/// code that doesn't exist (QA D1: a check on the raw path missed `%61bcdef`).
 async fn pocket(state: &AppState, code: &str) -> PResult<Arc<Snapshot>> {
     if !keys::valid_code(code) {
         return Err(PocketError::not_found());
     }
-    super::snapshot(state, code).await?.ok_or_else(PocketError::not_found)
+    let s = super::snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
+    if super::made_off(state, &s).await {
+        return Err(PocketError::not_found());
+    }
+    Ok(s)
 }
 
 fn signed_out() -> PocketError {

@@ -66,8 +66,16 @@ async fn switches(t: &T, apps: &str, make: Option<&str>) {
 
 /// The person on this computer on the main port, or a guest through the guest port's public name.
 async fn send(app: &Router, local: bool, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
+    send_from(app, local, None, method, uri, body).await
+}
+
+/// [`send`] with an `Origin` header (a page on another site when it isn't the guest port's).
+async fn send_from(app: &Router, local: bool, origin: Option<&str>, method: &str, uri: &str, body: Option<Value>) -> (StatusCode, Value) {
     let host = if local { "127.0.0.1:8799" } else { "pocket.example.net" };
-    let req = Request::builder().method(method).uri(uri).header("host", host).header("content-type", "application/json");
+    let mut req = Request::builder().method(method).uri(uri).header("host", host).header("content-type", "application/json");
+    if let Some(o) = origin {
+        req = req.header("origin", o);
+    }
     let mut req = req.body(body.map(|b| Body::from(b.to_string())).unwrap_or_else(Body::empty)).unwrap();
     if local {
         req.extensions_mut().insert(ConnectInfo("127.0.0.1:50000".parse::<SocketAddr>().unwrap()));
@@ -112,20 +120,49 @@ async fn put_pocket(t: &T, kit: &str) -> String {
     code
 }
 
-/// What the guest port answers on each pocket route for `code`.
-async fn guest_statuses(t: &T, code: &str) -> Vec<(String, StatusCode)> {
+/// `code` with its first character percent-encoded (`%61bcdef` for `abcdef`): the router
+/// decodes it back to the same code (QA D1).
+fn encoded(code: &str) -> String {
+    format!("%{:02X}{}", code.as_bytes()[0], &code[1..])
+}
+
+/// What the guest port answers on each pocket route for `code` (as typed in the path), with the
+/// body of a JSON answer (`Null` for the page, whose HTML embeds nothing pocket-specific when gone).
+async fn guest_answers(t: &T, code: &str) -> Vec<(String, StatusCode, Value)> {
     let mut out = Vec::new();
     for (method, path, body) in [
         ("GET", format!("/p/{code}"), None),
         ("GET", format!("/api/pocket/{code}/info"), None),
         ("GET", format!("/api/pocket/{code}/state"), None),
         ("POST", format!("/api/pocket/{code}/join"), Some(json!({ "name": "Ana" }))),
+        ("POST", format!("/api/pocket/{code}/rejoin"), Some(json!({ "name": "Ana", "pin": "1234" }))),
+        ("POST", format!("/api/pocket/{code}/action"), Some(json!({ "name": "tap" }))),
+        ("POST", format!("/api/pocket/{code}/host/signin"), Some(json!({ "token": "x" }))),
         ("GET", format!("/api/pocket/{code}/host/state"), None),
+        ("POST", format!("/api/pocket/{code}/host/end"), None),
+        ("GET", format!("/api/pocket/{code}/photo/abc"), None),
     ] {
-        let (s, _) = send(&t.guest, false, method, &path, body).await;
-        out.push((path, s));
+        let (s, b) = send(&t.guest, false, method, &path, body).await;
+        let b = if path.starts_with("/p/") { Value::Null } else { b };
+        out.push((path, s, b));
     }
     out
+}
+
+/// A guest join for `code` posted from a page on another site.
+async fn foreign_join(t: &T, code: &str) -> (StatusCode, Value) {
+    send_from(&t.guest, false, Some("https://evil.example"), "POST", &format!("/api/pocket/{code}/join"), Some(json!({ "name": "Ana" }))).await
+}
+
+/// Every route of `code` answers exactly as the same route of `missing` (status and body), both
+/// as typed and percent-encoded.
+async fn answers_like_missing(t: &T, code: &str, missing: &str, when: &str) {
+    for (c, m) in [(code.to_string(), missing.to_string()), (encoded(code), encoded(missing))] {
+        for ((path, got, body), (_, want, want_body)) in guest_answers(t, &c).await.into_iter().zip(guest_answers(t, &m).await) {
+            assert_eq!(got, StatusCode::NOT_FOUND, "{when}: {path}: {body}");
+            assert_eq!((got, &body), (want, &want_body), "{when}: {path} answers like a missing code");
+        }
+    }
 }
 
 #[tokio::test]
@@ -242,11 +279,19 @@ async fn the_guest_port_hides_made_pockets_while_made_is_off() {
     let made = put_pocket(&t, MADE_ID).await;
     let other = put_pocket(&t, "test").await;
 
-    // Off: every route of the made pocket is 404, as for a code that doesn't exist
+    // Off: every route of the made pocket is 404, as for a code that doesn't exist, also with
+    // the code percent-encoded (the router decodes it; QA D1)
     let missing = keys::new_code();
-    for ((path, got), (_, want)) in guest_statuses(&t, &made).await.into_iter().zip(guest_statuses(&t, &missing).await) {
-        assert_eq!(got, StatusCode::NOT_FOUND, "{path}");
-        assert_eq!(got, want, "{path} answers like a missing code");
+    answers_like_missing(&t, &made, &missing, "made off").await;
+    // The encoded form really reaches the pocket: another kit's pocket answers through it
+    let (s, b) = send(&t.guest, false, "GET", &format!("/api/pocket/{}/info", encoded(&other)), None).await;
+    assert_eq!((s, b["pocket"]["code"].clone()), (StatusCode::OK, json!(other)), "{b}");
+    // A write from another site: refused the same way for a hidden code and a missing one (QA 1)
+    for code in [made.clone(), encoded(&made)] {
+        let (hidden_s, hidden_b) = foreign_join(&t, &code).await;
+        let (missing_s, missing_b) = foreign_join(&t, &missing).await;
+        assert_eq!((hidden_s, &hidden_b), (missing_s, &missing_b), "{code}");
+        assert_eq!(hidden_s, StatusCode::FORBIDDEN, "{hidden_b}");
     }
     let (s, b) = send(&t.guest, false, "GET", &format!("/api/pocket/{made}/info"), None).await;
     assert_eq!((s, b["error"].clone()), (StatusCode::NOT_FOUND, json!("not_found")), "{b}");
@@ -254,11 +299,13 @@ async fn the_guest_port_hides_made_pockets_while_made_is_off() {
     let (s, b) = send(&t.guest, false, "GET", &format!("/api/pocket/{other}/info"), None).await;
     assert_eq!(s, StatusCode::OK, "{b}");
 
-    // Both on: the made pocket answers
+    // Both on: the made pocket answers, typed or encoded
     switches(&t, "on", Some("on")).await;
-    let (s, b) = send(&t.guest, false, "GET", &format!("/api/pocket/{made}/info"), None).await;
-    assert_eq!(s, StatusCode::OK, "{b}");
-    assert_eq!(b["pocket"]["kit"], MADE_ID, "{b}");
+    for c in [made.clone(), encoded(&made)] {
+        let (s, b) = send(&t.guest, false, "GET", &format!("/api/pocket/{c}/info"), None).await;
+        assert_eq!(s, StatusCode::OK, "{c}: {b}");
+        assert_eq!(b["pocket"]["kit"], MADE_ID, "{b}");
+    }
 
     // pocket_make on but pocket_apps not naming made: hidden again
     switches(&t, "santa,test", Some("on")).await;
@@ -271,9 +318,7 @@ async fn the_guest_port_hides_made_pockets_while_made_is_off() {
     switches(&t, "on", Some("on")).await;
     assert_eq!(send(&t.guest, false, "GET", &format!("/api/pocket/{made}/info"), None).await.0, StatusCode::OK);
     switches(&t, "on", Some("off")).await;
-    for (path, got) in guest_statuses(&t, &made).await {
-        assert_eq!(got, StatusCode::NOT_FOUND, "{path} after pocket_make went off");
-    }
+    answers_like_missing(&t, &made, &missing, "after pocket_make went off").await;
     assert!(pocket::hidden(&t.state, &made).await);
     assert!(!pocket::hidden(&t.state, &other).await);
 }

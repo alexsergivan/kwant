@@ -221,9 +221,15 @@ pub async fn hidden(state: &AppState, code: &str) -> bool {
         return false;
     }
     match snapshot(state, code).await {
-        Ok(Some(s)) if s.row.kit == kits::MADE_ID => !switch(&state.db).await.allows(kits::MADE_ID),
+        Ok(Some(s)) => made_off(state, &s).await,
         _ => false,
     }
+}
+
+/// [`hidden`] for a snapshot already in hand (the guest port's `pocket()`): the settings are read
+/// only for a `made` pocket.
+pub async fn made_off(state: &AppState, s: &Snapshot) -> bool {
+    s.row.kit == kits::MADE_ID && !switch(&state.db).await.allows(kits::MADE_ID)
 }
 
 /// At least one kit is on: the guest port listens, the sweeper runs, the person's list shows.
