@@ -814,7 +814,7 @@ async fn switched_off_nothing_starts_and_nothing_answers() {
     // The list is empty; everything else on the main port is 404
     let r = send(&t.main, "GET", "/api/pockets", None, &local).await;
     assert_eq!(r.status, StatusCode::OK);
-    assert_eq!(r.body, json!({ "enabled": false, "pocket_port": null, "kits": [], "pockets": [] }));
+    assert_eq!(r.body, json!({ "enabled": false, "pocket_port": null, "kits": [], "make": false, "pockets": [] }));
     let r = send(&t.main, "POST", "/api/pockets", Some(json!({ "kit": "test", "spec": { "title": "x" } })), &local).await;
     assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::NOT_FOUND, Some("pocket_apps_off")));
     // A pocket left from before: the sweeper leaves it alone and the guest router answers nothing

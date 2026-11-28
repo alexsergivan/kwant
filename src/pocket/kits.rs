@@ -314,6 +314,11 @@ pub trait Kit: Send + Sync + 'static {
     }
 }
 
+/// pa12 "Make your own": the kit for pockets whose screens a bot wrote (spec `made/1`). It needs
+/// `pocket_make` on as well as `pocket_apps` (see `super::Switch`). Not in [`kit`] or [`kit_ids`]
+/// until pa12 L2 adds the kit; the switch already knows the id, so the gate is there first.
+pub const MADE_ID: &str = "made";
+
 /// The kit registered under `id`. `test` exists only in debug builds or with
 /// `KWNT_POCKET_TEST_KIT=1` (QA on a release image).
 pub fn kit(id: &str) -> Option<&'static dyn Kit> {
