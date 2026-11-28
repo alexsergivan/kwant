@@ -114,6 +114,11 @@ export interface GatherView {
   counts?: { yes: number; maybe: number; no: number; coming: number };
   /** RSVP names + Yes / Maybe / No, only with show_names. */
   people: (Person & { answer: Answer })[] | null;
+  /**
+   * rsvp-names-switch: the host turned names on after this guest answered, so their name stays off everyone's list
+   * until they tap "Show my name" or answer again. Only on an RSVP or sign-up, only while names are on.
+   */
+  names_notice: boolean;
   live: Votes[] | null;
   result: Result | null;
 }
@@ -330,6 +335,7 @@ export function gatherFrom(json: unknown): { view: GatherView; version?: number 
             }),
           )
         : null,
+    names_notice: !!seat && facts.face !== 'vote' && facts.show_names && kv.names_notice === true,
     // Live 1st choices only for a guest who voted, while voting is open (the server decides; this only reads).
     live: facts.face === 'vote' && seat && facts.phase === 'open' && Array.isArray(kv.live) ? some(kv.live.map((x) => votesFrom(x, names))) : null,
     result: facts.face === 'vote' ? resultFrom(kv.result, names) : null,
@@ -372,9 +378,11 @@ const host = (f: Facts): string => f.host_name ?? 'The host';
 
 /**
  * The who-sees line (design "For Iris" 3), generated from the fields the host turned on: [who, what] pairs, the who
- * part in bold. Never hard-coded per pocket.
+ * part in bold. Never hard-coded per pocket. `unnamed`: this guest's name is still hidden after the host turned names
+ * on (names_notice), so the line reads as with names off, which is what is true for them (Mira, copy-check.md 6).
  */
-export function whoSees(f: Facts): [string, string][] {
+export function whoSees(f: Facts, unnamed = false): [string, string][] {
+  if (unnamed && f.show_names) f = { ...f, show_names: false };
   const h = host(f);
   const has = (x: string) => f.fields.includes(x);
   if (f.face === 'rsvp') {
