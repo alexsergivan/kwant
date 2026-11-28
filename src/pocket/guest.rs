@@ -72,6 +72,8 @@ async fn not_found() -> Response {
 
 /// Off means 404 for everything; a foreign Origin on a write or a WebSocket is refused; a
 /// method a path doesn't take is 404 too; every answer gets the safety headers.
+/// (A `made` pocket while "Make your own" is off is hidden in [`pocket`], after the code is
+/// decoded, so every route answers it as a missing code.)
 async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
     let mut res = if !state.pocket.on.load(Ordering::SeqCst) {
         PocketError::not_found().into_response()
@@ -145,11 +147,18 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers.get(header::AUTHORIZATION).and_then(|v| v.to_str().ok()).and_then(|v| v.strip_prefix("Bearer ")).map(str::trim)
 }
 
+/// Every guest route starts here (or in [`host_as`], which calls it), with the code as the
+/// router decoded it. pa12 L1: a `made` pocket while "Make your own" is off answers exactly like a
+/// code that doesn't exist (QA D1: a check on the raw path missed `%61bcdef`).
 async fn pocket(state: &AppState, code: &str) -> PResult<Arc<Snapshot>> {
     if !keys::valid_code(code) {
         return Err(PocketError::not_found());
     }
-    super::snapshot(state, code).await?.ok_or_else(PocketError::not_found)
+    let s = super::snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
+    if super::made_off(state, &s).await {
+        return Err(PocketError::not_found());
+    }
+    Ok(s)
 }
 
 fn signed_out() -> PocketError {
@@ -930,6 +939,12 @@ async fn serve_ws(mut socket: WebSocket, state: AppState, code: String, who: WsW
                 }
             },
             _ = ping.tick() => {
+                // pa12 L1: "Make your own" turned off closes a made pocket's open sockets too
+                if super::hidden(&state, &code).await {
+                    let _ = socket.send(Message::Text(json!({ "type": "gone" }).to_string())).await;
+                    let _ = socket.send(Message::Close(None)).await;
+                    return;
+                }
                 if socket.send(Message::Ping(Vec::new())).await.is_err() {
                     return;
                 }

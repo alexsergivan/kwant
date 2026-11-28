@@ -128,6 +128,8 @@ async fn list(State(state): State<AppState>) -> PResult<Json<Value>> {
         "enabled": enabled,
         "pocket_port": if enabled { super::pocket_port(&state.config) } else { None },
         "kits": switch.kits(),
+        // pa12 L1: "Make your own" is on (`pocket_make` on and `pocket_apps` letting `made` through)
+        "make": switch.allows(super::kits::MADE_ID),
         "pockets": pockets,
     })))
 }
