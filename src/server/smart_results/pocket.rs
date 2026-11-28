@@ -20,7 +20,7 @@ use sqlx::SqliteConnection;
 use crate::db::models::{MessageExtra, NewMessage};
 use crate::db::pocket::PocketRow;
 use crate::pocket::kits::Player;
-use crate::server::{desk_tool, santa_tool};
+use crate::server::{desk_tool, gather_tool, santa_tool, wall_tool};
 use crate::db::quiz_drafts::QuizDraftRow;
 use crate::mcp::SELF_SERVER_NAME;
 use crate::quizmaster::card::{Card, State};
@@ -48,6 +48,8 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
         Called::Quiz(_) => crate::kits::quiz::KIT_ID,
         Called::Santa(_) => crate::pocket::santa::ID,
         Called::Desk(_) => crate::pocket::desk::ID,
+        Called::Gather(_) => crate::pocket::gather::ID,
+        Called::Wall(_) => crate::pocket::wall::ID,
     };
     if !switch.allows(kit) {
         return None;
@@ -70,6 +72,13 @@ pub async fn candidate(conn: &mut SqliteConnection, input: &NewMessage, extra: &
             let code = kit_made_this_turn(&mut *conn, crate::pocket::desk::ID, input, extra).await?;
             return desk_candidate(&mut *conn, &code, input, extra).await;
         }
+        Called::Gather(named) | Called::Wall(named) => {
+            let code = match named {
+                Named::Id(code) => code,
+                Named::MadeThisTurn => kit_made_this_turn(&mut *conn, kit, input, extra).await?,
+            };
+            return party_candidate(&mut *conn, kit, &code, input, extra).await;
+        }
     };
     let row = match named {
         Named::Id(id) => sqlx::query_as::<_, QuizDraftRow>("SELECT * FROM quiz_drafts WHERE id = ?").bind(id.as_str()).fetch_optional(&mut *conn).await.ok()??,
@@ -91,6 +100,10 @@ enum Called {
     Santa(Named),
     /// The front desk `desk_create` made (desk-create-from-chat), named the same two ways.
     Desk(Named),
+    /// The RSVP, sign-up or vote `gather_create` made (party-card-and-results), the same two ways.
+    Gather(Named),
+    /// The photo wall `wall_create` made (party-card-and-results), the same two ways.
+    Wall(Named),
 }
 
 /// The turn's last call that names a card, of any kind.
@@ -98,8 +111,10 @@ fn last_named(input: &NewMessage) -> Option<Called> {
     let quiz = draft_named_at(input).map(|(i, n)| (i, Called::Quiz(n)));
     let santa = santa_named_at(input).map(|(i, n)| (i, Called::Santa(n)));
     let desk = desk_named_at(input).map(|(i, n)| (i, Called::Desk(n)));
+    let gather = made_named_at(input, gather_tool::TOOL, gather_tool::CARD_TEXT_HEAD, gather_tool::holds_gather).map(|(i, n)| (i, Called::Gather(n)));
+    let wall = made_named_at(input, wall_tool::TOOL, wall_tool::CARD_TEXT_HEAD, wall_tool::holds_wall).map(|(i, n)| (i, Called::Wall(n)));
     // No two calls share a place in the turn
-    [quiz, santa, desk].into_iter().flatten().max_by_key(|(i, _)| *i).map(|(_, c)| c)
+    [quiz, santa, desk, gather, wall].into_iter().flatten().max_by_key(|(i, _)| *i).map(|(_, c)| c)
 }
 
 /// The Secret Santa the turn's last `santa_create` call that made one names, and that call's place
@@ -218,6 +233,8 @@ fn santa_block(code: &str, c: santa_tool::Card) -> Pocket {
         notice: None,
         santa: Some(c.santa),
         desk: None,
+        gather: None,
+        wall: None,
     }
 }
 
@@ -321,6 +338,145 @@ fn desk_block(code: &str, title: &str, ended: bool, d: Value) -> Pocket {
         notice: None,
         santa: None,
         desk: Some(d),
+        gather: None,
+        wall: None,
+    }
+}
+
+/// What the turn's last call of `tool` (`gather_create`, `wall_create`) that made a pocket names,
+/// and that call's place: the code its answer starts with (`head`, then the code and `]`), or, for
+/// a call the Claude CLI engine let through ("allowed") whose arguments hold a whole one (`holds`)
+/// and with no answer kept, [`Named::MadeThisTurn`]. A failed or denied call, a call that only
+/// asked for the rules (no `title`), or another server's tool of the same name names nothing.
+fn made_named_at(input: &NewMessage, tool: &str, head: &str, holds: fn(Option<&Value>) -> bool) -> Option<(usize, Named)> {
+    let calls = input.tool_calls.as_ref()?.as_array()?;
+    calls.iter().enumerate().rev().find_map(|(i, c)| {
+        if c.get("server").and_then(Value::as_str) != Some(SELF_SERVER_NAME) || c.get("tool").and_then(Value::as_str) != Some(tool) {
+            return None;
+        }
+        let status = c.get("status").and_then(Value::as_str);
+        if !matches!(status, Some("ok" | "allowed")) {
+            return None;
+        }
+        let Some(result) = c.get("result").and_then(Value::as_str) else {
+            return (status == Some("allowed") && holds(c.get("arguments"))).then_some((i, Named::MadeThisTurn));
+        };
+        let rest = result.trim_start().strip_prefix(head)?;
+        let code = &rest[..rest.find(']')?];
+        valid_code(code).then(|| (i, Named::Id(code.to_string())))
+    })
+}
+
+/// party-card-and-results: an RSVP, sign-up, vote or photo wall's card. The stored pocket (of
+/// `kit`, owned by the reply's sender, in the reply's space) through [`party_part`], never the
+/// call's text. `None` when its part doesn't make a card ([`party_part`]).
+async fn party_candidate(conn: &mut SqliteConnection, kit: &str, code: &str, input: &NewMessage, extra: &MessageExtra) -> Option<Block> {
+    let sql = format!("SELECT {} FROM pocket_apps WHERE code = ?", crate::db::pocket::POCKET_COLS);
+    let row = sqlx::query_as::<_, PocketRow>(&sql).bind(code).fetch_optional(&mut *conn).await.ok()??;
+    if row.kit != kit {
+        return None;
+    }
+    let owner = row.owner_kwant_id.clone()?;
+    let space = sqlx::query_scalar::<_, String>("SELECT space_id FROM kwants WHERE id = ?").bind(&owner).fetch_optional(&mut *conn).await.ok()??;
+    if !belongs(&mut *conn, &owner, &space, input, extra).await {
+        return None;
+    }
+    let players: Vec<Player> = sqlx::query_as::<_, (String, String, String, Option<String>, DateTime<Utc>)>(
+        "SELECT id, name, avatar, team, joined_at FROM pocket_players WHERE pocket_code = ? AND removed_at IS NULL ORDER BY joined_at, id",
+    )
+    .bind(code)
+    .fetch_all(&mut *conn)
+    .await
+    .ok()?
+    .into_iter()
+    .map(|(id, name, avatar, team, joined_at)| Player { id, name, avatar, team, joined_at })
+    .collect();
+    let spec: Value = serde_json::from_str(&row.spec).ok()?;
+    let kit_state: Value = serde_json::from_str(&row.kit_state).unwrap_or(Value::Null);
+    let ended = row.state != crate::db::pocket::OPEN;
+    let join = if ended { None } else { santa_tool::join_for(code) };
+    let (state, part) = party_part(kit, &spec, &kit_state, &players, ended, Utc::now(), join)?;
+    Some(Block::Pocket(Box::new(party_block(&row.code, kit, &row.title, state, part))))
+}
+
+/// The card part of a `gather` or `wall` pocket and the block's state (`live` or `ended`), as the
+/// chat's `validPocket` pairs them:
+/// - `gather`: the kit's host view (title and expires_at included), plus its own `join` while
+///   open. Live while its phase isn't `closed`, ended once it is. An ended RSVP or sign-up reads
+///   as closed; an ended vote that never closed (open or tied) has no card (`None`).
+/// - `wall`: the kit's host summary: counts, space and the best ids, never a photo list or a
+///   guest id. Live while uploads are open; an ended pocket's wall reads as closed.
+///
+/// Any other kit: `None`.
+pub fn party_part(kit: &str, spec: &Value, kit_state: &Value, players: &[Player], ended: bool, now: DateTime<Utc>, join: Option<Value>) -> Option<(&'static str, Value)> {
+    use crate::pocket::kits::{self, KitCtx, Viewer};
+    let k = kits::kit(kit)?;
+    let ctx = KitCtx::new(spec, players, now);
+    if kit == crate::pocket::gather::ID {
+        let mut g = k.view(&ctx, kit_state, &Viewer::Host);
+        if !g.is_object() {
+            return None;
+        }
+        let closed = g["phase"] == crate::pocket::gather::CLOSED;
+        if ended && !closed {
+            if g["face"] == crate::pocket::gather::VOTE {
+                return None;
+            }
+            g["phase"] = Value::from(crate::pocket::gather::CLOSED);
+        }
+        let is_closed = g["phase"] == crate::pocket::gather::CLOSED;
+        if let Some(j) = join.filter(|_| !is_closed) {
+            g["join"] = j;
+        }
+        return Some((if is_closed { "ended" } else { "live" }, g));
+    }
+    if kit == crate::pocket::wall::ID {
+        let mut w = k.host_summary(&ctx, kit_state);
+        if !w.is_object() {
+            return None;
+        }
+        if ended {
+            w["state"] = Value::from("closed");
+        }
+        let live = w["state"] == "open";
+        return Some((if live { "live" } else { "ended" }, w));
+    }
+    None
+}
+
+/// The `pocket` block for a `gather` or `wall` card: the kit's own part (see [`party_part`]) and
+/// none of the quiz's parts.
+pub fn party_block(code: &str, kit: &str, title: &str, state: &str, part: Value) -> Pocket {
+    let (gather, wall) = if kit == crate::pocket::gather::ID { (Some(part), None) } else { (None, Some(part)) };
+    Pocket {
+        id: "b0".into(),
+        title: None,
+        source: Source::slot(),
+        provenance: Provenance::kwant_data(format!("pocket:{code}")),
+        code: code.to_string(),
+        kit: kit.to_string(),
+        name: fit(title, 80),
+        when: None,
+        state: state.into(),
+        paused: false,
+        progress: None,
+        rounds: Vec::new(),
+        checks: None,
+        dry_run: None,
+        eta: None,
+        opens_line: None,
+        live: None,
+        join: None,
+        ended: None,
+        budget: None,
+        results: None,
+        draft: None,
+        yours: None,
+        notice: None,
+        santa: None,
+        desk: None,
+        gather,
+        wall,
     }
 }
 
@@ -464,9 +620,10 @@ async fn belongs(conn: &mut SqliteConnection, kwant_id: &str, space_id: &str, in
     }
 }
 
-/// Kits whose ended pocket the chat draws as the quiz results card. The other kits carry parts of
-/// their own (`santa`, `wall`, `gather`, `desk`) that this block doesn't, and the chat refuses one
-/// without them. `test` exists only in debug builds.
+/// Kits whose ended pocket the chat draws as the quiz results card. `gather` and `wall` come as
+/// their own card instead (party-card-and-results); the other kits carry parts of their own
+/// (`santa`, `desk`) that this block doesn't, and the chat refuses one without them. `test`
+/// exists only in debug builds.
 const RESULT_KITS: &[&str] = &[crate::kits::quiz::KIT_ID, "test"];
 
 /// The most player names a results card's team shows (the chat's `validTeam` and
@@ -488,7 +645,10 @@ pub fn from_meta(extra: &MessageExtra) -> Option<Block> {
     let raw = meta.get("block").filter(|b| b.is_object())?;
     let mut p: Pocket = serde_json::from_value(raw.clone()).ok()?;
     let reference = format!("pocket:{code}");
-    if p.state != "ended" || p.code != code || p.provenance.reference.as_deref() != Some(reference.as_str()) || !RESULT_KITS.contains(&p.kit.as_str()) {
+    // party-card-and-results: an ended RSVP, sign-up, vote or wall carries its own part instead of
+    // `results` (`schedule::ended_block`)
+    let party = (p.kit == crate::pocket::gather::ID && p.gather.is_some()) || (p.kit == crate::pocket::wall::ID && p.wall.is_some());
+    if p.state != "ended" || p.code != code || p.provenance.reference.as_deref() != Some(reference.as_str()) || !(RESULT_KITS.contains(&p.kit.as_str()) || party) {
         return None;
     }
     // One block per message, so its id is the set's own
@@ -603,6 +763,8 @@ fn block(row: &QuizDraftRow, card: &Card, tz: Option<&str>) -> Pocket {
         notice,
         santa: None,
         desk: None,
+        gather: None,
+        wall: None,
     }
 }
 
@@ -682,6 +844,8 @@ mod tests {
             notice: None,
             santa: None,
             desk: None,
+            gather: None,
+            wall: None,
         }
     }
 

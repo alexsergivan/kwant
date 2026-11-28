@@ -1463,6 +1463,6 @@ async fn delete_answers_now_keeps_slot_counts_and_drops_names_and_waiting_lists(
             _ => {}
         }
     }
-    assert_eq!(ends, vec![("Club dinner has ended".to_string(), "4 players took part.".to_string())]);
+    assert_eq!(ends, vec![("Club dinner has ended".to_string(), "4 people took part.".to_string())]);
     assert_eq!(send(&t.main, "GET", &format!("/api/pockets/{code}"), None, &person()).await.body["pocket"]["players"], 4);
 }

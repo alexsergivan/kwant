@@ -155,6 +155,12 @@ pub(crate) fn gather_arg(args: &Value) -> Result<Option<Value>, String> {
     Ok(has_title.then_some(v))
 }
 
+/// Whether a call's arguments hold an RSVP, sign-up or vote (what a made-this-turn card looks for,
+/// party-card-and-results).
+pub(crate) fn holds_gather(args: Option<&Value>) -> bool {
+    args.is_some_and(|a| matches!(gather_arg(a), Ok(Some(_))))
+}
+
 
 /// The one weekday a `when` line names (Fri, Friday, fri.), or `None` when it names none or more
 /// than one ("Fri night to Sat").

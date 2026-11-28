@@ -573,6 +573,20 @@ pub fn connection_item(at: DateTime<Utc>, v: &Value, last_seen: Option<DateTime<
     })
 }
 
+/// party-card-and-results: a Photo Wall's waiting photos (`inbox_pockets::wall_needs_you`) as one
+/// Waiting-on-you row; its title and summary come with it.
+pub fn wall_item(at: DateTime<Utc>, mut v: Value, last_seen: Option<DateTime<Utc>>) -> Value {
+    let unread = last_seen.is_none_or(|s| at > s);
+    let name = v["kwant_name"].as_str().unwrap_or("").to_string();
+    let id = v["id"].as_str().unwrap_or("").to_string();
+    v["status"] = json!("open");
+    v["timestamp"] = json!(rfc3339(at));
+    v["group"] = json!(Group::WaitingOnYou.key());
+    v["sort_key"] = sort_key(Group::WaitingOnYou, None, at.timestamp_millis(), unread, &name, &id);
+    v["unread"] = json!(unread);
+    v
+}
+
 /// pa13a: a front desk guest the bot handed to the person (`desk_turns::needs_you`, as listed on
 /// /api/waiting) as a Waiting-on-you row, "Emma needs you" / "Sea-view flat · Guest Guide". Every
 /// field of the /api/waiting item stays (the card's Allow row reads them); the Inbox fields are
@@ -881,7 +895,9 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
         Ok(kwants) => (super::tool_failures::needs_you(&state, &kwants).await, super::desk_turns::needs_you(&state, &kwants).await),
         Err(_) => (Vec::new(), Vec::new()),
     };
-    let unseen_total = unseen_total + watch.len() as i64 + stopped.len() as i64 + connections.len() as i64 + desks.len() as i64;
+    // party-card-and-results: an open Photo Wall with photos waiting for the host, one row per wall
+    let walls = super::inbox_pockets::wall_needs_you(&state, &space).await.unwrap_or_default();
+    let unseen_total = unseen_total + watch.len() as i64 + stopped.len() as i64 + connections.len() as i64 + desks.len() as i64 + walls.len() as i64;
 
     let mut items: Vec<Value> = Vec::new();
     items.extend(waiting.into_iter().map(|r| away_item(r, Group::WaitingOnYou, seen)));
@@ -892,6 +908,7 @@ pub async fn get(State(state): State<AppState>, Scope(space): Scope, Query(q): Q
     away::annotate(&state, &mut items).await;
     items.extend(connections.into_iter().map(|(at, v)| connection_item(at, &v, seen)));
     items.extend(desks.into_iter().map(|(at, v)| desk_item(at, v, seen)));
+    items.extend(walls.into_iter().map(|(at, v)| wall_item(at, v, seen)));
     // An approval's title is its own question when the call names what it is about (Iris's #539).
     // `question` is sent only then, so the Inbox can tell it from today's tool title, which stays
     // in `title` when there is none (every screen prints `title`).

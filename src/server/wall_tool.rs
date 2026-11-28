@@ -112,6 +112,12 @@ pub(crate) fn wall_arg(args: &Value) -> Result<Option<Value>, String> {
     Ok(has_title.then_some(v))
 }
 
+/// Whether a call's arguments hold a photo wall (what a made-this-turn card looks for,
+/// party-card-and-results).
+pub(crate) fn holds_wall(args: Option<&Value>) -> bool {
+    args.is_some_and(|a| matches!(wall_arg(a), Ok(Some(_))))
+}
+
 
 /// Noon the day after `event_at`, in its own offset (a bare date: the next day).
 fn noon_after(event_at: &str) -> Option<String> {

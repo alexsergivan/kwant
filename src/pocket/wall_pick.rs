@@ -285,9 +285,9 @@ fn leaves_line(leaves: Option<&str>) -> String {
 pub fn ready_copy(title: &str, n: usize, all: bool, leaves: Option<&str>) -> (String, String) {
     let t = schedule::short_title(title);
     let line = if all {
-        format!("{t} closed with {n} photos, so all {n} are in the best. Look them over on the card; guests see them only after you say yes.")
+        format!("{t} closed with {n} photos, so all {n} are in the best. Look them over on the wall card; guests see them only after you say yes.")
     } else {
-        format!("I picked the best {n} photos from {t}. Look them over on the card and swap any you like; guests see them only after you say yes.")
+        format!("I picked the best {n} photos from {t}. Look them over on the wall card and swap any you like; guests see them only after you say yes.")
     };
     (format!("Best photos ready: {t}"), line + &leaves_line(leaves))
 }
@@ -593,12 +593,12 @@ mod tests {
         assert_eq!(title, "Best photos ready: Mia & Jonas's wedding");
         assert_eq!(
             ready,
-            "I picked the best 30 photos from Mia & Jonas's wedding. Look them over on the card and swap any you like; guests see them only after you say yes. All the photos leave this box on Dec 28."
+            "I picked the best 30 photos from Mia & Jonas's wedding. Look them over on the wall card and swap any you like; guests see them only after you say yes. All the photos leave this box on Dec 28."
         );
         let (_, all) = ready_copy(w, 12, true, Some("Dec 28"));
         assert_eq!(
             all,
-            "Mia & Jonas's wedding closed with 12 photos, so all 12 are in the best. Look them over on the card; guests see them only after you say yes. All the photos leave this box on Dec 28."
+            "Mia & Jonas's wedding closed with 12 photos, so all 12 are in the best. Look them over on the wall card; guests see them only after you say yes. All the photos leave this box on Dec 28."
         );
         let (title, failed) = failed_copy(w, Some("Dec 28"));
         assert_eq!(title, "Best photos not picked: Mia & Jonas's wedding");

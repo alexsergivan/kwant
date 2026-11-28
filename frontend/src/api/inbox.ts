@@ -7,7 +7,7 @@ import { PersonCancelledError, personFetch } from '../auth';
 import type { AwayItem, AwayKind } from '../away';
 
 /** pa4c: 'pocket' is a finished quiz in Done (Juno #1095, pa4c-server/impl.md "Inbox Done item"). */
-export type InboxKind = AwayKind | 'review' | 'team_job' | 'pocket';
+export type InboxKind = AwayKind | 'review' | 'team_job' | 'pocket' | 'pocket_wall';
 export type InboxGroup = 'waiting_on_you' | 'failed_or_stuck' | 'to_review' | 'finished';
 
 export type VerdictResult = 'pass' | 'fail' | 'needs_you' | 'none';
@@ -196,6 +196,18 @@ export interface DoneFields {
   /** pa4c pocket items: how many played and when it ended; the winning team or null. */
   meta?: { players?: number | null; ended_at?: string | null } | null;
   winner?: { name: string; points: number } | null;
+  /** party-card-and-results: a Photo Wall's Needs-you row (kind pocket_wall), one per wall: its code, how many wait and the oldest. */
+  pocket_code?: string;
+  waiting?: number;
+  next_photo?: { id: string; by_name: string | null } | null;
+}
+
+/** The wall row's next photo when the item names a usable one, else null (no thumbnail, no buttons). */
+export function wallNext(i: Pick<InboxItem, 'kind' | 'pocket_code' | 'next_photo'>): { code: string; id: string; by: string | null } | null {
+  if (i.kind !== 'pocket_wall' || typeof i.pocket_code !== 'string' || !/^[A-Za-z0-9_-]{3,32}$/.test(i.pocket_code)) return null;
+  const n = i.next_photo;
+  if (!n || typeof n.id !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(n.id)) return null;
+  return { code: i.pocket_code, id: n.id, by: typeof n.by_name === 'string' && n.by_name.trim() ? n.by_name : null };
 }
 
 // `task_id` is a review's task (ReviewFields) or a watch item's (P1, null when none), so it takes both.

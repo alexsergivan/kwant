@@ -565,6 +565,160 @@ fn check_pocket(p: &super::Pocket) -> Result<(), String> {
     if let Some(d) = &p.desk {
         check_desk(p, d)?;
     }
+    // party-card-and-results: kit `gather` carries `gather`, kit `wall` carries `wall`, and
+    // nothing else does
+    if (p.kit == crate::pocket::gather::ID) != p.gather.is_some() {
+        return Err("a pocket's gather part".into());
+    }
+    if let Some(g) = &p.gather {
+        check_gather(p, g)?;
+    }
+    if (p.kit == crate::pocket::wall::ID) != p.wall.is_some() {
+        return Err("a pocket's wall part".into());
+    }
+    if let Some(w) = &p.wall {
+        check_wall(p, w)?;
+    }
+    Ok(())
+}
+
+/// Keys a wall card never has, at any depth (frontend `WALL_FORBIDDEN`): a guest id, a file
+/// size or a photo list.
+const WALL_FORBIDDEN: [&str; 10] = ["by", "bytes", "guest", "guest_id", "player_id", "players", "queue", "wall", "photos", "pin"];
+
+/// A photo wall's card (frontend `validWall` and `validPocket`'s wall rules): live while open,
+/// ended once closed; counts that add up; space in MB with a cap; no quiz or other kit's part,
+/// and no photo list, guest id or file size anywhere.
+fn check_wall(p: &super::Pocket, w: &serde_json::Value) -> Result<(), String> {
+    use serde_json::Value;
+    let Some(o) = w.as_object() else { return Err("a wall part that isn't an object".into()) };
+    if let Some(k) = find_key(w, &WALL_FORBIDDEN, 0) {
+        return Err(format!("a wall part carrying {k}"));
+    }
+    let live = match o.get("state").and_then(Value::as_str) {
+        Some("open") => true,
+        Some("closed") => false,
+        _ => return Err("wall state".into()),
+    };
+    if p.state != if live { "live" } else { "ended" } {
+        return Err(format!("a {} pocket's wall", p.state));
+    }
+    if p.join.is_some() || p.santa.is_some() || p.desk.is_some() || p.gather.is_some() || p.results.is_some() {
+        return Err("a wall pocket with another kit's part".into());
+    }
+    let c = o.get("counts").and_then(Value::as_object).ok_or("wall counts")?;
+    let n = |k: &str| c.get(k).and_then(Value::as_u64).filter(|n| *n <= 1_000_000);
+    let [Some(total), Some(waiting), Some(approved), Some(hidden), Some(_), Some(_)] = ["total", "waiting", "approved", "hidden", "guests", "senders"].map(n) else {
+        return Err("wall counts".into());
+    };
+    if waiting + approved + hidden != total {
+        return Err("wall counts that don't add up".into());
+    }
+    let mb = |k: &str| o.get(k).and_then(Value::as_f64).filter(|m| (0.0..=10_000_000.0).contains(m));
+    if mb("used_mb").is_none() || mb("pocket_cap_mb").is_none_or(|m| m <= 0.0) {
+        return Err("wall space".into());
+    }
+    let best = o.get("best").filter(|b| !b.is_null()).map(|b| b.as_array().ok_or("wall best")).transpose()?.map(Vec::as_slice).unwrap_or(&[]);
+    if best.iter().any(|id| !id.as_str().is_some_and(|id| id_like(id, 64))) {
+        return Err("wall best".into());
+    }
+    let best_max = o.get("best_max").filter(|b| !b.is_null()).map_or(Some(30), Value::as_u64).filter(|m| (1..=1_000_000).contains(m)).ok_or("wall best max")?;
+    if best.len() as u64 > best_max {
+        return Err("wall best".into());
+    }
+    opt_pocket_text(o.get("host_name"), 40, "wall host")?;
+    Ok(())
+}
+
+/// Keys that would put a ballot on a gather card (frontend `BALLOT_KEYS`): anywhere for
+/// `ballots`/`rankings`, on a person-shaped object (or under a list of people) for the rest.
+const BALLOT_KEYS: [&str; 14] = ["ballot", "ballots", "ranking", "rankings", "ranked", "picks", "pick", "picked", "choice", "choices", "my_vote", "voted_for", "preference", "preferences"];
+const PERSON_LISTS: [&str; 15] = ["people", "person", "voters", "voter", "members", "member", "nudges", "drafts", "who", "waiting_people", "guests", "guest", "not_answered", "moved_up", "me"];
+
+/// The first path where a person and a ballot meet (frontend `findBallotPair`).
+fn ballot_pair(v: &serde_json::Value, depth: usize, person: bool) -> Option<String> {
+    use serde_json::Value;
+    if depth > 10 {
+        return None;
+    }
+    match v {
+        Value::Array(a) => a.iter().find_map(|x| ballot_pair(x, depth + 1, person)),
+        Value::Object(o) => {
+            let shaped = person || o.keys().any(|k| matches!(k.to_lowercase().as_str(), "name" | "to" | "person_id" | "player_id"));
+            o.iter().find_map(|(k, x)| {
+                let lk = k.to_lowercase();
+                if matches!(lk.as_str(), "ballots" | "rankings") || (shaped && BALLOT_KEYS.contains(&lk.as_str())) {
+                    return Some(k.clone());
+                }
+                ballot_pair(x, depth + 1, shaped || PERSON_LISTS.contains(&lk.as_str()))
+            })
+        }
+        _ => None,
+    }
+}
+
+/// An RSVP, sign-up or vote's card (frontend `validGather` and `validPocket`'s gather rules):
+/// face and phase, live until closed and ended once it is, the pocket's title and deletion date,
+/// each face's own part, its join only inside it, and no person ever carrying a ballot.
+fn check_gather(p: &super::Pocket, g: &serde_json::Value) -> Result<(), String> {
+    use serde_json::Value;
+    let Some(o) = g.as_object() else { return Err("a gather part that isn't an object".into()) };
+    if let Some(k) = ballot_pair(g, 0, false) {
+        return Err(format!("a gather part carrying {k}"));
+    }
+    let face = o.get("face").and_then(Value::as_str).filter(|f| matches!(*f, "rsvp" | "signup" | "vote")).ok_or("gather face")?;
+    let phase = o.get("phase").and_then(Value::as_str).filter(|f| matches!(*f, "open" | "tie" | "closed")).ok_or("gather phase")?;
+    if phase == "tie" && face != "vote" {
+        return Err("a tie that isn't a vote".into());
+    }
+    if p.state != if phase == "closed" { "ended" } else { "live" } {
+        return Err(format!("a {} pocket's gather", p.state));
+    }
+    if p.join.is_some() || p.santa.is_some() || p.desk.is_some() || p.wall.is_some() || p.results.is_some() {
+        return Err("a gather pocket with another kit's part".into());
+    }
+    match o.get("title") {
+        None | Some(Value::Null) => {}
+        Some(Value::String(t)) => check_text(t, 80, "gather title")?,
+        Some(_) => return Err("gather title".into()),
+    }
+    if !o.get("expires_at").and_then(Value::as_str).is_some_and(|t| !t.trim().is_empty() && utf16_len(t) <= 60) {
+        return Err("gather deletion date".into());
+    }
+    let list = |k: &str| o.get(k).filter(|v| !v.is_null()).map(|v| v.as_array().map(Vec::len).ok_or(format!("gather {k}"))).transpose();
+    list("people")?;
+    list("not_answered")?;
+    list("drafts")?;
+    match face {
+        "rsvp" => {
+            let c = o.get("counts").and_then(Value::as_object).ok_or("gather counts")?;
+            if !["yes", "maybe", "no"].iter().all(|k| c.get(*k).and_then(Value::as_u64).is_some()) {
+                return Err("gather counts".into());
+            }
+        }
+        "signup" => {
+            let slots = o.get("slots").and_then(Value::as_array).filter(|s| !s.is_empty()).ok_or("gather slots")?;
+            for (i, x) in slots.iter().enumerate() {
+                let cap = x["cap"].as_u64().unwrap_or(0);
+                if x["slot"].as_u64() != Some(i as u64) || !x["name"].is_string() || !(1..=99).contains(&cap) || !x["people"].is_array() || !x["waiting_people"].is_array() {
+                    return Err("gather slot".into());
+                }
+            }
+        }
+        _ => {
+            let b = o.get("ballot").and_then(Value::as_object).ok_or("gather ballot")?;
+            let options = b.get("options").and_then(Value::as_array).filter(|a| a.len() >= 2).ok_or("gather options")?;
+            if options.iter().enumerate().any(|(i, x)| x["option"].as_u64() != Some(i as u64) || !x["name"].is_string()) || !b.get("in_play").is_some_and(Value::is_array) {
+                return Err("gather options".into());
+            }
+            if o.get("voted").and_then(Value::as_u64).is_none() || !o.get("voters").is_some_and(Value::is_array) {
+                return Err("gather voters".into());
+            }
+            if phase != "open" && !o.get("result").is_some_and(Value::is_object) {
+                return Err("gather result".into());
+            }
+        }
+    }
     Ok(())
 }
 
