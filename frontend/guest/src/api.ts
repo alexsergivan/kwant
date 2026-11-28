@@ -263,9 +263,13 @@ export class Api<V = GuestView> {
     return { ok: true, view: this.take(json) };
   }
 
-  /** Reads a v1 state and remembers its version. */
+  /**
+   * Reads a v1 state and remembers its version. A state older than the last one taken gives no view and leaves the version
+   * where it is: a slow HTTP reply (an answer, a join) can land after a newer push, and the page must not go back to it.
+   */
   take(json: unknown): V | undefined {
     const s = this.parse(json, this.memo);
+    if (s?.version !== undefined && this.version !== undefined && s.version < this.version) return undefined;
     if (s?.version !== undefined) this.version = s.version;
     const v = s?.view as (GuestView & { team_max?: number; rounds?: number }) | undefined;
     if (Array.isArray(v?.teams)) this.memo = { teams: v.teams, team_max: v.team_max, rounds: v.rounds };
