@@ -581,7 +581,7 @@ const SantaJoinBox: React.FC<{ block: PocketBlock; s: SantaInfo }> = ({ block, s
  * The guest port for the Funnel how-to. It's in the Wi-Fi link when there is one; a 127.0.0.1 box has none, so
  * the port comes from the pocket list (GET /api/pockets `pocket_port`), read once. Until then the step says where.
  */
-function useGuestPort(wifiUrl: string | null, ask: boolean): string | null {
+export function useGuestPort(wifiUrl: string | null, ask: boolean): string | null {
   const fromLink = portOf(wifiUrl);
   const [listed, setListed] = useState<string | null>(null);
   useEffect(() => {

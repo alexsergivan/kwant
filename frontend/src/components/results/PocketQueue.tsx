@@ -38,8 +38,8 @@ import { isIndex, isObj, isText, optText } from '../../smartResults';
 import type { Mood } from '../../kwantMood';
 import { linkUrl, pocketApi, PocketApiError } from '../../pocketApi';
 import { QrImage } from '../DeviceSignIn';
-import { Bar, Callout, CopyLink, GHOST, HALF, ICON, LaterButton, LinkField, PRIMARY, Qr, Row, STOP } from './pocketParts';
-import { GuestCreature, validSantaJoin } from './PocketSanta';
+import { Bar, Callout, CopyLink, GHOST, HALF, ICON, LaterButton, LinkField, NoLinkYet, PRIMARY, QUEUE_STAYS_LINE, Qr, Row, STOP, THIS_COMPUTER_ONLY, THIS_COMPUTER_WIFI_LINE } from './pocketParts';
+import { GuestCreature, HowTo, useGuestPort, validSantaJoin } from './PocketSanta';
 
 // ---------------------------------------------------------------------------------------------------
 // Wire shape
@@ -53,7 +53,7 @@ export const QUEUE_TITLE_MAX = 40;
 const CALL_MIN = 1;
 const CALL_MAX = 10;
 const MAX_TICKETS = 260;
-/** Remove waits this long for Undo before it reaches the Mac. */
+/** Remove waits this long for Undo before it reaches the box. */
 export const QUEUE_UNDO_MS = 5000;
 /** While open or paused, the card reads the queue again this often (only while the page is visible). */
 export const QUEUE_POLL_MS = 10_000;
@@ -376,7 +376,7 @@ const HoursPick: React.FC<{ until: string | null; set: (u: string | null) => voi
 
 const KeepRows: React.FC = () => (
   <>
-    <Row icon={<Lock size={15} aria-hidden="true" />}>Tickets stay on this Mac. A ticket is deleted when it's served, skipped or left, or when you close for the day.</Row>
+    <Row icon={<Lock size={15} aria-hidden="true" />}>Tickets stay on this computer. A ticket is deleted when it's served, skipped or left, or when you close for the day.</Row>
     <Row icon={<ShieldCheck size={15} aria-hidden="true" />}>No phone numbers, no accounts. Customers see only their own ticket and how many are ahead.</Row>
   </>
 );
@@ -615,6 +615,9 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
   };
 
   const url = joinUrlOf(q);
+  // A box bound to 127.0.0.1 (the default): no phone reaches it, and a queue never takes a quick link.
+  const onlyHere = !url && q.join?.wifi_note === THIS_COMPUTER_ONLY;
+  const port = useGuestPort(q.join?.wifi_url ?? null, onlyHere);
   const bigScreen = async () => {
     if (!url) return;
     setScreenErr(null);
@@ -655,7 +658,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
         Big screen
       </button>
     ) : (
-      <LaterButton icon={<Monitor size={14} aria-hidden="true" />} why="The big screen works once the queue has its link." half>
+      <LaterButton icon={<Monitor size={14} aria-hidden="true" />} why="Needs the customers' link first: see above." half>
         Big screen
       </LaterButton>
     );
@@ -666,7 +669,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
         {label}
       </button>
     ) : (
-      <LaterButton icon={<Printer size={14} aria-hidden="true" />} why="The sign prints once the queue has its link." half>
+      <LaterButton icon={<Printer size={14} aria-hidden="true" />} why="Needs the customers' link first: see above." half>
         {label}
       </LaterButton>
     );
@@ -875,7 +878,22 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
         <CopyLink url={url} />
       </div>
     )
-  ) : null;
+  ) : (
+    // No link yet: say why in the join box's place, on a phone too (ux-pass-queue-ticket #3). Nothing failed, so no warn chip.
+    <div className="flex flex-col gap-2.5 rounded-xl border border-hairline bg-surface-rail/40 p-3" data-join="none" data-no-link={onlyHere ? 'this-computer-only' : 'not-yet'}>
+      <div className="flex items-start gap-2 text-[15px] leading-[22px] text-zinc-400 sm:text-[13px] sm:leading-5">
+        <Wifi size={15} className={`${ICON} text-zinc-500`} aria-hidden="true" />
+        {onlyHere ? (
+          <span data-stays-line>
+            {THIS_COMPUTER_WIFI_LINE} {QUEUE_STAYS_LINE}
+          </span>
+        ) : (
+          <NoLinkYet mode="wifi" />
+        )}
+      </div>
+      {onlyHere && <HowTo port={port} bot="your bot" chat="your customers" />}
+    </div>
+  );
 
   // ---- set-up form
   const [name, setName] = useState(title);
@@ -1060,6 +1078,7 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
         {undoBar}
         {nextList}
         <Tiles q={q} />
+        {url ? null : join}
       </>
     );
     actions = (
@@ -1221,10 +1240,10 @@ export const QueueCard: React.FC<{ block: PocketBlock; ask: (t: string) => void 
 
   const foot =
     q.state === 'setup'
-      ? 'No model calls after set-up. Calling, tickets and the big screen run on this Mac, past your daily limit.'
+      ? 'No model calls after set-up. Calling, tickets and the big screen run on this computer, past your daily limit.'
       : q.state === 'ended'
         ? 'No model calls were used to run it.'
-        : 'No model calls: calling, tickets and the big screen run on this Mac, past your daily limit.';
+        : 'No model calls: calling, tickets and the big screen run on this computer, past your daily limit.';
 
   return (
     <section
