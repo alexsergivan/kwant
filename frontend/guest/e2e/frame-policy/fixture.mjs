@@ -17,9 +17,26 @@ export const TODAY_CSP =
 const sha256 = (s) => createHash('sha256').update(s, 'utf8').digest('base64');
 
 // kwant's prelude (a constant <script>, security-review.md section 3): removes WebRTC's constructors before any
-// app code runs. A real L5 prelude will do more (the postMessage bridge, P1); K1 only needs the one thing the
-// review calls out as CSP-proof: "K1 must prove it, because CSP alone doesn't cover WebRTC."
-const PRELUDE_JS = `(()=>{for(const k of ['RTCPeerConnection','webkitRTCPeerConnection','mozRTCPeerConnection','RTCDataChannel']){try{delete window[k]}catch(e){}}window.__kwantPreludeRan=true})();`;
+// app code runs, and gives the app the only two calls style-guide.md section 3 allows across the frame boundary
+// (Mira's K1 ask): kwant.onState(fn) wraps the message listener and checks type==='state'; kwant.act(name, body)
+// posts {type:"act",name,body} to the parent. With these in place, K2's lint can ban `postMessage` and `parent` as
+// banned tokens outright in the app's own script (style-guide.md section 7, J1), since the app never needs them.
+const PRELUDE_JS = `(()=>{
+for(const k of ['RTCPeerConnection','webkitRTCPeerConnection','mozRTCPeerConnection','RTCDataChannel']){try{delete window[k]}catch(e){}}
+window.__kwantPreludeRan=true;
+window.kwant={
+  onState:function(fn){
+    window.addEventListener('message',function(e){
+      if(e.source!==window.parent)return;
+      var d=e.data;
+      if(d&&d.type==='state')fn(d);
+    });
+  },
+  act:function(name,body){
+    window.parent.postMessage({type:'act',name:name,body:body},'*');
+  }
+};
+})();`;
 
 // kwant's pocket.css (a constant <style>): a stand-in for the real one, just enough to prove the style-src hash.
 const POCKET_CSS = `:root{color-scheme:dark}body{margin:0;font:14px system-ui,sans-serif;background:#120e26;color:#f4f1ff}`;
@@ -197,6 +214,27 @@ const appJs = (foreign) => `(() => {
       setTimeout(() => settle(true, 'nested frame never loaded (frame-src none held)'), 1500);
     });
 
+    // 7. The bridge (style-guide.md section 3, Mira's K1 ask): kwant.onState/kwant.act are now the only two calls
+    // across the frame (the prelude's job), so this proves they actually carry a state down and an act up through
+    // this exact sandbox+CSP header set - not just that the two functions exist. The parent (parent.js) posts a
+    // {type:"state"} message repeatedly until this check settles, since this probe reaches the bridge section at an
+    // unpredictable time relative to the parent's own 'load' event.
+    let bridgeState = null;
+    window.kwant.onState((s) => { bridgeState = s; });
+    window.kwant.act('qa-bridge-act', { ping: 1 });
+    await new Promise((resolve) => {
+      let waited = 0;
+      const iv = setInterval(() => {
+        waited += 50;
+        if (bridgeState || waited >= 3000) { clearInterval(iv); resolve(); }
+      }, 50);
+    });
+    pass(
+      'bridge-onstate-received',
+      !!(bridgeState && bridgeState.type === 'state' && bridgeState.marker === 'k1-state'),
+      JSON.stringify(bridgeState),
+    );
+
     r.done = true;
   }
   run().catch((e) => { r.error = String(e && e.stack || e); r.done = true; });
@@ -235,9 +273,32 @@ const appHeaders = (csp) => ({
 
 const parentCsp = `${TODAY_CSP}; frame-src 'self'; object-src 'none'; worker-src 'self'`;
 
+// The parent's bridge side (style-guide.md section 3): posts one `{type:"state"}` message down to the frame and
+// records any `{type:"act"}` message the frame posts back. Today's pocket CSP (TODAY_CSP) has no script-src of its
+// own, so default-src 'self' governs it - an inline <script> would violate it; a same-origin external file doesn't,
+// matching how the real guest page is built. Sends repeatedly, not once: the app runs its checks sequentially with
+// several awaited timeouts, so kwant.onState's listener can register well after this script's own 'load' handler
+// would have already fired a single, one-shot send.
+const PARENT_JS = `window.__receivedActs = [];
+window.addEventListener('message', function (e) {
+  var f = document.getElementById('app');
+  if (!f || e.source !== f.contentWindow) return;
+  window.__receivedActs.push(e.data);
+});
+window.addEventListener('load', function () {
+  var f = document.getElementById('app');
+  var n = 0;
+  var iv = setInterval(function () {
+    n += 1;
+    f.contentWindow.postMessage({ type: 'state', marker: 'k1-state', view: {} }, '*');
+    if (n >= 60) clearInterval(iv);
+  }, 50);
+});`;
+
 const parentHtml = (appUrl) => `<!doctype html><html><head><meta charset="utf-8"><title>K1 parent</title></head>
 <body><div id="parent">parent</div>
 <iframe id="app" sandbox="allow-scripts" allow="" referrerpolicy="no-referrer" src="${appUrl}"></iframe>
+<script src="/parent.js"></script>
 </body></html>`;
 
 function appHtml(foreign) {
@@ -302,6 +363,7 @@ export async function startFramePolicyFixture() {
     if (path === '/app-nav') return send(res, 200, appNavDoc, undefined, appHeaders(appNavCsp));
     if (path === '/main-echo') return send(res, 200, 'ok', 'text/plain');
     if (path === '/main.png') return send(res, 200, PNG_1x1, 'image/png');
+    if (path === '/parent.js') return send(res, 200, PARENT_JS, 'text/javascript; charset=utf-8');
     send(res, 404, 'not found', 'text/plain');
   });
   mainServer.on('upgrade', (req, socket) => { log.push(`main UPGRADE ${req.url}`); socket.destroy(); });
