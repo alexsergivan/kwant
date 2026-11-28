@@ -641,6 +641,12 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
             list.push(super::desk_tool::tool());
         }
     }
+    // queue-create-tool: the take-a-number queue's one tool, behind the same switch (on, or naming `queue`)
+    if super::queue_tool::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
+            list.push(super::queue_tool::tool());
+        }
+    }
     // pa14b: a wall's two pick tools, only while this bot picks a wall's best 30
     if crate::pocket::wall_pick::picking_bot(state, &scope.kwant_id) {
         if let Some(list) = tools.as_array_mut() {
@@ -681,6 +687,12 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
     if super::desk_tool::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.push(super::desk_tool::tool());
+        }
+    }
+    // queue-create-tool: the take-a-number queue's one tool, behind the same switch (on, or naming `queue`)
+    if super::queue_tool::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
+            list.push(super::queue_tool::tool());
         }
     }
     if crate::pocket::wall_pick::picking_bot(state, &scope.kwant_id) {
@@ -1586,6 +1598,7 @@ async fn call_tool(
         n if super::quizmaster_tools::handles(n) => super::quizmaster_tools::call(state, scope, n, args).await,
         n if super::santa_tool::handles(n) => super::santa_tool::call(state, scope, args).await,
         n if super::desk_tool::handles(n) => super::desk_tool::call(state, scope, args).await,
+        n if super::queue_tool::handles(n) => super::queue_tool::call(state, scope, args).await,
         n if super::smart_results::present_result_handles(n) => super::smart_results::present_result_call(state, scope, n, args).await,
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
         n if super::missions::tools::handles(n) => super::missions::tools::call(state, scope, n, args).await,
