@@ -70,11 +70,30 @@ async fn not_found() -> Response {
     PocketError::not_found().into_response()
 }
 
+/// The pocket code a guest-port path names (`/p/<code>`, `/api/pocket/<code>/…`), if any.
+fn path_code(path: &str) -> Option<&str> {
+    let rest = path.strip_prefix("/api/pocket/").or_else(|| path.strip_prefix("/p/"))?;
+    rest.split('/').next().filter(|c| keys::valid_code(c))
+}
+
 /// Off means 404 for everything; a foreign Origin on a write or a WebSocket is refused; a
 /// method a path doesn't take is 404 too; every answer gets the safety headers.
+/// pa12 L1: a `made` pocket while "Make your own" is off is 404 too, like a code that doesn't
+/// exist (its page gets the gone screen), on every route and the WebSocket.
 async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
-    let mut res = if !state.pocket.on.load(Ordering::SeqCst) {
+    let on = state.pocket.on.load(Ordering::SeqCst);
+    let hidden = match path_code(req.uri().path()) {
+        Some(code) if on => super::hidden(&state, code).await,
+        _ => false,
+    };
+    let mut res = if !on {
         PocketError::not_found().into_response()
+    } else if hidden {
+        if req.uri().path().starts_with("/p/") {
+            gone_response(page_asset(PAGE_INDEX))
+        } else {
+            PocketError::not_found().into_response()
+        }
     } else if (req.method() != Method::GET || req.headers().contains_key(header::UPGRADE)) && !same_origin(req.headers()) {
         PocketError::new(StatusCode::FORBIDDEN, "bad_origin", "This request came from another site.").into_response()
     } else {
@@ -930,6 +949,12 @@ async fn serve_ws(mut socket: WebSocket, state: AppState, code: String, who: WsW
                 }
             },
             _ = ping.tick() => {
+                // pa12 L1: "Make your own" turned off closes a made pocket's open sockets too
+                if super::hidden(&state, &code).await {
+                    let _ = socket.send(Message::Text(json!({ "type": "gone" }).to_string())).await;
+                    let _ = socket.send(Message::Close(None)).await;
+                    return;
+                }
                 if socket.send(Message::Ping(Vec::new())).await.is_err() {
                     return;
                 }

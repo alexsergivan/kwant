@@ -147,7 +147,7 @@ async fn the_value_is_stored_in_its_normal_form() {
     save(&e, json!({ "pocket_apps": "" })).await;
     assert!(!kwnt::pocket::enabled(&e.state.db).await);
     save(&e, json!({ "pocket_apps": "on" })).await;
-    assert_eq!(kwnt::pocket::switch(&e.state.db).await, kwnt::pocket::Switch::All);
+    assert_eq!(kwnt::pocket::switch(&e.state.db).await, kwnt::pocket::Switch::All { make: false });
 }
 
 #[tokio::test]
