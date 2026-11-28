@@ -311,6 +311,8 @@ pub struct Hub {
     wipe_due: Arc<AtomicBool>,
     /// A wipe runs now.
     wiping: Arc<AtomicBool>,
+    /// F3: this process already looked whether the file rewrite is due ([`rewrite_once`]).
+    rewrite_checked: AtomicBool,
 }
 
 impl Hub {
@@ -1390,6 +1392,7 @@ pub const SCRUBS: &[&str] = &[gather::ID];
 /// ends at once and keeps its data until the deletion date), gets the kit's scrub; a change is
 /// saved like any other (no event). So an upgrade fixes data an older version stored.
 pub(crate) async fn scrub_stored(state: &AppState) {
+    let mut unlinked = 0;
     for kit_id in SCRUBS {
         for code in state.db.pocket_codes_of_kit(kit_id).await.unwrap_or_default() {
             let lock = state.pocket.lock_for(&code);
@@ -1401,15 +1404,65 @@ pub(crate) async fn scrub_stored(state: &AppState) {
                 let mut ctx = KitCtx::new(&s.spec, &s.players, Utc::now());
                 ctx.forgot = true;
                 match save(state, &code, &kit_state, ctx, Utc::now()).await {
-                    Ok(()) => tracing::info!(code = %code, "pocket apps: unlinked a closed vote's ballots"),
+                    Ok(()) => {
+                        unlinked += 1;
+                        tracing::info!(code = %code, "pocket apps: unlinked a closed vote's ballots");
+                    }
                     Err(e) => tracing::warn!(code = %code, "pocket apps: couldn't unlink a closed vote's ballots: {}", e.code),
                 }
             }
         }
     }
+    // F3: an older version stored those votes before freed space was zeroed, so its old copies
+    // can sit anywhere in the file's free space. Kept in the database, so a rewrite that
+    // didn't happen (disk full, a crash) is tried again on the next start
+    if unlinked > 0 {
+        if let Err(e) = state.db.set_setting(REWRITE_DUE, "1").await {
+            tracing::warn!("pocket apps: couldn't note the database file rewrite: {e}");
+        }
+    }
     // F2: the old row versions those saves, or a vote's close, left in the database files go
     // too (a no-op when nothing forgot a secret)
     state.pocket.wipe_now(&state.db).await;
+    rewrite_once(state).await;
+}
+
+/// Set (`"1"`) while the database file still needs the one rewrite F3 asks for.
+pub const REWRITE_DUE: &str = "pocket_rewrite_due";
+/// A larger file isn't rewritten: writers would wait past the busy timeout (about 0.7 s per
+/// 60 MB on the test server). Its pre-upgrade leftovers stay until SQLite reuses the space,
+/// as the release note says.
+const REWRITE_MAX_BYTES: i64 = 256 * 1024 * 1024;
+
+/// secret-ballot-unlinkable F3: the first sweep after a start rewrites the database file
+/// ([`Database::rewrite_file`]) when a sweep unlinked a vote an older version stored, once; a
+/// clean database never rewrites.
+async fn rewrite_once(state: &AppState) {
+    if state.pocket.rewrite_checked.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    if state.db.get_setting(REWRITE_DUE).await.ok().flatten().as_deref() != Some("1") {
+        return;
+    }
+    let done = match state.db.rewrite_file(REWRITE_MAX_BYTES).await {
+        Ok(true) => {
+            tracing::info!("pocket apps: rewrote the database file; no old vote's ballots are left in its free space");
+            true
+        }
+        Ok(false) => {
+            tracing::warn!("pocket apps: the database file is over 256 MB, so it isn't rewritten; old votes' leftover bytes stay until reused");
+            true
+        }
+        Err(e) => {
+            tracing::warn!("pocket apps: couldn't rewrite the database file (trying again on the next start): {e}");
+            false
+        }
+    };
+    if done {
+        if let Err(e) = state.db.set_setting(REWRITE_DUE, "").await {
+            tracing::warn!("pocket apps: couldn't clear the database file rewrite: {e}");
+        }
+    }
 }
 
 /// What one sweep did.
