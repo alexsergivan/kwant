@@ -112,11 +112,14 @@ export function h4StuckLine(s: H4Status): string {
   return `Stuck: ${s.waits_on?.label ?? 'the AI'} stopped answering`;
 }
 
-/** m7: a bot whose model has sent nothing for 3 min (`quiet`/`model_silent`): "No word from the model yet · since 4:47 PM". */
-export function h4QuietLine(s?: H4Status | null): string | null {
+/** m7: a bot whose model has sent nothing for 3 min (`quiet`/`model_silent`): "No word from Claude · 4:47 PM";
+ *  `full` spells out "since" for the tooltip. Without a time: "No word from Claude yet". */
+export function h4QuietLine(s?: H4Status | null, full = false): string | null {
   if (s?.status !== 'quiet' || s.reason_code !== 'model_silent') return null;
+  const who = s.waits_on?.label ?? 'the AI';
   const at = hhmm(s.since);
-  return `No word from the model yet${at ? ` · since ${at}` : ''}`;
+  if (!at) return `No word from ${who} yet`;
+  return full ? `No word from ${who} since ${at}` : `No word from ${who} · ${at}`;
 }
 
 /** The sidebar's busy lines with a silent model's line in place of "Working …"; the old line moves to its tooltip. */
@@ -128,7 +131,7 @@ export function withQuietLines(lines: Record<string, string>, status: Record<str
     if (!quiet) continue;
     if (out === lines) out = { ...lines };
     out[id] = quiet;
-    if (titles) titles[id] = `${quiet}. ${titles[id] ?? line}`;
+    if (titles) titles[id] = `${h4QuietLine(status[id], true)}. ${titles[id] ?? line}`;
   }
   return out;
 }
