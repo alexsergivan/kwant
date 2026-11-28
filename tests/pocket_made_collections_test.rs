@@ -247,80 +247,37 @@ async fn each_read_rule_gives_each_viewer_its_own_part_and_nothing_private_leaks
     let shelf: Vec<String> = (0..4).map(|i| format!("shelf-g{i}")).collect();
     let all_notes: Vec<String> = (0..4).map(note).chain(["host-own-d4".to_string()]).collect();
 
-    // Every response each viewer gets, labelled
+    // Every response each viewer gets, labelled; the leak search runs on all of them before the
+    // per-viewer checks, so a leak fails on the search itself
     let mut seen: Vec<(String, Vec<(String, Value)>)> = Vec::new();
-    for (i, (id, key)) in guests.iter().enumerate() {
+    let mut polls = Vec::new();
+    for (i, (_, key)) in guests.iter().enumerate() {
         let poll = send(&t.guest, "GET", &format!("/api/pocket/{code}/state"), None, &guest_req(&code, key)).await;
         assert_eq!(poll.status, StatusCode::OK);
         let ws = first_state(ws_connect(addr, &code, Some((guest::guest_cookie(&code), key.clone())), None, None).await).await;
         let page = send(&t.guest, "GET", &format!("/p/{code}"), None, &guest_req(&code, key)).await;
         assert_eq!(page.status, StatusCode::OK);
         let html = page.body.as_str().unwrap().to_string();
-        // Same part on every way out
-        assert_eq!(ws["view"], poll.body["view"], "guest {i}: ws and polling agree");
-        if let Some(boot) = boot_of(&html) {
-            assert_eq!(boot["view"], poll.body["view"], "guest {i}: the page boot is the same view");
-        }
-        let v = &poll.body;
-        assert_eq!(v["me"]["id"], id.as_str());
-        // everyone: all rows
-        assert_eq!(texts(v, "shelf", "title"), shelf, "guest {i} sees the whole shelf");
-        // mine: own row only, count of own
-        assert_eq!(texts(v, "guesses", "text"), vec![mine(i)]);
-        assert_eq!(v["view"]["collections"]["guesses"]["count"], 1);
-        assert_eq!(rows(v, "guesses").unwrap()[0]["mine"], true);
-        // host: own row only
-        assert_eq!(texts(v, "notes", "line"), vec![note(i)]);
-        assert_eq!(v["view"]["collections"]["notes"]["count"], 1);
-        // after_reveal before the reveal: own row, the total as the count
-        assert_eq!(texts(v, "picks", "text"), vec![pick(i)]);
-        assert_eq!(v["view"]["collections"]["picks"]["count"], 4);
-        // server: everyone, no rows yet
-        assert_eq!(v["view"]["collections"]["tally"], json!({ "rows": [], "count": 0, "locked": false }));
-        assert_eq!(v["view"]["title"], "Book swap");
-        assert_eq!(v["view"]["words"]["intro"], "Bring one book.");
-        assert_eq!(v["view"]["revealed"], json!({}));
-        assert_eq!(v["view"]["players"].as_array().unwrap().len(), 4);
-        seen.push((format!("guest {i}"), vec![("poll".into(), poll.body.clone()), ("ws".into(), ws), ("boot".into(), Value::String(html))]));
+        polls.push((poll.body.clone(), ws.clone(), boot_of(&html)));
+        seen.push((format!("guest {i}"), vec![("poll".into(), poll.body), ("ws".into(), ws), ("boot".into(), Value::String(html))]));
     }
-    // The big screen: counts for mine/after_reveal, nothing at all of a host collection
     let screen = send(&t.guest, "GET", &format!("/api/pocket/{code}/host/state?view=screen"), None, &host_req(&host)).await;
     assert_eq!(screen.status, StatusCode::OK, "{}", screen.body);
     let screen_ws = first_state(ws_connect(addr, &code, None, Some(host.as_str()), Some("screen")).await).await;
-    assert_eq!(screen_ws["view"], screen.body["view"]);
-    let c = &screen.body["view"]["collections"];
-    assert_eq!(texts(&screen.body, "shelf", "title"), shelf);
-    assert_eq!(c["guesses"], json!({ "count": 4, "locked": false }));
-    assert_eq!(c["picks"], json!({ "count": 4, "locked": false }));
-    assert!(c.get("notes").is_none(), "the screen doesn't even get a count of a host collection: {c}");
-    seen.push(("screen".into(), vec![("poll".into(), screen.body.clone()), ("ws".into(), screen_ws)]));
-    // The host: every host-read row, counts for mine/after_reveal
+    seen.push(("screen".into(), vec![("poll".into(), screen.body.clone()), ("ws".into(), screen_ws.clone())]));
     let hosted = send(&t.guest, "GET", &format!("/api/pocket/{code}/host/state"), None, &host_req(&host)).await;
     assert_eq!(hosted.status, StatusCode::OK, "{}", hosted.body);
     let host_ws = first_state(ws_connect(addr, &code, None, Some(host.as_str()), Some("host")).await).await;
-    assert_eq!(host_ws["view"], hosted.body["view"]);
-    let c = &hosted.body["view"]["collections"];
-    let mut want_notes = all_notes.clone();
-    want_notes.sort();
-    assert_eq!(texts(&hosted.body, "notes", "line"), want_notes);
-    assert_eq!(c["guesses"], json!({ "count": 4, "locked": false }));
-    assert_eq!(c["picks"], json!({ "count": 4, "locked": false }));
-    let own: Vec<&Value> = rows(&hosted.body, "notes").unwrap().iter().filter(|r| r["mine"] == true).collect();
-    assert_eq!((own.len(), &own[0]["values"]["line"]), (1, &json!("host-own-d4")));
-    // The person's main-port read: the summary's counts, and the host's view
     let main_read = send(&t.main, "GET", &format!("/api/pockets/{code}"), None, &local()).await;
     assert_eq!(main_read.status, StatusCode::OK, "{}", main_read.body);
-    assert_eq!(main_read.body["summary"]["counts"], json!({ "shelf": 4, "guesses": 4, "notes": 5, "picks": 4, "tally": 0 }));
-    assert_eq!(main_read.body["host_view"]["collections"], hosted.body["view"]["collections"]);
     let main_list = send(&t.main, "GET", "/api/pockets", None, &local()).await;
-    seen.push(("host".into(), vec![("poll".into(), hosted.body.clone()), ("ws".into(), host_ws), ("main read".into(), main_read.body), ("main list".into(), main_list.body)]));
-    // Before joining: the lobby counts the everyone collections only
+    seen.push(("host".into(), vec![("poll".into(), hosted.body.clone()), ("ws".into(), host_ws.clone()), ("main read".into(), main_read.body.clone()), ("main list".into(), main_list.body)]));
+    // Before joining: info and the page's boot
     let info = send(&t.guest, "GET", &format!("/api/pocket/{code}/info"), None, &Req::default()).await;
     assert_eq!(info.status, StatusCode::OK, "{}", info.body);
     let page = send(&t.guest, "GET", &format!("/p/{code}"), None, &Req::default()).await;
     let public = Value::String(page.body.as_str().unwrap_or_default().to_string());
-    assert!(info.body.to_string().contains(r#""counts":{"shelf":4,"tally":0}"#), "{}", info.body);
-    seen.push(("nobody".into(), vec![("info".into(), info.body), ("boot".into(), public)]));
+    seen.push(("nobody".into(), vec![("info".into(), info.body.clone()), ("boot".into(), public)]));
 
     // The leak test: what no viewer but the owner (and the host, for host rows) may ever see
     for (who, responses) in &seen {
@@ -347,6 +304,55 @@ async fn each_read_rule_gives_each_viewer_its_own_part_and_nothing_private_leaks
             }
         }
     }
+
+    // Each guest: the same part on every way out, and exactly what each rule gives them
+    for (i, (v, ws, boot)) in polls.iter().enumerate() {
+        assert_eq!(ws["view"], v["view"], "guest {i}: ws and polling agree");
+        if let Some(boot) = boot {
+            assert_eq!(boot["view"], v["view"], "guest {i}: the page boot is the same view");
+        }
+        assert_eq!(v["me"]["id"], guests[i].0.as_str());
+        // everyone: all rows
+        assert_eq!(texts(v, "shelf", "title"), shelf, "guest {i} sees the whole shelf");
+        // mine: own row only, count of own
+        assert_eq!(texts(v, "guesses", "text"), vec![mine(i)]);
+        assert_eq!(v["view"]["collections"]["guesses"]["count"], 1);
+        assert_eq!(rows(v, "guesses").unwrap()[0]["mine"], true);
+        // host: own row only
+        assert_eq!(texts(v, "notes", "line"), vec![note(i)]);
+        assert_eq!(v["view"]["collections"]["notes"]["count"], 1);
+        // after_reveal before the reveal: own row, the total as the count
+        assert_eq!(texts(v, "picks", "text"), vec![pick(i)]);
+        assert_eq!(v["view"]["collections"]["picks"]["count"], 4);
+        // server: everyone, no rows yet
+        assert_eq!(v["view"]["collections"]["tally"], json!({ "rows": [], "count": 0, "locked": false }));
+        assert_eq!(v["view"]["title"], "Book swap");
+        assert_eq!(v["view"]["words"]["intro"], "Bring one book.");
+        assert_eq!(v["view"]["revealed"], json!({}));
+        assert_eq!(v["view"]["players"].as_array().unwrap().len(), 4);
+    }
+    // The big screen: counts for mine/after_reveal, nothing at all of a host collection
+    assert_eq!(screen_ws["view"], screen.body["view"]);
+    let c = &screen.body["view"]["collections"];
+    assert_eq!(texts(&screen.body, "shelf", "title"), shelf);
+    assert_eq!(c["guesses"], json!({ "count": 4, "locked": false }));
+    assert_eq!(c["picks"], json!({ "count": 4, "locked": false }));
+    assert!(c.get("notes").is_none(), "the screen doesn't even get a count of a host collection: {c}");
+    // The host: every host-read row, counts for mine/after_reveal
+    assert_eq!(host_ws["view"], hosted.body["view"]);
+    let c = &hosted.body["view"]["collections"];
+    let mut want_notes = all_notes.clone();
+    want_notes.sort();
+    assert_eq!(texts(&hosted.body, "notes", "line"), want_notes);
+    assert_eq!(c["guesses"], json!({ "count": 4, "locked": false }));
+    assert_eq!(c["picks"], json!({ "count": 4, "locked": false }));
+    let own: Vec<&Value> = rows(&hosted.body, "notes").unwrap().iter().filter(|r| r["mine"] == true).collect();
+    assert_eq!((own.len(), &own[0]["values"]["line"]), (1, &json!("host-own-d4")));
+    // The person's main-port read: the summary's counts, and the host's view
+    assert_eq!(main_read.body["summary"]["counts"], json!({ "shelf": 4, "guesses": 4, "notes": 5, "picks": 4, "tally": 0 }));
+    assert_eq!(main_read.body["host_view"]["collections"], hosted.body["view"]["collections"]);
+    // Before joining: the lobby counts the everyone collections only
+    assert!(info.body.to_string().contains(r#""counts":{"shelf":4,"tally":0}"#), "{}", info.body);
 }
 
 #[tokio::test]
