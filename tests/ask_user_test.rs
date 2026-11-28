@@ -83,7 +83,8 @@ async fn ask_pauses_the_turn_and_a_choice_resumes_it() {
                 _ => {}
             },
             RuntimeEvent::Notify { kind, body, .. } if kind == "question_asked" => {
-                assert!(!body.contains("branch"), "notifications don't carry the question text");
+                // pushes-say-what (0.9.60): the push says the question and its choices (questions::push_body)
+                assert_eq!(body, "Which branch should I ship? · main / batch2");
                 notified = true;
             }
             _ => {}

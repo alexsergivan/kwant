@@ -715,6 +715,14 @@ impl Database {
         Ok(())
     }
 
+    /// The hand-offs the lead's turn `turn_id` started with the `delegate` tool, oldest first.
+    pub async fn list_delegations_for_turn(&self, turn_id: &str) -> Result<Vec<Delegation>, DbError> {
+        Ok(sqlx::query_as::<_, Delegation>("SELECT * FROM delegations WHERE lead_turn_id = ? ORDER BY created_at, rowid")
+            .bind(turn_id)
+            .fetch_all(&self.pool)
+            .await?)
+    }
+
     /// Delegations parked until `after` ends.
     pub async fn list_dependent_delegations(&self, after: &str) -> Result<Vec<Delegation>, DbError> {
         Ok(sqlx::query_as::<_, Delegation>(
