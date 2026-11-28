@@ -653,13 +653,20 @@ export const VoteBars: React.FC<{ counts: GatherCount[]; total: number; lead: st
   </ul>
 );
 
+/** Who left in a round. 2+ in one round only happens on a tie for last (vote-ties-and-members, m9). */
+const outLine = (out: string[]): string => {
+  if (out.length < 2) return `${out[0] ?? ''} drops out`;
+  const names = `${out.slice(0, -1).join(', ')} and ${out[out.length - 1]}`;
+  return `${names} tied for last, so ${out.length === 2 ? 'both' : 'all'} drop out`;
+};
+
 /** "How it was counted": each round in plain words. */
 const Rounds: React.FC<{ rounds: GatherRound[] }> = ({ rounds }) =>
   rounds.length > 1 ? (
     <ol className="list-decimal pl-5 text-[13px] leading-[19px] text-zinc-400 marker:text-zinc-500 sm:text-[12.5px]" aria-label="How it was counted" data-rounds>
       {rounds.map((r, i) => (
         <li key={i}>
-          Round {i + 1}: {r.counts.map((c) => `${c.name} ${c.votes}`).join(' · ')}.{r.out.length ? ` ${r.out.join(' and ')} ${r.out.length === 1 ? 'drops' : 'drop'} out; ${r.out.length === 1 ? 'its votes move' : 'their votes move'} to each voter's next choice.` : ''}
+          Round {i + 1}: {r.counts.map((c) => `${c.name} ${c.votes}`).join(' · ')}.{r.out.length ? ` ${outLine(r.out)}; ${r.out.length === 1 ? 'its votes move' : 'their votes move'} to each voter's next choice.` : ''}
           {r.exhausted ? ` ${num(r.exhausted)} ${r.exhausted === 1 ? 'ballot had' : 'ballots had'} no choice left.` : ''}
         </li>
       ))}
@@ -1223,6 +1230,8 @@ const VoteRows: React.FC<{ g: GatherInfo }> = ({ g }) => {
             </strong>{' '}
             {v.members !== null ? 'members voted' : 'voted so far'}
           </Row>
+          {/* m10: with a members list only they can vote (the server refuses anyone else) */}
+          {v.members === null && <Row icon={<Globe size={15} aria-hidden="true" />}>Anyone with the link can vote.</Row>}
           {v.members !== null && v.members > 0 && (
             <li className="list-none">
               <Bar value={v.voted / v.members} label={`${num(v.voted)} of ${num(v.members)} voted`} />

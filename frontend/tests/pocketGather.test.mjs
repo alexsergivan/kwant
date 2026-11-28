@@ -74,6 +74,7 @@ const withG = (name, over) => {
 };
 const card = (name, block = raw(name)) => mount(h(m.MarkdownRenderer, { content: F[name].reply, results: { version: 1, blocks: [block] }, messageId: `m-${name}` }));
 const button = (v, text) => [...v.host.querySelectorAll('button, a')].find((b) => b.textContent.trim() === text);
+const c4 = (...votes) => votes.map((v, option) => ({ option, votes: v }));
 const holos = (v) => v.host.querySelectorAll('.kw-sticker-holo, [data-tone="holo"]').length;
 const ok = (b) => assert.ok(m.validPocket(b), 'should validate');
 const bad = (b, why) => assert.equal(m.validPocket(b), null, why);
@@ -221,6 +222,33 @@ test('Picked only when the vote is closed with a winner; a tie stays a plain war
   assert.equal(m.earnedPicked(m.validPocket(noWinner).gather), false);
   assert.equal(m.earnedPicked(m.validPocket(raw('voteTie')).gather), false);
   assert.equal(m.earnedPicked(m.validPocket(raw('voteClosed')).gather), true);
+});
+
+test('a tie for last: the round says both (or all) drop out, the rest of the line as before (vote-ties-and-members, m9)', async () => {
+  const r = raw('voteClosed').gather.result;
+  const two = withG('voteClosed', { result: { ...r, rounds: [{ round: 1, counts: c4(6, 7, 1, 1), exhausted: 0, dropped: [{ option: 2 }, { option: 3 }] }, { round: 2, counts: c4(8, 7), exhausted: 0, dropped: [] }] } });
+  ok(two);
+  const tie = await card('voteClosed', two);
+  assert.match(tie.host.textContent, /Round 1: .*Golden Lotus 1 · Pizza at the clubhouse 1\. Golden Lotus and Pizza at the clubhouse tied for last, so both drop out; their votes move to each voter's next choice\./);
+  assert.doesNotMatch(tie.host.textContent, /Pizza at the clubhouse drop out/);
+  tie.done();
+  const three = withG('voteClosed', { result: { ...r, rounds: [{ round: 1, counts: c4(6, 3, 3, 3), exhausted: 0, dropped: [{ option: 1 }, { option: 2 }, { option: 3 }] }, { round: 2, counts: [{ option: 0, votes: 8 }], exhausted: 7, dropped: [] }] } });
+  ok(three);
+  const v = await card('voteClosed', three);
+  assert.match(v.host.textContent, /Casa Lupa, Golden Lotus and Pizza at the clubhouse tied for last, so all drop out; their votes move to each voter's next choice\./);
+  v.done();
+});
+
+test('a vote without a members list says anyone with the link can vote; with one it does not (m10)', async () => {
+  const open = await card('voteOpen');
+  assert.doesNotMatch(open.host.textContent, /Anyone with the link can vote/);
+  open.done();
+  const anyone = withG('voteOpen', { members: null, not_answered: [] });
+  ok(anyone);
+  const v = await card('voteOpen', anyone);
+  assert.match(v.host.textContent, /15 voted so far/);
+  assert.match(v.host.textContent, /Anyone with the link can vote\./);
+  v.done();
 });
 
 test('moving up is ink New, with a note to copy', async () => {
