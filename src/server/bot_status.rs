@@ -1181,6 +1181,7 @@ mod tests {
     fn quiet_starts_at_5_minutes_without_a_step_and_is_long_from_15() {
         let mut t = running("t1", at(0));
         t.signals.last_step_at = Some(at(10));
+        t.running_tool = Some("Bash".into());
         let b = bot(vec![t]);
         let at_min = |m: i64, secs: i64| compute(&b, at(m) + Span::seconds(secs));
         assert_eq!(at_min(14, 59).status, "working", "4 min 59 s is not quiet yet");
@@ -1190,6 +1191,66 @@ mod tests {
         assert_eq!(s.quiet.as_ref().unwrap().level, "short");
         assert_eq!(at_min(24, 59).quiet.unwrap().level, "short");
         assert_eq!(at_min(25, 0).quiet.unwrap().level, "long");
+    }
+
+    /// m7: a turn that waits only on the model (one streamed line, then nothing) says so at 3 min.
+    #[test]
+    fn a_silent_model_is_quiet_at_3_minutes_as_model_silent() {
+        let mut t = running("t1", at(0));
+        t.signals.last_step_at = Some(at(10));
+        let b = bot(vec![t]);
+        let at_min = |m: i64, secs: i64| compute(&b, at(m) + Span::seconds(secs));
+        let s = at_min(12, 59);
+        assert_eq!((s.status, s.reason_code), ("working", "thinking"), "2 min 59 s is not quiet yet");
+        assert!(s.quiet.is_none());
+        let s = at_min(13, 0);
+        assert_eq!((s.status, s.reason_code), ("quiet", "model_silent"));
+        assert_eq!(s.since, Some(at(10)), "Quiet counts from the last step");
+        assert_eq!(s.waits_on, Some(WaitsOn { kind: "model", label: Some("Claude".into()) }));
+        assert_eq!(s.quiet.as_ref().unwrap().level, "short");
+        assert_eq!(at_min(24, 59).quiet.unwrap().level, "short");
+        assert_eq!(at_min(25, 0).quiet.unwrap().level, "long", "long stays at 15 min");
+    }
+
+    #[test]
+    fn a_handoff_wait_keeps_the_5_minutes() {
+        let mut t = running("t1", at(0));
+        t.signals.last_step_at = Some(at(10));
+        t.running_tool = Some("mcp__kwnt__delegate".into());
+        let b = bot(vec![t]);
+        let s = compute(&b, at(14) + Span::seconds(59));
+        assert_eq!((s.status, s.reason_code), ("working", "waiting_for_bot"), "4 min 59 s is not quiet yet");
+        let s = compute(&b, at(15));
+        assert_eq!((s.status, s.reason_code), ("quiet", "no_step"));
+    }
+
+    #[test]
+    fn snooze_and_mute_hide_a_silent_model_too() {
+        let mut t = running("t1", at(0));
+        t.signals.last_step_at = Some(at(0));
+        t.signals.snooze_until = Some(at(10));
+        let s = compute(&bot(vec![t.clone()]), at(4));
+        assert_eq!((s.status, s.reason_code), ("working", "thinking"));
+        assert_eq!(s.quiet.as_ref().unwrap().snoozed_until, Some(at(10)));
+        assert_eq!(compute(&bot(vec![t.clone()]), at(10)).reason_code, "model_silent", "the snooze ran out");
+        t.signals.snooze_until = None;
+        t.signals.muted = true;
+        let s = compute(&bot(vec![t]), at(4));
+        assert_eq!((s.status, s.reason_code), ("working", "thinking"));
+        assert!(s.quiet.unwrap().muted);
+    }
+
+    #[test]
+    fn a_silent_model_gets_no_fyi_before_15_minutes() {
+        let mut t = running("t1", at(0));
+        t.signals.last_step_at = Some(at(0));
+        for m in [3, 5, 10, 14] {
+            assert_eq!(compute(&bot(vec![t.clone()]), at(m)).status, "quiet");
+            assert!(!fyi_due(&t, at(m) + Span::seconds(59)), "no FYI at {m} min");
+        }
+        assert!(fyi_due(&t, at(15)));
+        t.running_tool = Some("Bash".into());
+        assert!(fyi_due(&t, at(15)), "a running tool gets it at 15 min too");
     }
 
     #[test]
