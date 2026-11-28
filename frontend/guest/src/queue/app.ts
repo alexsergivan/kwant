@@ -549,8 +549,8 @@ export class QueueApp {
         break;
       }
       case 'skipped': {
-        const sk = skippedLines(t, v);
-        kids.push(this.ticket(t, 'dim', ['Called', at(t.called_at)], h('div', { class: 'word sm' }, 'You missed your turn'), h('div', { class: 'post p8' }, sk.lead)));
+        const sk = skippedLines(t, v, this.env.now() + this.offset);
+        kids.push(this.ticket(t, 'dim', ['Called', at(t.called_at)], h('div', { class: 'word sm' }, sk.word), h('div', { class: 'post p8' }, sk.lead)));
         kids.push(...this.takeBtn('Take a new ticket'));
         if (!this.blocked()) kids.push(h('p', { class: 'ginfo' }, qIcon('clock'), h('span', null, sk.after)));
         break;
