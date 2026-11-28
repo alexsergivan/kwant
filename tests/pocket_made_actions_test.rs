@@ -406,7 +406,7 @@ async fn a_guest_sent_score_is_refused_and_unknown_actions_stay_unknown() {
         json!({ "text": "x", "correct": true }),
     ] {
         let r = act(&t, &code, &key, "answer", body.clone()).await;
-        assert_eq!((r.status, r.body["code"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_action")), "{body}: {}", r.body);
+        assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_action")), "{body}: {}", r.body);
         assert!(r.body.to_string().contains("isn't one of them"), "{}", r.body);
     }
     // Nothing was stored, and a put into the answer collection is refused (only answer writes it)
@@ -419,11 +419,11 @@ async fn a_guest_sent_score_is_refused_and_unknown_actions_stay_unknown() {
     // Host actions from a guest, guest actions from the host, and made-up names: unknown_action
     for name in ["adjust", "reveal", "draw", "step", "lock", "timer_start", "turn_next", "delete_everything", "score"] {
         let r = act(&t, &code, &key, name, json!({})).await;
-        assert_eq!((r.status, r.body["code"].as_str()), (StatusCode::BAD_REQUEST, Some("unknown_action")), "guest {name}: {}", r.body);
+        assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::BAD_REQUEST, Some("unknown_action")), "guest {name}: {}", r.body);
     }
     for name in ["answer", "vote", "take_back", "score", "eval"] {
         let r = host_act(&t, &code, &host, name, json!({})).await;
-        assert_eq!((r.status, r.body["code"].as_str()), (StatusCode::BAD_REQUEST, Some("unknown_action")), "host {name}: {}", r.body);
+        assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::BAD_REQUEST, Some("unknown_action")), "host {name}: {}", r.body);
     }
 }
 
