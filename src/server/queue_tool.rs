@@ -68,7 +68,7 @@ pub const RULES: &str = "Take-a-number queue: the fields and rules.
 
 kwant runs the queue: customers open its page on their phones (from the counter sign or the link), take a number and watch their \
 place in line. The person calls the next number, and can pause or close the queue. There's no app, no account and no phone number: \
-a ticket is just a number, deleted when it's served, skipped or given up, or when the queue closes.
+a ticket is just a number (and a first name, if the person wants one), deleted when it's served, skipped or given up, or when the queue closes.
 
 Fields (all at the top level of the call):
 - title (required, up to 40 characters): what customers see, like \"Tine's Bakery\".
@@ -81,11 +81,14 @@ stays open until the person closes it.
 
 Rules:
 - Ask the person at most one question before you call: whether customers give a first name, in plain words, like \"Should \
-customers give a first name with their ticket, or just take a number? I'll use numbers only if that's fine.\" If they don't say, \
+customers give a first name with their ticket, or just take a number? If you don't mind either way, I'll use numbers only.\" If they don't say, \
 use numbers only. Never say \"ask_name\" or \"call_minutes\" to the person. Pick a short title from their words.
 - Never promise an opening time. The queue opens the moment you make it; kwant can't open it later. When the person gives hours, \
 like \"8 to 12\", set until to the closing time and say it plainly, like \"It's open now and closes by itself at 12:00. Nobody can \
 take a number until you share its link or counter sign.\"
+- When the person names a later day, like \"Saturday\", don't make the queue yet: until only knows a time, so it would open now \
+and close at that time tomorrow, not on their day. Say it plainly, like \"kwant can't open a queue later, so ask me on Saturday \
+morning and I'll make it then.\" Make it now only when they want it today.
 - Never invent a phone or SMS reminder. Customers are only told on the queue's own page, while it's open on their phone.
 - Never invent a price, an address or opening hours the person didn't give.
 
@@ -209,7 +212,7 @@ fn made_text(code: &str, title: &str, closes: Option<&str>, join: Option<&Value>
     let link_line = match (link, join.map(|j| j["mode"].as_str() == Some("wifi"))) {
         (Some(u), Some(true)) => format!("Customer link: {u}\nIt works only on the same Wi-Fi as this computer."),
         (Some(u), _) => format!("Customer link: {u}"),
-        (None, _) => "No customer link works yet: this kwant answers only this computer. Don't write a link yourself.".into(),
+        (None, _) => "No customer link works yet: this kwant answers only this computer, so phones can't reach the queue. Tell the person that plainly, and don't write a link yourself.".into(),
     };
     let hours = match closes {
         Some(c) => format!("It's open now and closes by itself at {c}."),
@@ -294,7 +297,7 @@ mod tests {
         let t = made_text("PQ7XK2", "Tine's Bakery", Some("12:00"), None);
         assert!(t.starts_with("Pocket app · Queue [PQ7XK2] \"Tine's Bakery\" is made."), "{t}");
         assert!(t.contains("It's open now and closes by itself at 12:00."), "{t}");
-        assert!(t.contains("No customer link works yet") && t.contains("Don't write a link yourself."), "{t}");
+        assert!(t.contains("No customer link works yet") && t.contains("so phones can't reach the queue. Tell the person that plainly, and don't write a link yourself."), "{t}");
         assert!(t.ends_with("never invent a phone or SMS reminder: customers are only told on the queue's own page."), "{t}");
         let t = made_text("PQ7XK2", "Q", None, Some(&json!({"mode": "anywhere", "anywhere_url": "https://q.example/j/PQ7XK2"})));
         assert!(t.contains("stays open until the person closes it") && t.contains("Customer link: https://q.example/j/PQ7XK2"), "{t}");
@@ -321,6 +324,8 @@ mod tests {
         for w in [
             "at most one question",
             "Never promise an opening time",
+            "When the person names a later day",
+            "ask me on Saturday morning and I'll make it then.",
             "It's open now and closes by itself at 12:00.",
             "Never invent a phone or SMS reminder",
             "Never say \"ask_name\" or \"call_minutes\" to the person",
