@@ -798,3 +798,26 @@ fn b4_an_unclosed_block_still_refuses_the_declaration_a_browser_would_apply_to_e
     let r = lint(Surface::Phone, "", ".a { position: fixed", "");
     assert_refuses(&r, "C2", "It tried to pin something over the page.");
 }
+
+#[test]
+fn b5_a_sixty_kilobyte_nest_of_unclosed_blocks_still_lints_in_well_under_a_second() {
+    // Rigel's QA (B5): scanning every `{ }` body's full text once per level it's nested at (the
+    // range-collecting version of `declarations()` that fixed B4) turned this exact shape
+    // (well inside the 120 KB C6 budget, so nothing short-circuits it) quadratic: 60 KB of
+    // unclosed "a{" opens took 62s, against 1.8ms before B4's fix. The linear single-pass
+    // replacement (B5's fix) must stay fast on it.
+    let css = "a{".repeat(30_000);
+    let start = std::time::Instant::now();
+    let _ = lint(Surface::Phone, "", &css, "");
+    let elapsed = start.elapsed();
+    assert!(elapsed.as_secs() < 2, "expected well under a second, took {elapsed:?}");
+}
+
+#[test]
+fn b5_twenty_eight_kilobytes_of_single_declaration_blocks_still_lints_in_well_under_a_second() {
+    let css = ".a{b:c;".repeat(4_000);
+    let start = std::time::Instant::now();
+    let _ = lint(Surface::Phone, "", &css, "");
+    let elapsed = start.elapsed();
+    assert!(elapsed.as_secs() < 2, "expected well under a second, took {elapsed:?}");
+}

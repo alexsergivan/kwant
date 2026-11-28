@@ -302,23 +302,24 @@ fn identifiers(src: &str) -> Vec<(usize, usize)> {
     out
 }
 
-/// Byte ranges of every `{ ... }` rule body in `css`, at every nesting depth: a flat colon scan
-/// over the whole text would misread a selector's pseudo-class colon (`.x:hover`) or an at-rule's
-/// condition (`@media (min-width:1px)`) as its own `name: value` pair and swallow the real
-/// declaration that follows (Rigel's QA, B2), so declarations are only ever read from inside a
-/// `{ }` body. A body that itself contains a nested `{ }` (CSS nesting) still has its own
-/// declarations scanned: `declarations_in_block` reads flat over the body's text, so a nested
-/// block's own text is scanned twice (once as part of the outer body, once as its own range) —
-/// harmless, since a duplicate finding refuses the same rule a second time (Rigel's QA, B4;
-/// dropping the innermost-only filter this used to apply here is the fix). A `{` or `}` inside a
-/// quoted string is skipped so it can't shift the brace count. A block left open at the end of
-/// the input (an unbalanced `{`) is closed at end of input: a browser applies it up to there too,
-/// so a declaration inside it must still be scanned, not silently dropped (Rigel's QA, B4).
-fn leaf_block_ranges(css: &str) -> Vec<(usize, usize)> {
+/// `prop: value` pairs read directly from `css`'s token stream in a single linear pass. The input
+/// is split at every top-level `{`, `;` and `}` (a `'`/`"` string is skipped as one unit so a
+/// boundary byte inside it can't be misread as one); a segment that ends at a `{` is a selector or
+/// an at-rule prelude (`.x:hover`, `@media (min-width:1px)`) and is discarded whole, so its own
+/// colon never gets misread as a `name: value` pair and swallows the real declaration that follows
+/// (Rigel's QA, B2). Every other segment — ending at a `;`, a `}`, or end of input — is exactly one
+/// statement, checked on its own for a `name: value` shape. Because every segment, at every CSS
+/// nesting depth, is visited exactly once, an outer block's own declaration is never skipped just
+/// because it nests another rule inside it (`.a { position: fixed; .b { margin: 0; } }`, Rigel's
+/// QA, B4), and a block left open at end of input is still read up to there, same as a browser
+/// applies it (Rigel's QA, B4) — without the quadratic blow-up of first collecting every `{ }`
+/// body's byte range and then re-scanning each one's full text once per level it's nested at,
+/// which is what the range-collecting version of this function used to do (Rigel's QA, B5).
+fn declarations(css: &str) -> Vec<(String, String)> {
     let b = css.as_bytes();
-    let mut stack: Vec<usize> = Vec::new();
-    let mut pairs: Vec<(usize, usize)> = Vec::new();
-    let mut i = 0;
+    let mut out = Vec::new();
+    let mut seg_start = 0usize;
+    let mut i = 0usize;
     while i < b.len() {
         match b[i] {
             b'\'' | b'"' => {
@@ -332,69 +333,45 @@ fn leaf_block_ranges(css: &str) -> Vec<(usize, usize)> {
                 }
             }
             b'{' => {
-                stack.push(i + 1);
+                seg_start = i + 1;
                 i += 1;
             }
-            b'}' => {
-                if let Some(start) = stack.pop() {
-                    pairs.push((start, i));
-                }
+            b';' | b'}' => {
+                push_declaration(&css[seg_start..i], &mut out);
+                seg_start = i + 1;
                 i += 1;
             }
             _ => i += 1,
         }
     }
-    while let Some(start) = stack.pop() {
-        pairs.push((start, b.len()));
-    }
-    pairs
+    push_declaration(&css[seg_start..], &mut out);
+    out
 }
 
-/// `prop: value` pairs scanned flat over one rule body (no further `{`/`}` inside it, so a value
-/// never needs to stop early at a nested block's own close brace).
-fn declarations_in_block(block: &str) -> Vec<(String, String)> {
-    let b = block.as_bytes();
-    let mut out = Vec::new();
+/// Reads the single `name: value` declaration out of one statement already isolated by
+/// `declarations`'s boundary scan: `value` never needs to stop early at a `;`, `}` or `{` of its
+/// own, since there isn't one left in `segment`.
+fn push_declaration(segment: &str, out: &mut Vec<(String, String)>) {
+    let b = segment.as_bytes();
     let mut i = 0;
-    while i < b.len() {
-        while i < b.len() && !(b[i].is_ascii_alphabetic() || b[i] == b'-') {
-            i += 1;
-        }
-        let start = i;
-        while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'-') {
-            i += 1;
-        }
-        if i == start {
-            continue;
-        }
-        let name = block[start..i].to_string();
-        let mut j = i;
-        while j < b.len() && b[j].is_ascii_whitespace() {
-            j += 1;
-        }
-        if j < b.len() && b[j] == b':' {
-            j += 1;
-            let vstart = j;
-            while j < b.len() && b[j] != b';' && b[j] != b'}' {
-                j += 1;
-            }
-            out.push((name, block[vstart..j].trim().to_string()));
-            i = j;
-        }
+    while i < b.len() && !(b[i].is_ascii_alphabetic() || b[i] == b'-') {
+        i += 1;
     }
-    out
-}
-
-/// `prop: value` pairs scanned over every innermost rule body in `css`: selector and at-rule
-/// prelude colons never produce a pair (Rigel's QA, B2). A declaration outside any `{ }` rule
-/// body (including one orphaned by an unbalanced brace) is invalid CSS a browser ignores too, so
-/// finding none here is the correct, safe reading of it, not a gap.
-fn declarations(css: &str) -> Vec<(String, String)> {
-    let mut out = Vec::new();
-    for (s, e) in leaf_block_ranges(css) {
-        out.extend(declarations_in_block(&css[s..e]));
+    let start = i;
+    while i < b.len() && (b[i].is_ascii_alphanumeric() || b[i] == b'-') {
+        i += 1;
     }
-    out
+    if i == start {
+        return;
+    }
+    let name = segment[start..i].to_string();
+    let mut j = i;
+    while j < b.len() && b[j].is_ascii_whitespace() {
+        j += 1;
+    }
+    if j < b.len() && b[j] == b':' {
+        out.push((name, segment[j + 1..].trim().to_string()));
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -859,7 +836,7 @@ fn strip_important(value: &str) -> &str {
 
 fn lint_css(r: &mut Report, css_in: &str) {
     // Comments and CSS escapes are resolved once, up front, so every check below (including
-    // `declarations()`'s own leaf-block scan) sees a bot's actual property names and values
+    // `declarations()`'s own boundary scan) sees a bot's actual property names and values
     // instead of a `/**/`- or `\XX`-obscured version of them (Rigel's QA, B2).
     let normalized = decode_css_escapes_outside_strings(&strip_css_comments(css_in));
     let css: &str = &normalized;
