@@ -309,7 +309,7 @@ pub async fn tool_ask(state: &AppState, scope: &SelfScope, args: &Value) -> (Str
             kwant_name: scope.kwant_name.clone(),
             channel_id: origin.channel_id.clone(),
             title: format!("{} has a question", scope.kwant_name),
-            body: "Open the chat to answer.".into(),
+            body: push_body(&q.question, &q.choice_list()),
             thread_id: q.thread_id.clone(),
             card_id: None,
         },
@@ -646,7 +646,7 @@ pub async fn ask_without_waiter(state: &AppState, place: &QuestionPlace, kwant_n
             kwant_name: kwant_name.to_string(),
             channel_id: q.channel_id.clone(),
             title: format!("{kwant_name} has a question"),
-            body: "Open the chat to answer.".into(),
+            body: push_body(&q.question, &q.choice_list()),
             thread_id: q.thread_id.clone(),
             card_id: None,
         },
@@ -775,7 +775,7 @@ pub async fn record_native(state: &AppState, place: &QuestionPlace, kwant_name: 
                 kwant_name: kwant_name.to_string(),
                 channel_id: q.channel_id.clone(),
                 title: format!("{kwant_name} has a question"),
-                body: "Open the chat to answer.".into(),
+                body: push_body(&q.question, &q.choice_list()),
                 thread_id: q.thread_id.clone(),
                 card_id: None,
             },
@@ -787,9 +787,92 @@ pub async fn record_native(state: &AppState, place: &QuestionPlace, kwant_name: 
     saved
 }
 
+/// How long a question may run in its push before it is clipped (pushes-say-what).
+const PUSH_QUESTION_CHARS: usize = 100;
+/// How long a question push's whole body (question and choices) may run.
+pub const PUSH_BODY_CHARS: usize = 160;
+
+/// The body of a question's push (pushes-say-what): the question clipped to
+/// [`PUSH_QUESTION_CHARS`] and, when it has choices, " · " and the choices joined by " / ", the
+/// whole clipped to [`PUSH_BODY_CHARS`], each at a word. The person can answer a one-tap question
+/// from the lock screen's text instead of opening kwant to read it. It leaves kwant (push,
+/// webhook, Telegram), so anything that looks like a key is masked.
+pub fn push_body(question: &str, choices: &[String]) -> String {
+    let masked = |t: &str| super::missions::autofix::redact(t);
+    let question = clip_at_word(&masked(question), PUSH_QUESTION_CHARS);
+    let choices: Vec<String> = choices
+        .iter()
+        .map(|c| c.split_whitespace().collect::<Vec<_>>().join(" "))
+        .filter(|c| !c.is_empty())
+        .collect();
+    let body = match choices.is_empty() {
+        true => question,
+        false => format!("{question} · {}", masked(&choices.join(" / "))),
+    };
+    clip_at_word(&body, PUSH_BODY_CHARS)
+}
+
+/// `text` on one line, at most `max` chars: when it is longer it is cut at the last word that
+/// fits (mid-word only for a word longer than half of `max`) and ends with "…".
+pub fn clip_at_word(text: &str, max: usize) -> String {
+    let flat = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    if flat.chars().count() <= max {
+        return flat;
+    }
+    let cut: String = flat.chars().take(max.saturating_sub(1)).collect();
+    // The char after the cut: a space there means `cut` already ends on a whole word
+    let at_word = flat.chars().nth(cut.chars().count()) == Some(' ');
+    let kept = match (at_word, cut.rfind(' ')) {
+        (true, _) => cut.as_str(),
+        (false, Some(i)) if cut[..i].chars().count() >= max / 2 => &cut[..i],
+        _ => cut.as_str(),
+    };
+    let kept = kept.trim_end_matches([' ', ',', ';', ':', '·', '/', '-']);
+    format!("{kept}…")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_question_push_carries_the_question_and_its_choices() {
+        let ch = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        // With choices: one tap from the lock screen
+        assert_eq!(
+            push_body("How much can I spend on the hotel?", &ch(&["€20", "€30", "No limit"])),
+            "How much can I spend on the hotel? · €20 / €30 / No limit"
+        );
+        // Without: the question alone, on one line
+        assert_eq!(push_body("Which city\n  should I  start with?", &[]), "Which city should I start with?");
+        // A long question is clipped at a word to 100 chars; the choices still follow
+        let long = "Should I book the early train that leaves at six and gets in before the museum opens, or the later one that arrives at noon?";
+        let body = push_body(long, &ch(&["Early", "Later"]));
+        let (q, rest) = body.split_once(" · ").unwrap();
+        assert!(q.chars().count() <= 100, "{q}");
+        let kept = q.strip_suffix('…').unwrap();
+        assert!(long.starts_with(kept) && long[kept.len()..].starts_with([' ', ',']), "cut mid-word: {q}");
+        assert_eq!(rest, "Early / Later");
+        // The whole body stays within 160, cut at a word
+        let many: Vec<String> = (1..=5).map(|i| format!("Option number {i} with a long label")).collect();
+        let body = push_body(long, &many);
+        assert!(body.chars().count() <= PUSH_BODY_CHARS, "{body}");
+        assert!(body.ends_with('…'), "{body}");
+        assert!(body.contains(" · Option number 1 with a long label / "), "{body}");
+        // A key in the question never reaches the phone
+        let keyed = push_body("Use ghp_abcdefghijklmnop1234 for the repo?", &ch(&["Yes", "No"]));
+        assert!(!keyed.contains("ghp_"), "{keyed}");
+    }
+
+    #[test]
+    fn clipping_keeps_whole_words() {
+        assert_eq!(clip_at_word("short", 10), "short");
+        assert_eq!(clip_at_word("one two three four", 10), "one two…");
+        assert_eq!(clip_at_word("one two three", 8), "one two…");
+        // A single long word is cut mid-word rather than dropped
+        assert_eq!(clip_at_word("abcdefghijklmnop", 6), "abcde…");
+        assert!(clip_at_word(&"é ".repeat(200), 50).chars().count() <= 50);
+    }
 
     #[test]
     fn native_questions_are_read() {
