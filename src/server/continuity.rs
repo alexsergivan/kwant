@@ -2288,6 +2288,21 @@ pub fn spawn_notifier(state: AppState) -> tokio::task::JoinHandle<()> {
                     continue;
                 }
             }
+            // mention-pushes-say-what: a team lead's turn that @mentioned someone pushes once its
+            // mention hand-offs exist (made after the turn ended), without holding other pushes
+            if let RuntimeEvent::TurnEnded { turn_id: Some(turn_id), .. } = event.unscoped() {
+                if super::mention_push::waits(turn_id) {
+                    let (state, turn_id) = (state.clone(), turn_id.clone());
+                    tokio::spawn(async move {
+                        super::mention_push::settled(&turn_id).await;
+                        if let Some(n) = notification_for(&state, &event).await {
+                            notify(&state, n).await;
+                        }
+                        super::mention_push::take(&turn_id);
+                    });
+                    continue;
+                }
+            }
             if let Some(n) = notification_for(&state, &event).await {
                 notify(&state, n).await;
             }
@@ -2452,8 +2467,9 @@ async fn saved_blocked(state: &AppState, kwant_id: &str, context: &str, reply: &
 /// What a turn of `kwant_id` in `context_id` that ended with `outcome` tells the person (33e):
 /// a failed turn "<bot> stopped"; a completed one "<bot> is blocked" when its reply ends Blocked,
 /// else "<bot> replied" (with its `Done:` line as the body when it has one). A completed turn
-/// `turn_id` whose plain reply only handed work on says so: "<bot> handed “<task>” to
-/// <teammate>" (pushes-say-what), not "replied", which read as "done already?". `None` for a
+/// `turn_id` whose plain reply only handed work on (with the `delegate` tool, or a team lead's
+/// @mentions) says so: "<bot> handed “<task>” to <teammate>" (pushes-say-what,
+/// mention-pushes-say-what), not "replied", which read as "done already?". `None` for a
 /// cancelled turn: the person stopped it.
 pub async fn turn_ended(
     state: &AppState,
@@ -2492,11 +2508,19 @@ pub async fn turn_ended(
 }
 
 /// What the lead's turn `turn_id` handed on with the `delegate` tool (its hand-offs'
-/// `lead_turn_id`), for its notification: "“<task>” to Researcher", "“<task>” to Researcher and
-/// Writer", "2 tasks to 3 teammates". `None` when it handed nothing on (a cancelled hand-off
-/// doesn't count).
+/// `lead_turn_id`) or, as a team lead, with @mentions in its reply (see [`super::mention_push`]),
+/// for its notification: "“<task>” to Researcher", "“<task>” to Researcher and Writer", "2 tasks
+/// to 3 teammates". `None` when it handed nothing on (a cancelled hand-off doesn't count).
 async fn handed_on(state: &AppState, turn_id: Option<&str>) -> Option<String> {
-    let handed = state.db.list_delegations_for_turn(turn_id?).await.ok()?;
+    let turn_id = turn_id?;
+    let mut handed = state.db.list_delegations_for_turn(turn_id).await.ok()?;
+    for id in super::mention_push::take(turn_id) {
+        if let Ok(Some(d)) = state.db.get_delegation(&id).await {
+            if !handed.iter().any(|h| h.id == d.id) {
+                handed.push(d);
+            }
+        }
+    }
     let handed: Vec<_> = handed.iter().filter(|d| d.status != "cancelled").collect();
     let mut titles: Vec<&str> = Vec::new();
     let mut names: Vec<String> = Vec::new();

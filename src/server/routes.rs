@@ -1102,10 +1102,16 @@ fn execute_single_turn(
         {
             super::delivery_plan::remember(&scope.job_id, &message_id, plan);
         }
+        // mention-pushes-say-what: a team lead's push waits for the hand-offs its @mentions start
+        let gate = is_team_channel_lead(&scope, &target_kwant).await.then(super::mention_push::Gate::new);
+        let mention_push = gate.as_ref().map(super::mention_push::Gate::slot);
         // A full link in the person's own message may open the bot browser first
-        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), source: Some(source), held_place, ..TurnOpts::default() };
+        let opts = TurnOpts { routing, nav_prompt: Some(prompt.clone()), source: Some(source), held_place, mention_push, ..TurnOpts::default() };
         if let Some(reply) = run_kwant_turn(&scope, &target_kwant, turn_prompt, opts).await {
-            run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
+            let handed = run_handoffs(&scope, std::slice::from_ref(&target_kwant.id), &[(target_kwant.clone(), reply)], &prompt).await;
+            if let Some(gate) = gate {
+                gate.handed(handed);
+            }
             // Several bots asked the person something: one list of it all (when the chain is over)
             super::asks::consolidate(&scope).await;
         }
@@ -1300,7 +1306,7 @@ pub(super) fn run_handoffs_boxed<'a>(
     already_spoken: &'a [String],
     replies: &'a [(Kwant, String)],
     user_prompt: &'a str,
-) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + 'a>> {
+) -> std::pin::Pin<Box<dyn std::future::Future<Output = Vec<String>> + Send + 'a>> {
     Box::pin(run_handoffs(scope, already_spoken, replies, user_prompt))
 }
 
@@ -1351,14 +1357,16 @@ pub(crate) fn only_greets(user_prompt: &str) -> bool {
         && !words.iter().any(|w| GO_AHEAD.contains(w))
 }
 
-async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(Kwant, String)], user_prompt: &str) {
+/// Returns the hand-offs a team lead's @mentions started (see [`delegate_mentions`]); none for
+/// a handoff chain, whose teammates take turns here instead.
+async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(Kwant, String)], user_prompt: &str) -> Vec<String> {
     // "Hi! @Writer and @Analyst are here too" to a "hi team!" names them; it doesn't start two more turns
     if only_greets(user_prompt) {
-        return;
+        return Vec::new();
     }
     let named: Vec<(String, String)> = replies.iter().map(|(k, t)| (k.name.clone(), t.clone())).collect();
     if super::budget::pause_if_over(scope, already_spoken, &named, user_prompt).await {
-        return;
+        return Vec::new();
     }
     if let [(from, text)] = replies {
         if is_team_channel_lead(scope, from).await {
@@ -1366,7 +1374,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
         }
     }
     if scope.teammates.is_empty() {
-        return;
+        return Vec::new();
     }
     // (teammate, asked by, asker's text, the teammate whose result it waits for)
     type Queued = (Kwant, String, String, Option<String>);
@@ -1394,7 +1402,8 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
     }
     if queue.is_empty() {
         drop(enqueue);
-        return report_skipped(scope, skipped).await;
+        report_skipped(scope, skipped).await;
+        return Vec::new();
     }
 
     let events = scope.state.event_sender.clone();
@@ -1485,6 +1494,7 @@ async fn run_handoffs(scope: &TurnScope, already_spoken: &[String], replies: &[(
 
     let _ = events.send(RuntimeEvent::DiscussionCompleted { total_turns: done + 1, context_id: Some(context_id.clone()) });
     report_skipped(scope, skipped).await;
+    Vec::new()
 }
 
 /// How one bot's turn in a handoff chain ended, for a teammate that waits on its result.
@@ -1668,7 +1678,8 @@ pub(super) struct Relay<'a> {
 /// task after that one, with its result ("Waiting for … to start"); a teammate's result (a relay)
 /// doesn't hand it more, and the lead's same line again isn't sent ([`STILL_ON_IT`]).
 /// `resumed`: the person pressed Continue on such a notice: only these teammates are handed the
-/// work, with a fresh allowance.
+/// work, with a fresh allowance. Returns the ids of the hand-offs it started (for the lead's push,
+/// see [`super::mention_push`]).
 pub(super) async fn delegate_mentions(
     scope: &TurnScope,
     lead: &Kwant,
@@ -1677,8 +1688,8 @@ pub(super) async fn delegate_mentions(
     just_reported: &[String],
     resumed: Option<&[String]>,
     relay: Option<&Relay<'_>>,
-) {
-    let Some(cid) = scope.channel_id.clone() else { return };
+) -> Vec<String> {
+    let Some(cid) = scope.channel_id.clone() else { return Vec::new() };
     let names: Vec<&str> = scope.teammates.iter().map(|k| k.name.as_str()).collect();
     let found = crate::router::handoff_mentions(text, &names);
     // "@Writer, once @Analyst has the numbers…": the Writer's task waits for the Analyst's result
@@ -1692,7 +1703,8 @@ pub(super) async fn delegate_mentions(
     let speaker = relay.map_or(lead.id.as_str(), |r| r.from.id.as_str());
     let not_a_handoff = |id: &str| id == lead.id || id == speaker;
     if found.targets.iter().all(|&i| not_a_handoff(&scope.teammates[i].id)) {
-        return report_skipped(scope, skipped).await;
+        report_skipped(scope, skipped).await;
+        return Vec::new();
     }
     let mine: Vec<_> = scope
         .state
@@ -1886,6 +1898,7 @@ pub(super) async fn delegate_mentions(
     }
     // Only now, with the whole round created: a teammate that finished while the next one was
     // being created resumed the lead without it (CI on 8f41657: the Continue notice left out SEO)
+    let ids: Vec<String> = created.iter().map(|c| c.delegation.id.clone()).collect();
     for c in created {
         c.start(&scope.state).await;
     }
@@ -1893,6 +1906,7 @@ pub(super) async fn delegate_mentions(
     if !capped.is_empty() {
         super::budget::pause_capped(scope, lead, &capped, this_request.len() + sent, text, user_prompt).await;
     }
+    ids
 }
 
 /// When the current request's hand-offs are counted from: the later of the person's last message
@@ -2200,6 +2214,9 @@ pub(super) struct TurnOpts {
     /// The turn sends no `turn_finished` notification when it ends (the caller notifies, see
     /// [`super::missions::runner`]).
     pub(super) quiet_finish: bool,
+    /// A team lead's turn whose @mentions may hand work on after it ends: its push waits for
+    /// those hand-offs (see [`super::mention_push`]).
+    pub(super) mention_push: Option<super::mention_push::Slot>,
     /// Shown as the turn's `purpose` in `GET /api/turns` (`turns[]`).
     pub(super) purpose: Option<String>,
     /// An audit turn's who and why, shown with the turn (`audit` in `GET /api/turns` and its
@@ -2484,6 +2501,8 @@ struct Carried {
     delivery_seen: Option<DeliverySeen>,
     /// Who started the turn: the delivery check's continuation answers the same message.
     source: Option<super::bot_status::TurnSource>,
+    /// A team lead's continuation may @mention too: its push waits for those hand-offs as well.
+    mention_push: Option<super::mention_push::Slot>,
 }
 
 impl Carried {
@@ -2502,12 +2521,13 @@ impl Carried {
             beside_running: o.beside_running,
             delivery_seen: o.delivery_seen.clone(),
             source: o.source.clone(),
+            mention_push: o.mention_push.clone(),
         }
     }
 
     fn into_opts(self) -> TurnOpts {
-        let Carried { always_ask, every_call, strict_ask, started_by, delegation_id, routed, routing, tier, purpose, task, beside_running, delivery_seen: _, source } = self;
-        TurnOpts { always_ask, every_call, strict_ask, started_by, delegation_id, routed, routing, tier, purpose, task, beside_running, source, ..Default::default() }
+        let Carried { always_ask, every_call, strict_ask, started_by, delegation_id, routed, routing, tier, purpose, task, beside_running, delivery_seen: _, source, mention_push } = self;
+        TurnOpts { always_ask, every_call, strict_ask, started_by, delegation_id, routed, routing, tier, purpose, task, beside_running, source, mention_push, ..Default::default() }
     }
 
     /// The delivery check's continuation of the turn: checked against the first turn's `plan`
@@ -2674,6 +2694,7 @@ pub(super) async fn turn_once(
     let follow_up = opts.discussion.is_none() && !opts.unsaved;
     let hook = opts.hook.clone();
     let (next, handover) = (opts.delivery_next.clone(), opts.chat_handover.clone());
+    let mention_push = opts.mention_push.clone();
     let reply = run_kwant_turn_inner(scope, target_kwant, prompt, opts, &tag).await;
     let follow_up = follow_up && !hook.is_some_and(|h| h.lock().is_ok_and(|h| h.held.is_some()));
     if scope.cancel_token.is_cancelled() {
@@ -2690,6 +2711,10 @@ pub(super) async fn turn_once(
     // 33e: its notification says when the reply ended Blocked or Done
     if let Ok(text) = &reply {
         ended.reply = Some(text.as_str().into());
+        // Before `ended` sends TurnEnded: the push waits for the hand-offs its mentions start
+        if let Some(slot) = &mention_push {
+            slot.turn_ended(&tag.turn_id, text);
+        }
     }
     // 33e: a turn parked behind a usage limit (or held for the bot's budget) retries by itself, and
     // its chat says when; "stopped… retry" would ask the person for nothing (as the Needs-you item,
