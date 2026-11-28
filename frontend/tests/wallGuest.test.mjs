@@ -413,6 +413,24 @@ test('G1 join: keep line first, picked files wait, then join sends them (G2) and
   t.app.stop();
 });
 
+test('m13: one photo reads "It sends" / "It shows", more read "They"', async () => {
+  const t = await open('wall-join');
+  await pick(t, [jpg('a.jpg')]);
+  assert.match(t.text(), /1 photo picked\. It sends once you join\./);
+  assert.match(t.text(), /It shows on the TV and here once/);
+  assert.doesNotMatch(t.text(), /They (send|show)/);
+  await type(t.$('#w-name'), 'Sam');
+  await type(t.$('#w-pin'), '1234');
+  await flush();
+  await t.advance(50);
+  if (t.screen() === 'join') await submit(t.$('form'));
+  await t.advance(50);
+  assert.equal(t.screen(), 'wall');
+  assert.match(t.text(), /Thanks, Sam! Your 1 photo is with Mia\. It shows here and on the TV once Mia says yes\./);
+  assert.doesNotMatch(t.$('[data-thanks]').textContent, /They show/);
+  t.app.stop();
+});
+
 test('G3 live wall: yours first with Waiting for Mia, the wall newest first, 12 then Show more, no counts of others', async () => {
   const t = await open('wall-live');
   assert.equal(t.screen(), 'wall');
