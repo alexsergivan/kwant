@@ -56,6 +56,11 @@ impl Kit for Made {
         spec::validate(spec)
     }
 
+    /// The title as the validator checked it: no invisible or direction characters, no links.
+    fn title(&self, spec: &Value) -> String {
+        spec["title"].as_str().and_then(|s| words::clean_text(s, spec::TITLE_MAX).ok()).unwrap_or_default()
+    }
+
     fn init(&self, _spec: &Value) -> Value {
         json!({ "rows": {}, "locked": {}, "revealed": false })
     }
@@ -118,11 +123,17 @@ mod tests {
     use super::*;
     use chrono::{Duration, Utc};
 
+    /// A month ahead: inside the validator's year, and after every `Utc::now()` in these tests.
+    fn reveal_at() -> chrono::DateTime<Utc> {
+        let t = Utc::now() + Duration::days(30);
+        chrono::DateTime::from_timestamp(t.timestamp() - t.timestamp() % 86_400, 0).unwrap()
+    }
+
     fn spec() -> Value {
         json!({
             "format": "made/1",
             "title": "Book swap",
-            "reveal_at": "2030-01-01T00:00:00Z",
+            "reveal_at": reveal_at().to_rfc3339(),
             "collections": {
                 "shelf": { "read": "everyone", "write": "guest_many", "max_per_guest": 2,
                            "fields": { "title": {"type":"text","max":20} } },
@@ -213,7 +224,7 @@ mod tests {
     #[test]
     fn the_reveal_flips_at_reveal_at_and_removed_guests_rows_go() {
         let (spec, ps) = (spec(), players());
-        let before = chrono::DateTime::parse_from_rfc3339("2029-12-31T23:59:00Z").unwrap().with_timezone(&Utc);
+        let before = reveal_at() - Duration::minutes(1);
         let mut ctx = KitCtx::new(&spec, &ps, before);
         let mut st = Made.init(&spec);
         assert!(!Made.tick(&mut ctx, &mut st));
@@ -223,6 +234,20 @@ mod tests {
         put(&mut later, &mut st, &Viewer::Guest("a".into()), "guesses", json!({ "text": "bye" })).unwrap();
         Made.on_remove(&mut later, &mut st, "a");
         assert_eq!(st["rows"]["guesses"], json!([]));
+    }
+
+    #[test]
+    fn the_title_guests_see_has_no_invisible_or_direction_characters_or_links() {
+        let mut spec = spec();
+        spec["title"] = json!("Book\u{202E} swap\u{200B} https://evil.example/x  night");
+        assert_eq!(Made.validate_spec(&spec), Ok(()));
+        let ps = players();
+        let ctx = KitCtx::new(&spec, &ps, Utc::now());
+        assert_eq!(Made.title(&spec), "Book swap night");
+        let st = Made.init(&spec);
+        for out in [Made.view(&ctx, &st, &Viewer::Guest("a".into())), Made.lobby(&ctx, &st)] {
+            assert_eq!(out["title"], "Book swap night");
+        }
     }
 
     #[test]

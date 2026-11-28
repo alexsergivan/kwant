@@ -142,7 +142,11 @@ async fn host_put(t: &T, code: &str, host: &str, coll: &str, values: Value) -> R
 }
 
 async fn take_back(t: &T, code: &str, key: &str, id: &str) -> Res {
-    send(&t.guest, "POST", &format!("/api/pocket/{code}/action"), Some(json!({ "name": "take_back", "body": { "collection": "shelf", "id": id } })), &guest_req(code, key)).await
+    take_back_in(t, code, key, "shelf", id).await
+}
+
+async fn take_back_in(t: &T, code: &str, key: &str, coll: &str, id: &str) -> Res {
+    send(&t.guest, "POST", &format!("/api/pocket/{code}/action"), Some(json!({ "name": "take_back", "body": { "collection": coll, "id": id } })), &guest_req(code, key)).await
 }
 
 type Ws = tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
@@ -174,6 +178,16 @@ async fn first_state(mut ws: Ws) -> Value {
     }
 }
 
+/// The next text message on a socket, as sent.
+async fn next_text(ws: &mut Ws) -> String {
+    loop {
+        let msg = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next()).await.expect("a message within 5 s").unwrap().unwrap();
+        if let Message::Text(t) = msg {
+            return t.to_string();
+        }
+    }
+}
+
 /// The boot JSON in the page, when this build has the page (else `None`: the placeholder page
 /// embeds nothing but the title, and is string-searched all the same).
 fn boot_of(html: &str) -> Option<Value> {
@@ -187,7 +201,8 @@ fn spec() -> Value {
         "format": "made/1",
         "title": "Book swap",
         "retention": "after_end",
-        "reveal_at": "2099-12-18T19:00:00Z",
+        // inside the validator's one year, and long after the test
+        "reveal_at": (chrono::Utc::now() + chrono::Duration::days(300)).to_rfc3339(),
         "words": { "intro": "Bring one book." },
         "collections": {
             "shelf": { "read": "everyone", "write": "guest_many", "max_per_guest": 2, "fields": { "title": { "type": "text", "max": 60 } } },
@@ -439,6 +454,62 @@ async fn write_rules_overwrite_cap_refuse_server_and_check_row_refs() {
         let r = put(&t, &code, &c, "picks", values).await;
         assert_eq!((r.status, r.body["message"].as_str()), (StatusCode::BAD_REQUEST, Some(want)), "{}", r.body);
     }
+}
+
+/// QA N5: the gaps Rigel found. A state pushed to an open socket after another guest's put
+/// carries none of that guest's private values; a `row` field pointing into a `mine` collection
+/// answers another guest's row like a missing one; `take_back` on `mine` is owner-only.
+#[tokio::test]
+async fn pushed_states_row_refs_into_mine_and_take_back_on_mine_leak_nothing() {
+    let t = setup(true).await;
+    let addr = t.state.pocket.listener.addr().expect("the guest listener runs");
+    let mut s = spec();
+    s["collections"]["votes"] = json!({ "read": "everyone", "write": "guest_one", "fields": { "about": { "type": "row", "of": "guesses" } } });
+    let (code, _host) = made(&t, s).await;
+    let (_, a) = joined(&t, &code, "Ana").await;
+    let (_, b) = joined(&t, &code, "Ben").await;
+
+    // Ben's socket is open and has its first state; then Ana puts private rows
+    let mut ws = ws_connect(addr, &code, Some((guest::guest_cookie(&code), b.clone())), None, None).await;
+    let first = next_text(&mut ws).await;
+    assert!(!first.contains("pushed-mine"), "{first}");
+    for (coll, values) in [("guesses", json!({ "text": "pushed-mine-e5" })), ("notes", json!({ "line": "pushed-host-f6" }))] {
+        assert_eq!(put(&t, &code, &a, coll, values).await.status, StatusCode::OK, "{coll}");
+    }
+    assert_eq!(put(&t, &code, &a, "shelf", json!({ "title": "pushed-shelf-h8" })).await.status, StatusCode::OK);
+    // Read pushes until the public shelf row shows up, string-searching every one of them
+    let mut got_shelf = false;
+    for _ in 0..10 {
+        let pushed = next_text(&mut ws).await;
+        for private in ["pushed-mine-e5", "pushed-host-f6", SECRET] {
+            assert!(!pushed.contains(private), "a pushed state leaks {private:?}: {pushed}");
+        }
+        if pushed.contains("pushed-shelf-h8") {
+            got_shelf = true;
+            break;
+        }
+    }
+    assert!(got_shelf, "Ben's socket got the shelf row Ana put after it opened");
+
+    // A row field pointing into `mine`: Ana's own guess counts, Ben's answer for Ana's row is
+    // word for word the one for a row that doesn't exist
+    let ana_state = send(&t.guest, "GET", &format!("/api/pocket/{code}/state"), None, &guest_req(&code, &a)).await.body;
+    let ana_guess = rows(&ana_state, "guesses").unwrap()[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(put(&t, &code, &a, "votes", json!({ "about": ana_guess })).await.status, StatusCode::OK, "a guest may point at their own row");
+    let theirs = put(&t, &code, &b, "votes", json!({ "about": ana_guess })).await;
+    let missing = put(&t, &code, &b, "votes", json!({ "about": "r_0000000000000000" })).await;
+    assert_eq!((theirs.status, theirs.body["error"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_action")), "{}", theirs.body);
+    assert_eq!((theirs.status, &theirs.body), (missing.status, &missing.body));
+    assert_eq!(theirs.body["message"], "about: there's no such row in \"guesses\".");
+
+    // take_back on `mine`: Ben can't take Ana's guess (same answer as a missing row); Ana can
+    let theirs = take_back_in(&t, &code, &b, "guesses", &ana_guess).await;
+    let missing = take_back_in(&t, &code, &b, "guesses", "r_0000000000000000").await;
+    assert_eq!((theirs.status, &theirs.body), (missing.status, &missing.body));
+    assert!(theirs.status.is_client_error(), "{}", theirs.body);
+    assert_eq!(take_back_in(&t, &code, &a, "guesses", &ana_guess).await.status, StatusCode::OK);
+    let ana_state = send(&t.guest, "GET", &format!("/api/pocket/{code}/state"), None, &guest_req(&code, &a)).await.body;
+    assert_eq!(rows(&ana_state, "guesses").map(Vec::len), Some(0));
 }
 
 #[tokio::test]
