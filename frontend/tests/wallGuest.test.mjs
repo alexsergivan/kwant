@@ -636,7 +636,7 @@ test('safety: nothing from the box is parsed as HTML, no style attributes, no em
 
 // ---------- the big screen ----------
 
-function tv(name, { still = false } = {}) {
+function tv(name, { still = false, token = 'tok' } = {}) {
   let now = 0;
   let timers = [];
   let nextId = 1;
@@ -669,7 +669,7 @@ function tv(name, { still = false } = {}) {
   };
   const root = document.getElementById('app');
   root.replaceChildren();
-  const app = new m.WallTV(root, env, name, 'tok');
+  const app = new m.WallTV(root, env, name, token);
   const advance = async (ms) => {
     const end = now + ms;
     for (;;) {
@@ -797,6 +797,24 @@ test('TV ended and away: calm screens with Snap; away has Try now', async () => 
   await flush();
   assert.equal(a.screen(), 'away');
   assert.match(a.text(), /Try now/);
+  a.app.stop();
+});
+
+test('TV used link (tv-link-used-copy): already used, one screen per link, Big screen on the wall card, the 10-minute note; Snap rests', async () => {
+  const t = tv('screen-wall-slides', { token: 'used' });
+  await t.app.start();
+  await flush();
+  assert.equal(t.screen(), 'signed-out');
+  assert.equal(t.$('h1').textContent, 'This big-screen link was already used');
+  const soft = t.$$('.tvcalm .tvsoft').map((p) => p.textContent);
+  assert.deepEqual(soft, ['Each link opens one screen. To add another, press Big screen on the wall card in kwant.', "Links also stop working 10 minutes after they're made."]);
+  assert.doesNotMatch(t.text(), /expired|Pocket card/);
+  const rest = t.$('.tvqm').outerHTML;
+  assert.doesNotMatch(rest, /mood-thinking/);
+  const a = tv('screen-wall-away');
+  void a.app.start();
+  await flush();
+  assert.notEqual(a.$('.tvqm').outerHTML, rest, 'the used-link Snap rests; away keeps thinking');
   a.app.stop();
 });
 

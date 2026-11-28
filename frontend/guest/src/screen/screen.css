@@ -41,6 +41,8 @@ html.tvpage, html.tvpage body { height: 100%; overflow: hidden; background: var(
 .tv svg.pi { width: 36px; height: 36px; }
 .tv svg.pi.ok { color: var(--kw-ok); }
 .tv .tvsoft { font-size: 40px; line-height: 52px; color: var(--zinc-300); }
+/* tv-link-used-copy: a two-line calm line splits evenly instead of leaving one word ("kwant.") alone. */
+.tv .tvcalm .tvsoft { text-wrap: balance; }
 .tv .t0 { background: var(--team-0); }
 .tv .t1 { background: var(--team-1); }
 .tv .t2 { background: var(--team-2); }

@@ -51,6 +51,13 @@ const hostOf = (url: string): string => {
   }
 };
 
+/** The refused-link screen: title, line, and the 10-minute note (tv-link-used-copy, same as the queue TV in #1384). */
+export const SCREEN_LINK_USED = [
+  'This big-screen link was already used',
+  'Each link opens one screen. To add another, press Big screen on the quiz card in kwant.',
+  "Links also stop working 10 minutes after they're made.",
+] as const;
+
 export class ScreenApp {
   private api: Api<ScreenView>;
   private live: Live<ScreenView>;
@@ -200,7 +207,9 @@ export class ScreenApp {
         body = this.calm(v, 'This quiz has ended', 'Thanks for playing!', 'finished');
         break;
       case 'signed-out':
-        body = this.calm(undefined, 'This screen link has expired', 'Open the big screen again from the Pocket card in kwant.', undefined);
+        // tv-link-used-copy: the #screen= link is one-time and lasts 10 minutes; the box refuses a spent and an old one
+        // alike, so name the common case (a second screen on the same link) and the card's real button.
+        body = this.calm(undefined, SCREEN_LINK_USED[0], SCREEN_LINK_USED[1], undefined, [h('p', { class: 'tvsoft' }, SCREEN_LINK_USED[2])]);
         break;
       case 'missing':
         body = this.calm(undefined, "This quiz isn't here any more", 'The host may have deleted it.', undefined);

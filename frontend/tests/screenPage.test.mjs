@@ -318,7 +318,10 @@ test('the fake box refuses any host write from a screen session (403 screen_only
 test('an expired or used link says so; a reload with the cookie reads state without signing in', async () => {
   const t = await open('expired');
   assert.equal(t.screen(), 'signed-out');
-  assert.ok(t.text().includes('This screen link has expired'));
+  assert.ok(t.text().includes('This big-screen link was already used'));
+  assert.ok(t.text().includes('Each link opens one screen. To add another, press Big screen on the quiz card in kwant.'));
+  assert.ok(t.text().includes("Links also stop working 10 minutes after they're made."));
+  assert.doesNotMatch(t.text(), /expired|Pocket card/);
   const r = harness('lobby', { token: null });
   void r.app.start();
   await flush();
@@ -487,7 +490,7 @@ test('leaderboard: no move column when the box sends no moves; the solo board sh
 test('expired and gone: the Quizmaster rests (no thinking dots); paused and away keep thinking', async () => {
   const t = await open('expired');
   assert.equal(t.screen(), 'signed-out');
-  assert.match(t.text(), /This screen link has expired/);
+  assert.match(t.text(), /This big-screen link was already used/);
   const rest = t.$('.tvqm').outerHTML;
   const p = await open('paused');
   assert.notEqual(p.$('.tvqm').outerHTML, rest);
