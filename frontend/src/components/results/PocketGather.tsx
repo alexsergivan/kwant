@@ -154,7 +154,9 @@ function validSlot(v: unknown, i: number): GatherSlot | undefined {
   const people = arr(v.people, v.cap);
   const waitingPeople = arr(v.waiting_people, 50);
   const waiting = v.waiting === undefined || v.waiting === null ? (waitingPeople?.length ?? 0) : isCount(v.waiting) ? v.waiting : undefined;
-  if (!people || !waitingPeople || waiting === undefined) return undefined;
+  // An ended card keeps `filled` after the names go (people: []), so the count comes from it when it's there.
+  const filled = v.filled === undefined || v.filled === null ? (people?.length ?? 0) : isCount(v.filled) && v.filled <= v.cap ? v.filled : undefined;
+  if (!people || !waitingPeople || waiting === undefined || filled === undefined) return undefined;
   const who: GatherSlot['who'] = [];
   for (const w of people) {
     if (!isObj(w) || !firstName(w.name)) return undefined;
@@ -168,7 +170,7 @@ function validSlot(v: unknown, i: number): GatherSlot | undefined {
     if (!isObj(w) || !firstName(w.name)) return undefined;
     names.push(w.name);
   }
-  return { id: String(i), name: v.name, cap: v.cap, who, waiting: names, waiting_count: Math.max(waiting, names.length) };
+  return { id: String(i), name: v.name, cap: v.cap, who, filled: Math.max(filled, who.length), waiting: names, waiting_count: Math.max(waiting, names.length) };
 }
 
 /** `[{option, name?, votes}]`, named from the ballot's options. */
@@ -463,7 +465,7 @@ export function restaurantList(g: GatherInfo): string {
 
 /** Who brings what, slot by slot. */
 export function whoBringsWhat(g: GatherInfo): string {
-  return [g.title, ...g.slots.map((s) => `${s.name} (${s.who.length} of ${s.cap}): ${s.who.length ? s.who.map((w) => (w.note ? `${w.name} (${w.note})` : w.name)).join(', ') : 'nobody'}`)].join('\n');
+  return [g.title, ...g.slots.map((s) => `${s.name} (${s.filled} of ${s.cap}): ${s.who.length ? s.who.map((w) => (w.note ? `${w.name} (${w.note})` : w.name)).join(', ') : s.filled ? people(s.filled) : 'nobody'}`)].join('\n');
 }
 
 /** The vote's result in one shareable line. */
@@ -488,7 +490,7 @@ export function gatherDoneLine(g: GatherInfo): string {
     const r = g.rsvp!;
     return `${num(r.coming)} coming${r.paid ? ` · ${num(r.paid.ticked)} of ${num(r.paid.of)} paid` : ''}`;
   }
-  const n = g.slots.reduce((a, s) => a + s.who.length, 0);
+  const n = g.slots.reduce((a, s) => a + s.filled, 0);
   return `${people(n)} in ${g.slots.length} ${g.slots.length === 1 ? 'slot' : 'slots'}`;
 }
 
@@ -530,7 +532,7 @@ const GatherChip: React.FC<{ g: GatherInfo }> = ({ g }) => {
       </span>
     );
   }
-  const n = g.face === 'rsvp' ? g.rsvp!.yes + g.rsvp!.maybe + g.rsvp!.no : g.slots.reduce((a, s) => a + s.who.length, 0);
+  const n = g.face === 'rsvp' ? g.rsvp!.yes + g.rsvp!.maybe + g.rsvp!.no : g.slots.reduce((a, s) => a + s.filled, 0);
   return (
     <span className="kw-chip kw-chip-info">
       <Users size={12} aria-hidden="true" />
@@ -598,7 +600,7 @@ const Pips: React.FC<{ n: number; cap: number }> = ({ n, cap }) =>
 export const SlotList: React.FC<{ slots: GatherSlot[] }> = ({ slots }) => (
   <ul className="flex flex-col gap-1.5" aria-label="Slots" data-slots>
     {slots.map((s) => {
-      const full = s.who.length >= s.cap;
+      const full = s.filled >= s.cap;
       return (
         <li
           key={s.id}
@@ -608,10 +610,10 @@ export const SlotList: React.FC<{ slots: GatherSlot[] }> = ({ slots }) => (
           data-slot={s.name}
         >
           <span className="min-w-0 font-semibold text-zinc-50">{s.name}</span>
-          <span className="flex items-center gap-[7px] whitespace-nowrap text-zinc-300 tabular-nums" aria-label={`${s.who.length} of ${s.cap}${full ? ', full' : ''}`}>
-            <Pips n={s.who.length} cap={s.cap} />
+          <span className="flex items-center gap-[7px] whitespace-nowrap text-zinc-300 tabular-nums" aria-label={`${s.filled} of ${s.cap}${full ? ', full' : ''}`}>
+            <Pips n={s.filled} cap={s.cap} />
             <span aria-hidden="true">
-              {s.who.length} of {s.cap}
+              {s.filled} of {s.cap}
             </span>
             {full && (
               <span className="kw-chip" aria-hidden="true">
@@ -619,7 +621,7 @@ export const SlotList: React.FC<{ slots: GatherSlot[] }> = ({ slots }) => (
               </span>
             )}
           </span>
-          <span className="col-span-2 min-w-0 text-zinc-300 sm:col-span-1">{s.who.length ? s.who.map((w) => (w.note ? `${w.name} (${w.note})` : w.name)).join(', ') : 'Nobody yet'}</span>
+          <span className="col-span-2 min-w-0 text-zinc-300 sm:col-span-1">{s.who.length ? s.who.map((w) => (w.note ? `${w.name} (${w.note})` : w.name)).join(', ') : s.filled ? people(s.filled) : 'Nobody yet'}</span>
           {s.waiting_count > 0 && (
             <span className="col-span-2 text-[13px] text-zinc-400 sm:col-start-3 sm:text-[12.5px]" data-waiting>
               Waiting list: {s.waiting.length ? s.waiting.map((n, i) => `${i + 1} ${n}`).join(', ') : people(s.waiting_count)} · moves up on its own
@@ -1365,13 +1367,13 @@ const RsvpResult: React.FC<{ g: GatherInfo }> = ({ g }) => {
 
 /** "Every slot is full except Washing-up crew (2 of 3). Leo stayed on the Desserts waiting list." */
 export function signupSummary(g: GatherInfo): string {
-  const open = g.slots.filter((s) => s.who.length < s.cap);
+  const open = g.slots.filter((s) => s.filled < s.cap);
   const head =
     open.length === 0
       ? 'Every slot is full.'
       : open.length === g.slots.length
         ? `No slot is full yet.`
-        : `Every slot is full except ${open.map((s) => `${s.name} (${s.who.length} of ${s.cap})`).join(', ')}.`;
+        : `Every slot is full except ${open.map((s) => `${s.name} (${s.filled} of ${s.cap})`).join(', ')}.`;
   const waiting = g.slots.filter((s) => s.waiting_count).map((s) => (s.waiting.length ? `${list(s.waiting)} stayed on the ${s.name} waiting list.` : `${people(s.waiting_count)} stayed on the ${s.name} waiting list.`));
   return [head, ...waiting].join(' ');
 }
@@ -1399,9 +1401,9 @@ const SignupResult: React.FC<{ g: GatherInfo }> = ({ g }) => (
           {g.slots.map((s) => (
             <tr key={s.id} className="[&:last-child>td]:border-b-0">
               <td className={`${TD} font-semibold text-zinc-100`}>{s.name}</td>
-              <td className={TD}>{s.who.length ? s.who.map((w) => (w.note ? `${w.name} (${w.note})` : w.name)).join(', ') : <span className="text-zinc-500">nobody</span>}</td>
+              <td className={TD}>{s.who.length ? s.who.map((w) => (w.note ? `${w.name} (${w.note})` : w.name)).join(', ') : s.filled ? people(s.filled) : <span className="text-zinc-500">nobody</span>}</td>
               <td className={`${TD} whitespace-nowrap tabular-nums`}>
-                {s.who.length} of {s.cap}
+                {s.filled} of {s.cap}
               </td>
             </tr>
           ))}
@@ -1565,9 +1567,9 @@ const GatherActions: React.FC<{
       return (
         <div className={GRID}>
           {g.vote!.winner ? (
-            <button type="button" onClick={() => ask(`Make the dinner RSVP for ${g.vote!.winner}.`)} className={`${PRIMARY} ${FULL}`} data-action="make-rsvp">
+            <button type="button" onClick={() => ask(`Make the RSVP for ${g.vote!.winner}.`)} className={`${PRIMARY} ${FULL}`} data-action="make-rsvp">
               <CalendarCheck size={14} aria-hidden="true" />
-              Make the dinner RSVP
+              Make the RSVP
             </button>
           ) : null}
           <CopyButton text={resultLine(g)} label="Share the result" done="Result copied" icon={<Share2 size={14} aria-hidden="true" />} action="share-result" />

@@ -17,7 +17,7 @@ mod chart;
 mod items;
 mod compose;
 mod files;
-mod pocket;
+pub(crate) mod pocket;
 mod present_result;
 mod recipe;
 mod selector;
@@ -297,6 +297,16 @@ pub struct Pocket {
     /// booking times; never a guest's words, a PIN or a key. Absent on the wire when none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub desk: Option<serde_json::Value>,
+    /// party-card-and-results: an RSVP, sign-up or vote's card (frontend `validGather`), on kit
+    /// `gather` only and only there: the kit's host view (title and expires_at included) plus its
+    /// own `join` while open. First names, answers and counts; never a ballot. Absent when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gather: Option<serde_json::Value>,
+    /// party-card-and-results: a photo wall's card (frontend `validWall`), on kit `wall` only and
+    /// only there: the kit's host summary (counts, space, best ids). Never a photo list, a guest
+    /// id or a file size. Absent on the wire when none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wall: Option<serde_json::Value>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

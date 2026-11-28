@@ -71,7 +71,9 @@ async function main(): Promise<void> {
     // pa14: a Wall's big screen is the photo slideshow, its own chunk; every other kit keeps the quiz screen.
     const tk = await kit(b);
     const tv =
-      tk === 'wall'
+      tk === 'made'
+        ? new (await import('./made/made')).MadeApp(root, env, code, 'screen', screen || undefined)
+        : tk === 'wall'
         ? new (await import('./wall/screen-wall')).WallTV(root, tvEnv, code, screen || undefined)
         : tk === 'queue'
           ? new (await import('./queue/screen-queue')).QueueTV(root, tvEnv, code, screen || undefined)
@@ -80,6 +82,9 @@ async function main(): Promise<void> {
     fit();
     w.addEventListener('resize', fit);
     app = tv;
+  } else if (remote !== undefined && kitOf(b) === 'made') {
+    // pa12 P2: a made pocket's remote draws the spec's blocks with the host's buttons (the boot names the kit; no extra fetch).
+    app = new (await import('./made/made')).MadeApp(root, env, code, 'remote', remote || undefined);
   } else if (remote !== undefined) {
     const { RemoteApp } = await import('./remote/remote');
     app = new RemoteApp(root, env, code, remote || undefined);
@@ -103,6 +108,9 @@ async function main(): Promise<void> {
       const { QueueApp } = await import('./queue/queue');
       const still = w.matchMedia?.('(prefers-reduced-motion: reduce)');
       app = new QueueApp(root, { ...env, still: () => !!still?.matches, buzz: w as never }, code);
+    } else if (k === 'made') {
+      // pa12 P2: "Make your own" apps drawn from ready-made blocks; only a box with pocket_make on serves this kit.
+      app = new (await import('./made/made')).MadeApp(root, env, code, 'phone');
     } else app = new GuestApp(root, env, code);
   }
   void app.start(b);

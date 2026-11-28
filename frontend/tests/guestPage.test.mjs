@@ -994,8 +994,8 @@ test('built: phone files at most 80 KB gzipped (JS + CSS + HTML + font); the big
   // pocket's kit is fetched. So the budget counts every phone file except the other kits' JS chunks: all of them minus
   // the lazy kit chunks, plus the largest one. CSS and shared chunks still count in full, which keeps it on the safe side.
   const entry = readFileSync(new URL('index.html', dist), 'utf8').match(/g-[\w-]+\.js/)?.[0];
-  const lazy = [...readFileSync(new URL(entry, dist), 'utf8').matchAll(/import\("\.\/(g-[\w-]+\.js)"\)/g)]
-    .map((m) => m[1])
+  // pa12 P2: one chunk can be imported from several places (the made kit serves the phone, the screen and the remote), so each counts once.
+  const lazy = [...new Set([...readFileSync(new URL(entry, dist), 'utf8').matchAll(/import\("\.\/(g-[\w-]+\.js)"\)/g)].map((m) => m[1]))]
     .filter((f) => !f.startsWith('g-screen-') && !f.startsWith('g-remote-'));
   const kitGz = lazy.map((f) => gzipSync(readFileSync(new URL(f, dist)), { level: 9 }).length);
   const all = phone;

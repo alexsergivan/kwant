@@ -820,9 +820,19 @@ impl Database {
         .await?)
     }
 
-    /// pa4c: the results post a pocket left in its chat, while it is kept.
+    /// pa4c: the results post a pocket left in its chat, while it is kept. The table also notes
+    /// the bot's replies that carry the pocket's card (their names expire with it), so only the
+    /// message pa7 posted as the results (`meta.kind` "pocket", `meta.reason` "results") counts,
+    /// never a reply card that happens to sort first (party-card-and-results, Rigel's QA F5).
     pub async fn pocket_result_post_of(&self, code: &str) -> Result<Option<String>, DbError> {
-        let row: Option<(String,)> = sqlx::query_as("SELECT message_id FROM pocket_result_posts WHERE pocket_code = ? ORDER BY message_id LIMIT 1").bind(code).fetch_optional(&self.pool).await?;
+        let row: Option<(String,)> = sqlx::query_as(
+            "SELECT r.message_id FROM pocket_result_posts r JOIN messages m ON m.id = r.message_id \
+             WHERE r.pocket_code = ? AND json_valid(m.meta) AND json_extract(m.meta, '$.kind') = 'pocket' \
+             AND json_extract(m.meta, '$.reason') = 'results' ORDER BY m.created_at DESC, r.message_id LIMIT 1",
+        )
+        .bind(code)
+        .fetch_optional(&self.pool)
+        .await?;
         Ok(row.map(|r| r.0))
     }
 

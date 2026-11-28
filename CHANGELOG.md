@@ -10,6 +10,7 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 - A fixture and e2e script (`frontend/guest/e2e/frame-policy/`) prove the pa12 custom-app frame policy (opaque origin, sandbox, CSP, Trusted Types, WebRTC removal) holds in real Chromium and WebKit, not just on paper (autonomy/pocket-apps/pa12/frame-policy.md)
+- The same fixture now also proves the pa12 custom-app's `kwant.onState`/`kwant.act` bridge actually carries a state down and an act up through that frame policy, in real Chromium and WebKit (autonomy/pocket-apps/pa12/frame-policy.md)
 
 ## [Mac 0.9.58] - 2026-11-27
 

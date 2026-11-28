@@ -26,6 +26,9 @@ const REQUIRED = [
   'fetch-outside-blocked', 'fetch-same-origin-blocked', 'websocket-outside-blocked', 'websocket-same-origin-blocked',
   'sendbeacon-outside-blocked', 'sendbeacon-same-origin-blocked', 'img-outside-blocked', 'img-same-origin-blocked',
   'rtc-deleted', 'rtc-fresh-realm-blocked',
+  // style-guide.md section 3 (Mira's K1 ask): the prelude's bridge actually carries a state down and an act up
+  // through this exact sandbox+CSP header set.
+  'bridge-onstate-received', 'bridge-act-received',
   // self-navigation-blocked and csp-sandbox-forces-opaque-origin-top-level are deliberately not listed here: both
   // are computed after this REQUIRED loop runs (separate one-shot documents after ctx.close()), and each is
   // validated by its own explicit problems.push below instead.
@@ -97,6 +100,12 @@ async function runEngine(engineName, launcher) {
     const wsSameHits = fixture.log.filter((l) => l.startsWith('main UPGRADE') && l.includes('/ws-same')).length;
     checks['websocket-outside-blocked'] = { pass: wsOutsideHits === 0, detail: `server upgrade hits=${wsOutsideHits}` };
     checks['websocket-same-origin-blocked'] = { pass: wsSameHits === 0, detail: `server upgrade hits=${wsSameHits}` };
+    // style-guide.md section 3 (Mira's K1 ask): the parent side of the bridge. parent.js posted a {type:"state"}
+    // message down (read by the app as bridge-onstate-received) and records every {type:"act"} message the app
+    // posts back in window.__receivedActs, read here from the parent page itself.
+    const receivedActs = await page.evaluate(() => window.__receivedActs || []);
+    const bridgeAct = receivedActs.find((a) => a && a.type === 'act' && a.name === 'qa-bridge-act');
+    checks['bridge-act-received'] = { pass: !!(bridgeAct && bridgeAct.body && bridgeAct.body.ping === 1), detail: JSON.stringify(bridgeAct ?? receivedActs) };
     result.checks = checks;
     result.violations = violations;
     result.appOrigin = appOrigin;

@@ -285,6 +285,16 @@ fn full_name(ctx: &KitCtx, player_id: &str) -> Option<String> {
     ctx.player(player_id).map(|p| p.name.clone())
 }
 
+/// party-card-and-results: the photos waiting for the host, oldest first, as (id, sender's full
+/// name, sent at), for the Inbox's one Needs-you row per wall (pa14). A hidden or approved photo
+/// never shows; a photo with no time sorts first.
+pub fn waiting_photos(ctx: &KitCtx, state: &Value) -> Vec<(String, Option<String>, Option<DateTime<Utc>>)> {
+    let s = load(state);
+    let mut out: Vec<_> = s.photos.iter().filter(|p| p.status == PENDING).map(|p| (p.id.clone(), full_name(ctx, &p.by), p.at)).collect();
+    out.sort_by_key(|p| p.2);
+    out
+}
+
 pub struct Wall;
 
 /// A guest's creature on the TV and the wall: one of the kit's 8, from the guest id (FNV-1a), so
@@ -708,6 +718,15 @@ impl Kit for Wall {
     /// For the card: the host view's numbers without the photo lists.
     fn host_summary(&self, ctx: &KitCtx, state: &Value) -> Value {
         Self::host_numbers(ctx, &load(state))
+    }
+
+    /// party-card-and-results (m1): a wall's ended line counts what's on it, not who took part.
+    fn ended_line(&self, _ctx: &KitCtx, state: &Value) -> Option<String> {
+        Some(match load(state).photos.iter().filter(|p| p.status == APPROVED).count() {
+            0 => "No photos on the wall.".to_string(),
+            1 => "1 photo on the wall.".to_string(),
+            n => format!("{n} photos on the wall."),
+        })
     }
 }
 

@@ -1060,7 +1060,12 @@ impl Gather {
                         let last = s.tally.as_ref().and_then(|x| x.rounds.last());
                         match last.map(|r| r.counts.as_slice()) {
                             Some([(_, a), (_, b), ..]) if rounds > 1 => format!("{w} wins, {a} to {b} in the last round"),
-                            Some([(_, a), ..]) => format!("{w} wins with {a} of {}", s.ballots.len()),
+                            // After "Delete ballots now" (or the sweep) the ballots are gone but the
+                            // count stays: the round's own total, never "of 0"
+                            Some(c @ [(_, a), ..]) => {
+                                let of = if s.ballots.is_empty() { c.iter().map(|(_, n)| *n as usize).sum() } else { s.ballots.len() };
+                                format!("{w} wins with {a} of {of}")
+                            }
                             _ => format!("{w} wins"),
                         }
                     }
@@ -1596,6 +1601,26 @@ impl Kit for Gather {
 
     fn kept_players(&self, state: &Value) -> Option<usize> {
         load(state).deleted.map(|k| k.joined)
+    }
+
+    /// party-card-and-results (m1): an RSVP or sign-up counts people, not players.
+    fn taking_part(&self) -> (&'static str, &'static str) {
+        ("person", "people")
+    }
+
+    /// party-card-and-results (m1): a closed vote's ended line names the winner, the card's own
+    /// summary ("Winter wonderland wins with 6 of 8."); an RSVP or sign-up keeps the count.
+    fn ended_line(&self, ctx: &KitCtx, state: &Value) -> Option<String> {
+        let s = load(state);
+        if face(ctx.spec) != VOTE || s.phase != CLOSED {
+            return None;
+        }
+        let line = Self::summary_line(ctx, &s);
+        let line = line.trim();
+        if line.is_empty() {
+            return None;
+        }
+        Some(if line.ends_with(['.', '!', '?']) { line.to_string() } else { format!("{line}.") })
     }
 
     fn view(&self, ctx: &KitCtx, state: &Value, viewer: &Viewer) -> Value {
