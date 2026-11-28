@@ -36,6 +36,16 @@ export function stepWaitFlags(
   return { answer, step, tools: step && !running.some((t) => browser.has(t.turn_id)) };
 }
 
+/**
+ * thread-waiting-once (0.9.60, Mira's m6): the banner yields to the Needs-you strip when the strip shows the
+ * same open question (the asking bot has a question on the strip). The card and the strip already say it;
+ * the banner would be the third time. No asker known, no matching question, or the strip stepped aside: the
+ * banner stays as before. Only the ask-only state: other banner waits never reach here.
+ */
+export function bannerYieldsToStrip(s: { askOnly: boolean; askerId?: string | null; stripQuestionBots?: readonly string[]; stripAside?: boolean }): boolean {
+  return s.askOnly && !s.stripAside && !!s.askerId && !!s.stripQuestionBots?.includes(s.askerId);
+}
+
 /** One line for each thing the chat waits on the person for. Later lines (waiting checks) add a kind. */
 export interface WaitingLine {
   kind: 'answer';

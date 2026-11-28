@@ -636,8 +636,8 @@ test('29w: App passes stripOnlyApproval; ChatView keeps approvalCardInView from 
   // Round 3 (Rigel): followingCard comes from the same measurement, after onScroll has updated stickRef.
   assert.match(check, /setFollowingCard\(stickRef\.current && rows\.length > 0\)/);
   // Kept mounted (no re-enter animation, its state stays) and hidden at once: no new motion.
-  assert.match(chat, /className=\{stripAside \? 'hidden' : 'contents'\}.*\n\s*\{needsYouStrip\}\n\s*<\/div>/);
-  assert.doesNotMatch(chat, /\n\s*\{needsYouStrip\}\n\n\s*<form/);
+  assert.match(chat, /className=\{stripAside \? 'hidden' : 'contents'\}.*\n\s*\{stripNode\}\n\s*<\/div>/);
+  assert.doesNotMatch(chat, /\n\s*\{(?:needsYouStrip|stripNode)\}\n\n\s*<form/);
   // Round 2 (Mira): only keyboard focus hands off to the composer; a tap (Android focuses the button) must not
   // raise the soft keyboard over Allow / Deny.
   assert.match(chat, /onFocus=\{\(e\) => \(stripHadFocusRef\.current = \(e\.target as HTMLElement\)\.matches\(':focus-visible'\)\)\}/);
