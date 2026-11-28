@@ -7,6 +7,8 @@
 //! Everything is behind the `pocket_apps` setting: `on` for every kit, or a list of kits such as
 //! `santa` ([`Switch`]). While no kit is on no listener runs, the sweeper does nothing and the main
 //! port's list is empty; a kit that is off makes no pocket and runs no kit-only path.
+//! "Make your own" (the `made` kit: screens a bot wrote) is off twice (pa12 L1): it also needs
+//! `pocket_make` on, so `pocket_apps=on` alone never turns it on ([`MAKE_SETTING`]).
 //!
 //! Every change to a pocket runs under that pocket's lock: read, let the kit act, save the kit's
 //! state with a new version, refresh the in-memory snapshot, and signal the pocket's viewers,
@@ -49,6 +51,10 @@ use tokio::sync::broadcast;
 
 /// The switch: pocket apps run only while this setting is `on` or names a kit ([`Switch`]).
 pub const SETTING: &str = "pocket_apps";
+/// pa12 L1 (security-review G10): the second switch for "Make your own" (the `made` kit). `made`
+/// runs only while this is `on` and [`SETTING`] is `on` or names `made`. Off by default, and any
+/// value but `on` (missing, unreadable, a typo) is off.
+pub const MAKE_SETTING: &str = "pocket_make";
 /// The version every guest response names (`"api": "pocket/1"`).
 pub const API_VERSION: &str = "pocket/1";
 /// Wrong PIN tries before a 10-minute wait.
@@ -66,20 +72,43 @@ const ACTIVE_SECS: u64 = 10;
 /// kit), or a comma list of kit ids such as `santa` or `santa,quiz` (case and spaces don't
 /// matter). `off`, empty, and every name this build has no kit for count as nothing: a list with
 /// no known kit is off (fail closed).
+///
+/// pa12 L1: `made` (bot-written screens) also needs `pocket_make` on. `on` means every kit but
+/// `made` while `make` is off, and a list naming `made` drops it while `make` is off.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Switch {
     Off,
-    All,
+    /// `on`: every kit, and `made` too only when `make` (`pocket_make` is on).
+    All {
+        make: bool,
+    },
     Kits(Vec<&'static str>),
 }
 
+/// The names a `pocket_apps` list may hold: this build's kits, plus `made` only when `make`.
+/// `made` counts as a name before its kit is registered (pa12 L2), so the gate exists first.
+fn known_ids(make: bool) -> Vec<&'static str> {
+    let mut ids = kits::kit_ids();
+    ids.retain(|id| *id != kits::MADE_ID);
+    if make {
+        ids.push(kits::MADE_ID);
+    }
+    ids
+}
+
 impl Switch {
+    /// The switch with `pocket_make` off: `made` is never on (fail closed).
     pub fn parse(value: &str) -> Switch {
+        Self::parse_with(value, false)
+    }
+
+    /// `value` is the `pocket_apps` setting, `make` whether `pocket_make` is on.
+    pub fn parse_with(value: &str, make: bool) -> Switch {
         let v = value.trim();
         if v == "on" {
-            return Switch::All;
+            return Switch::All { make };
         }
-        let ids = kits::kit_ids();
+        let ids = known_ids(make);
         let mut on: Vec<&'static str> = Vec::new();
         for name in v.split(',').map(|n| n.trim().to_ascii_lowercase()) {
             if let Some(id) = ids.iter().copied().find(|id| *id == name) {
@@ -100,7 +129,7 @@ impl Switch {
     pub fn allows(&self, kit: &str) -> bool {
         match self {
             Switch::Off => false,
-            Switch::All => true,
+            Switch::All { make } => *make || kit != kits::MADE_ID,
             Switch::Kits(k) => k.contains(&kit),
         }
     }
@@ -110,12 +139,13 @@ impl Switch {
         !matches!(self, Switch::Off)
     }
 
-    /// The kits that are on, as `GET /api/pockets` lists them.
+    /// The kits that are on, as `GET /api/pockets` lists them: only kits this build can make
+    /// (so `made` shows once pa12 L2 registers it, and only while it is on).
     pub fn kits(&self) -> Vec<&'static str> {
         match self {
             Switch::Off => Vec::new(),
-            Switch::All => kits::kit_ids(),
-            Switch::Kits(k) => k.clone(),
+            Switch::All { .. } => kits::kit_ids().into_iter().filter(|id| self.allows(id)).collect(),
+            Switch::Kits(k) => k.iter().copied().filter(|id| kits::kit(id).is_some()).collect(),
         }
     }
 
@@ -123,7 +153,7 @@ impl Switch {
     pub fn stored(&self) -> String {
         match self {
             Switch::Off => "off".into(),
-            Switch::All => "on".into(),
+            Switch::All { .. } => "on".into(),
             Switch::Kits(k) => k.join(","),
         }
     }
@@ -138,7 +168,8 @@ pub fn setting_value(raw: &str) -> Result<String, String> {
     if v.is_empty() || v == "off" {
         return Ok("off".into());
     }
-    match Switch::parse(&v) {
+    // `pocket_apps` is stored on its own: a list naming `made` keeps it whatever `pocket_make` says
+    match Switch::parse_with(&v, true) {
         Switch::Off => {
             let shown: String = raw.trim().chars().take(60).collect();
             Err(format!("Unknown Pocket app: {shown}. Known: {}", kits::kit_ids().join(", ")))
@@ -147,12 +178,58 @@ pub fn setting_value(raw: &str) -> Result<String, String> {
     }
 }
 
-/// The switch as stored now (a missing or unreadable setting is off).
+/// What `POST /api/settings` stores for `pocket_make` (pa12 L1): `on` or `off` (empty is off,
+/// any case); anything else is an error, so a typo never quietly changes it.
+pub fn make_setting_value(raw: &str) -> Result<&'static str, String> {
+    match raw.trim().to_ascii_lowercase().as_str() {
+        "" | "off" => Ok("off"),
+        "on" => Ok("on"),
+        _ => {
+            let shown: String = raw.trim().chars().take(60).collect();
+            Err(format!("pocket_make must be on or off, not {shown}"))
+        }
+    }
+}
+
+/// `pocket_make` is on. Missing, unreadable or anything but `on` is off (fail closed).
+pub async fn make_on(db: &Database) -> bool {
+    matches!(db.get_setting(MAKE_SETTING).await, Ok(Some(v)) if v.trim() == "on")
+}
+
+/// The switch as stored now (a missing or unreadable setting is off; `made` also needs
+/// `pocket_make`, see [`make_on`]).
 pub async fn switch(db: &Database) -> Switch {
     match db.get_setting(SETTING).await {
-        Ok(Some(v)) => Switch::parse(&v),
+        Ok(Some(v)) => Switch::parse_with(&v, make_on(db).await),
         _ => Switch::Off,
     }
+}
+
+/// `pocket_apps` as `GET /api/settings` shows it: the normal form of what is stored, `made` kept
+/// in a list whatever `pocket_make` says (that is its own setting).
+pub async fn stored_setting(db: &Database) -> String {
+    match db.get_setting(SETTING).await {
+        Ok(Some(v)) => Switch::parse_with(&v, true).stored(),
+        _ => "off".into(),
+    }
+}
+
+/// pa12 L1: a `made` pocket while `made` is off (`pocket_make` off, or `pocket_apps` not naming
+/// it): the guest port answers it like a code that doesn't exist. Other kits are never hidden.
+pub async fn hidden(state: &AppState, code: &str) -> bool {
+    if !keys::valid_code(code) {
+        return false;
+    }
+    match snapshot(state, code).await {
+        Ok(Some(s)) => made_off(state, &s).await,
+        _ => false,
+    }
+}
+
+/// [`hidden`] for a snapshot already in hand (the guest port's `pocket()`): the settings are read
+/// only for a `made` pocket.
+pub async fn made_off(state: &AppState, s: &Snapshot) -> bool {
+    s.row.kit == kits::MADE_ID && !switch(&state.db).await.allows(kits::MADE_ID)
 }
 
 /// At least one kit is on: the guest port listens, the sweeper runs, the person's list shows.
@@ -1496,7 +1573,7 @@ mod tests {
     #[test]
     fn the_switch_parses_on_off_and_kit_lists() {
         let kits = |v: &str| Switch::parse(v).kits();
-        assert_eq!(Switch::parse("on"), Switch::All);
+        assert_eq!(Switch::parse("on"), Switch::All { make: false });
         assert_eq!(kits("on"), kits::kit_ids());
         for off in ["off", "", "  ", "bogus", ",", "On", "on,", "yes", "true"] {
             assert_eq!(Switch::parse(off), Switch::Off, "{off:?}");
@@ -1509,8 +1586,12 @@ mod tests {
         assert_eq!(kits("santa, santa ,SANTA"), ["santa"]);
         let santa = Switch::parse("santa");
         assert!(santa.any() && santa.allows("santa") && !santa.allows("quiz") && !santa.allows("desk"));
-        assert!(Switch::All.allows("quiz") && Switch::All.allows("santa"));
+        assert!(Switch::All { make: false }.allows("quiz") && Switch::All { make: false }.allows("santa"));
         assert!(!Switch::Off.any() && !Switch::Off.allows("santa"));
+        // pa12 L1: `made` needs pocket_make as well
+        assert!(!Switch::parse("on").allows(kits::MADE_ID) && Switch::parse_with("on", true).allows(kits::MADE_ID));
+        assert!(!Switch::parse("made").any() && Switch::parse_with("santa,made", true).allows(kits::MADE_ID));
+        assert_eq!(Switch::parse("santa,made"), Switch::Kits(vec!["santa"]));
     }
 
     #[test]
@@ -1536,7 +1617,8 @@ mod tests {
         }
         assert!(setting_value(&"x".repeat(500)).unwrap_err().len() < 200, "a long value isn't echoed whole");
         assert_eq!(Switch::Off.stored(), "off");
-        assert_eq!(Switch::All.stored(), "on");
+        assert_eq!(Switch::All { make: false }.stored(), "on");
+        assert_eq!(Switch::All { make: true }.stored(), "on");
         assert_eq!(Switch::parse("santa,quiz").stored(), "quiz,santa");
     }
 }
