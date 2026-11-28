@@ -240,8 +240,11 @@ interface RowProps {
   steps?: Record<string, HumanStep>;
 }
 
-/** pa4c: a finished quiz's Done meta, "24 players". The end time sits on the row's top line, like every Done row. */
+/** pa4c: a finished quiz's Done meta, "24 players". The end time sits on the row's top line, like every Done row.
+ * queue-end-summary: a kit's own line wins when the server sends one ("1 day · 3 served · average 1 min"). */
 export function pocketMeta(i: Pick<InboxItem, 'meta'>): string {
+  const line = i.meta?.summary;
+  if (typeof line === 'string' && line.trim()) return line.trim();
   const n = i.meta?.players;
   return typeof n === 'number' ? `${n} ${n === 1 ? 'player' : 'players'}` : '';
 }

@@ -6,7 +6,8 @@
 //!
 //! Item: `kind: "pocket"`, `id: "pocket:<code>"`, title `"<title>: <winner> win"` (pa7's
 //! "Nobody joined." for no players, "<title> has ended" when nobody scored), `meta {players,
-//! ended_at}`, `winner {name, points}` (every team tied on the top score, null at 0 points),
+//! ended_at}` (queue-end-summary: a kit with its own end line, the queue, has `meta {summary,
+//! ended_at}`, the title "<title> has ended" and `checked: null`), `winner {name, points}` (every team tied on the top score, null at 0 points),
 //! `source {kind: "pocket", code, kwant_id, message_id, channel_id, thread_id}`, and the results
 //! post's link and excerpt through [`inbox_done::apply`].
 //!
@@ -98,8 +99,15 @@ pub fn title(pocket_title: &str, players: usize, winner: &Value) -> String {
     match (players, winner["name"].as_str()) {
         (0, _) => format!("{t}: Nobody joined."),
         (_, Some(w)) => format!("{t}: {w} win"),
-        _ => format!("{t} has ended"),
+        _ => ended_title(pocket_title),
     }
+}
+
+/// "<title> has ended" (a kit with its own end line, or nobody scored).
+pub fn ended_title(pocket_title: &str) -> String {
+    let t = pocket_title.trim();
+    let t = if t.is_empty() { "Pocket app" } else { t };
+    format!("{t} has ended")
 }
 
 /// m3: a desk that ended with `n` guests still waiting for the host.
@@ -117,6 +125,8 @@ pub async fn items(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen
         let code = s.row.code.clone();
         let players = s.player_count();
         let win = winner(s);
+        // queue-end-summary: a kit's own line (the queue's "1 day · 3 served · average 1 min")
+        let summary = s.kit().and_then(|k| k.end_summary(&s.kit_state)).filter(|l| !l.trim().is_empty());
         // m3: a desk left with guests waiting opens its answering bot's chat
         let unanswered = if s.row.kit == pocket::desk::ID { pocket::desk::ended_unanswered(&s.kit_state) } else { 0 };
         let desk_bot = match s.spec["answer_bot"].as_str().filter(|b| unanswered > 0 && !b.is_empty()) {
@@ -136,7 +146,13 @@ pub async fn items(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen
         };
         let unread = seen.is_none_or(|s| p.at > s);
         let id = format!("pocket:{code}");
-        let title = if unanswered > 0 { ended_unanswered_title(&s.row.title, unanswered) } else { title(&s.row.title, players, &win) };
+        let title = if unanswered > 0 {
+            ended_unanswered_title(&s.row.title, unanswered)
+        } else if summary.is_some() {
+            ended_title(&s.row.title)
+        } else {
+            title(&s.row.title, players, &win)
+        };
         let link = match (&desk_bot, &message, &p.origin) {
             (Some(b), _, _) => json!({ "thread_id": null, "channel_id": null, "direct_kwant_id": b.id }),
             (None, Some(m), _) => json!({ "thread_id": m.thread_id, "channel_id": m.channel_id, "direct_kwant_id": m.direct_kwant_id }),
@@ -155,7 +171,10 @@ pub async fn items(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen
             "link": link,
             "group": Group::Finished.key(),
             "sort_key": sort_key(Group::Finished, None, p.at.timestamp_millis(), unread, &kwant_name, &id),
-            "meta": { "players": players, "ended_at": s.row.ended_at.map(rfc3339) },
+            "meta": match &summary {
+                Some(l) => json!({ "summary": l, "ended_at": s.row.ended_at.map(rfc3339) }),
+                None => json!({ "players": players, "ended_at": s.row.ended_at.map(rfc3339) }),
+            },
             "winner": win,
         });
         if unanswered > 0 {
@@ -170,6 +189,10 @@ pub async fn items(state: &AppState, space: &SpaceId, since: DateTime<Utc>, seen
             "thread_id": message.as_ref().and_then(|m| m.thread_id.clone()).or_else(|| p.origin.as_ref().and_then(|o| o.thread_id.clone())),
         });
         inbox_done::apply(&mut v, &DoneFacts { message, source, ..Default::default() }, unread);
+        if summary.is_some() {
+            // A count, not a result to verify: no "Not checked" strip on the post or the row
+            v["checked"] = Value::Null;
+        }
         out.push(v);
     }
     Ok(out)
