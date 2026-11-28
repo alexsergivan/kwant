@@ -25,7 +25,7 @@ use super::continuity::SelfScope;
 use super::quizmaster_tools::PocketOrigin;
 use super::AppState;
 use crate::pocket::{gather, schedule, CreateRequest};
-use chrono::{DateTime, Datelike, Duration, NaiveDate, Weekday};
+use chrono::Datelike;
 use serde_json::{json, Map, Value};
 
 type ToolResult = (String, bool);
@@ -156,49 +156,6 @@ pub(crate) fn gather_arg(args: &Value) -> Result<Option<Value>, String> {
 }
 
 
-/// The one weekday a `when` line names (Fri, Friday, fri.), or `None` when it names none or more
-/// than one ("Fri night to Sat").
-pub(crate) fn weekday_in(line: &str) -> Option<Weekday> {
-    const DAYS: [(Weekday, &str, &[&str]); 7] = [
-        (Weekday::Mon, "monday", &["mon"]),
-        (Weekday::Tue, "tuesday", &["tue", "tues"]),
-        (Weekday::Wed, "wednesday", &["wed"]),
-        (Weekday::Thu, "thursday", &["thu", "thur", "thurs"]),
-        (Weekday::Fri, "friday", &["fri"]),
-        (Weekday::Sat, "saturday", &["sat"]),
-        (Weekday::Sun, "sunday", &["sun"]),
-    ];
-    let mut found: Option<Weekday> = None;
-    for w in line.split(|c: char| !c.is_alphabetic()).filter(|w| !w.is_empty()) {
-        let w = w.to_lowercase();
-        if let Some((d, _, _)) = DAYS.iter().find(|(_, full, short)| w == *full || short.contains(&w.as_str())) {
-            match found {
-                Some(f) if f != *d => return None,
-                _ => found = Some(*d),
-            }
-        }
-    }
-    found
-}
-
-/// `event_at`'s own calendar day (in its own offset), or `None` when it isn't a date.
-fn event_day(v: &Value) -> Option<NaiveDate> {
-    let s = v.as_str()?.trim();
-    DateTime::parse_from_rfc3339(s).map(|t| t.date_naive()).ok().or_else(|| NaiveDate::parse_from_str(s, "%Y-%m-%d").ok())
-}
-
-fn day_name(d: Weekday) -> &'static str {
-    match d {
-        Weekday::Mon => "Monday",
-        Weekday::Tue => "Tuesday",
-        Weekday::Wed => "Wednesday",
-        Weekday::Thu => "Thursday",
-        Weekday::Fri => "Friday",
-        Weekday::Sat => "Saturday",
-        Weekday::Sun => "Sunday",
-    }
-}
-
 /// The spec `gather_create` hands the kit: the known fields only, `closes_at` from `event_at`
 /// when it's missing, and a `when` naming the wrong weekday refused. `Err` is the bot's answer.
 pub(crate) fn build_spec(g: &Value) -> Result<Value, String> {
@@ -213,25 +170,20 @@ pub(crate) fn build_spec(g: &Value) -> Result<Value, String> {
             spec.insert("closes_at".into(), e);
         }
     }
-    let line = spec.get("when").and_then(Value::as_str).unwrap_or("");
-    if let (Some(said), Some(day)) = (weekday_in(line), spec.get("event_at").and_then(event_day)) {
-        if said != day.weekday() {
-            // The nearest day with the weekday the person named (within 3 days either way), so
-            // the bot can offer both dates without counting days itself.
-            let d = (said.num_days_from_monday() as i64 - day.weekday().num_days_from_monday() as i64).rem_euclid(7);
-            let other = day + Duration::days(if d > 3 { d - 7 } else { d });
-            return Err(format!(
-                "Nothing was made: when says {said}, but event_at is {actual}, {date}. Ask the person which they mean, like \"{short} is a \
-                 {actual}. Do you mean {actual}, {short}, or {other}?\"; don't pick one yourself.",
-                said = day_name(said),
-                actual = day_name(day.weekday()),
-                date = day.format("%b %-d, %Y"),
-                short = day.format("%b %-d"),
-                other = other.format("%A, %b %-d"),
-            ));
-        }
+    // The kit's own rule (gather::wrong_weekday); the tool adds "ask the person" so the bot never picks a date itself.
+    let spec = Value::Object(spec);
+    if let Some(w) = gather::wrong_weekday(&spec) {
+        let actual = gather::day_name(w.day.weekday());
+        return Err(format!(
+            "Nothing was made: when says {said}, but event_at is {actual}, {date}. Ask the person which they mean, like \"{short} is a \
+             {actual}. Do you mean {actual}, {short}, or {other}?\"; don't pick one yourself.",
+            said = gather::day_name(w.said),
+            date = w.day.format("%b %-d, %Y"),
+            short = w.day.format("%b %-d"),
+            other = w.other.format("%A, %b %-d"),
+        ));
     }
-    Ok(Value::Object(spec))
+    Ok(spec)
 }
 
 pub async fn call(state: &AppState, scope: &SelfScope, args: &Value) -> ToolResult {
@@ -312,6 +264,8 @@ fn made_text(code: &str, title: &str, spec: &Value, join: Option<&Value>) -> Str
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pocket::gather::weekday_in;
+    use chrono::Weekday;
     use crate::pocket::kits::Kit;
 
     #[test]
