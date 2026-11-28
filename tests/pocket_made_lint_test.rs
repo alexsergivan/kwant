@@ -821,3 +821,25 @@ fn b5_twenty_eight_kilobytes_of_single_declaration_blocks_still_lints_in_well_un
     let elapsed = start.elapsed();
     assert!(elapsed.as_secs() < 2, "expected well under a second, took {elapsed:?}");
 }
+
+#[test]
+fn b6_a_double_quoted_string_left_open_by_a_bare_newline_still_refuses_what_follows_it() {
+    // Rigel's QA (B6): a CSS string ends at an unescaped newline, same as a browser (a CSS
+    // string can't contain a literal newline). The scan used to keep looking for the closing
+    // quote past that newline, which could run to the end of the stylesheet and hide every
+    // declaration after the dropped quote from this scan.
+    let r = lint(Surface::Phone, "", ".a{content:\"x\n}.b{position:fixed}", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b6_a_single_quoted_string_left_open_by_a_bare_newline_still_refuses_what_follows_it() {
+    let r = lint(Surface::Phone, "", ".a{content:'x\n}.b{position:fixed}", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}
+
+#[test]
+fn b6_a_string_left_open_by_a_bare_crlf_still_refuses_what_follows_it() {
+    let r = lint(Surface::Phone, "", ".a{content:\"x\r\n}.b{position:fixed}", "");
+    assert_refuses(&r, "C2", "It tried to pin something over the page.");
+}

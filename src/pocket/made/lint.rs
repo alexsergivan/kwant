@@ -314,7 +314,12 @@ fn identifiers(src: &str) -> Vec<(usize, usize)> {
 /// QA, B4), and a block left open at end of input is still read up to there, same as a browser
 /// applies it (Rigel's QA, B4) — without the quadratic blow-up of first collecting every `{ }`
 /// body's byte range and then re-scanning each one's full text once per level it's nested at,
-/// which is what the range-collecting version of this function used to do (Rigel's QA, B5).
+/// which is what the range-collecting version of this function used to do (Rigel's QA, B5). A
+/// quote only closes the string at its matching quote byte: an unescaped newline, carriage
+/// return or form feed ends it first, same as a browser (a CSS string can't contain a literal
+/// newline), so everything after a dropped closing quote isn't swallowed into it and hidden from
+/// this scan (Rigel's QA, B6); that stray newline byte is then read again by the outer loop as
+/// ordinary text, since it's no longer inside the string.
 fn declarations(css: &str) -> Vec<(String, String)> {
     let b = css.as_bytes();
     let mut out = Vec::new();
@@ -325,10 +330,10 @@ fn declarations(css: &str) -> Vec<(String, String)> {
             b'\'' | b'"' => {
                 let q = b[i];
                 i += 1;
-                while i < b.len() && b[i] != q {
+                while i < b.len() && b[i] != q && b[i] != b'\n' && b[i] != b'\r' && b[i] != 0x0c {
                     i += if b[i] == b'\\' && i + 1 < b.len() { 2 } else { 1 };
                 }
-                if i < b.len() {
+                if i < b.len() && b[i] == q {
                     i += 1;
                 }
             }
