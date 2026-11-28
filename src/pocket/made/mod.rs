@@ -12,6 +12,7 @@
 //! spec only: no view, lobby or summary reads it, and the kit state never copies it.
 
 pub mod collections;
+pub mod lint;
 pub mod spec;
 
 use super::kits::{spec_date, Kit, KitCtx, KitError, KitRules, Player, Retention, Viewer, DEFAULT_MAX_PLAYERS, MADE_ID};
