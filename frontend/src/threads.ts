@@ -581,6 +581,8 @@ export function delegationStatusLine(
       if (opts.waiting === 'question') return `${specialist} asked you a question`;
       return `${specialist} is working on it`;
     case 'completed':
+      // Its question timed out but is still open: one answer is all the job needs.
+      if (opts.waiting === 'question') return `${specialist} needs your answer to finish`;
       return `${specialist} finished`;
     case 'failed':
       return opts.error ? `${specialist} couldn't finish: ${opts.error}` : `${specialist} couldn't finish`;

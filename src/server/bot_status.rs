@@ -179,6 +179,9 @@ const MAX_SIGN_IN_MARKS: usize = 8;
 pub struct BotMarks {
     pub gave_up: Option<GaveUp>,
     pub last_finished_at: Option<DateTime<Utc>>,
+    /// How the turn that set `last_finished_at` ended: "completed", "failed" or "cancelled" (as its
+    /// `turn_ended`), or `None` when that end didn't say. In memory only, like `last_finished_at`.
+    pub last_outcome: Option<&'static str>,
     /// Connections waiting for the person to sign in again, oldest first.
     pub sign_in: Vec<SignInMark>,
 }
@@ -457,6 +460,10 @@ pub struct Status {
     pub held: Vec<HeldItem>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_finished_at: Option<DateTime<Utc>>,
+    /// How the bot's last turn ended (see [`BotMarks::last_outcome`]), so a reload can still show a
+    /// bot whose last turn failed as failed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_outcome: Option<&'static str>,
 }
 
 impl Status {
@@ -479,6 +486,7 @@ impl Status {
             also: Vec::new(),
             held: Vec::new(),
             last_finished_at: None,
+            last_outcome: None,
         }
     }
 
@@ -698,6 +706,7 @@ pub fn compute(b: &BotInput, now: DateTime<Utc>) -> Status {
         .collect();
     out.held = b.held.clone();
     out.last_finished_at = b.marks.last_finished_at;
+    out.last_outcome = b.marks.last_outcome;
     out
 }
 
@@ -1280,6 +1289,29 @@ mod tests {
         let s = compute(&b, at(30));
         assert_eq!((s.status, s.reason_code, s.since), ("available", "idle", Some(at(0))));
         assert_eq!(s.last_finished_at, Some(at(0)));
+    }
+
+    #[test]
+    fn the_last_turns_outcome_rides_beside_when_it_finished() {
+        let mut b = bot(Vec::new());
+        let s = compute(&b, at(1));
+        assert_eq!((s.last_finished_at, s.last_outcome), (None, None));
+        assert!(json!(s).get("last_outcome").is_none(), "no outcome, no key");
+        b.marks.last_finished_at = Some(at(0));
+        b.marks.last_outcome = Some("failed");
+        let s = compute(&b, at(1));
+        assert_eq!((s.status, s.reason_code), ("available", "idle"));
+        assert_eq!((s.last_finished_at, s.last_outcome), (Some(at(0)), Some("failed")));
+        let wire = json!(s);
+        assert_eq!(wire["last_outcome"], "failed");
+        assert_eq!(wire["last_finished_at"], json!(at(0)));
+        // A running turn's status still carries the last one's outcome, and a push sees it change
+        let s = compute(&bot(vec![running("t2", at(2))]), at(3));
+        let mut b2 = bot(vec![running("t2", at(2))]);
+        b2.marks = b.marks.clone();
+        let s2 = compute(&b2, at(3));
+        assert_eq!((s2.status, s2.last_outcome), ("working", Some("failed")));
+        assert_ne!(s.fingerprint(), s2.fingerprint());
     }
 
     #[test]
