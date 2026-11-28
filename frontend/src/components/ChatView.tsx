@@ -31,6 +31,8 @@ import { answersChip, composerStacked, fitPlaceholder, hintLearned, hintLineShow
 import { isNewThing, markNewSeen, subscribeNew } from '../whatsNew';
 import { ModernApprovalCard, PendingApproval, approvalAction } from './ModernApprovalCard';
 import { placeSettled } from '../settledPlace';
+import { deskGuestOf, deskHandoff, deskSentTo } from '../deskThread';
+import { DeskHandoffChip, DeskReplyComposer, DeskSentRow, useDeskThread } from './DeskReplyComposer';
 import { MentionPopover, MentionItem } from './MentionPopover';
 import { MarkdownRenderer } from './MarkdownRenderer';
 import { StreamMarkdown } from './StreamMarkdown';
@@ -363,6 +365,9 @@ export interface ChatViewProps {
   onContinueFrom?: (msg: ChatMessage) => Promise<string | void>;
   /** The open thread's kind ('chat' or 'delegation'); absent in the bot's main chat. */
   threadKind?: string | null;
+  /** The open thread's `created_by` and title: "pocket-guest" is a front desk guest's thread (its composer replies to the guest). */
+  threadCreatedBy?: string | null;
+  threadTitle?: string | null;
   /** A continued chat's quiet first line, linking back to the message it came from. */
   continuedFrom?: { text: string; onOpen: () => void } | null;
   /** Goes up when the composer should take focus (a new continued chat just opened). */
@@ -694,6 +699,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
   stripHasApproval = false,
   onContinueFrom,
   threadKind,
+  threadCreatedBy,
+  threadTitle,
   continuedFrom,
   focusComposerKey,
   onHighlightDone,
@@ -918,6 +925,10 @@ export const ChatView: React.FC<ChatViewProps> = ({
 
   const activeKwants = kwantsProp || internalKwants;
   // Every bot a message here can come from: names and ids resolve against these, never the chat title (P4).
+  // desk-host-reply-composer: a front desk guest's thread replies to the guest, never to the bot.
+  const deskGuest = useMemo(() => deskGuestOf(threadCreatedBy, messages, threadTitle), [threadCreatedBy, messages, threadTitle]);
+  const desk = useDeskThread(deskGuest, messages.length);
+  const deskBot = (home?.kind === 'bot' ? home.bot?.name : undefined) ?? title;
   const knownBots = useMemo(() => {
     const all: Array<{ id: string; name: string }> = [...activeKwants, ...(teamMembers ?? [])];
     if (home?.kind === 'bot' && home.bot) all.push({ id: home.bot.id, name: home.bot.name });
@@ -1545,7 +1556,7 @@ export const ChatView: React.FC<ChatViewProps> = ({
   useEffect(() => {
     if (scrollRef.current && stickRef.current) pinToBottom(scrollRef.current);
     checkApprovalVisible();
-  }, [messages, writing, thinking, approvalKey, routingState, queued, contextKey]);
+  }, [messages, writing, thinking, approvalKey, routingState, queued, contextKey, desk.lines]);
   // Each streamed update (at most one a frame) keeps the bottom pinned while the person follows the chat.
   const onStreamGrowRef = useRef(() => {});
   onStreamGrowRef.current = () => {
@@ -2331,6 +2342,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
         />
       );
     const isUser = msg.sender_role === 'user';
+    // desk-host-reply-composer: the host's reply the server saved here (meta `to_guest`) is the "You → Tom" line.
+    if (deskGuest && isUser && deskSentTo(msg))
+      return <DeskSentRow key={msg.id} line={{ id: msg.id, text: msg.text, at: msg.created_at ?? '', asked_at: msg.created_at ?? '' }} guestName={deskGuest.guestName} />;
     const files = msg.meta ? parseAttachments(msg.meta) : [];
     // A bot's share_file note: the file tiles say it all.
     const filesOnly = files.length > 0 && isSharedFileMessage(msg.meta);
@@ -2351,7 +2365,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
     // Older channel replies still hold a raw [DECISIONS] block: hidden here, its lines shown as chips
     const shownDecisions = isUser ? null : messageDecisions(msg.text, msg.meta);
     const decisions = shownDecisions?.decisions ?? [];
-    const text = shownDecisions ? shownDecisions.text : msg.text;
+    // desk-host-reply-composer: the bot's raw `[[person]] …` line shows as the hand-off chip.
+    const handoff = deskGuest && !isUser ? deskHandoff(shownDecisions ? shownDecisions.text : msg.text, deskBot) : null;
+    const text = handoff ? handoff.text : shownDecisions ? shownDecisions.text : msg.text;
     // S-F7: a trial turn that came back empty says so, in muted text, instead of a blank bubble.
     const emptyTrial =
       !isUser && msg.sender_role === 'kwant' && !(text ?? '').trim() && !files.length && msg.results == null && trialOf(msg)
@@ -2544,6 +2560,11 @@ export const ChatView: React.FC<ChatViewProps> = ({
                 <CircleSlash size={14} aria-hidden="true" className="mt-[3px] shrink-0" />
                 <span>{emptyTrial}</span>
               </p>
+            ) : handoff ? (
+              <>
+                {(text.trim() || msg.results != null) && <MarkdownRenderer content={text} results={msg.results} messageId={msg.id} />}
+                <DeskHandoffChip reason={handoff.reason} />
+              </>
             ) : (
               <MarkdownRenderer content={text} results={msg.results} messageId={msg.id} />
             )}
@@ -2654,6 +2675,9 @@ export const ChatView: React.FC<ChatViewProps> = ({
   const chatItems = groupDiscussionThreads(listed, { foldOpen: askOnly });
   const itemTime = (item: (typeof chatItems)[number]) => (item.kind === 'message' ? item.message.created_at : item.turns[item.turns.length - 1]?.created_at);
   const settledPlaced = placeSettled(chatItems.map(itemTime), settledApprovals);
+  // desk-host-reply-composer: a reply on its way (its echo), in time order among the messages until the saved copy lands.
+  const deskPlaced = placeSettled(chatItems.map(itemTime), deskGuest ? desk.lines : []);
+  const renderDeskSent = (line: (typeof desk.lines)[number]) => <DeskSentRow key={line.id} line={line} guestName={deskGuest?.guestName ?? ''} />;
   const renderSettled = (approval: (typeof settledApprovals)[number]) =>
     approval.refused ? (
       <RefusedCustomerCall key={approval.id} approval={approval} />
@@ -2718,16 +2742,27 @@ export const ChatView: React.FC<ChatViewProps> = ({
     listed, askOnly, trialCards, openThoughts, retries, flashId, flashKind, repeatStarts, knownBots, chatBudget,
     approveId, doneItems, questionId, answered, activeKwants, arranged, liveShareIds, detailsAsk, switchNoteFor,
     questionOf, approving, phone, replyTo, copiedId, continueError, continuing, newestId, vmOpen,
+    deskGuest, deskBot, desk.lines,
   ];
   const drawRows = () => (
     <>
       {settledPlaced.after.get(-1)?.map(renderSettled)}
+      {deskPlaced.after.get(-1)?.map(renderDeskSent)}
       {chatItems.map((item, n, items) => {
         // 33a: kept approval lines sit after the item that came before their card.
         const linesAfter = settledPlaced.after.get(n);
-        if (linesAfter) return <Fragment key={`settled-after:${item.kind === 'message' ? item.message.id : item.id}`}>{renderItem(item, n, items)}{linesAfter.map(renderSettled)}</Fragment>;
+        const sentAfter = deskPlaced.after.get(n);
+        if (linesAfter || sentAfter)
+          return (
+            <Fragment key={`settled-after:${item.kind === 'message' ? item.message.id : item.id}`}>
+              {renderItem(item, n, items)}
+              {linesAfter?.map(renderSettled)}
+              {sentAfter?.map(renderDeskSent)}
+            </Fragment>
+          );
         return renderItem(item, n, items);
       })}
+      {deskPlaced.end.map(renderDeskSent)}
     </>
   );
   const drawRowsRef = useRef(drawRows);
@@ -3498,6 +3533,19 @@ export const ChatView: React.FC<ChatViewProps> = ({
           {needsYouStrip}
         </div>
 
+        {/* desk-host-reply-composer: a front desk guest's thread gets "Reply to Tom", never the bot's composer. */}
+        {deskGuest ? (
+          <DeskReplyComposer
+            guest={deskGuest}
+            bot={deskBot}
+            desk={desk}
+            phone={phone}
+            onSend={() => {
+              stickRef.current = true;
+            }}
+          />
+        ) : (
+        <>
         <form
           onSubmit={handleSubmit}
           aria-label={`Message ${title}`}
@@ -3808,6 +3856,8 @@ export const ChatView: React.FC<ChatViewProps> = ({
             </span>
           )}
         </div>
+        </>
+        )}
       </div>
     </div>
 

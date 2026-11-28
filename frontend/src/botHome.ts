@@ -1,6 +1,8 @@
 // What the empty-chat "bot home" and the composer's answer pill say, worked out from data the client
 // already has: no new requests. Pure, so tests can check the words.
 
+import { DESK_GUEST_SOURCE } from './deskThread';
+
 export interface HomeBot {
   id: string;
   name: string;
@@ -106,14 +108,17 @@ export function goodAt(bot: Pick<HomeBot, 'title' | 'covers'>): string[] {
   return out;
 }
 
-/** The two newest chats that aren't archived, from a bot's thread list. */
+/**
+ * The two newest chats that aren't archived, from a bot's thread list. A front desk guest's thread
+ * (`created_by: "pocket-guest"`) is the guest's conversation, not the person's work, so it's left out.
+ */
 export function recentWork(
-  threads: Array<{ id: string; title: string; updated_at: string; archived?: boolean; kind?: string }> | undefined,
+  threads: Array<{ id: string; title: string; updated_at: string; archived?: boolean; kind?: string; created_by?: string }> | undefined,
   limit = 2,
 ): RecentItem[] | undefined {
   if (!threads) return undefined;
   return threads
-    .filter((t) => !t.archived && t.title && t.kind !== 'delegation')
+    .filter((t) => !t.archived && t.title && t.kind !== 'delegation' && t.created_by !== DESK_GUEST_SOURCE)
     .sort((a, b) => (a.updated_at < b.updated_at ? 1 : a.updated_at > b.updated_at ? -1 : 0))
     .slice(0, limit)
     .map(({ id, title, updated_at }) => ({ id, title, updated_at }));

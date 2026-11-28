@@ -241,7 +241,8 @@ test('ChatView puts the strip inside the composer section, right above the box, 
   // 22i (design.md §2): the Needs-you strip sits between the working line and the box, nothing else
   const between = src.slice(at + '{workingStrip}'.length, formAt).replace(/\{\/\*[\s\S]*?\*\/\}/g, '').trim();
   // 29w: inside its slot, which only hides it while it repeats the approval card on screen.
-  assert.match(between, /^<div ref=\{stripSlotRef\}[^\n]*data-needs-you-slot[^\n]*>\s*\{needsYouStrip\}\s*<\/div>$/, 'directly above the box, under the Needs-you strip');
+  // desk-host-reply-composer: in a front desk guest's thread "Reply to Tom" takes the box's place, so the swap opens here.
+  assert.match(between, /^<div ref=\{stripSlotRef\}[^\n]*data-needs-you-slot[^\n]*>\s*\{needsYouStrip\}\s*<\/div>\s*(\{deskGuest \? \(\s*<DeskReplyComposer\b[^<]*?\/>\s*\) : \(\s*<>)?$/, 'directly above the box, under the Needs-you strip');
   assert.doesNotMatch(src, /\{!?phone && workingStrip\}/, 'no layout-specific place (Rigel: 390 sat outside the section)');
   assert.equal(src.split('{workingStrip}').length - 1, 1, 'rendered once');
   assert.equal(src.match(/<WorkingStrip\b/g).length, 1, 'one element');

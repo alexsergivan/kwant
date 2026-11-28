@@ -4871,6 +4871,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
           }
           onContinueFrom={canContinueHere ? handleContinueFrom : undefined}
           threadKind={shownThread?.kind ?? null}
+          threadCreatedBy={shownThread?.created_by ?? null}
+          threadTitle={shownThread?.title ?? null}
           continuedFrom={continuedFrom}
           focusComposerKey={focusComposerKey}
           highlightMessageId={highlightMessageId}
