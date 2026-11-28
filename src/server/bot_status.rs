@@ -1153,7 +1153,7 @@ mod tests {
     }
 
     fn bot(turns: Vec<TurnInput>) -> BotInput {
-        BotInput { kwant_id: "k1".into(), turns, questions: Vec::new(), marks: BotMarks::default(), held: Vec::new() }
+        BotInput { kwant_id: "k1".into(), turns, questions: Vec::new(), marks: BotMarks::default(), held: Vec::new(), limit_waits: Vec::new() }
     }
 
     fn question(id: &str, ctx: &str, asked: DateTime<Utc>, turn: Option<&str>) -> QuestionRef {
@@ -1453,6 +1453,49 @@ mod tests {
         let s = compute(&bot(vec![t]), at(2));
         assert_eq!((s.status, s.reason_code, s.since), ("queued", "in_line", Some(at(1))));
         assert_eq!(s.queue, Some(Queue { position: 2, reason: "server_busy".into() }));
+    }
+
+    fn limit_wait(retry_at: DateTime<Utc>, since: DateTime<Utc>) -> LimitWait {
+        LimitWait { retry_at, since }
+    }
+
+    #[test]
+    fn a_turn_parked_on_the_usage_limit_waits_for_it_with_the_retry_time() {
+        let mut b = bot(Vec::new());
+        b.marks.last_finished_at = Some(at(0));
+        b.limit_waits = vec![limit_wait(at(62), at(1)), limit_wait(at(60), at(2))];
+        let s = compute(&b, at(3));
+        assert_eq!((s.status, s.reason_code, s.since), ("queued", "usage_limit", Some(at(2))), "the earliest retry");
+        assert_eq!(s.back_at, Some(at(60)));
+        assert_eq!(s.waits_on, Some(WaitsOn { kind: "usage_limit", label: None }));
+        assert!(s.turn.is_none() && s.queue.is_none() && s.also.is_empty());
+        assert_eq!(s.last_finished_at, Some(at(0)));
+        let wire = json!(s);
+        assert_eq!(wire["back_at"], json!(at(60)), "{wire}");
+        assert_eq!(wire["waits_on"], json!({ "kind": "usage_limit" }), "{wire}");
+        // The retry ran (or the chat moved on): no pending row, so it's available again
+        b.limit_waits.clear();
+        let s = compute(&b, at(61));
+        assert_eq!((s.status, s.reason_code, s.since, s.back_at), ("available", "idle", Some(at(0)), None));
+        assert!(json!(s).get("back_at").is_none());
+    }
+
+    #[test]
+    fn a_running_turn_or_an_open_question_wins_over_a_usage_limit_wait() {
+        let mut b = bot(vec![running("t1", at(5))]);
+        b.limit_waits = vec![limit_wait(at(60), at(1))];
+        let s = compute(&b, at(6));
+        assert_eq!((s.status, s.reason_code, s.back_at), ("working", "thinking", None));
+        assert!(s.also.is_empty(), "the wait isn't listed beside a running turn");
+        let mut asked = bot(Vec::new());
+        asked.limit_waits = vec![limit_wait(at(60), at(1))];
+        asked.questions = vec![question("q1", "c9", at(2), None)];
+        let s = compute(&asked, at(3));
+        assert_eq!((s.status, s.reason_code, s.back_at), ("needs_you", "asked_question", None));
+        let mut gave_up = bot(Vec::new());
+        gave_up.limit_waits = vec![limit_wait(at(60), at(1))];
+        gave_up.marks.gave_up = Some(GaveUp { at: at(2), tries: 2, secs: 120, turn_id: "t0".into(), context_id: "c1".into(), thread_id: None });
+        assert_eq!(compute(&gave_up, at(3)).reason_code, "stalled_gave_up");
     }
 
     #[test]
