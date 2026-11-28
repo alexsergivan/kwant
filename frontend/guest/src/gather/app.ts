@@ -1108,6 +1108,8 @@ export class GatherApp {
           : `${cap(host)} knows you can't make it.${until}`;
     const yes = (v.people ?? []).filter((p) => p.answer === 'yes');
     const maybe = (v.people ?? []).filter((p) => p.answer === 'maybe');
+    // The server's own yes count minus the names it sent: the people whose names are still hidden.
+    const hidden = v.counts ? Math.max(0, v.counts.yes - yes.length) : 0;
     let who: Kid = null;
     if (v.people) {
       who = h(
@@ -1115,8 +1117,18 @@ export class GatherApp {
         null,
         h('div', { class: 'lbl', id: 'lbl-who' }, "Who's coming ", v.counts ? h('small', null, comingLine(v.counts, { verb: false })) : null),
         yes.length
-          ? h('ul', { class: 'who-grid', 'aria-labelledby': 'lbl-who' }, yes.map((p) => h('li', null, creature(p.avatar, 'sm'), h('div', { class: 'nm' }, p.name))))
-          : h('p', { class: 'soft fine' }, 'Nobody has said yes yet.'),
+          ? h(
+              'ul',
+              { class: 'who-grid', 'aria-labelledby': 'lbl-who' },
+              yes.map((p) => h('li', null, creature(p.avatar, 'sm'), h('div', { class: 'nm' }, p.name))),
+              // Rigel F1 (#1326): people who said yes but keep their name hidden are counted, never left out.
+              hidden > 0
+                ? h('li', { 'data-who-more': '' }, h('div', { class: 'empty', 'aria-hidden': 'true' }, `+${fmt(hidden)}`), h('div', { class: 'nm muted' }, h('span', { class: 'vh' }, `${fmt(hidden)} more said yes. Their names are hidden.`), h('span', { 'aria-hidden': 'true' }, 'hidden')))
+                : null,
+            )
+          : hidden > 0
+            ? h('p', { class: 'soft fine', 'data-who-hidden': '' }, `${fmt(hidden)} said yes. Their names are hidden.`)
+            : h('p', { class: 'soft fine' }, 'Nobody has said yes yet.'),
         maybe.length ? h('p', { class: 'soft fine' }, `Maybe: ${and(maybe.map((p) => p.name))}`) : null,
       );
     } else if (v.counts) {

@@ -659,7 +659,8 @@ test('names switch: flips at once and is busy while the request runs', async () 
   assert.equal(sw(v).getAttribute('aria-checked'), 'false', 'a reply without a view keeps the flip');
 });
 
-test('names switch: a refusal rolls back and shows the card error line; the switch stays', async () => {
+// Rigel finding 1 on #1341: the reason shows inside the switch box, not in the card's done slot under the join box.
+test('names switch: a refusal rolls back and says why inside the switch box; the switch stays', async () => {
   const calls = [];
   g.fetch = respond(calls, { error: 'conflict', message: 'Answers were deleted.' }, 409);
   const v = await card('rsvpNamesHidden');
@@ -667,9 +668,21 @@ test('names switch: a refusal rolls back and shows the card error line; the swit
   assert.equal(calls[0][2].body.on, false);
   assert.equal(sw(v).getAttribute('aria-checked'), 'true', 'rolled back');
   assert.match(help(v), /^2 people answered before/);
-  const err = v.host.querySelector('[data-done="error"]');
-  assert.match(err.textContent, /Couldn't do that: Answers were deleted\. Try again\./);
+  const box = v.host.querySelector('[data-names-switch]');
+  const err = box.querySelector('[data-names-error]');
+  assert.ok(err, 'the error is inside the switch box');
+  assert.equal(err.getAttribute('role'), 'status');
+  assert.ok(err.classList.contains('text-bad'));
+  assert.equal(err.querySelectorAll('svg').length, 1, 'the warning icon');
+  assert.equal(err.textContent, "Couldn't do that: Answers were deleted. Try again.");
+  assert.equal(v.host.querySelector('[data-done]'), null, "not in the card's done slot");
   assert.ok(sw(v), 'still there');
+  // The next flip clears it; a good answer leaves it gone.
+  g.fetch = respond(calls, { host_view: { face: 'rsvp', show_names: false, names_hidden: 0 } });
+  await click(sw(v));
+  assert.equal(v.host.querySelector('[data-names-error]'), null, 'cleared on the next flip');
+  assert.equal(sw(v).getAttribute('aria-checked'), 'false');
+  assert.equal(v.host.querySelector('[data-done]'), null);
 });
 
 test('names_hidden: missing (an older server) parses as 0; junk rejects the block', () => {
