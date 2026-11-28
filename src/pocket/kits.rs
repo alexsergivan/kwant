@@ -40,11 +40,11 @@ impl Retention {
     /// When the data goes, if that is known yet: at creation `ended_at` is `None`.
     pub fn expires_at(&self, spec: &Value, ended_at: Option<DateTime<Utc>>) -> Option<DateTime<Utc>> {
         match *self {
-            Retention::AfterEnd { days } | Retention::AfterLastMessage { days } => ended_at.map(|t| t + Duration::days(days)),
+            Retention::AfterEnd { days } | Retention::AfterLastMessage { days } => ended_at.map(|t| plus_days(t, days)),
             Retention::AtEnd => ended_at,
             Retention::AfterDate { fields, days } => match fields.iter().find_map(|f| spec_date(spec.get(*f)?)) {
-                Some(date) => Some(date + Duration::days(days)),
-                None => ended_at.map(|t| t + Duration::days(days)),
+                Some(date) => Some(plus_days(date, days)),
+                None => ended_at.map(|t| plus_days(t, days)),
             },
         }
     }
@@ -67,6 +67,12 @@ pub fn spec_date(v: &Value) -> Option<DateTime<Utc>> {
         return Some(t.with_timezone(&Utc));
     }
     NaiveDate::parse_from_str(s, "%Y-%m-%d").ok()?.and_hms_opt(23, 59, 59).map(|t| t.and_utc())
+}
+
+/// `t` + `days`. A date at the far end of chrono's range (a spec's `+262142-12-31`) can't take
+/// another week: then the data goes at `t` itself, sooner rather than never, and nothing panics.
+fn plus_days(t: DateTime<Utc>, days: i64) -> DateTime<Utc> {
+    Duration::try_days(days).and_then(|d| t.checked_add_signed(d)).unwrap_or(t)
 }
 
 /// What a kit declares for one spec (a kit may differ by spec: a class quiz keeps nothing).
@@ -485,6 +491,10 @@ mod tests {
         assert_eq!(santa.expires_at(&json!({ "gift_on": "2026-12-18" }), None).unwrap().to_rfc3339(), "2026-12-25T23:59:59+00:00");
         assert_eq!(santa.expires_at(&json!({}), None), None);
         assert_eq!(santa.expires_at(&json!({}), Some(end)), Some(end + Duration::days(7)));
+        // pa12 L2 QA N1: the last date chrono parses can't take 7 more days; no panic, it goes then
+        let far = json!({ "reveal_at": "+262142-12-31" });
+        assert_eq!(santa.expires_at(&far, None), spec_date(&far["reveal_at"]));
+        assert_eq!(Retention::AfterEnd { days: 7 }.expires_at(&far, Some(DateTime::<Utc>::MAX_UTC)), Some(DateTime::<Utc>::MAX_UTC));
     }
 
     #[test]

@@ -6,6 +6,7 @@
 //! belong to L4 and V2, and no view in L2 reads them.
 
 use super::super::kits::spec_date;
+use chrono::{Duration, Utc};
 use super::super::words;
 use serde_json::{Map, Value};
 
@@ -13,6 +14,8 @@ pub const FORMAT: &str = "made/1";
 /// The biggest `made/1` spec (plan section 5), well under the core's 256 KB.
 pub const MAX_SPEC_BYTES: usize = 64 * 1024;
 pub const TITLE_MAX: usize = 80;
+/// `reveal_at` is at most this many days ahead: with `after_date` the data stays until a week after it.
+pub const REVEAL_MAX_DAYS: i64 = 366;
 pub const MAX_PLAYERS: u64 = 60;
 pub const MAX_COLLECTIONS: usize = 12;
 pub const MAX_FIELDS: usize = 12;
@@ -54,17 +57,23 @@ pub fn validate(spec: &Value) -> Result<(), String> {
     if serde_json::to_string(spec).map_or(usize::MAX, |s| s.len()) > MAX_SPEC_BYTES {
         return Err("The spec is bigger than 64 KB.".into());
     }
-    let title = o.get("title").and_then(Value::as_str).map(str::trim).unwrap_or("");
-    if title.is_empty() {
-        return Err("The spec needs a title.".into());
-    }
-    if title.chars().count() > TITLE_MAX {
-        return Err(format!("The title is at most {TITLE_MAX} characters."));
+    // The title is shown to guests (info, the join page, the view), so it is cleaned like any
+    // text guests read: invisible and direction characters and links come out (QA N2)
+    let title = o.get("title").and_then(Value::as_str).unwrap_or("");
+    match words::clean_text(title, TITLE_MAX) {
+        Ok(_) => {}
+        Err(words::TextError::Empty) => return Err("The spec needs a title.".into()),
+        Err(words::TextError::TooLong(_)) => return Err(format!("The title is at most {TITLE_MAX} characters.")),
+        Err(words::TextError::NotAllowed) => return Err("The title needs other words.".into()),
     }
     let reveal_at = match o.get("reveal_at") {
         None | Some(Value::Null) => None,
         Some(v) => Some(spec_date(v).ok_or("reveal_at must be a date (2026-12-18) or a time (2026-12-18T19:00:00Z).")?),
     };
+    // QA N1: a far date would keep the data for ever (and once overflowed the expiry)
+    if reveal_at.is_some_and(|t| t > Utc::now() + Duration::days(REVEAL_MAX_DAYS)) {
+        return Err("reveal_at is at most a year from now.".into());
+    }
     match o.get("retention") {
         None | Some(Value::Null) => {}
         Some(v) => match v.as_str() {
@@ -290,6 +299,10 @@ mod tests {
             (with(&["collections", "picks", "fields", "pick", "of"], json!("picks")), "must point at another collection, not its own."),
             (with(&["collections", "shelf", "fields", "title", "label"], json!("Title")), "Collection \"shelf\": field \"title\" is a text and doesn't take \"label\"."),
             (with(&["words", "join"], json!("a".repeat(81))), "Word \"join\": That's too long: at most 80 characters."),
+            (with(&["reveal_at"], json!("+262142-12-31")), "reveal_at is at most a year from now."),
+            (with(&["reveal_at"], json!((Utc::now() + Duration::days(REVEAL_MAX_DAYS + 2)).to_rfc3339())), "reveal_at is at most a year from now."),
+            (with(&["title"], json!("https://example.com \u{200B}")), "The spec needs a title."),
+            (with(&["title"], json!("x".repeat(81))), "The title is at most 80 characters."),
         ];
         for (spec, want) in cases {
             let got = validate(&spec).expect_err(want);
@@ -298,6 +311,8 @@ mod tests {
         }
         // after_date with a reveal date passes; 13 collections don't
         assert_eq!(validate(&with(&["reveal_at"], json!("2026-12-18"))), Ok(()));
+        let soon = (Utc::now() + Duration::days(REVEAL_MAX_DAYS - 1)).to_rfc3339();
+        assert_eq!(validate(&with(&["reveal_at"], json!(soon))), Ok(()));
         let mut s = with(&["retention"], json!("after_date"));
         s["reveal_at"] = json!("2026-12-18T19:00:00Z");
         assert_eq!(validate(&s), Ok(()));
