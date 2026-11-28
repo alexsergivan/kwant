@@ -292,7 +292,9 @@ test('G2 without names: counts only', async () => {
 
 // Rigel F1 on #1326: names on, but the people who said yes are still unnamed. The yes count is the server's.
 for (const [yes, people, want, more] of [
-  [2, 0, '2 said yes. Their names are hidden.', null],
+  [2, 0, '2 people said yes. Their names are hidden.', null],
+  [1, 0, '1 person said yes. Their name is hidden.', null],
+  [3, 2, null, '+1'],
   [5, 2, null, '+3'],
   [1200, 2, null, '+1,198'],
   [2, 2, null, null],
@@ -316,7 +318,8 @@ for (const [yes, people, want, more] of [
     assert.equal(tile ? tile.querySelector('.empty').textContent : null, more);
     if (more) {
       assert.equal(tile.parentElement, t.$('.who-grid'), 'the +N tile ends the grid');
-      assert.equal(tile.querySelector('.vh').textContent, `${more.slice(1)} more said yes. Their names are hidden.`);
+      const n = more.slice(1);
+      assert.equal(tile.querySelector('.vh').textContent, n === '1' ? '1 more person said yes. Their name is hidden.' : `${n} more people said yes. Their names are hidden.`);
     }
     t.app.stop();
   });

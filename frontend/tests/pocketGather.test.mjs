@@ -57,7 +57,7 @@ async function mount(el) {
   const root = createRoot(host);
   root.render(el);
   await settle();
-  const v = { host, done: () => (root.unmount(), host.remove()) };
+  const v = { host, root, done: () => (root.unmount(), host.remove()) };
   mounted.add(v);
   return v;
 }
@@ -683,6 +683,18 @@ test('names switch: a refusal rolls back and says why inside the switch box; the
   assert.equal(v.host.querySelector('[data-names-error]'), null, 'cleared on the next flip');
   assert.equal(sw(v).getAttribute('aria-checked'), 'false');
   assert.equal(v.host.querySelector('[data-done]'), null);
+});
+
+// Mira and Rigel on #1411: a fresh view clears a stale reason, so it never sits under a switch that now works.
+test('names switch: a fresh view clears the error', async () => {
+  g.fetch = respond([], { error: 'conflict', message: 'Answers were deleted.' }, 409);
+  const v = await card('rsvpNamesHidden');
+  await click(sw(v));
+  assert.ok(v.host.querySelector('[data-names-error]'), 'shown after the refusal');
+  v.root.render(h(m.MarkdownRenderer, { content: F.rsvpNamesHidden.reply, results: { version: 1, blocks: [raw('rsvpNamesHidden')] }, messageId: 'm-rsvpNamesHidden' }));
+  await settle();
+  assert.equal(v.host.querySelector('[data-names-error]'), null, 'cleared by the new view');
+  assert.ok(sw(v), 'the switch is still there');
 });
 
 test('names_hidden: missing (an older server) parses as 0; junk rejects the block', () => {
