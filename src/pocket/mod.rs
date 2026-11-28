@@ -23,6 +23,7 @@ pub mod keys;
 pub mod kits;
 pub mod limits;
 pub mod listener;
+pub mod made;
 pub mod photo;
 pub mod queue;
 pub mod quiz_kit;
@@ -88,8 +89,7 @@ pub enum Switch {
 /// The names a `pocket_apps` list may hold: this build's kits, plus `made` only when `make`.
 /// `made` counts as a name before its kit is registered (pa12 L2), so the gate exists first.
 fn known_ids(make: bool) -> Vec<&'static str> {
-    let mut ids = kits::kit_ids();
-    ids.retain(|id| *id != kits::MADE_ID);
+    let mut ids = kits::plain_kit_ids();
     if make {
         ids.push(kits::MADE_ID);
     }
@@ -1433,7 +1433,8 @@ mod tests {
     fn the_switch_parses_on_off_and_kit_lists() {
         let kits = |v: &str| Switch::parse(v).kits();
         assert_eq!(Switch::parse("on"), Switch::All { make: false });
-        assert_eq!(kits("on"), kits::kit_ids());
+        assert_eq!(kits("on"), kits::plain_kit_ids());
+        assert!(kits::kit_ids().contains(&kits::MADE_ID) && Switch::parse_with("on", true).kits() == kits::kit_ids());
         for off in ["off", "", "  ", "bogus", ",", "On", "on,", "yes", "true"] {
             assert_eq!(Switch::parse(off), Switch::Off, "{off:?}");
         }

@@ -3,7 +3,8 @@
 //! `pocket_apps` `on` or a list naming `made`; `pocket_apps=on` alone never turns it on. A missing,
 //! unreadable or mistyped `pocket_make` is off. While `made` is off the guest port answers a made
 //! pocket like a code that doesn't exist, and turning it off again hides existing made pockets.
-//! `made` isn't a registered kit until L2, so the made pockets here are rows put in directly.
+//! The made pockets here are rows put in directly, so the gate is tested apart from the kit (pa12 L2
+//! registered it; tests/pocket_made_collections_test.rs makes them through the API).
 
 use axum::{
     body::{to_bytes, Body},
@@ -174,7 +175,7 @@ async fn pocket_apps_on_alone_never_turns_on_made() {
         let sw = pocket::switch(&t.state.db).await;
         assert!(!sw.allows(MADE_ID), "pocket_make {make:?}: {sw:?}");
         assert!(!pocket::enabled_for(&t.state.db, MADE_ID).await, "pocket_make {make:?}");
-        for kit in pocket::kits::kit_ids() {
+        for kit in pocket::kits::plain_kit_ids() {
             assert!(sw.allows(kit), "pocket_apps=on still turns on {kit} (pocket_make {make:?})");
         }
         let b = pockets(&t).await;
