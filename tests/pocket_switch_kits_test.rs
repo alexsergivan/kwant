@@ -121,7 +121,7 @@ fn strings(v: &Value) -> Vec<String> {
 #[tokio::test]
 async fn the_switch_reads_on_off_and_kit_lists() {
     let e = setup(false).await;
-    let all: Vec<String> = kwnt::pocket::kits::kit_ids().into_iter().map(str::to_string).collect();
+    let all: Vec<String> = kwnt::pocket::kits::plain_kit_ids().into_iter().map(str::to_string).collect();
     let cases: [(&str, Vec<String>); 9] = [
         ("on", all.clone()),
         ("off", vec![]),

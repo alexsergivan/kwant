@@ -5841,7 +5841,8 @@ pub async fn get_settings(State(state): State<AppState>) -> Result<Json<Settings
         fact_dispute_scan: super::missions::truth_ledger::scan_enabled(&state).await,
         pocket_apps: crate::pocket::stored_setting(&state.db).await,
         pocket_make: if crate::pocket::make_on(&state.db).await { "on" } else { "off" }.into(),
-        pocket_kits: crate::pocket::kits::kit_ids(),
+        // pa12 L2: `made` has its own switch (`pocket_make`), so Settings' kit list leaves it out
+        pocket_kits: crate::pocket::kits::plain_kit_ids(),
     }))
 }
 
