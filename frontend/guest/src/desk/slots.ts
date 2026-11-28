@@ -20,7 +20,7 @@ export function wall(start: string | undefined): number | undefined {
   return t;
 }
 
-type Parts = { weekday: string; month: string; day: string; time: string };
+type Parts = { weekday: string; month: string; day: string; time: string; date: string };
 
 function parts(t: number, locale?: string): Parts {
   const f = new Intl.DateTimeFormat(locale, { weekday: 'short', month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit', timeZone: 'UTC' });
@@ -29,7 +29,19 @@ function parts(t: number, locale?: string): Parts {
   // 12-hour clocks drop ":00" ("10 AM", "10:30 AM"); 24-hour ones keep it ("10:00", "14:30").
   const ampm = p.dayPeriod ? ` ${p.dayPeriod}` : '';
   const min = p.dayPeriod && p.minute === '00' ? '' : `:${p.minute}`;
-  return { weekday: p.weekday ?? '', month: p.month ?? '', day: p.day ?? '', time: `${p.hour}${min}${ampm}` };
+  return { weekday: p.weekday ?? '', month: p.month ?? '', day: p.day ?? '', time: `${p.hour}${min}${ampm}`, date: dateText(t, locale) };
+}
+
+/** "Wed Dec 2" (en-US), "Wed 2 Dec" (en-GB): weekday, day and month in the phone's own order. The comma a locale puts
+ * after the weekday ("Wed, Dec 2") goes, as in the design; every other separator stays the locale's. */
+function dateText(t: number, locale?: string): string {
+  const f = new Intl.DateTimeFormat(locale, { weekday: 'short', month: 'short', day: 'numeric', timeZone: 'UTC' });
+  const xs = f.formatToParts(new Date(t));
+  return xs
+    .map((x, i) => (x.type === 'literal' && xs[i - 1]?.type === 'weekday' ? x.value.replace(/,\s*/, ' ') : x.value))
+    .join('')
+    .replace(/\s+/g, ' ')
+    .trim();
 }
 
 /** "10 AM" (the time button). The slot's label when `start` isn't a time. */
@@ -38,12 +50,12 @@ export function timeLabel(s: Pick<Slot, 'start' | 'label' | 'id'>, locale?: stri
   return t === undefined ? fallback(s) : parts(t, locale).time;
 }
 
-/** "Wed Dec 2, 10 AM": the strip, the notes and the ask button. The slot's label when `start` isn't a time. */
+/** "Wed Dec 2, 10 AM" ("Wed 2 Dec, 10:00" on an en-GB phone): the strip, the notes and the ask button. The slot's label when `start` isn't a time. */
 export function whenLabel(s: Pick<Slot, 'start' | 'label' | 'id'>, locale?: string): string {
   const t = wall(s.start);
   if (t === undefined) return fallback(s);
   const p = parts(t, locale);
-  return `${p.weekday} ${p.month} ${p.day}, ${p.time}`;
+  return `${p.date}, ${p.time}`;
 }
 
 /** "Thu 10 AM": an offer chip in Bell's reply (copy offer_chip "{day} {time}"). */
@@ -69,7 +81,7 @@ export interface Day {
   weekday: string;
   /** "2" */
   date: string;
-  /** "Wed Dec 2" */
+  /** "Wed Dec 2" ("Wed 2 Dec" on an en-GB phone) */
   long: string;
   /** Every slot of the day still to come, open or not, in time order. */
   slots: Slot[];
@@ -91,7 +103,7 @@ export function groupDays(slots: Slot[], now: number, locale?: string): Day[] {
     let d = byDay.get(key);
     if (!d) {
       const p = parts(wall(s.start)!, locale);
-      d = { key, weekday: p.weekday, date: p.day, long: `${p.weekday} ${p.month} ${p.day}`, slots: [], open: [] };
+      d = { key, weekday: p.weekday, date: p.day, long: p.date, slots: [], open: [] };
       byDay.set(key, d);
     }
     d.slots.push(s);

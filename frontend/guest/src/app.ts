@@ -984,6 +984,7 @@ export class GuestApp {
       this.confirmed.add(q.id);
       this.failing.delete(q.id);
       const cur = this.view?.question;
+      // A reply older than a push already drawn (the reveal) gives no view: the answer still counts, the screen stays.
       if (r.ok && r.view) this.show(r.view);
       else if (cur?.id === q.id && this.view?.phase === 'question') this.show({ ...this.view, question: { ...cur, answer: cur.answer ?? a, secs_left: this.secsLeft(cur) } });
       return;

@@ -533,7 +533,8 @@ async fn page_file(headers: HeaderMap, Path(file): Path<String>) -> Response {
 /// without a seat): `{api, pocket, view}`, where `view` is the kit's `lobby` (or `null`).
 /// No names, no guest text.
 pub fn public_json(s: &Snapshot) -> Value {
-    let view = s.kit().map_or(Value::Null, |k| k.lobby(&KitCtx::new(&s.spec, &s.players, Utc::now()), &s.kit_state));
+    let mut view = s.kit().map_or(Value::Null, |k| k.lobby(&KitCtx::new(&s.spec, &s.players, Utc::now()), &s.kit_state));
+    super::wall_pick::fill_delete_on(s, &mut view);
     json!({ "api": super::API_VERSION, "pocket": super::pocket_json(s), "view": view })
 }
 

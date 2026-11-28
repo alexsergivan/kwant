@@ -15,10 +15,13 @@
 //! that hides it); its record keeps only the id and `hidden`. Everything goes 30 days after the
 //! pocket ends, with the pocket (rule 11: the photos are the host's, who keeps the zip).
 //!
-//! Spec (`POST /api/pockets` with `kit: "wall"`): `title` (required), `when` / `event_at` /
-//! `closes_at` (dates; uploads stop at `closes_at`), `host_name`, `photo_cap_mb` (1-25, default
-//! 15), `pocket_cap_mb` (1-4096, default 1024), `per_guest_max` (1-500, default 40), `captions`
-//! (default true). A caption comes with the photo in the `X-Caption` header (percent-encoded
+//! Spec (`POST /api/pockets` with `kit: "wall"`): `title` (required), `when` (the line people
+//! read, like "Sat, Dec 12, 7:30 PM": text up to 60 characters, never an RFC 3339 time, as in
+//! gather), `event_at` and `closes_at` (a date or an RFC 3339 time; uploads stop at `closes_at`),
+//! `host_name`, `photo_cap_mb` (1-25, default 15), `pocket_cap_mb` (1-4096, default 1024),
+//! `per_guest_max` (1-500, default 40), `captions` (default true). Older walls sent `when` as a
+//! date: on create a `when` that is a date or an RFC 3339 time moves to `event_at` when that is
+//! empty ([`when_to_event_at`]), and a stored spec with a date `when` still reads as its date. A caption comes with the photo in the `X-Caption` header (percent-encoded
 //! UTF-8) and can be changed with the guest `caption` action until the host approves the photo;
 //! it is cut to 80 characters and goes through the word filter (a caught one is dropped and the
 //! photo says `caption_removed`).
@@ -47,6 +50,10 @@ pub const PER_GUEST_MAX: u64 = 40;
 pub const PER_GUEST_MAX_MAX: u64 = 500;
 pub const CAPTION_MAX: usize = 80;
 const HOST_NAME_MAX: usize = 40;
+/// `when`, the line people read (gather's limit).
+pub const WHEN_MAX: usize = 60;
+/// gather's sentence for an RFC 3339 `when` (gather.rs `validate`), word for word.
+pub const WHEN_IS_A_LINE: &str = "when is the line people read, like \"Sat, Dec 12, 7:30 PM\". Put the event's time in event_at.";
 /// Photos the host (or pa14b's pick) may mark as the best.
 pub const BEST_MAX: usize = 30;
 /// Days the photos stay after the pocket ends.
@@ -97,6 +104,31 @@ fn spec_str<'a>(spec: &'a Value, field: &str) -> Option<&'a str> {
 
 fn uploads_close_at(spec: &Value) -> Option<DateTime<Utc>> {
     spec.get("closes_at").and_then(spec_date)
+}
+
+/// wall-dates-agree m14: the event's time, `event_at`, else an older wall's date `when`.
+fn event_time(spec: &Value) -> Option<DateTime<Utc>> {
+    spec.get("event_at").and_then(spec_date).or_else(|| spec.get("when").and_then(spec_date))
+}
+
+/// The line people read (`when` that isn't a date; an older wall's date `when` has none).
+fn when_line(spec: &Value) -> Option<&str> {
+    spec_str(spec, "when").filter(|w| spec_date(&json!(w)).is_none())
+}
+
+/// wall-dates-agree m14: on create, a `when` that is a date or an RFC 3339 time (what a bot sent
+/// before `when` became the line people read) moves to `event_at` when that is empty, so such a
+/// spec keeps working. With `event_at` set too it stays, and [`Kit::validate_spec`] refuses an
+/// RFC 3339 one with gather's sentence (a bare date then reads as text).
+pub fn when_to_event_at(spec: &mut Value) {
+    let Some(obj) = spec.as_object_mut() else { return };
+    let dated = obj.get("when").filter(|w| spec_date(w).is_some()).cloned();
+    if let Some(w) = dated {
+        if obj.get("event_at").is_none_or(Value::is_null) {
+            obj.remove("when");
+            obj.insert("event_at".into(), w);
+        }
+    }
 }
 
 // ---- State ----
@@ -260,7 +292,9 @@ pub fn creature(player_id: &str) -> u64 {
     h % 8
 }
 
-/// `closes_at + 30 days` as a date: when the photos leave, for the keep line.
+/// `closes_at + 30 days` as a UTC date: the kit's own guess at when the photos leave. The core
+/// replaces it with the pocket's real date in the person's zone ([`super::wall_pick::fill_delete_on`]:
+/// `expires_at` once ended, the same day the chat lines say).
 fn delete_on(spec: &Value) -> Option<String> {
     uploads_close_at(spec).map(|t| (t + chrono::Duration::days(KEEP_DAYS)).date_naive().to_string())
 }
@@ -270,7 +304,10 @@ impl Wall {
         let mut v = json!({
             "title": spec_str(ctx.spec, "title"),
             "host_name": spec_str(ctx.spec, "host_name"),
-            "when": ctx.spec.get("when").or_else(|| ctx.spec.get("event_at")).and_then(spec_date),
+            // m14: `when` stays the event's time for the pages (a date); the line people read is
+            // `when_line`
+            "when": event_time(ctx.spec),
+            "when_line": when_line(ctx.spec),
             "closes_at": uploads_close_at(ctx.spec),
             "delete_on": delete_on(ctx.spec),
             "state": if uploads_open(ctx, s) { "open" } else { "closed" },
@@ -499,7 +536,15 @@ impl Kit for Wall {
         if words::blocked_text(title) {
             return Err("The title has a word the guest page won't show. Pick another.".into());
         }
-        for f in ["when", "event_at", "closes_at"] {
+        // m14: `when` is the line people read, as in gather; the time goes in event_at
+        match spec.get("when") {
+            None | Some(Value::Null) => {}
+            Some(Value::String(t)) if t.chars().count() > WHEN_MAX => return Err(format!("when is at most {WHEN_MAX} characters.")),
+            Some(Value::String(t)) if DateTime::parse_from_rfc3339(t.trim()).is_ok() => return Err(WHEN_IS_A_LINE.into()),
+            Some(Value::String(_)) => {}
+            Some(_) => return Err("when must be text.".into()),
+        }
+        for f in ["event_at", "closes_at"] {
             if let Some(v) = spec.get(f).filter(|v| !v.is_null()) {
                 spec_date(v).ok_or(format!("{f} must be a date (YYYY-MM-DD) or an RFC 3339 time."))?;
             }
@@ -1135,9 +1180,9 @@ pub async fn photo_response(state: &AppState, s: &Snapshot, id: &str, viewer: &V
 
 // ---- Zip (main port, the person) ----
 
-/// A zip entry's name: `001-mia-2114.jpg` (number, the guest's first name, upload time HHMM in
-/// the local time of the computer kwant runs on, the host's own clock).
-fn entry_name(n: usize, name: Option<&str>, at: Option<DateTime<chrono::FixedOffset>>, kind: Kind) -> String {
+/// A zip entry's name: `001-mia-2114.jpg` (number, the guest's first name, upload time HHMM on
+/// the person's clock: their zone ([`zip_zone`]), else the computer kwant runs on).
+fn entry_name(n: usize, name: Option<&str>, at: Option<chrono::NaiveDateTime>, kind: Kind) -> String {
     let mut slug = String::new();
     for ch in name.unwrap_or("").chars().flat_map(char::to_lowercase) {
         if ch.is_alphanumeric() {
@@ -1197,6 +1242,29 @@ pub enum ZipPick {
     Best,
 }
 
+/// wall-dates-agree m12: the zone the zip's times are read in: the pocket's schedule zone when it
+/// is the person's named zone (TIMEZONE_SETTING when the wall was made, as the wall's chat lines
+/// use), else their TIMEZONE_SETTING now, else `None`: the box's own local time, as before.
+async fn zip_zone(state: &AppState, s: &Snapshot) -> Option<super::schedule::Zone> {
+    use super::schedule::Zone;
+    if let Some(z @ Zone::Named(_)) = &s.zone {
+        return Some(z.clone());
+    }
+    let tz = state.db.get_setting(crate::server::bot_actions::TIMEZONE_SETTING).await.ok().flatten();
+    match super::schedule::zone_for(tz.as_deref(), None) {
+        z @ Zone::Named(_) => Some(z),
+        Zone::Fixed(_) => None,
+    }
+}
+
+/// An upload time on the zip's clock: `zone`, else the box's local time.
+fn zip_clock(zone: Option<&super::schedule::Zone>, at: DateTime<Utc>) -> chrono::NaiveDateTime {
+    match zone {
+        Some(z) => z.local(at),
+        None => at.with_timezone(&chrono::Local).naive_local(),
+    }
+}
+
 /// The wall's photos as one zip (stored, not deflated: photos don't shrink). Never hidden ones.
 pub async fn zip_response(state: &AppState, code: &str, pick: ZipPick) -> PResult<Response> {
     let s = super::snapshot(state, code).await?.ok_or_else(PocketError::not_found)?;
@@ -1206,6 +1274,7 @@ pub async fn zip_response(state: &AppState, code: &str, pick: ZipPick) -> PResul
     let dir = wall_dir(state, code).ok_or_else(PocketError::not_found)?;
     let st = load(&s.kit_state);
     let ctx = KitCtx::new(&s.spec, &s.players, Utc::now());
+    let zone = zip_zone(state, &s).await;
     // (entry name, file, degrees a JPEG's orientation block says in the zip)
     let mut files: Vec<(String, PathBuf, u16)> = Vec::new();
     let mut total = 0u64;
@@ -1217,7 +1286,7 @@ pub async fn zip_response(state: &AppState, code: &str, pick: ZipPick) -> PResul
     for p in st.photos.iter().filter(wanted) {
         let Some(kind) = Kind::from_ext(&p.ext) else { continue };
         let name = first_name(&ctx, &p.by);
-        let at = p.at.map(|t| t.with_timezone(&chrono::Local).fixed_offset());
+        let at = p.at.map(|t| zip_clock(zone.as_ref(), t));
         let turn = if kind == Kind::Jpeg { p.rotate } else { 0 };
         files.push((entry_name(files.len() + 1, name.as_deref(), at, kind), dir.join(format!("{}.{}", p.id, kind.ext())), turn));
         total += p.bytes;
@@ -1402,6 +1471,58 @@ mod tests {
         assert!(!Wall.tick(&mut KitCtx::new(&spec, &ps, after), &mut state), "once");
         assert_eq!(Wall.view(&KitCtx::new(&spec, &ps, after), &state, &Viewer::Host)["state"], "closed");
         assert_eq!(Wall.view(&KitCtx::new(&spec, &ps, after), &state, &Viewer::Host)["delete_on"], "2026-12-31");
+    }
+
+    // ---- wall-dates-agree m14: `when` is the line people read, as in gather ----
+
+    #[test]
+    fn when_is_the_line_people_read() {
+        let ok = |w: Value| Wall.validate_spec(&json!({ "title": "W", "when": w, "event_at": "2026-12-12T19:30:00+01:00" }));
+        assert_eq!(ok(json!("Sat, Dec 12, 7:30 PM")), Ok(()));
+        assert_eq!(ok(json!("2026-12-12T19:30:00+01:00")), Err(WHEN_IS_A_LINE.to_string()), "gather's sentence");
+        assert_eq!(ok(json!("a".repeat(WHEN_MAX))), Ok(()));
+        assert!(ok(json!("a".repeat(WHEN_MAX + 1))).unwrap_err().contains("at most 60"));
+        assert_eq!(ok(json!(12)), Err("when must be text.".into()));
+        assert!(Wall.validate_spec(&json!({ "title": "W", "event_at": "soon" })).unwrap_err().starts_with("event_at must be a date"));
+    }
+
+    #[test]
+    fn a_dated_when_moves_to_event_at_on_create() {
+        let moved = |mut spec: Value| {
+            when_to_event_at(&mut spec);
+            spec
+        };
+        assert_eq!(moved(json!({ "title": "W", "when": "2026-12-12T19:30:00+01:00" })), json!({ "title": "W", "event_at": "2026-12-12T19:30:00+01:00" }));
+        assert_eq!(moved(json!({ "title": "W", "when": "2026-12-12", "event_at": null })), json!({ "title": "W", "event_at": "2026-12-12" }));
+        let both = json!({ "title": "W", "when": "2026-12-12T19:30:00Z", "event_at": "2026-12-13" });
+        assert_eq!(moved(both.clone()), both, "event_at set: it stays, and the spec check refuses it");
+        assert_eq!(Wall.validate_spec(&moved(both)), Err(WHEN_IS_A_LINE.to_string()));
+        let line = json!({ "title": "W", "when": "Sat, Dec 12" });
+        assert_eq!(moved(line.clone()), line);
+    }
+
+    #[test]
+    fn old_and_new_whens_both_read() {
+        let ps = players();
+        let state = Wall.init(&json!({}));
+        let facts = |spec: Value| {
+            let v = Wall.lobby(&KitCtx::new(&spec, &ps, Utc::now()), &state);
+            (v["when"].clone(), v["when_line"].clone())
+        };
+        // A wall stored before m14, with a date `when`
+        assert_eq!(facts(json!({ "title": "W", "when": "2026-12-12" })), (json!("2026-12-12T23:59:59Z"), Value::Null));
+        assert_eq!(facts(json!({ "title": "W", "when": "2026-12-12T19:30:00+01:00" })), (json!("2026-12-12T18:30:00Z"), Value::Null));
+        // A wall made now
+        assert_eq!(facts(json!({ "title": "W", "when": "Sat, Dec 12", "event_at": "2026-12-12" })), (json!("2026-12-12T23:59:59Z"), json!("Sat, Dec 12")));
+        assert_eq!(facts(json!({ "title": "W", "when": "Sat, Dec 12" })), (Value::Null, json!("Sat, Dec 12")));
+    }
+
+    #[test]
+    fn zip_clock_reads_the_persons_zone() {
+        let at = DateTime::parse_from_rfc3339("2026-12-01T00:47:00Z").unwrap().with_timezone(&Utc);
+        let lj = super::super::schedule::Zone::parse("Europe/Ljubljana");
+        assert_eq!(entry_name(1, Some("Ana"), Some(zip_clock(Some(&lj), at)), Kind::Jpeg), "001-ana-0147.jpg");
+        assert_eq!(zip_clock(None, at), at.with_timezone(&chrono::Local).naive_local(), "no zone: the box's clock");
     }
 
     #[test]
@@ -1665,7 +1786,7 @@ mod tests {
 
     #[test]
     fn zip_names() {
-        let at = DateTime::parse_from_rfc3339("2026-12-01T21:14:00+00:00").unwrap();
+        let at = DateTime::parse_from_rfc3339("2026-12-01T21:14:00+00:00").unwrap().naive_utc();
         assert_eq!(entry_name(1, Some("Mia"), Some(at), Kind::Jpeg), "001-mia-2114.jpg");
         assert_eq!(entry_name(12, Some("Zoë-Ann  O'Neil"), Some(at), Kind::Png), "012-zoë-ann-o-neil-2114.png");
         assert_eq!(entry_name(3, None, Some(at), Kind::Webp), "003-guest-2114.webp");

@@ -233,7 +233,48 @@ IC = {
     "play": ["#.....", "###...", "#####.", "#####.", "###...", "#....."],
     "full": ["###..###", "#......#", "#......#", "........", "........", "#......#", "#......#", "###..###"],
     "arrow": ["....#...", ".....#..", "########", ".....#..", "....#..."],
+    "up": ["########", "...##...", "..####..", ".######.", "##.##.##", "#..##..#", "...##...", "...##...", "...##..."],
+    "cloud": [
+        "......####......", "....########....", "...##########...", ".#############..", "#######..#######",
+        "######....######", "#####......#####", "#######..#######", "#######..#######", ".######..######.",
+    ],
 }
+
+# One-click deploys on Railway: the two published templates from the README (Oleks's Railway workspace). Railway pays
+# the template's publisher a share of what deploys of it cost, so every Railway link on the site uses exactly these.
+# referralCode is Oleks's Railway referral code (Dashboard → Refer); the README buttons carry the same code.
+RAILWAY_KWANT = "https://railway.com/deploy/kwant-1?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant"
+RAILWAY_LAYA = "https://railway.com/deploy/kwant-laya?referralCode=1WRbgr&utm_medium=integration&utm_source=button&utm_campaign=kwant"
+
+
+def railway(uid, root, h="h3"):
+    """{{railway:ID}} or {{railway:ID:h2}}: the "run it on Railway" card, with the deploy button and the kwant + Laya
+    link. Its title is an h3 by default; pass h2 where the card sits right under the page's h1 (docs), so headings don't skip."""
+    kwant, laya = html.escape(RAILWAY_KWANT), html.escape(RAILWAY_LAYA)
+    return (
+        f'<aside class="cloud cloud-{uid} px" aria-labelledby="{uid}-cloud-title">'
+        f'<div class="cloud-art" aria-hidden="true">{px_icon(IC["cloud"], "cloud-pi")}</div>'
+        f'<div class="cloud-copy">'
+        f'<p class="cloud-k mono-label">No server needed</p>'
+        f'<{h} class="cloud-h" id="{uid}-cloud-title">Run kwant on Railway in one click</{h}>'
+        f'<p class="cloud-say">Railway sets up kwant, the bots\' private browser and a disk for your data, so routines '
+        f'keep going while your laptop sleeps. It makes your sign-in token too.</p>'
+        f'<div class="cloud-act">'
+        f'<a class="btn btn-violet px" href="{kwant}" rel="noopener">{px_icon(IC["up"])}'
+        f'<span>Deploy on Railway</span></a>'
+        f'<a class="cloud-alt" href="{laya}" rel="noopener">Or deploy with Laya, for smarter routing '
+        f'<span aria-hidden="true">→</span></a>'
+        f'</div>'
+        f'<p class="cloud-fine">New Railway accounts start with a free trial, then Railway bills you directly. '
+        f'Deploying with this button supports kwant: Railway shares part of what it charges with the project, at no '
+        f'extra cost to you. <a href="{root}docs/install.html#railway">How to sign in</a></p>'
+        f'</div>'
+        f'<div class="cloud-get" aria-label="What Railway sets up">'
+        f'<p class="mono-label">What you get</p><ul>'
+        + "".join(f'<li>{px_icon(IC["check"], "cloud-ok")}<span>{t}</span></li>' for t in (
+            "kwant, always on", "The bots' private browser", "A disk for your data", "Your sign-in token"))
+        + f'</ul></div></aside>'
+    )
 
 # The GitHub star count in the nav, read once per build. The build never needs the network: offline, rate-limited or
 # slow, it falls back to STARS_FALLBACK. KWANT_STARS=<n> pins it (KWANT_STARS=off skips the call).
@@ -426,6 +467,8 @@ def expand(body, root):
     body = body.replace("{{root}}", root)
     body = re.sub(r"\{\{(" + "|".join(OPERATOR) + r")\}\}", lambda m: operator(m[1]), body)
     body = re.sub(r"\{\{install:([a-z0-9-]+)\}\}", lambda m: install(m[1]), body)
+    body = re.sub(r"\{\{railway:([a-z0-9-]+)(?::(h[23]))?\}\}", lambda m: railway(m[1], root, m[2] or "h3"), body)
+    body = body.replace("{{railway_url}}", html.escape(RAILWAY_KWANT)).replace("{{railway_laya_url}}", html.escape(RAILWAY_LAYA))
     if "{{releases}}" in body:
         body = body.replace("{{releases}}", release_line())
     if "{{jump:versions}}" in body:

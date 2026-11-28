@@ -541,9 +541,9 @@ export function badgeUsageFor(
   return usageSummary(account, now, name);
 }
 
-/** The badge's diameter for an avatar of `size` px: none under 24, 14 at 28–34, larger on big avatars. */
+/** The badge's diameter for an avatar of `size` px: none under 24, 12 at 24–35 (small-avatar-badges), larger from 36. */
 export function modelBadgeSize(size: number): number | null {
   if (size < 24) return null;
-  if (size < 28) return 12;
+  if (size < 36) return 12; // small-avatar-badges: 12 px up to 35 px, then the old scale
   return Math.max(14, Math.min(28, Math.round(size * 0.28)));
 }
