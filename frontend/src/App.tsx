@@ -105,7 +105,7 @@ import { recentWork, teamMembersLeadFirst, type ChatHome } from './botHome';
 import { approvalsDiffers } from './components/Sidebar';
 import { botStatuses, busyLines } from './botStatus';
 import { auditShortLine, auditTurnLine } from './auditor';
-import { type H4Status, type HeldSend, afterRelease, applyBotStatusEvent, h4Api, heldFromReply, heldLine, heldMessages, stillHeld } from './h4Status';
+import { type H4Status, type HeldSend, afterRelease, applyBotStatusEvent, h4Api, heldFromReply, heldLine, heldMessages, stillHeld, withQuietLines } from './h4Status';
 import { HeldLine } from './components/HeldLine';
 import { type BrowsingMap, expireBrowsing, globeRows, noteBrowser, ownerStillRunning, pruneBrowsing, seedBrowsing, switchEntries } from './watchLive';
 import { LiveMissPage } from './components/WatchLive';
@@ -4114,7 +4114,12 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
   // Sidebar: what busy bots are doing, "here" for the open chat.
   const busyTitles: Record<string, string> = {};
-  const busyKwants = busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, tools: toolsTurns, describe: describeContext, names: kwantNames, titles: busyTitles });
+  // m7: a bot whose model has been silent 3 min says so instead of "Working …" (server `quiet`/`model_silent`).
+  const busyKwants = withQuietLines(
+    busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, tools: toolsTurns, describe: describeContext, names: kwantNames, titles: busyTitles }),
+    h4Status,
+    busyTitles,
+  );
   // A team turn waiting on one bot's question: its teammates that already replied read "Done" (UX audit #2).
   const doneKwants = doneLines(messages, awaitingBotHere, isChannel, (id) => botOf(id, kwants));
   const botStatus = botStatuses({ turns: Object.values(turns), awaiting: awaitingTurns, needsYou: needsYouByKwant });
