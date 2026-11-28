@@ -112,6 +112,30 @@ export function h4StuckLine(s: H4Status): string {
   return `Stuck: ${s.waits_on?.label ?? 'the AI'} stopped answering`;
 }
 
+/** m7: a bot whose model has sent nothing for 3 min (`quiet`/`model_silent`): "No word from Claude · 4:47 PM";
+ *  `full` spells out "since" for the tooltip. Without a time: "No word from Claude yet". */
+export function h4QuietLine(s?: H4Status | null, full = false): string | null {
+  if (s?.status !== 'quiet' || s.reason_code !== 'model_silent') return null;
+  const who = s.waits_on?.label ?? 'the AI';
+  const at = hhmm(s.since);
+  if (!at) return `No word from ${who} yet`;
+  return full ? `No word from ${who} since ${at}` : `No word from ${who} · ${at}`;
+}
+
+/** The sidebar's busy lines with a silent model's line in place of "Working …"; the old line moves to its tooltip. */
+export function withQuietLines(lines: Record<string, string>, status: Record<string, H4Status> | null | undefined, titles?: Record<string, string>): Record<string, string> {
+  if (!status) return lines;
+  let out = lines;
+  for (const [id, line] of Object.entries(lines)) {
+    const quiet = h4QuietLine(status[id]);
+    if (!quiet) continue;
+    if (out === lines) out = { ...lines };
+    out[id] = quiet;
+    if (titles) titles[id] = `${h4QuietLine(status[id], true)}. ${titles[id] ?? line}`;
+  }
+  return out;
+}
+
 /** When the bot became stuck, for "oldest first" inside rank 2. */
 export const h4StuckAt = (s: H4Status): number => Date.parse(s.stuck?.gave_up_at ?? s.since ?? '') || 0;
 

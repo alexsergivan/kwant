@@ -22,8 +22,11 @@ use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use tokio_util::sync::CancellationToken;
 
-/// A live-engine turn with no step for this long is Quiet.
+/// A live-engine turn with no step for this long is Quiet (while a tool runs or a hand-off waits).
 pub const QUIET_AFTER_MIN: i64 = 5;
+/// A live-engine turn that waits only on the model (no tool running) is Quiet sooner: `model_silent`.
+/// The API driver has no silence watchdog and retries only at its 300 s request timeout (m7).
+pub const MODEL_QUIET_AFTER_MIN: i64 = 3;
 /// From here Quiet is "long" (amber) and the Inbox FYI goes out, once per turn.
 pub const QUIET_LONG_MIN: i64 = 15;
 /// An engine that reports only at the end is Quiet after this long running.
@@ -378,7 +381,7 @@ pub struct Queue {
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 pub struct Quiet {
-    /// "short" (5–14 min) or "long" (15 min and more).
+    /// "short" (3 or 5 to 14 min) or "long" (15 min and more).
     pub level: &'static str,
     pub snoozed_until: Option<DateTime<Utc>>,
     pub muted: bool,
@@ -540,12 +543,14 @@ fn rank(status: &str) -> u8 {
 }
 
 /// Whether a turn is past its quiet threshold, ignoring snoozes: `Some(level)` if so.
+/// A live turn waiting only on the model goes quiet at 3 min, one with a running tool or hand-off at 5.
 fn quiet_level(t: &TurnInput, now: DateTime<Utc>) -> Option<&'static str> {
     let live = t.signals.live_steps.unwrap_or(true);
     let last = t.signals.last_step_at.unwrap_or(t.turn.since);
     if live {
         let idle = now - last;
-        (idle >= Span::minutes(QUIET_AFTER_MIN)).then_some(if idle >= Span::minutes(QUIET_LONG_MIN) { "long" } else { "short" })
+        let after = if t.running_tool.is_none() { MODEL_QUIET_AFTER_MIN } else { QUIET_AFTER_MIN };
+        (idle >= Span::minutes(after)).then_some(if idle >= Span::minutes(QUIET_LONG_MIN) { "long" } else { "short" })
     } else {
         (now - t.turn.since >= Span::minutes(NO_LIVE_QUIET_AFTER_MIN)).then_some("long")
     }
@@ -612,7 +617,11 @@ fn turn_status(kwant_id: &str, t: &TurnInput, now: DateTime<Utc>) -> Status {
                     Some(_) if quiet_allowed(sig, now) => Status::new(
                         kwant_id,
                         "quiet",
-                        if live { "no_step" } else { "no_live_steps" },
+                        match (live, &t.running_tool) {
+                            (false, _) => "no_live_steps",
+                            (true, None) => "model_silent",
+                            (true, Some(_)) => "no_step",
+                        },
                         Some(sig.last_step_at.unwrap_or(t.turn.since)),
                     ),
                     _ => Status::new(kwant_id, "working", code, Some(t.turn.since)),
@@ -1144,7 +1153,7 @@ mod tests {
     }
 
     fn bot(turns: Vec<TurnInput>) -> BotInput {
-        BotInput { kwant_id: "k1".into(), turns, questions: Vec::new(), marks: BotMarks::default(), held: Vec::new() }
+        BotInput { kwant_id: "k1".into(), turns, questions: Vec::new(), marks: BotMarks::default(), held: Vec::new(), limit_waits: Vec::new() }
     }
 
     fn question(id: &str, ctx: &str, asked: DateTime<Utc>, turn: Option<&str>) -> QuestionRef {
@@ -1181,6 +1190,7 @@ mod tests {
     fn quiet_starts_at_5_minutes_without_a_step_and_is_long_from_15() {
         let mut t = running("t1", at(0));
         t.signals.last_step_at = Some(at(10));
+        t.running_tool = Some("Bash".into());
         let b = bot(vec![t]);
         let at_min = |m: i64, secs: i64| compute(&b, at(m) + Span::seconds(secs));
         assert_eq!(at_min(14, 59).status, "working", "4 min 59 s is not quiet yet");
@@ -1190,6 +1200,66 @@ mod tests {
         assert_eq!(s.quiet.as_ref().unwrap().level, "short");
         assert_eq!(at_min(24, 59).quiet.unwrap().level, "short");
         assert_eq!(at_min(25, 0).quiet.unwrap().level, "long");
+    }
+
+    /// m7: a turn that waits only on the model (one streamed line, then nothing) says so at 3 min.
+    #[test]
+    fn a_silent_model_is_quiet_at_3_minutes_as_model_silent() {
+        let mut t = running("t1", at(0));
+        t.signals.last_step_at = Some(at(10));
+        let b = bot(vec![t]);
+        let at_min = |m: i64, secs: i64| compute(&b, at(m) + Span::seconds(secs));
+        let s = at_min(12, 59);
+        assert_eq!((s.status, s.reason_code), ("working", "thinking"), "2 min 59 s is not quiet yet");
+        assert!(s.quiet.is_none());
+        let s = at_min(13, 0);
+        assert_eq!((s.status, s.reason_code), ("quiet", "model_silent"));
+        assert_eq!(s.since, Some(at(10)), "Quiet counts from the last step");
+        assert_eq!(s.waits_on, Some(WaitsOn { kind: "model", label: Some("Claude".into()) }));
+        assert_eq!(s.quiet.as_ref().unwrap().level, "short");
+        assert_eq!(at_min(24, 59).quiet.unwrap().level, "short");
+        assert_eq!(at_min(25, 0).quiet.unwrap().level, "long", "long stays at 15 min");
+    }
+
+    #[test]
+    fn a_handoff_wait_keeps_the_5_minutes() {
+        let mut t = running("t1", at(0));
+        t.signals.last_step_at = Some(at(10));
+        t.running_tool = Some("mcp__kwnt__delegate".into());
+        let b = bot(vec![t]);
+        let s = compute(&b, at(14) + Span::seconds(59));
+        assert_eq!((s.status, s.reason_code), ("working", "waiting_for_bot"), "4 min 59 s is not quiet yet");
+        let s = compute(&b, at(15));
+        assert_eq!((s.status, s.reason_code), ("quiet", "no_step"));
+    }
+
+    #[test]
+    fn snooze_and_mute_hide_a_silent_model_too() {
+        let mut t = running("t1", at(0));
+        t.signals.last_step_at = Some(at(0));
+        t.signals.snooze_until = Some(at(10));
+        let s = compute(&bot(vec![t.clone()]), at(4));
+        assert_eq!((s.status, s.reason_code), ("working", "thinking"));
+        assert_eq!(s.quiet.as_ref().unwrap().snoozed_until, Some(at(10)));
+        assert_eq!(compute(&bot(vec![t.clone()]), at(10)).reason_code, "model_silent", "the snooze ran out");
+        t.signals.snooze_until = None;
+        t.signals.muted = true;
+        let s = compute(&bot(vec![t]), at(4));
+        assert_eq!((s.status, s.reason_code), ("working", "thinking"));
+        assert!(s.quiet.unwrap().muted);
+    }
+
+    #[test]
+    fn a_silent_model_gets_no_fyi_before_15_minutes() {
+        let mut t = running("t1", at(0));
+        t.signals.last_step_at = Some(at(0));
+        for m in [3, 5, 10, 14] {
+            assert_eq!(compute(&bot(vec![t.clone()]), at(m)).status, "quiet");
+            assert!(!fyi_due(&t, at(m) + Span::seconds(59)), "no FYI at {m} min");
+        }
+        assert!(fyi_due(&t, at(15)));
+        t.running_tool = Some("Bash".into());
+        assert!(fyi_due(&t, at(15)), "a running tool gets it at 15 min too");
     }
 
     #[test]
@@ -1383,6 +1453,49 @@ mod tests {
         let s = compute(&bot(vec![t]), at(2));
         assert_eq!((s.status, s.reason_code, s.since), ("queued", "in_line", Some(at(1))));
         assert_eq!(s.queue, Some(Queue { position: 2, reason: "server_busy".into() }));
+    }
+
+    fn limit_wait(retry_at: DateTime<Utc>, since: DateTime<Utc>) -> LimitWait {
+        LimitWait { retry_at, since }
+    }
+
+    #[test]
+    fn a_turn_parked_on_the_usage_limit_waits_for_it_with_the_retry_time() {
+        let mut b = bot(Vec::new());
+        b.marks.last_finished_at = Some(at(0));
+        b.limit_waits = vec![limit_wait(at(62), at(1)), limit_wait(at(60), at(2))];
+        let s = compute(&b, at(3));
+        assert_eq!((s.status, s.reason_code, s.since), ("queued", "usage_limit", Some(at(2))), "the earliest retry");
+        assert_eq!(s.back_at, Some(at(60)));
+        assert_eq!(s.waits_on, Some(WaitsOn { kind: "usage_limit", label: None }));
+        assert!(s.turn.is_none() && s.queue.is_none() && s.also.is_empty());
+        assert_eq!(s.last_finished_at, Some(at(0)));
+        let wire = json!(s);
+        assert_eq!(wire["back_at"], json!(at(60)), "{wire}");
+        assert_eq!(wire["waits_on"], json!({ "kind": "usage_limit" }), "{wire}");
+        // The retry ran (or the chat moved on): no pending row, so it's available again
+        b.limit_waits.clear();
+        let s = compute(&b, at(61));
+        assert_eq!((s.status, s.reason_code, s.since, s.back_at), ("available", "idle", Some(at(0)), None));
+        assert!(json!(s).get("back_at").is_none());
+    }
+
+    #[test]
+    fn a_running_turn_or_an_open_question_wins_over_a_usage_limit_wait() {
+        let mut b = bot(vec![running("t1", at(5))]);
+        b.limit_waits = vec![limit_wait(at(60), at(1))];
+        let s = compute(&b, at(6));
+        assert_eq!((s.status, s.reason_code, s.back_at), ("working", "thinking", None));
+        assert!(s.also.is_empty(), "the wait isn't listed beside a running turn");
+        let mut asked = bot(Vec::new());
+        asked.limit_waits = vec![limit_wait(at(60), at(1))];
+        asked.questions = vec![question("q1", "c9", at(2), None)];
+        let s = compute(&asked, at(3));
+        assert_eq!((s.status, s.reason_code, s.back_at), ("needs_you", "asked_question", None));
+        let mut gave_up = bot(Vec::new());
+        gave_up.limit_waits = vec![limit_wait(at(60), at(1))];
+        gave_up.marks.gave_up = Some(GaveUp { at: at(2), tries: 2, secs: 120, turn_id: "t0".into(), context_id: "c1".into(), thread_id: None });
+        assert_eq!(compute(&gave_up, at(3)).reason_code, "stalled_gave_up");
     }
 
     #[test]

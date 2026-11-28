@@ -215,3 +215,37 @@ impl Database {
         Ok(sqlx::query_as::<_, ParkedTurn>("SELECT * FROM parked_turns ORDER BY created_at").fetch_all(&self.pool).await?)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn turn(kwant: &str, thread: &str, retry_at: DateTime<Utc>, reason: &'static str) -> NewParkedTurn {
+        NewParkedTurn {
+            kwant_id: kwant.into(),
+            channel_id: None,
+            direct_kwant_id: None,
+            thread_id: Some(thread.into()),
+            delegation_id: None,
+            depth: 0,
+            prompt: "hi".into(),
+            retry_at,
+            reason,
+        }
+    }
+
+    #[tokio::test]
+    async fn only_pending_usage_limit_rows_count_as_a_limit_wait() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        let back = Utc::now() + chrono::Duration::hours(1);
+        let limit = db.park_turn(&turn("res", "th1", back, "usage_limit")).await.unwrap().unwrap();
+        db.park_turn(&turn("wri", "th2", back, "bot_budget")).await.unwrap().unwrap();
+        db.park_turn(&turn("ed", "th3", back, "restart")).await.unwrap().unwrap();
+        let waits = db.pending_usage_limit_parked().await.unwrap();
+        assert_eq!(waits.iter().map(|p| (p.kwant_id.as_str(), p.retry_at)).collect::<Vec<_>>(), vec![("res", limit.retry_at)]);
+        // A bot_budget hold keeps its own paused flow; once the retry runs, the wait is over
+        db.set_parked_status(&limit.id, "running").await.unwrap();
+        assert!(db.pending_usage_limit_parked().await.unwrap().is_empty());
+    }
+}
