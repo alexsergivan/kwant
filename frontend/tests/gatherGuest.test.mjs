@@ -18,7 +18,7 @@ for (const k of ['window', 'document', 'navigator', 'HTMLElement', 'HTMLInputEle
 
 const m = await loadBundled(`
   export { gatherFrom, screenOf, whoSees, nth, move, FOOD_LABELS } from './guest/src/gather/view';
-  export { GatherApp, avatarFor } from './guest/src/gather/app';
+  export { GatherApp, avatarFor, eachPrice, letGoLines } from './guest/src/gather/app';
 `);
 const settle = () => new Promise((r) => setTimeout(r, 0));
 const flush = async () => {
@@ -267,7 +267,7 @@ test('G2 in: summary, paid line only for them, who is coming, change my answer s
   assert.equal(t.screen(), 'in');
   assert.match(t.text(), /You're in, Mia!/);
   assert.match(t.$('[data-paid]').textContent, /Dana marked you as paid · Dec 4 · only you see this/);
-  assert.match(t.text(), /Who's coming 12 with plus-ones/);
+  assert.equal(t.$('#lbl-who small').textContent, '12, incl. 3 plus-ones', 'the heading already says coming');
   assert.equal(t.root.querySelectorAll('.who-grid li').length, 4);
   assert.match(t.text(), /Maybe: Ana/);
   assert.equal(holo(t), 0);
@@ -289,6 +289,33 @@ test('G2 without names: counts only', async () => {
   t.app.stop();
 });
 
+// m8 (signup-coming-count): `coming` already counts plus-ones, so name plus-ones only when there are some.
+// Names on, the heading "Who's coming" already says the verb, so the count drops it (Mira, copy-check.md 1).
+for (const [names, name, small] of [
+  [true, 'gather-rsvp-in', '#lbl-who small'],
+  [false, 'gather-rsvp-counts', '.lbl small'],
+]) {
+  for (const [yes, coming, want] of [
+    [1, 1, '1 coming'],
+    [9, 10, '10 coming, incl. 1 plus-one'],
+    [9, 11, '11 coming, incl. 2 plus-ones'],
+    [0, 0, '0 coming'],
+    [3, 2, '2 coming'], // odd counts: never "incl. -1"
+    [1200, 1203, '1,203 coming, incl. 3 plus-ones'],
+  ]) {
+    const line = names ? want.replace(' coming', '') : want;
+    test(`G2 names ${names ? 'on' : 'off'}: ${yes} yes, ${coming} coming says "${line}"`, async () => {
+      const t = harness(name);
+      t.box.seat.view.counts = { ...t.box.seat.view.counts, yes, coming };
+      await t.app.start(null);
+      await flush();
+      assert.equal(t.screen(), 'in');
+      assert.equal(t.$(small).textContent, line);
+      assert.doesNotMatch(t.text(), /with plus-ones/);
+      t.app.stop();
+    });
+  }
+}
 test('G3 sign-up: slot cards, full one is dashed with the waiting line, button says waiting list', async () => {
   const t = await open('gather-signup');
   assert.equal(t.screen(), 'join');
@@ -324,8 +351,119 @@ test('sign-up in: let the spot go asks twice', async () => {
   await click(t.$('[data-let-go]'));
   await click(t.$('[data-let-go-yes]'));
   assert.deepEqual(t.actions(), ['let_go']);
-  assert.equal(t.screen(), 'join');
+  assert.equal(t.screen(), 'let-go', 'what happened, not the empty form');
   t.app.stop();
+});
+
+async function openWith(name, tweak) {
+  const t = harness(name);
+  tweak(t.box);
+  await t.app.start(null);
+  await flush();
+  return t;
+}
+const letGo = async (t) => {
+  await click(t.$('[data-let-go]'));
+  await click(t.$('[data-let-go-yes]'));
+};
+
+test('let go with someone waiting (names on): the done panel names who moved up, one button, no dead form', async () => {
+  const t = await open('gather-moved');
+  assert.equal(t.screen(), 'moved');
+  await letGo(t);
+  assert.deepEqual(t.actions(), ['seen', 'let_go']);
+  assert.equal(t.screen(), 'let-go');
+  assert.equal(t.$('[data-let-go-done] h2').textContent, 'You let your Desserts spot go.');
+  assert.equal(document.activeElement, t.$('[data-let-go-done] h2'), 'focus on what happened');
+  assert.equal(t.$('[data-let-go-done] [role="status"]').textContent, 'Tom moved up.');
+  assert.equal(t.root.querySelectorAll('[data-let-go-done] button').length, 1);
+  assert.equal(t.$('[data-again]').textContent, 'Sign up for something else');
+  assert.equal(t.$('form'), null, 'no form');
+  assert.doesNotMatch(t.text(), /Keep my answer as it was/);
+  assert.equal(t.$('[data-bar]').textContent, 'Mia');
+  // The box pushes the same view again: still the done panel.
+  t.app.show(t.app.view);
+  assert.equal(t.screen(), 'let-go');
+  await click(t.$('[data-again]'));
+  assert.equal(t.screen(), 'join');
+  assert.equal(t.$('#g-note').value, '', 'typed note cleared');
+  assert.equal(t.root.querySelector('input[name="slot"]:checked'), null, 'no slot picked');
+  assert.equal(t.$('[data-cancel]'), null, 'no Keep my answer without a slot or place');
+  assert.equal(t.$('[data-to-rejoin]'), null, 'and no "joined before": they have a seat');
+  assert.equal(document.activeElement, t.$('input[name="slot"]'));
+  await pick(t.$('input[name="slot"][value="3"]'));
+  await submit(t.$('form'));
+  assert.equal(t.screen(), 'in');
+  assert.match(t.text(), /You're in: Drinks/);
+  t.app.stop();
+});
+
+test('let go with someone waiting (names off): the first person waiting has it now', async () => {
+  const t = await openWith('gather-moved', (b) => (b.seat.view.show_names = false));
+  await letGo(t);
+  assert.equal(t.screen(), 'let-go');
+  assert.equal(t.$('[data-let-go-done] h2').textContent, 'You let your Desserts spot go.');
+  assert.equal(t.$('[data-let-go-done] [role="status"]').textContent, 'The first person waiting has it now.');
+  assert.doesNotMatch(t.text(), /Tom/);
+  t.app.stop();
+});
+
+test('let go with nobody waiting: Nobody was waiting.', async () => {
+  const t = await open('gather-signup-in');
+  await letGo(t);
+  assert.equal(t.screen(), 'let-go');
+  assert.equal(t.$('[data-let-go-done] h2').textContent, 'You let your Drinks spot go.');
+  assert.equal(t.$('[data-let-go-done] [role="status"]').textContent, 'Nobody was waiting.');
+  t.app.stop();
+});
+
+test('leave a waiting list: the done line, one button; a refused let-go keeps the old screen', async () => {
+  const t = await open('gather-waiting');
+  await letGo(t);
+  assert.deepEqual(t.actions(), ['leave']);
+  assert.equal(t.screen(), 'let-go');
+  assert.equal(t.$('[data-let-go-done] h2').textContent, 'You left the waiting list for Desserts.');
+  assert.equal(t.$('[data-let-go-done] [role="status"]'), null);
+  assert.equal(t.root.querySelectorAll('[data-let-go-done] button').length, 1);
+  t.app.stop();
+  const r = await openWith('gather-signup-in', (b) => {
+    const real = b.handle.bind(b);
+    b.handle = (path, body, o) => (path === 'action' && body?.name === 'let_go' ? { status: 409, body: { error: 'not_now', message: 'Not now.' } } : real(path, body, o));
+  });
+  await letGo(r);
+  assert.notEqual(r.screen(), 'let-go');
+  r.app.stop();
+});
+
+test('letGoLines: a new name in the slot moved up; no count is made up', () => {
+  const before = map(viewOf('gather-moved'));
+  const after = structuredClone(before);
+  const s = after.facts.slots.find((x) => x.slot === 2);
+  s.people = s.people.filter((p) => p.id !== before.seat.id).concat([{ id: 'p9', name: 'Tom', avatar: 'visor' }]);
+  assert.deepEqual(m.letGoLines(before, after), { title: 'You let your Desserts spot go.', line: 'Tom moved up.' });
+  assert.deepEqual(m.letGoLines(before, undefined), { title: 'You let your Desserts spot go.', line: 'The first person waiting has it now.' });
+});
+
+test('m2 and m7: the price tile has no doubled "each"; slot names come before Full and the waiting count', async () => {
+  assert.equal(m.eachPrice('EUR 15 each'), 'EUR 15');
+  assert.equal(m.eachPrice('€15 Each.'), '€15');
+  assert.equal(m.eachPrice('€15, each'), '€15');
+  assert.equal(m.eachPrice('€15'), '€15');
+  assert.equal(m.eachPrice('each'), 'each', 'never empty');
+  assert.equal(m.eachPrice('€10 at the beach'), '€10 at the beach');
+  const r = await openWith('gather-rsvp', (b) => (b.s = { ...b.s, info: { ...b.s.info, price: 'EUR 15 each' } }));
+  const tiles = [...r.root.querySelectorAll('.fact')].map((x) => x.textContent);
+  assert.ok(tiles.includes('EachEUR 15'), tiles.join(' | '));
+  assert.doesNotMatch(tiles.join(' '), /15 each/i);
+  r.app.stop();
+  const s = await openWith('gather-signup', (b) => {
+    const slots = b.s.info.slots.map((x) => (x.slot === 2 ? { ...x, waiting: 1, waiting_people: [{ id: 'p7', name: 'Mae', avatar: 'visor' }] } : x));
+    b.s = { ...b.s, info: { ...b.s.info, slots } };
+  });
+  const line = s.root.querySelectorAll('.gslot')[2].textContent;
+  assert.match(line, /Leo, Ana · Full · 1 waiting/);
+  assert.doesNotMatch(line, /waiting · Leo/);
+  s.app.stop();
 });
 
 test('G4 waiting: the server position, the list, leave sends leave', async () => {

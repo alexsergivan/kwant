@@ -635,6 +635,12 @@ async fn offered_tools(state: &AppState, scope: &SelfScope) -> Value {
             list.push(super::santa_tool::tool());
         }
     }
+    // desk-create-from-chat: the front desk's one tool, behind the same switch (on, or naming `desk`)
+    if super::desk_tool::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
+            list.push(super::desk_tool::tool());
+        }
+    }
     // pa14b: a wall's two pick tools, only while this bot picks a wall's best 30
     if crate::pocket::wall_pick::picking_bot(state, &scope.kwant_id) {
         if let Some(list) = tools.as_array_mut() {
@@ -669,6 +675,12 @@ pub(crate) async fn self_tool_names(state: &AppState, scope: &SelfScope) -> Vec<
     if super::santa_tool::enabled(state).await {
         if let Some(list) = tools.as_array_mut() {
             list.push(super::santa_tool::tool());
+        }
+    }
+    // desk-create-from-chat: the front desk's one tool, behind the same switch (on, or naming `desk`)
+    if super::desk_tool::enabled(state).await {
+        if let Some(list) = tools.as_array_mut() {
+            list.push(super::desk_tool::tool());
         }
     }
     if crate::pocket::wall_pick::picking_bot(state, &scope.kwant_id) {
@@ -1573,6 +1585,7 @@ async fn call_tool(
         n if super::bot_actions::handles(n) => super::bot_actions::call(state, scope, n, args).await,
         n if super::quizmaster_tools::handles(n) => super::quizmaster_tools::call(state, scope, n, args).await,
         n if super::santa_tool::handles(n) => super::santa_tool::call(state, scope, args).await,
+        n if super::desk_tool::handles(n) => super::desk_tool::call(state, scope, args).await,
         n if super::smart_results::present_result_handles(n) => super::smart_results::present_result_call(state, scope, n, args).await,
         n if super::hires::handles(n) => super::hires::call(state, scope, n, args).await,
         n if super::missions::tools::handles(n) => super::missions::tools::call(state, scope, n, args).await,
@@ -2073,7 +2086,8 @@ pub struct Notification {
 
 /// Sends `n` to the UI, the webhook and push subscriptions, if the user wants this kind. The body never holds chat
 /// text, tool arguments or settings, so nothing secret reaches the phone service. The one exception (33e) is a
-/// reply's own closing `Blocked:` / `Done:` line, written for the person, masked for keys and clipped.
+/// reply's own closing `Blocked:` / `Done:` line, written for the person, masked for keys and clipped, and
+/// (pushes-say-what) a question's own text and choices, and a hand-off's task title, masked and clipped likewise.
 pub async fn notify(state: &AppState, n: Notification) {
     notify_in(state, n, None).await
 }
@@ -2437,9 +2451,18 @@ async fn saved_blocked(state: &AppState, kwant_id: &str, context: &str, reply: &
 
 /// What a turn of `kwant_id` in `context_id` that ended with `outcome` tells the person (33e):
 /// a failed turn "<bot> stopped"; a completed one "<bot> is blocked" when its reply ends Blocked,
-/// else "<bot> replied" (with its `Done:` line as the body when it has one). `None` for a
+/// else "<bot> replied" (with its `Done:` line as the body when it has one). A completed turn
+/// `turn_id` whose plain reply only handed work on says so: "<bot> handed “<task>” to
+/// <teammate>" (pushes-say-what), not "replied", which read as "done already?". `None` for a
 /// cancelled turn: the person stopped it.
-pub async fn turn_ended(state: &AppState, kwant_id: &str, context_id: Option<&str>, outcome: &str, reply: Option<&str>) -> Option<Notification> {
+pub async fn turn_ended(
+    state: &AppState,
+    kwant_id: &str,
+    context_id: Option<&str>,
+    outcome: &str,
+    reply: Option<&str>,
+    turn_id: Option<&str>,
+) -> Option<Notification> {
     if outcome == "failed" {
         return Some(
             turn_note(state, "turn_stopped", kwant_id, context_id, |name, where_| {
@@ -2456,8 +2479,47 @@ pub async fn turn_ended(state: &AppState, kwant_id: &str, context_id: Option<&st
             turn_note(state, "turn_stopped", kwant_id, context_id, |name, _| (format!("{name} is blocked"), format!("Blocked: {text}"))).await
         }
         ReplyEnd::Done(text) => Notification { body: format!("Done: {text}"), ..turn_finished(state, kwant_id, context_id).await },
-        ReplyEnd::Plain => turn_finished(state, kwant_id, context_id).await,
+        ReplyEnd::Plain => match handed_on(state, turn_id).await {
+            Some(what) => {
+                turn_note(state, "turn_finished", kwant_id, context_id, |name, where_| {
+                    (format!("{name} handed {what}"), format!("Results come back to {where_}."))
+                })
+                .await
+            }
+            None => turn_finished(state, kwant_id, context_id).await,
+        },
     })
+}
+
+/// What the lead's turn `turn_id` handed on with the `delegate` tool (its hand-offs'
+/// `lead_turn_id`), for its notification: "“<task>” to Researcher", "“<task>” to Researcher and
+/// Writer", "2 tasks to 3 teammates". `None` when it handed nothing on (a cancelled hand-off
+/// doesn't count).
+async fn handed_on(state: &AppState, turn_id: Option<&str>) -> Option<String> {
+    let handed = state.db.list_delegations_for_turn(turn_id?).await.ok()?;
+    let handed: Vec<_> = handed.iter().filter(|d| d.status != "cancelled").collect();
+    let mut titles: Vec<&str> = Vec::new();
+    let mut names: Vec<String> = Vec::new();
+    for d in &handed {
+        if !titles.contains(&d.title.as_str()) {
+            titles.push(&d.title);
+        }
+        let name = kwant_name(state, &d.specialist_kwant_id).await;
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    let what = match titles.as_slice() {
+        [] => return None,
+        [title] => format!("“{}”", clip(&super::missions::autofix::redact(title), 60)),
+        more => format!("{} tasks", more.len()),
+    };
+    let to = match names.as_slice() {
+        [one] => one.clone(),
+        [a, b] => format!("{a} and {b}"),
+        more => format!("{} teammates", more.len()),
+    };
+    Some(format!("{what} to {to}"))
 }
 
 async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Notification> {
@@ -2469,6 +2531,7 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
             thread_id,
             quiet,
             reply,
+            turn_id,
             ..
         } if (outcome == "completed" || outcome == "failed") && !quiet => {
             // A delegated task reports with delegation_finished instead
@@ -2477,7 +2540,7 @@ async fn notification_for(state: &AppState, event: &RuntimeEvent) -> Option<Noti
                     return None;
                 }
             }
-            turn_ended(state, kwant_id, context_id.as_deref(), outcome, reply.as_deref()).await
+            turn_ended(state, kwant_id, context_id.as_deref(), outcome, reply.as_deref(), turn_id.as_deref()).await
         }
         RuntimeEvent::ApprovalRequired {
             id, tool_name, details,

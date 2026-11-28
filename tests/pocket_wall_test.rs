@@ -855,3 +855,169 @@ async fn photos_go_thirty_days_after_the_end_and_at_once_on_delete() {
     assert!(r.status.is_success(), "{}", r.status);
     assert!(!t.data.join("pocket").join(&code2).exists());
 }
+
+// ---- wall-dates-agree (m11, m12, m14): one delete date, zip times on the person's clock, `when` as in gather ----
+// Brief: /home/maus/shared/ship-software-safely/autonomy/wall-dates-agree/brief.md
+
+async fn set_zone(t: &T, tz: &str) {
+    t.state.db.set_setting(kwnt::server::bot_actions::TIMEZONE_SETTING, tz).await.unwrap();
+}
+
+/// The person's card read: `{pocket, summary, host_view, ...}`.
+async fn card_of(t: &T, code: &str) -> Value {
+    let r = send(&t.main, "GET", &format!("/api/pockets/{code}"), B::None, &person()).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    r.body
+}
+
+#[tokio::test]
+async fn an_ended_wall_says_the_delete_date_its_chat_line_says() {
+    let t = setup().await;
+    let tz = "Pacific/Kiritimati";
+    set_zone(&t, tz).await;
+    // Uploads would stop in 20 days, but the host ends the wall now: the photos go 30 days from now
+    let closes = (Utc::now() + Duration::days(20)).to_rfc3339();
+    let (code, _) = make(&t, spec(json!({ "closes_at": closes }))).await;
+    let (_, a) = joined(&t, &code, "Ana").await;
+    let r = send(&t.main, "POST", &format!("/api/pockets/{code}/end"), B::None, &person()).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let card = card_of(&t, &code).await;
+    let ended: DateTime<Utc> = card["pocket"]["ended_at"].as_str().unwrap().parse().unwrap();
+    let expires: DateTime<Utc> = card["pocket"]["expires_at"].as_str().unwrap().parse().unwrap();
+    assert_eq!(expires, ended + Duration::days(30), "retention is unchanged");
+    let zone = pocket::schedule::Zone::parse(tz);
+    let day = zone.local(expires).date();
+    let want = day.to_string();
+    assert_eq!(card["host_view"]["delete_on"], want, "the host view: ended + 30 on the person's clock, not closes_at + 30");
+    assert_eq!(card["summary"]["delete_on"], want, "the card's summary");
+    assert_eq!(view_of(&t, &code, &a).await["view"]["delete_on"], want, "a guest's view");
+    let info = send(&t.guest, "GET", &format!("/api/pocket/{code}/info"), B::None, &Req::default()).await;
+    assert_eq!(info.body["view"]["delete_on"], want, "the lobby: {}", info.body);
+    // The chat line (the ended card) says the same day
+    let snap = pocket::snapshot(&t.state, &code).await.unwrap().unwrap();
+    let sched = t.state.db.pocket_schedule(&code).await.unwrap();
+    let block = pocket::schedule::ended_block(&snap, sched.as_ref(), &zone);
+    assert_eq!(block["ended"]["deletes_on"], day.format("%a, %b %-d").to_string());
+}
+
+#[tokio::test]
+async fn an_open_wall_still_forecasts_closes_at_plus_thirty_days() {
+    let t = setup().await;
+    let (code, _) = make(&t, spec(json!({ "closes_at": "2026-12-01T00:00:00Z" }))).await;
+    assert_eq!(card_of(&t, &code).await["host_view"]["delete_on"], "2026-12-31");
+    let (code, _) = make(&t, spec(json!({}))).await;
+    assert_eq!(card_of(&t, &code).await["host_view"]["delete_on"], Value::Null, "no stop yet, no date");
+}
+
+/// The zip's entry names, and the upload times of the approved photos, oldest first.
+async fn zip_names_and_times(t: &T, code: &str, a: &str) -> (Vec<String>, Vec<DateTime<Utc>>) {
+    let id = sent(t, code, a, &jpeg()).await;
+    host_act(t, code, "approve", json!({ "id": id })).await;
+    let r = send(&t.main, "GET", &format!("/api/pockets/{code}/wall.zip"), B::None, &person()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    let names = unzip(&r.bytes).into_iter().map(|e| e.0).collect();
+    let wall = card_of(t, code).await["host_view"]["wall"].as_array().unwrap().clone();
+    let mut at: Vec<DateTime<Utc>> = wall.iter().map(|p| p["at"].as_str().unwrap().parse().unwrap()).collect();
+    at.reverse();
+    (names, at)
+}
+
+#[tokio::test]
+async fn zip_names_use_the_persons_zone() {
+    let t = setup().await;
+    // Made before the person set a zone (its schedule zone is UTC), and after
+    let (before, _) = make(&t, spec(json!({}))).await;
+    set_zone(&t, "Europe/Ljubljana").await;
+    let (after, _) = make(&t, spec(json!({}))).await;
+    let lj = pocket::schedule::Zone::parse("Europe/Ljubljana");
+    for code in [before, after] {
+        let (_, a) = joined(&t, &code, "Ana").await;
+        let (names, at) = zip_names_and_times(&t, &code, &a).await;
+        let hhmm = lj.local(at[0]).format("%H%M").to_string();
+        assert_eq!(names, [format!("001-ana-{hhmm}.jpg")], "{code}: Ljubljana time, not the box's ({})", at[0]);
+    }
+}
+
+#[tokio::test]
+async fn zip_names_without_a_zone_keep_the_box_clock() {
+    let t = setup().await;
+    let (code, _) = make(&t, spec(json!({}))).await;
+    let (_, a) = joined(&t, &code, "Ana").await;
+    let (names, at) = zip_names_and_times(&t, &code, &a).await;
+    let hhmm = at[0].with_timezone(&chrono::Local).format("%H%M").to_string();
+    assert_eq!(names, [format!("001-ana-{hhmm}.jpg")]);
+}
+
+#[tokio::test]
+async fn a_walls_when_is_the_line_people_read_as_in_gather() {
+    let t = setup().await;
+    let post = |spec: Value| {
+        let t = &t;
+        async move { send(&t.main, "POST", "/api/pockets", B::Json(json!({ "kit": "wall", "spec": spec })), &person()).await }
+    };
+    // The line people read, with the time in event_at
+    let (code, _) = make(&t, spec(json!({ "when": "Sat, Dec 12, 7:30 PM", "event_at": "2026-12-12T19:30:00+01:00" }))).await;
+    let v = &card_of(&t, &code).await["host_view"];
+    assert_eq!(v["when_line"], "Sat, Dec 12, 7:30 PM");
+    assert_eq!(v["when"], "2026-12-12T18:30:00Z", "the pages still get the event's time as `when`");
+    // An RFC 3339 `when` with event_at set too: gather's sentence
+    let r = post(spec(json!({ "when": "2026-12-12T19:30:00+01:00", "event_at": "2026-12-12T19:30:00+01:00" }))).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.body);
+    assert_eq!(r.body["message"], "when is the line people read, like \"Sat, Dec 12, 7:30 PM\". Put the event's time in event_at.");
+    let r = post(spec(json!({ "when": "x".repeat(61) }))).await;
+    assert_eq!(r.status, StatusCode::BAD_REQUEST, "{}", r.body);
+    // Today's specs keep working: an RFC 3339 `when` alone moves to event_at, and the wall's times
+    // are planned from it as before (the lobby opens 30 minutes before)
+    let w = (Utc::now() + Duration::days(3)).with_timezone(&chrono::FixedOffset::east_opt(3600).unwrap());
+    let w = chrono::Timelike::with_nanosecond(&w, 0).unwrap();
+    let (code, _) = make(&t, spec(json!({ "when": w.to_rfc3339() }))).await;
+    let stored: Value = serde_json::from_str(&t.state.db.pocket_get(&code).await.unwrap().unwrap().spec).unwrap();
+    assert_eq!(stored.get("when"), None, "{stored}");
+    assert_eq!(stored["event_at"], w.to_rfc3339());
+    let card = card_of(&t, &code).await;
+    let opens: DateTime<Utc> = card["pocket"]["opens_at"].as_str().unwrap().parse().unwrap();
+    assert_eq!(opens, w.with_timezone(&Utc) - Duration::minutes(30));
+    assert_eq!(card["host_view"]["when"], json!(w.with_timezone(&Utc)));
+    assert_eq!(card["host_view"]["when_line"], Value::Null);
+    // A bare date `when` moves too
+    let (code, _) = make(&t, spec(json!({ "when": "2026-12-12" }))).await;
+    let stored: Value = serde_json::from_str(&t.state.db.pocket_get(&code).await.unwrap().unwrap().spec).unwrap();
+    assert_eq!((stored.get("when"), &stored["event_at"]), (None, &json!("2026-12-12")));
+    assert_eq!(card_of(&t, &code).await["host_view"]["when"], "2026-12-12T23:59:59Z");
+}
+
+// ---- wall-dates-followups (2, 3): Rigel's follow-ups on wall-dates-agree ----
+// Brief: /home/maus/shared/ship-software-safely/autonomy/wall-dates-followups/brief.md
+
+#[tokio::test]
+async fn zip_names_use_a_fixed_offset_walls_own_clock() {
+    let t = setup().await;
+    // An older bot's `when` with an offset and no TIMEZONE_SETTING: the schedule zone is +13:00
+    // (past, so the wall is open now). delete_on reads that offset; the zip must too.
+    let (code, _) = make(&t, spec(json!({ "when": "2026-01-10T19:00:00+13:00" }))).await;
+    let plus13 = pocket::schedule::Zone::parse("+13:00");
+    let (_, a) = joined(&t, &code, "Ana").await;
+    let (names, at) = zip_names_and_times(&t, &code, &a).await;
+    assert_eq!(names, [format!("001-ana-{}.jpg", plus13.local(at[0]).format("%H%M"))], "+13:00 time, not the box's ({})", at[0]);
+    // A setting made later doesn't move the wall's own clock
+    set_zone(&t, "Europe/Ljubljana").await;
+    let r = send(&t.main, "GET", &format!("/api/pockets/{code}/wall.zip"), B::None, &person()).await;
+    assert_eq!(r.status, StatusCode::OK);
+    assert_eq!(unzip(&r.bytes).into_iter().map(|e| e.0).collect::<Vec<_>>(), names);
+}
+
+#[tokio::test]
+async fn a_bare_date_when_with_event_at_is_the_line_people_read() {
+    let t = setup().await;
+    let (code, _) = make(&t, spec(json!({ "when": "2026-12-12", "event_at": "2026-12-12T19:30:00+01:00" }))).await;
+    let stored: Value = serde_json::from_str(&t.state.db.pocket_get(&code).await.unwrap().unwrap().spec).unwrap();
+    assert_eq!((&stored["when"], &stored["event_at"]), (&json!("2026-12-12"), &json!("2026-12-12T19:30:00+01:00")));
+    let v = &card_of(&t, &code).await["host_view"];
+    assert_eq!(v["when_line"], "2026-12-12", "the person's text shows: {v}");
+    assert_eq!(v["when"], "2026-12-12T18:30:00Z", "the event's time is event_at");
+    let (_, a) = joined(&t, &code, "Ana").await;
+    assert_eq!(view_of(&t, &code, &a).await["view"]["when_line"], "2026-12-12", "a guest's view");
+    // Without event_at the date is the event's time, as before: no line
+    let (code, _) = make(&t, spec(json!({ "when": "2026-12-12" }))).await;
+    assert_eq!(card_of(&t, &code).await["host_view"]["when_line"], Value::Null);
+}

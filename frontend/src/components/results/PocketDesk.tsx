@@ -11,6 +11,7 @@ import {
   BellRing,
   Check,
   ChevronLeft,
+  Clock3,
   ConciergeBell,
   Eye,
   FileText,
@@ -30,6 +31,7 @@ import {
   Trash2,
   Undo2,
   Wifi,
+  WifiOff,
   X,
   Zap,
 } from 'lucide-react';
@@ -40,7 +42,7 @@ import type { Mood } from '../../kwantMood';
 import { pocketApi, PocketApiError, type PocketRead } from '../../pocketApi';
 import { Bar, Callout, GHOST, HALF, ICON, LATER_CLS, LaterButton, LinkField, PRIMARY, Qr, Row, STOP } from './pocketParts';
 import { GuestCreature, HowTo, NoQuickLink, portOf, validSantaJoin } from './PocketSanta';
-import { bookingChip, bookingKey, FILL_DEFAULT, isSlotStart, requestsOf, slotsWire, slotWhen, todayKey, validBooking, weekOf, withBookingAnswers, type FillRule } from './deskBooking';
+import { bookingChip, bookingKey, FILL_DEFAULT, holdingOf, isSlotStart, requestsOf, slotsWire, slotWhen, todayKey, validBooking, weekOf, withBookingAnswers, type FillRule } from './deskBooking';
 import {
   BOOKING_CAP_LINE,
   BookingAllow,
@@ -98,6 +100,9 @@ export function validDeskGuest(v: unknown): DeskGuest | undefined {
   const g: DeskGuest = { id: v.id, name: v.name, creature: c!, waiting: v.waiting, handoff_reason: v.waiting ? reason! : null, last: last!, unread: unread!, msgs: msgs!, delete_on: del! };
   // pa13b: a hand-off naming a time the host hasn't listed. A malformed time is dropped, not the guest.
   if (v.waiting && isSlotStart(v.ask_slot_start)) g.ask_slot_start = v.ask_slot_start;
+  // desk-needs-you-buttons: what the wait is (Juno's desk-inbox-rows-server). Only a yes/no request gets a Yes.
+  const need = deskNeed(v.ask);
+  if (v.waiting && need) g.ask = need;
   return g;
 }
 
@@ -183,6 +188,7 @@ export function validDesk(v: unknown, fallbackTitle?: string): DeskInfo | undefi
     join: join!,
     needs_address: !!startError && START_ERRORS.has(startError),
     ended: ended!,
+    ...(deskActions(v.actions) ? { actions: deskActions(v.actions) } : {}),
   };
 }
 
@@ -205,6 +211,7 @@ const prevWire = (d: DeskInfo) => ({
   guide_preview: d.guide_preview,
   join: d.join,
   ended: d.ended,
+  ...(d.actions ? { actions: d.actions } : {}),
   ...(d.mode === 'booking' ? { mode: 'booking', slots: d.booking?.slots.map((x) => ({ ...x })) } : {}),
 });
 
@@ -234,7 +241,92 @@ export interface DeskItem {
   ask_slot_start?: string | null;
   /** The host's name, for "Nika confirmed your time." */
   host_name?: string | null;
+  /** desk-needs-you-buttons: "request" (a yes/no ask only the host can allow, e.g. a late check-out) or "daily_cap"
+   *  (the bot hit its daily limit). Absent on a plain hand-off and until the server sends it: then there is no Yes. */
+  need?: DeskNeed;
+  /** The host actions the server says this desk has (`book` turns on "Book a time for…"). Absent: none assumed. */
+  actions?: string[];
+  /** The guest already holds a confirmed time (server field `booked`, when it sends one). */
+  booked?: boolean;
+  /** desk-cap-row: on a `daily_cap` row, the guest's messages since the cap (n >= 1). Absent: no count is shown. */
+  waiting?: number;
+  /** desk-cap-row: the desk's current daily cap, if the row ever carries it (else the card reads it). */
+  daily_cap?: number;
+  /** desk-cap-row (Rigel P1): a cap row from a Booking Desk. It stays a cap row; only its kit label changes. */
+  booking_desk?: true;
 }
+
+/** Where a desk row's bot chat is (`direct_kwant_id` / `thread_id`). Kept beside the item, never on it, so the
+ *  rows keep no bot id in their data (pa13); only "Answer in Bell's chat" reads it. */
+export interface DeskChatLink {
+  kwant_id: string;
+  thread_id: string | null;
+}
+const deskChats = new WeakMap<DeskItem, DeskChatLink>();
+export const deskChat = (item: DeskItem): DeskChatLink | null => deskChats.get(item) ?? null;
+const botId = (v: unknown): v is string => typeof v === 'string' && /^[A-Za-z0-9_-]{1,64}$/.test(v);
+/** desk-cap-row: the next limit up: double the current cap (30 -> 60), at most DESK_CAP_MAX; 60 when it isn't known. */
+export const deskNextCap = (cap: number | null | undefined) => (typeof cap === 'number' && cap >= DESK_CAP_MIN ? Math.min(DESK_CAP_MAX, cap * 2) : 60);
+/** "13 messages wait" / "1 message waits". */
+export const deskWaitingLine = (n: number) => (n === 1 ? '1 message waits' : `${num(n)} messages wait`);
+
+/**
+ * desk-cap-row (Mira m2, Rigel P11/L2): the cap is desk-wide, so every cap row of one desk shares one value and one
+ * read. `null` = the read failed (the rows fall back to 60). A value older than a minute is read again on the next show.
+ */
+const capCache = new Map<string, { cap: number | null; at: number }>();
+const capReads = new Set<string>();
+const capListeners = new Set<() => void>();
+const CAP_FRESH_MS = 60_000;
+const capOf = (r: unknown): number | null => {
+  const c = isObj(r) && isObj(r.summary) && isObj(r.summary.counts) ? r.summary.counts.daily_cap : undefined;
+  return Number.isInteger(c) && (c as number) >= DESK_CAP_MIN && (c as number) <= DESK_CAP_MAX ? (c as number) : null;
+};
+export const deskCaps = {
+  /** undefined: not known yet. */
+  get: (code: string): number | null | undefined => capCache.get(code)?.cap,
+  set(code: string, cap: number | null) {
+    capCache.set(code, { cap, at: Date.now() });
+    capListeners.forEach((f) => f());
+  },
+  /** One read per desk at a time; a row that carries the cap seeds it instead. */
+  load(code: string, fromRow?: number) {
+    const have = capCache.get(code);
+    if (fromRow !== undefined) {
+      if (!have) deskCaps.set(code, fromRow);
+      return;
+    }
+    if ((have && Date.now() - have.at < CAP_FRESH_MS) || capReads.has(code)) return;
+    capReads.add(code);
+    pocketApi
+      .read(code)
+      .then((r) => deskCaps.set(code, capOf(r)))
+      .catch(() => deskCaps.set(code, have?.cap ?? null))
+      .finally(() => capReads.delete(code));
+  },
+  subscribe(f: () => void) {
+    capListeners.add(f);
+    return () => void capListeners.delete(f);
+  },
+  /** Tests only (deskAnswers.reset calls it). */
+  reset() {
+    capCache.clear();
+    capReads.clear();
+  },
+};
+function useDeskCap(code: string, fromRow?: number): number | null | undefined {
+  const [, setV] = useState(0);
+  useEffect(() => deskCaps.subscribe(() => setV((v) => v + 1)), []);
+  useEffect(() => deskCaps.load(code, fromRow), [code, fromRow]);
+  const c = deskCaps.get(code);
+  return c === undefined ? fromRow : c;
+}
+
+export type DeskNeed = 'request' | 'daily_cap';
+export const deskNeed = (v: unknown): DeskNeed | undefined => (v === 'request' || v === 'daily_cap' ? v : undefined);
+/** A server `actions` list: short action names only; anything else is dropped. */
+export const deskActions = (v: unknown): string[] | undefined =>
+  Array.isArray(v) ? v.filter((a): a is string => typeof a === 'string' && /^[a-z_]{1,32}$/.test(a)).slice(0, 32) : undefined;
 
 export function validDeskItems(body: unknown): DeskItem[] {
   const items = isObj(body) && Array.isArray(body.items) ? body.items : [];
@@ -247,8 +339,12 @@ export function validDeskItems(body: unknown): DeskItem[] {
     if (!words(it.text, 200) || !isText(it.asked_at, 60) || !isText(it.kwant_name, 40)) continue;
     // pa13b: a booking request is its own item (one per guest and time); a malformed one is skipped.
     // Vega sends `ask` with `mode`; a guide desk's item stays a guide item even if it ever carries `ask`.
-    const bookingItem = it.mode === undefined || it.mode === null ? it.ask === 'booking' || it.ask === 'handoff' : it.mode === 'booking';
+    // desk-cap-row (Rigel P1): a `daily_cap` row is a cap row whatever its mode; a booking desk sends mode "booking".
+    const need = deskNeed(it.ask);
+    const capRow = need === 'daily_cap';
+    const bookingItem = capRow ? false : it.mode === undefined || it.mode === null ? it.ask === 'booking' || it.ask === 'handoff' : it.mode === 'booking';
     const ask = bookingItem ? (it.ask === 'booking' ? 'booking' : 'handoff') : undefined;
+    const actions = deskActions(it.actions);
     const nested = isObj(it.booking) ? it.booking : {};
     const slotStart = isSlotStart(it.slot_start) ? it.slot_start : isSlotStart(nested.start) ? nested.start : null;
     const slotId = typeof it.slot === 'string' ? it.slot : typeof nested.slot === 'string' ? nested.slot : null;
@@ -257,7 +353,9 @@ export function validDeskItems(body: unknown): DeskItem[] {
     // One item per waiting guest, never one per message.
     if (seen.has(id)) continue;
     seen.add(id);
-    out.push({
+    const waiting = need === 'daily_cap' && Number.isInteger(it.waiting) && (it.waiting as number) >= 1 && (it.waiting as number) <= 100000 ? (it.waiting as number) : undefined;
+    const cap = Number.isInteger(it.daily_cap) && (it.daily_cap as number) >= DESK_CAP_MIN && (it.daily_cap as number) <= DESK_CAP_MAX ? (it.daily_cap as number) : undefined;
+    const item: DeskItem = {
       id,
       pocket_code: code,
       pocket_title: it.pocket_title,
@@ -268,6 +366,12 @@ export function validDeskItems(body: unknown): DeskItem[] {
       asked_at: it.asked_at,
       kwant_name: it.kwant_name,
       thread_id: typeof it.thread_id === 'string' && it.thread_id ? it.thread_id : null,
+      ...(need ? { need } : {}),
+      ...(actions ? { actions } : {}),
+      ...(it.booked === true ? { booked: true } : {}),
+      ...(waiting ? { waiting } : {}),
+      ...(capRow && cap ? { daily_cap: cap } : {}),
+      ...(capRow && it.mode === 'booking' ? { booking_desk: true as const } : {}),
       ...(ask
         ? {
             ask,
@@ -277,7 +381,10 @@ export function validDeskItems(body: unknown): DeskItem[] {
             host_name: isText(it.host_name, 40) ? it.host_name : null,
           }
         : {}),
-    });
+    };
+    const kw = botId(it.direct_kwant_id) ? it.direct_kwant_id : botId(it.kwant_id) ? it.kwant_id : null;
+    if (kw) deskChats.set(item, { kwant_id: kw, thread_id: item.thread_id });
+    out.push(item);
   }
   return out;
 }
@@ -287,7 +394,8 @@ export function validDeskItems(body: unknown): DeskItem[] {
 // for 5 s with Undo, then sent; leaving the screen sends at once. Every answer is optimistic and rolls back on failure.
 
 export const DESK_UNDO_MS = 5000;
-export const DESK_YES = 'Yes, that’s fine. Enjoy your last morning!';
+/** The plain Yes, only on a yes/no request (desk-needs-you-buttons): it fits any request, so it says nothing more. */
+export const DESK_YES = 'Yes, that’s fine.';
 export const DESK_SORRY = 'Sorry, that’s not possible this time.';
 export const DESK_FAILED = 'Couldn’t reach the box. Try again';
 
@@ -427,6 +535,7 @@ export const deskAnswers = {
     answers.clear();
     pending.clear();
     holdMs = ms;
+    deskCaps.reset();
     emit();
   },
 };
@@ -496,6 +605,8 @@ export function bookingMood(stage: DeskStage, d: DeskInfo, code: string): Mood {
 export const DESK_LATER = {
   paste: 'Pasting from a doc comes later. Paste the guide into the chat for now.',
   noLink: 'The link exists once the desk starts.',
+  /** A started desk whose box only answers this computer (no own https, Funnel or Wi-Fi address). */
+  noAddress: 'Phones can’t reach this desk yet: the box only answers this computer.',
   address: 'Start needs an address that stays the same: turn on Tailscale Funnel, or use the flat Wi-Fi only.',
 };
 
@@ -561,7 +672,7 @@ const GRID = 'grid grid-cols-2 gap-2 sm:flex sm:flex-wrap sm:items-center';
 const FULL = 'col-span-2 sm:col-span-1';
 const HALF_BTN = `kw-btn-ghost ${HALF}`;
 
-const DeskChip: React.FC<{ stage: DeskStage; d: DeskInfo; editing?: boolean; requests?: number }> = ({ stage, d, editing = false, requests }) => {
+const DeskChip: React.FC<{ stage: DeskStage; d: DeskInfo; editing?: boolean; requests?: number; handoffs?: number }> = ({ stage, d, editing = false, requests, handoffs: shownHandoffs }) => {
   if (d.mode === 'booking' && d.booking) {
     if (editing)
       return (
@@ -571,7 +682,8 @@ const DeskChip: React.FC<{ stage: DeskStage; d: DeskInfo; editing?: boolean; req
         </span>
       );
     if (stage === 'live' || stage === 'ready') {
-      const handoffs = d.guests.filter((g) => g.waiting).length;
+      // Hand-offs only: a guest asking for a listed time is already a request (from the answered bk.slots).
+      const handoffs = shownHandoffs ?? d.guests.filter((g) => g.waiting).length;
       // The answered view (a held Yes is no longer a request), so the chip agrees with the tiles.
       const text = bookingChip(requests ?? d.booking.requests, handoffs);
       return (
@@ -715,11 +827,11 @@ const KeepRows: React.FC<{ d: DeskInfo }> = ({ d }) => (
   </>
 );
 
-const TryAsGuest: React.FC<{ d: DeskInfo; half?: boolean }> = ({ d, half = true }) => {
+const TryAsGuest: React.FC<{ d: DeskInfo; half?: boolean; started?: boolean }> = ({ d, half = true, started = false }) => {
   const url = joinUrl(d);
   if (!url)
     return (
-      <LaterButton icon={<Eye size={14} aria-hidden="true" />} why={DESK_LATER.noLink} half={half}>
+      <LaterButton icon={<Eye size={14} aria-hidden="true" />} why={started ? DESK_LATER.noAddress : DESK_LATER.noLink} half={half}>
         Try as a guest
       </LaterButton>
     );
@@ -731,7 +843,7 @@ const TryAsGuest: React.FC<{ d: DeskInfo; half?: boolean }> = ({ d, half = true 
   );
 };
 
-const ShareLink: React.FC<{ d: DeskInfo }> = ({ d }) => {
+const ShareLink: React.FC<{ d: DeskInfo; started?: boolean }> = ({ d, started = false }) => {
   const url = joinUrl(d);
   const [state, setState] = useState<'copied' | 'failed' | null>(null);
   useEffect(() => {
@@ -741,7 +853,14 @@ const ShareLink: React.FC<{ d: DeskInfo }> = ({ d }) => {
   }, [state]);
   if (!url)
     return (
-      <button type="button" aria-disabled="true" title={DESK_LATER.noLink} aria-description={DESK_LATER.noLink} onClick={(e) => e.preventDefault()} className={`${PRIMARY} ${FULL} ${LATER_CLS}`}>
+      <button
+        type="button"
+        aria-disabled="true"
+        title={started ? DESK_LATER.noAddress : DESK_LATER.noLink}
+        aria-description={started ? DESK_LATER.noAddress : DESK_LATER.noLink}
+        onClick={(e) => e.preventDefault()}
+        className={`${PRIMARY} ${FULL} ${LATER_CLS}`}
+      >
         <Share2 size={14} aria-hidden="true" />
         Share link
       </button>
@@ -790,6 +909,48 @@ const JoinBox: React.FC<{ d: DeskInfo }> = ({ d }) => {
     </div>
   );
 };
+
+/** A started desk: the same link and a smaller QR under the guests, so the host can still print or send it. */
+export const DeskCompactJoin: React.FC<{ d: DeskInfo }> = ({ d }) => {
+  const url = joinUrl(d);
+  if (!url)
+    return (
+      <Callout tone="warn">
+        <p className="flex items-start gap-2" data-join="none">
+          <WifiOff size={15} className={`${ICON} text-warn`} aria-hidden="true" />
+          <span>{DESK_LATER.noAddress} Turn on Tailscale Funnel or set your own https address. Then the link and QR show here.</span>
+        </p>
+      </Callout>
+    );
+  const anywhere = !!d.join?.anywhere_url;
+  const Icon = anywhere ? Globe : Wifi;
+  return (
+    <div
+      className="grid grid-cols-[auto_minmax(0,1fr)] items-center gap-3 rounded-2xl border border-sky-800/70 bg-surface-rail/40 p-3.5 sm:gap-x-3.5 sm:gap-y-2"
+      data-join="compact"
+      data-join-mode={anywhere ? 'anywhere' : 'wifi'}
+    >
+      {/* Phone: QR + caption, then the link on its own full-width row so the host is readable. Desktop: QR spans both rows. */}
+      <div className="sm:row-span-2">
+        <Qr url={url} size="compact" name={d.title} />
+      </div>
+      <p className="flex items-start gap-1.5 text-[13px] leading-5 text-zinc-300 sm:self-end sm:text-meta">
+        <Icon size={14} className="mt-0.5 shrink-0 text-sky-300" aria-hidden="true" />
+        {anywhere ? 'The same link for every guest. Print the QR or send the link.' : 'Same Wi-Fi only: guests must be on the flat Wi-Fi to open it.'}
+      </p>
+      <div className="col-span-2 min-w-0 sm:col-span-1 sm:col-start-2 sm:self-start" data-join-link>
+        <LinkField url={url} />
+      </div>
+    </div>
+  );
+};
+
+/** "Yuki is still waiting." / "3 guests are still waiting." for the Stop confirm (m3); null when nobody waits. */
+export function stillWaitingLine(guests: DeskGuest[]): string | null {
+  const w = guests.filter((g) => g.waiting);
+  if (w.length === 0) return null;
+  return w.length === 1 ? `${w[0].name} is still waiting.` : `${num(w.length)} guests are still waiting.`;
+}
 
 // ---------------------------------------------------------------------------------------------------
 // Guest list (For Pixel 5): rows are buttons, newest activity first, the last line cut by CSS.
@@ -870,6 +1031,73 @@ const GuestList: React.FC<{ d: DeskInfo; only?: 'waiting'; onOpen: (id: string) 
 // ---------------------------------------------------------------------------------------------------
 // The Allow card (§3), in the card's state 6 and inline in the Inbox (state 10): the same component, the same store.
 
+/** The answered state of a desk row, shared by the Allow card and the cap row: "Sent to Yuki", "Closed. Nothing went to Yuki." */
+const DeskAnswered: React.FC<{ k: string; a: DeskAnswer; name: string }> = ({ k, a, name }) => (
+  <div className="flex flex-col items-end gap-1.5" data-allow={a.phase} role="status">
+    {a.text ? (
+      <div className="max-w-[300px] rounded-[14px_4px_14px_14px] border border-sky-600 bg-sky-800 px-3 py-2 text-[15px] leading-[22px] text-zinc-50 [overflow-wrap:anywhere] sm:max-w-[420px] sm:text-[13.5px] sm:leading-5" data-bubble="host">
+        {a.text}
+      </div>
+    ) : null}
+    <p className="flex items-center gap-2 text-[13px] text-zinc-400 sm:text-2xs">
+      {a.phase === 'sent' || a.kind === 'resolve' ? <Check size={12} aria-hidden="true" data-icon="sent" /> : <Clock3 size={12} aria-hidden="true" data-icon="waiting" />}
+      {a.kind === 'resolve'
+        ? `Closed. Nothing went to ${name}.`
+        : a.phase === 'holding'
+          ? `Sending to ${name} in 5\u00a0s`
+          : a.phase === 'sending'
+            ? `Sending to ${name}…`
+            : `Sent to ${name}`}
+      {a.phase === 'holding' && <span aria-hidden="true">·</span>}
+      {a.phase === 'holding' && (
+        <button type="button" onClick={() => deskAnswers.undo(k)} className="inline-flex min-h-[44px] items-center gap-1 rounded-lg px-2 font-semibold text-zinc-100 hover:bg-white/[0.05] kw-focus sm:min-h-[28px]" data-action="undo">
+          <Undo2 size={13} aria-hidden="true" />
+          Undo
+        </button>
+      )}
+    </p>
+  </div>
+);
+
+/** The reply box, shared by the Allow card and the cap row: Enter sends, Shift+Enter breaks the line, Esc closes. */
+const DeskReplyField: React.FC<{ k: string; name: string; onSend: (text: string) => void; onClose: () => void }> = ({ k, name, onSend, onClose }) => {
+  const [text, setText] = useState('');
+  const field = useRef<HTMLTextAreaElement | null>(null);
+  useEffect(() => field.current?.focus(), []);
+  const submit = () => {
+    const t = text.trim();
+    if (t) onSend(t);
+  };
+  return (
+    <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
+      <label className="sr-only" htmlFor={`reply-${k}`}>
+        Your reply to {name}
+      </label>
+      <textarea
+        id={`reply-${k}`}
+        ref={field}
+        rows={2}
+        maxLength={4000}
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' && !e.shiftKey) {
+            e.preventDefault();
+            submit();
+          }
+          if (e.key === 'Escape') onClose();
+        }}
+        placeholder={`Write to ${name}`}
+        className="min-h-[44px] w-full resize-y rounded-[10px] border border-sky-400 bg-surface-main px-3 py-2.5 text-[15px] leading-5 text-zinc-50 placeholder:text-zinc-500 kw-focus sm:text-[13.5px]"
+      />
+      <button type="button" onClick={submit} disabled={!text.trim()} className={`${PRIMARY} min-w-[44px]`} data-action="send">
+        <Send size={14} aria-hidden="true" />
+        Send
+      </button>
+    </div>
+  );
+};
+
 export const AllowCard: React.FC<{
   code: string;
   guest: string;
@@ -879,52 +1107,20 @@ export const AllowCard: React.FC<{
   bot: string;
   /** Hand-off time (RFC 3339): an answer older than this one doesn't count. */
   askedAt?: string | null;
-}> = ({ code, guest, name, reason, quote, bot, askedAt }) => {
+  /** desk-needs-you-buttons: offer "Yes, that's fine" (only for a yes/no request; never a question or the cap). */
+  yes?: boolean;
+}> = ({ code, guest, name, reason, quote, bot, askedAt, yes = false }) => {
   useDeskAnswers();
   const k = deskKey(code, guest);
   const a = deskAnswers.get(k);
   const answered = isAnswered(a, stamp(askedAt ?? null));
   const [writing, setWriting] = useState(false);
-  const [text, setText] = useState('');
-  const field = useRef<HTMLTextAreaElement | null>(null);
   // Leaving the screen sends a held answer at once.
   useEffect(() => () => deskAnswers.flush(k), [k]);
-  useEffect(() => {
-    if (writing) field.current?.focus();
-  }, [writing]);
-  if (answered && a) {
-    return (
-      <div className="flex flex-col items-end gap-1.5" data-allow={a.phase} role="status">
-        {a.text ? (
-          <div className="max-w-[300px] rounded-[14px_4px_14px_14px] border border-sky-600 bg-sky-800 px-3 py-2 text-[15px] leading-[22px] text-zinc-50 [overflow-wrap:anywhere] sm:max-w-[420px] sm:text-[13.5px] sm:leading-5" data-bubble="host">
-            {a.text}
-          </div>
-        ) : null}
-        <p className="flex items-center gap-2 text-[13px] text-zinc-400 sm:text-2xs">
-          <Check size={12} aria-hidden="true" />
-          {a.kind === 'resolve'
-            ? `Closed. Nothing went to ${name}.`
-            : a.phase === 'holding'
-              ? `Sent to ${name} · Undo for 5\u00a0s`
-              : a.phase === 'sending'
-                ? `Sending to ${name}…`
-                : `Sent to ${name}`}
-          {a.phase === 'holding' && (
-            <button type="button" onClick={() => deskAnswers.undo(k)} className="inline-flex min-h-[44px] items-center gap-1 rounded-lg px-2 font-semibold text-zinc-100 hover:bg-white/[0.05] kw-focus sm:min-h-[28px]" data-action="undo">
-              <Undo2 size={13} aria-hidden="true" />
-              Undo
-            </button>
-          )}
-        </p>
-      </div>
-    );
-  }
-  const submit = () => {
-    const t = text.trim();
-    if (!t) return;
+  if (answered && a) return <DeskAnswered k={k} a={a} name={name} />;
+  const send = (t: string) => {
     void deskAnswers.now(code, guest, 'reply', t);
     setWriting(false);
-    setText('');
   };
   return (
     <div className="flex flex-col gap-2.5 rounded-xl border border-hairline-strong bg-surface-raised p-3" data-allow="open" role="group" aria-label={`${name}: ${reason}`}>
@@ -947,38 +1143,15 @@ export const AllowCard: React.FC<{
         </p>
       )}
       {writing ? (
-        <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-2">
-          <label className="sr-only" htmlFor={`reply-${k}`}>
-            Your reply to {name}
-          </label>
-          <textarea
-            id={`reply-${k}`}
-            ref={field}
-            rows={2}
-            maxLength={4000}
-            value={text}
-            onChange={(e) => setText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-              if (e.key === 'Escape') setWriting(false);
-            }}
-            placeholder={`Write to ${name}`}
-            className="min-h-[44px] w-full resize-y rounded-[10px] border border-sky-400 bg-surface-main px-3 py-2.5 text-[15px] leading-5 text-zinc-50 placeholder:text-zinc-500 kw-focus sm:text-[13.5px]"
-          />
-          <button type="button" onClick={submit} disabled={!text.trim()} className={`${PRIMARY} min-w-[44px]`} data-action="send">
-            <Send size={14} aria-hidden="true" />
-            Send
-          </button>
-        </div>
+        <DeskReplyField k={k} name={name} onSend={send} onClose={() => setWriting(false)} />
       ) : (
         <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center" data-allow-actions>
-          <button type="button" onClick={() => deskAnswers.hold(code, guest, DESK_YES)} className={`kw-btn-ghost ${HALF} justify-center border-teal-400/40 text-ok`} data-action="yes">
-            <Check size={14} aria-hidden="true" />
-            Yes, that&rsquo;s fine
-          </button>
+          {yes && (
+            <button type="button" onClick={() => deskAnswers.hold(code, guest, DESK_YES)} className={`kw-btn-ghost ${HALF} justify-center border-teal-400/40 text-ok`} data-action="yes">
+              <Check size={14} aria-hidden="true" />
+              Yes, that&rsquo;s fine
+            </button>
+          )}
           <button type="button" onClick={() => deskAnswers.hold(code, guest, DESK_SORRY)} className={`${HALF_BTN} justify-center`} data-action="sorry">
             <X size={14} aria-hidden="true" />
             Sorry, not this time
@@ -1141,9 +1314,11 @@ const Conversation: React.FC<{ code: string; d: DeskInfo; guestId: string; onBac
             askedAt={handoffAt}
             askStart={fromList?.ask_slot_start ?? null}
             slots={booking.slots}
+            actions={d.actions ?? null}
+            booked={holdingOf(booking.slots, guestId)?.state === 'confirmed'}
           />
         ) : guest && (waiting || (a && a.phase !== 'sent' && isAnswered(a))) ? (
-          <AllowCard code={code} guest={guestId} name={guest.name} reason={guest.handoff_reason ?? `${d.bot.name} asked you to reply`} quote={lastGuestWords(conv)} bot={d.bot.name} askedAt={handoffAt} />
+          <AllowCard code={code} guest={guestId} name={guest.name} reason={guest.handoff_reason ?? `${d.bot.name} asked you to reply`} quote={lastGuestWords(conv)} bot={d.bot.name} askedAt={handoffAt} yes={fromList?.ask === 'request'} />
         ) : guest && a?.phase === 'sent' && a.text ? (
           <AllowCard code={code} guest={guestId} name={guest.name} reason="" quote={null} bot={d.bot.name} />
         ) : guest && writing ? (
@@ -1237,6 +1412,10 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
   // pa13b: a booking desk. The host's answers lie over the times at once; the request cards read the times as sent.
   const bkBase = d.mode === 'booking' && d.booking ? d.booking : null;
   const bk = useMemo(() => (bkBase ? withBookingAnswers(block.code, bkBase, deskAnswers.get) : null), [block.code, bkBase, deskAnswers.version()]); // eslint-disable-line react-hooks/exhaustive-deps
+  // A guest asking for a listed time has its own Allow card; the chip, the guest list and the tile count only hand-offs.
+  // From the answered view (bk.slots), so a local Yes doesn't put that guest back in as a hand-off until the next read.
+  const asking = new Set(bk ? bk.slots.flatMap((x) => x.requested.map((r) => r.guest)) : []);
+  const handoffs = d.guests.filter((g) => g.waiting && !asking.has(g.id));
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState<DeskSlot[]>(() => bkBase?.slots ?? []);
   const [monday, setMonday] = useState(() => weekOf(bkBase?.slots.find((x) => x.start.slice(0, 10) >= todayKey())?.start.slice(0, 10) ?? todayKey()));
@@ -1317,6 +1496,7 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
     try {
       const next = deskFromRead(base, await pocketApi.deskSetCap(block.code, cap));
       if (next) setFresh(next);
+      deskCaps.set(block.code, next?.desk.counts.daily_cap ?? cap);
       setRaising(false);
       setDone({ kind: 'ok', text: `${d.bot.name} can write ${num(next?.desk.counts.daily_cap ?? cap)} replies a day now.` });
     } catch (e) {
@@ -1330,6 +1510,8 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
   const kitName = bkBase ? 'Booking Desk' : 'Guest Guide';
   const conv = open && (stage === 'live' || stage === 'cap' || stage === 'stopped' || stage === 'ready');
   const firstWaiting = d.guests.find((g) => g.waiting);
+  // m3: stopping while a guest still waits for the host names them first (the Inbox row goes when the desk ends).
+  const waitingLine = stillWaitingLine(d.guests);
 
   const stopButton = (
     <button type="button" onClick={() => setConfirm('stop')} className={`${STOP} col-span-2 justify-self-center sm:ml-auto`} data-action="stop">
@@ -1448,7 +1630,6 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
     );
   } else if (bk && stage !== 'stopped') {
     const full = stage === 'cap';
-    const handoffs = d.guests.filter((g) => g.waiting);
     body = editing ? (
       <TimesEditor draft={draft} setDraft={setDraft} monday={monday} setMonday={setMonday} rule={rule} setRule={setRule} quickFill={false} refusal={refusal} setRefusal={setRefusal} />
     ) : (
@@ -1466,8 +1647,9 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
         ) : (
           <>
             <BookingRequests code={block.code} slots={bkBase!.slots} host={d.host_name ?? ''} bot={bot} creatures={Object.fromEntries(d.guests.map((g) => [g.id, g.creature]))} />
-            {handoffs.length > 0 && <GuestList d={d} only="waiting" onOpen={setOpen} />}
+            {handoffs.length > 0 && <GuestList d={{ ...d, guests: d.guests.filter((g) => !asking.has(g.id)) }} only="waiting" onOpen={setOpen} />}
             <LiveWeek slots={bk.slots} />
+            <DeskCompactJoin d={d} />
           </>
         )}
         {!conv && (
@@ -1509,12 +1691,12 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
       </div>
     ) : (
       <div className={GRID}>
-        <ShareLink d={d} />
+        <ShareLink d={d} started />
         <button type="button" onClick={editTimes} className={HALF_BTN} data-action="edit-times">
           <Pencil size={14} aria-hidden="true" />
           Edit times
         </button>
-        <TryAsGuest d={d} />
+        <TryAsGuest d={d} started />
         {stopButton}
       </div>
     );
@@ -1616,9 +1798,12 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
             <JoinBox d={d} />
           </>
         ) : (
-          <div ref={listRef}>
-            <GuestList d={d} only={full ? 'waiting' : undefined} onOpen={setOpen} />
-          </div>
+          <>
+            <div ref={listRef}>
+              <GuestList d={d} only={full ? 'waiting' : undefined} onOpen={setOpen} />
+            </div>
+            <DeskCompactJoin d={d} />
+          </>
         )}
         {stage !== 'ready' && !conv && (
           <ul className="flex flex-col gap-2">
@@ -1629,9 +1814,9 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
     );
     actions = (
       <div className={GRID}>
-        <ShareLink d={d} />
-        {stage === 'ready' ? <TryAsGuest d={d} /> : editGuide}
-        {stage === 'ready' ? editGuide : <TryAsGuest d={d} />}
+        <ShareLink d={d} started />
+        {stage === 'ready' ? <TryAsGuest d={d} started /> : editGuide}
+        {stage === 'ready' ? editGuide : <TryAsGuest d={d} started />}
         {stopButton}
       </div>
     );
@@ -1657,11 +1842,11 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
           <h3 className="text-[20px] font-bold leading-[26px] text-zinc-50 sm:text-[19px]">{d.title}</h3>
           <p className="text-[15px] text-zinc-300 sm:text-[13px]">{where}</p>
           <span className="mt-1.5 block sm:hidden">
-            <DeskChip stage={stage} d={d} editing={editing} requests={bk?.requests} />
+            <DeskChip stage={stage} d={d} editing={editing} requests={bk?.requests} handoffs={bk ? handoffs.length : undefined} />
           </span>
         </div>
         <span className="hidden shrink-0 sm:block">
-          <DeskChip stage={stage} d={d} editing={editing} requests={bk?.requests} />
+          <DeskChip stage={stage} d={d} editing={editing} requests={bk?.requests} handoffs={bk ? handoffs.length : undefined} />
         </span>
       </header>
       <div className="relative flex flex-col gap-4">
@@ -1673,7 +1858,15 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
           </p>
         ) : null}
         {confirm ? (
-          <div className="flex flex-col gap-2.5 rounded-xl border border-hairline-strong bg-surface-rail/60 p-3" role="group" aria-label={confirm === 'stop' ? 'Stop the desk?' : 'Delete the chats now?'} data-confirm={confirm}>
+          <div className="flex flex-col gap-2.5 rounded-xl border border-hairline-strong bg-surface-rail/60 p-3" role="group" aria-label={confirm === 'stop' ? (waitingLine ? `${waitingLine} Stop anyway?` : 'Stop the desk?') : 'Delete the chats now?'} data-confirm={confirm} data-waiting={confirm === 'stop' && waitingLine ? 'yes' : undefined}>
+            {confirm === 'stop' && waitingLine && (
+              <p className={`flex items-start gap-2 font-semibold text-zinc-50 ${P}`} data-still-waiting>
+                <AlertTriangle size={15} className={`${ICON} text-warn`} aria-hidden="true" />
+                <span>
+                  {waitingLine} Stop anyway?
+                </span>
+              </p>
+            )}
             <p className={P}>
               {confirm === 'stop'
                 ? bk
@@ -1693,10 +1886,20 @@ export const DeskCard: React.FC<{ block: PocketBlock; ask: (t: string) => void; 
                 className={STOP}
                 data-action={`confirm-${confirm}`}
               >
-                {confirm === 'stop' ? 'Stop the desk' : 'Delete chats now'}
+                {confirm === 'stop' ? (waitingLine ? 'Stop anyway' : 'Stop the desk') : 'Delete chats now'}
               </button>
-              <button type="button" disabled={busy} onClick={() => setConfirm(null)} className={GHOST}>
-                {confirm === 'stop' ? 'Keep it open' : 'Keep them'}
+              <button
+                type="button"
+                disabled={busy}
+                onClick={() => {
+                  setConfirm(null);
+                  // Keep it open and go straight to the guest who waits.
+                  if (confirm === 'stop' && waitingLine && firstWaiting) setOpen(firstWaiting.id);
+                }}
+                className={GHOST}
+                data-action={confirm === 'stop' && waitingLine ? 'answer-first' : 'keep'}
+              >
+                {confirm === 'stop' ? (waitingLine ? (d.guests.filter((g) => g.waiting).length === 1 ? `Answer ${firstWaiting!.name}` : 'Answer them first') : 'Keep it open') : 'Keep them'}
               </button>
             </div>
           </div>
@@ -1774,9 +1977,127 @@ const SetupParts: React.FC<{ d: DeskInfo; cap: number; setCap: (n: number) => vo
 // ---------------------------------------------------------------------------------------------------
 // Inbox (state 10): one row per waiting guest with the Allow card inline; the Done row.
 
-export const DeskNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => (item.ask ? <BookingNeedsRow item={item} /> : <GuideNeedsRow item={item} />);
+/** `onOpenChat` is the Inbox's opener for the desk bot's chat. Not shown on any row yet: the cap row gets "Open Yuki's chat"
+ *  back with desk-host-reply-composer (Mira F1). */
+export const DeskNeedsRow: React.FC<{ item: DeskItem; onOpenChat?: (item: DeskItem, link: DeskChatLink) => void }> = ({ item, onOpenChat }) =>
+  item.ask ? <BookingNeedsRow item={item} /> : <GuideNeedsRow item={item} onOpenChat={onOpenChat} />;
 
-const GuideNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
+/**
+ * desk-cap-row: the daily-limit row. "Daily limit reached · 13 messages wait", "Raise the limit to 60" (set_cap, the
+ * card's own call), "Write a reply" (`reply`) and "No reply needed" (`resolve`). No Yes, Sorry or Book (Mira F1): a raise
+ * never answers the waiting guest, only a reply or a close clears the row. "Answer in Bell's chat" stays off until
+ * desk-host-reply-composer lets the host reply to the guest from that thread (`onOpenChat` / `deskChat` are kept for it).
+ */
+const CapCard: React.FC<{ item: DeskItem }> = ({ item }) => {
+  useDeskAnswers();
+  const code = item.pocket_code;
+  const guest = item.guest_id;
+  const name = item.guest_name;
+  const k = deskKey(code, guest);
+  const a = deskAnswers.get(k);
+  const cap = useDeskCap(code, item.daily_cap);
+  const [busy, setBusy] = useState(false);
+  const [writing, setWriting] = useState(false);
+  const [done, setDone] = useState<{ kind: 'ok' | 'error'; text: string } | null>(null);
+  if (a && isAnswered(a, stamp(item.asked_at))) return <DeskAnswered k={k} a={a} name={name} />;
+  const known = cap !== undefined;
+  const next = deskNextCap(cap);
+  const atMost = typeof cap === 'number' && cap >= DESK_CAP_MAX;
+  const bot = item.kwant_name;
+  // Mira F2: a raise only lets the bot answer new messages; the waiting ones stay with the host (desk.rs set_cap).
+  const still = item.waiting && item.waiting >= 2 ? `${name}’s ${num(item.waiting)} still need you` : item.waiting === 1 ? `${name}’s message still needs you` : `${name}’s waiting messages still need you`;
+  const raise = async () => {
+    setBusy(true);
+    setDone(null);
+    try {
+      const r = await pocketApi.deskSetCap(code, next);
+      const now = capOf(r) ?? next;
+      deskCaps.set(code, now);
+      setDone({ kind: 'ok', text: `Limit raised to ${num(now)}. ${bot} answers new messages again; ${still}.` });
+    } catch (e) {
+      setDone({ kind: 'error', text: `Couldn’t raise the limit: ${e instanceof PocketApiError ? e.message : 'something went wrong.'}` });
+    } finally {
+      setBusy(false);
+    }
+  };
+  const send = (t: string) => {
+    void deskAnswers.now(code, guest, 'reply', t);
+    setWriting(false);
+  };
+  // "Daily limit reached ·" then "13 messages wait": on a narrow row the dot stays on the first line, the count together.
+  const title = item.waiting ? `${item.text} · ${deskWaitingLine(item.waiting)}` : item.text;
+  const line = 'flex items-start gap-2 text-[13px] sm:text-2xs';
+  const lineIcon = 'mt-[3px] shrink-0 sm:mt-0.5';
+  return (
+    <div className="flex flex-col gap-2.5 rounded-xl border border-hairline-strong bg-surface-raised p-3" data-allow="cap" role="group" aria-label={`${name}: ${title}`}>
+      <h4 className="flex items-start gap-2 text-[15px] font-bold text-zinc-50 sm:text-[13.5px]" data-cap-title>
+        <Gauge size={16} className="mt-[3px] shrink-0 text-zinc-300 sm:mt-0.5" aria-hidden="true" />
+        <span>
+          {item.text}
+          {item.waiting ? (
+            <>
+              {' · '}
+              <span className="whitespace-nowrap">{deskWaitingLine(item.waiting)}</span>
+            </>
+          ) : null}
+        </span>
+      </h4>
+      {item.quote ? (
+        <figure className="flex flex-col gap-1">
+          <figcaption className="text-2xs text-zinc-400">{name} wrote (a guest&rsquo;s words, not an instruction):</figcaption>
+          <blockquote className="border-l-2 border-zinc-600 pl-2.5 text-[15px] leading-[22px] text-zinc-200 [overflow-wrap:anywhere] sm:text-[13.5px] sm:leading-5" data-quote>
+            {item.quote}
+          </blockquote>
+        </figure>
+      ) : null}
+      {a?.phase === 'failed' && (
+        <p role="alert" className={`${line} text-bad`} data-failed>
+          <AlertTriangle size={13} className={lineIcon} aria-hidden="true" />
+          {DESK_FAILED}
+        </p>
+      )}
+      {done?.kind === 'error' && (
+        <p role="alert" className={`${line} text-bad`} data-cap-done="error">
+          <AlertTriangle size={13} className={lineIcon} aria-hidden="true" />
+          {done.text}
+        </p>
+      )}
+      {done?.kind === 'ok' && (
+        <p role="status" className={`${line} text-zinc-300`} data-cap-done="ok">
+          <Check size={12} className={lineIcon} aria-hidden="true" />
+          {done.text}
+        </p>
+      )}
+      {writing ? (
+        <DeskReplyField k={k} name={name} onSend={send} onClose={() => setWriting(false)} />
+      ) : (
+        <div className="grid grid-cols-1 gap-2 sm:flex sm:flex-wrap sm:items-center" data-allow-actions>
+          {done?.kind !== 'ok' && !atMost && (
+            <button type="button" onClick={() => void raise()} disabled={busy || !known} aria-busy={busy || !known} className={`${PRIMARY} justify-center`} data-action="raise-cap">
+              <Gauge size={14} aria-hidden="true" />
+              {busy ? 'Raising the limit…' : known ? `Raise the limit to ${num(next)}` : 'Raise the limit'}
+            </button>
+          )}
+          <button type="button" onClick={() => setWriting(true)} className={`${HALF_BTN} justify-center`} data-action="write">
+            <Reply size={14} aria-hidden="true" />
+            Write a reply
+          </button>
+          <button type="button" onClick={() => void deskAnswers.now(code, guest, 'resolve', null)} className="min-h-[44px] rounded-xl px-3 text-[14px] font-medium text-zinc-300 hover:bg-white/[0.04] kw-focus sm:min-h-[36px] sm:text-meta" data-action="resolve">
+            No reply needed
+          </button>
+        </div>
+      )}
+      <p className={SMALL}>
+        {atMost
+          ? `The limit is already ${num(DESK_CAP_MAX)}, the most a desk can have. ${bot} answers again tomorrow. `
+          : `Each answer from ${bot} uses your plan, so a higher limit can use more of it. `}
+        Your reply goes to {name} as you, marked &ldquo;host&rdquo;.
+      </p>
+    </div>
+  );
+};
+
+const GuideNeedsRow: React.FC<{ item: DeskItem; onOpenChat?: (item: DeskItem, link: DeskChatLink) => void }> = ({ item }) => {
   useDeskAnswers();
   const a = deskAnswers.get(deskKey(item.pocket_code, item.guest_id));
   // Sent: the row goes; held or sending: it stays, so Undo is still in reach.
@@ -1788,7 +2109,7 @@ const GuideNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
         <div className="min-w-0 flex-1">
           <div className="truncate text-[15px] font-semibold text-zinc-100 sm:text-[14px]">{item.guest_name} needs you</div>
           <div className="truncate text-[13px] text-zinc-400 sm:text-2xs">
-            {item.pocket_title} · Guest Guide · {shortWhen(item.asked_at)}
+            {item.pocket_title} · {item.booking_desk ? 'Booking Desk' : 'Guest Guide'} · {shortWhen(item.asked_at)}
           </div>
         </div>
         <span className="kw-chip shrink-0" data-chip="needs-you">
@@ -1797,7 +2118,11 @@ const GuideNeedsRow: React.FC<{ item: DeskItem }> = ({ item }) => {
         </span>
       </div>
       <div className="px-3 pb-3">
-        <AllowCard code={item.pocket_code} guest={item.guest_id} name={item.guest_name} reason={item.text} quote={item.quote} bot={item.kwant_name} askedAt={item.asked_at} />
+        {item.need === 'daily_cap' ? (
+          <CapCard item={item} />
+        ) : (
+          <AllowCard code={item.pocket_code} guest={item.guest_id} name={item.guest_name} reason={item.text} quote={item.quote} bot={item.kwant_name} askedAt={item.asked_at} yes={item.need === 'request'} />
+        )}
       </div>
     </li>
   );

@@ -10,7 +10,7 @@ import { book, joinCopy, Line, longCopy, names, Names, noteCopy, offCopy, sayCop
 import { bell, dIcon, Mood } from './look';
 import { clientId, Out, Outbox, Store } from './outbox';
 import { closedPick, Pick, picker } from './picker';
-import { chipLabel, openSlots, timeLabel, whenLabel } from './slots';
+import { chipLabel, notPast, openSlots, timeLabel, whenLabel } from './slots';
 import { bookingFrom, deskFrom, DeskView, Msg, Screen, screenOf, slotsFrom } from './view';
 import { bookingWhen, strip } from './strip';
 
@@ -149,6 +149,7 @@ export class DeskApp {
 
   show(v: DeskView): void {
     if (this.gone) return;
+    const lost = this.lostPick(v);
     this.view = v;
     if (v.me) {
       this.hadSeat = true;
@@ -164,6 +165,27 @@ export class DeskApp {
       this.pick = closedPick();
     }
     this.paint();
+    // m1: the picked time went while the sheet was open. Its button is gone, so focus would fall out of the sheet
+    // (Esc would stop working): it lands on the notice instead, as after a 409. Typing in the note keeps its focus.
+    if (lost && this.pick.open) {
+      const sheet = this.root.querySelector('[data-sheet]');
+      if (!sheet?.contains(document.activeElement)) this.root.querySelector<HTMLElement>('[data-taken], [data-pick-say]')?.focus();
+    }
+  }
+
+  /** m1 (pa13b K10): a live view without the picked time open any more clears the pick and says why, like the 409 does.
+   * Not while our own request is on its way (its answer says what happened) or when the time is now ours. */
+  private lostPick(v: DeskView): boolean {
+    const p = this.pick;
+    if (!p.open || !p.slot || p.busy || v.ended || v.my_booking?.slot === p.slot) return false;
+    const now = v.slots.find((s) => s.id === p.slot);
+    if (now?.open) return false;
+    const was = now ?? this.view?.slots.find((s) => s.id === p.slot);
+    p.slot = '';
+    if (now) p.notice = { kind: 'taken', time: timeLabel(now) };
+    else if (was && !notPast(was, this.env.now())) p.notice = { kind: 'say', text: book.slot_past };
+    else p.notice = { kind: 'say', text: book.no_slot(names(v)) };
+    return true;
   }
 
   private async onGone(status: number, error?: string): Promise<void> {
@@ -357,7 +379,7 @@ export class DeskApp {
   /** Draws the screen when something it shows changed. Typing never redraws; focus, caret and the thread's place survive. */
   paint(force = false): void {
     const scr = this.screenNow();
-    const sig = JSON.stringify([scr, this.view, this.problem, this.busy, this.bd.reset, this.outbox.items, this.isSlow(), this.slowUntil, this.sayErr, this.away?.tries, { ...this.pick, note: 0 }, this.asking, this.cancelBusy, this.stripSay]);
+    const sig = JSON.stringify([scr, this.view, this.problem, this.busy, this.bd.reset, this.outbox.items, this.isSlow(), this.slowUntil, this.isSlow() && !!this.draft.trim(), this.sayErr, this.away?.tries, { ...this.pick, note: 0 }, this.asking, this.cancelBusy, this.stripSay]);
     if (!force && sig === this.sig) return;
     this.sig = sig;
     const active = document.activeElement as HTMLInputElement | null;
@@ -741,9 +763,10 @@ export class DeskApp {
     if (v.waiting) items.push(h('p', { class: 'waitpill', role: 'status', 'data-waiting': '' }, dIcon('clock'), `Waiting for ${n.host}`));
     const slow = this.isSlow();
     if (slow) {
-      const c = slowCopy(this.slowUntil!);
+      // m8: "still here" only when the composer really holds the refused message (a reload during G6 empties it).
+      const c = slowCopy(this.slowUntil!, !!this.draft.trim());
       items.push(
-        h('div', { class: 'gnote warn', role: 'status', 'data-slow': '' }, dIcon('clock'), h('span', null, h('b', null, c.lead), ' You can write again at ', h('b', null, c.time || 'soon'), `. ${c.rest}`)),
+        h('div', { class: 'gnote warn', role: 'status', 'data-slow': '' }, dIcon('clock'), h('span', null, h('b', null, c.lead), ' You can write again at ', h('b', null, c.time || 'soon'), c.rest ? `. ${c.rest}` : '.')),
       );
     }
     const thread = h('div', { class: 'thread', role: 'log', 'aria-label': `Chat with ${n.bot}`, 'aria-live': 'polite', tabindex: 0 }, items);
@@ -889,7 +912,7 @@ export class DeskApp {
       input.setAttribute('aria-invalid', over ? 'true' : 'false');
       send.disabled = slow || over || !this.draft.trim();
       send.classList.toggle('off', send.disabled);
-      if (slow) hint.replaceChildren(h('span', null, slowCopy(this.slowUntil!).hint));
+      if (slow) hint.replaceChildren(h('span', null, slowCopy(this.slowUntil!, !!this.draft.trim()).hint));
       else if (over) hint.replaceChildren(h('span', null, this.bold(longCopy(max))), h('span', { class: 'over' }, `${fmt(len)} / ${fmt(max)}`));
       else if (this.sayErr) hint.replaceChildren(h('span', { role: 'alert' }, this.sayErr));
       else hint.replaceChildren();

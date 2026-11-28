@@ -9,6 +9,8 @@ card_art: avatar:devops
 <p class="kicker">Docs</p>
 <h1>Install &amp; run on a laptop, VPS or Docker</h1>
 <p class="intro"><code>kwnt</code> is one self-contained binary with the web app and SQLite built in. Build it once, then run it on your own computer or on a server. New to this? Read <a href="../self-hosted-ai-agents.html">what self-hosting an AI agent team involves</a>.</p>
+<p class="note">We earn commissions when you shop through the links below.</p>
+{{railway:install:h2}}
 
 <h2 id="build">Build the release binary</h2>
 <pre><code>make build
@@ -105,6 +107,8 @@ card_art: avatar:devops
 </ul>
 
 <h2 id="vps">On a VPS</h2>
+<h3 id="digitalocean">Run kwant on a DigitalOcean Droplet</h3>
+<p>A 2 GB Droplet is enough for kwant. If you also run Laya, pick 4 GB. <a href="https://www.awin1.com/cread.php?awinmid=123996&amp;awinaffid=3169369&amp;ued=https%3A%2F%2Fwww.digitalocean.com%2F" rel="sponsored noopener">Create a DigitalOcean account</a>, then follow the Docker or binary steps below. A DigitalOcean 1-Click App is coming soon.</p>
 <pre><code><span class="c"># 1. Copy the binary to your server</span>
 scp target/release/kwnt user@your-vps:/usr/local/bin/kwnt
 
@@ -158,6 +162,15 @@ docker compose exec kwnt kwnt token --raw             <span class="c"># the toke
 <p><strong>The released image.</strong> Since 0.7.6, <code>docker compose up -d</code> without <code>--build</code> pulls the released kwnt image, <code>ghcr.io/alexsergivan/kwnt</code>, instead of building it here. It has no AI CLIs inside, so add an API key in the app, or build with <code>KWNT_CLIS</code> as above. To pin a version, set <code>KWNT_VERSION=0.7.7</code> in <code>.env</code>. To update: <code>docker compose pull kwnt &amp;&amp; docker compose up -d</code>.</p>
 <p>Instead of CLIs you can add an API key in the app under <strong>Settings → This space → Accounts</strong>. CLI sign-ins persist in the <code>kwnt-home</code> volume and data in <code>kwnt-data</code>. The UI is published on <code>127.0.0.1:8799</code> only: put HTTPS in front (below) and set <code>KWNT_ALLOWED_ORIGINS=https://your.domain</code> in <code>.env</code>. With Caddy that's a two-line <code>Caddyfile</code>: <code>your.domain { reverse_proxy 127.0.0.1:8799 }</code>.</p>
 <p>Requests through Docker's published port count as remote, so sign in with a one-time link: <code>docker compose exec kwnt kwnt signin-link</code> prints a new one (and a QR code), or paste the token from <code>docker compose exec kwnt kwnt token --raw</code>. kwant's own <code>execute_shell</code> tool isn't available in this stack, because it would need the host's Docker socket; the CLIs' shell tools work. Upgrading from an older image, where kwnt ran as root? If it says <code>/data isn't writable</code>, run once: <code>docker compose run --rm -u root kwnt chown -R 10001:10001 /data</code>.</p>
+
+<h2 id="railway">On Railway, in one click</h2>
+<p><a href="{{railway_url}}" rel="noopener"><img src="https://railway.com/button.svg" alt="Deploy on Railway" width="183" height="40"></a> or <a href="{{railway_laya_url}}" rel="noopener">Deploy kwant + Laya</a></p>
+<ol>
+<li><strong>Deploy.</strong> The button deploys kwant, the bots' private headless browser on Railway's private network, and a volume on <code>/data</code> for your chats and settings. Without Laya, kwant picks which bot answers by keyword. <strong>Deploy kwant + Laya</strong> also runs the Laya message router, for smarter routing, and uses about 2 GB more RAM.</li>
+<li><strong>Sign in.</strong> Railway makes the sign-in token: open the kwant service, copy <code>KWNT_API_TOKEN</code> from its <strong>Variables</strong> tab, open the service's public domain and paste the token on the sign-in screen.</li>
+<li><strong>Add an AI account.</strong> The image has no AI CLIs inside, so the simplest start is an Anthropic, OpenAI or xAI API key, under <strong>Settings → This space → Accounts</strong>.</li>
+</ol>
+<p>New Railway accounts start with a free trial, then Railway bills you directly. Deploying with these buttons supports kwant: Railway shares part of what it charges with the project, at no extra cost to you.</p>
 
 <h2 id="stores">Render, CasaOS, Umbrel and Coolify</h2>
 <p><a href="https://render.com/deploy?repo=https://github.com/alexsergivan/kwant"><img src="https://render.com/images/deploy-to-render-button.svg" alt="Deploy to Render" width="153" height="40"></a></p>

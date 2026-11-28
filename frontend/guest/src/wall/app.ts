@@ -481,12 +481,12 @@ export class WallApp {
       h('div', null, h('label', { class: 'lbl', for: 'w-name' }, 'Your first name ', h('small', { id: 'name-why' }, 'shown under your photos')), name),
       h('div', null, h('label', { class: 'lbl', for: 'w-pin' }, 'Pick a 4-digit PIN ', h('small', { id: 'pin-why' }, 'to add more tomorrow')), pin.el),
       this.picker('w-files', false),
-      n ? h('p', { class: 'soft fine', 'data-early': '' }, `${photos(n)} picked. They send once you join.`) : null,
+      n ? h('p', { class: 'soft fine', 'data-early': '' }, `${photos(n)} picked. ${n === 1 ? 'It sends' : 'They send'} once you join.`) : null,
       h(
         'div',
         { class: 'limits' },
         h('div', null, wIcon('photos'), h('span', null, each ? `Photos only: ${each}.` : 'Photos only.')),
-        h('div', null, wIcon('eye'), h('span', null, `They show on the TV and here once ${host ?? 'the host'} says yes.`)),
+        h('div', null, wIcon('eye'), h('span', null, `${n === 1 ? 'It shows' : 'They show'} on the TV and here once ${host ?? 'the host'} says yes.`)),
       ),
       this.problemBox(),
       go,
@@ -851,7 +851,7 @@ export class WallApp {
     if (sending) kids.push(this.keep(), sending);
     else if (this.thanks && v.me) {
       kids.push(
-        h('div', { class: 'say', role: 'status', 'data-thanks': '' }, snap(36, 'finished'), h('div', { class: 'b' }, `Thanks, ${v.me.name}! Your ${photos(this.thanks)} ${this.thanks === 1 ? 'is' : 'are'} with ${host}. They show here and on the TV once ${host} says yes.`)),
+        h('div', { class: 'say', role: 'status', 'data-thanks': '' }, snap(36, 'finished'), h('div', { class: 'b' }, `Thanks, ${v.me.name}! Your ${photos(this.thanks)} ${this.thanks === 1 ? 'is' : 'are'} with ${host}. ${this.thanks === 1 ? 'It shows' : 'They show'} here and on the TV once ${host} says yes.`)),
       );
     }
     if (this.pick === 'all' && !v.open) kids.push(h('p', null, this.linkButton('Back', () => this.setPick('auto'), 'back')));

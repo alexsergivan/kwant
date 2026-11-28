@@ -63,6 +63,22 @@ test('view: only a wall pocket maps; a seat gets the wall and its own photos, no
   assert.equal(pub.count, wallPhotos.length);
 });
 
+test("wall-dates-followups 1: the page says the server's delete day (the person's clock), not the UTC day of expires_at", () => {
+  const b = new WallBox('wall-live');
+  // Pago_Pago (-11): ended Nov 26 18:00 local, so expires_at is Dec 27 05:00 UTC but the photos go on Dec 26 there
+  const e = b.env(true);
+  e.pocket = { ...e.pocket, state: 'ended', expires_at: '2026-12-27T05:00:00Z' };
+  e.view = { ...e.view, delete_on: '2026-12-26' };
+  const v = m.wallFrom(e).view;
+  assert.equal(v.deletes_on, '2026-12-26');
+  assert.ok(!String(v.deletes_on).startsWith('2026-12-27'), 'never the UTC day');
+  // An older box with no delete_on: expires_at is still a date to show
+  const old = b.env(true);
+  old.pocket = { ...old.pocket, state: 'ended', expires_at: '2026-12-27T05:00:00Z' };
+  delete old.view.delete_on;
+  assert.equal(m.wallFrom(old).view.deletes_on, '2026-12-27T05:00:00Z');
+});
+
 test('tv view: the screen state maps oldest first with its count; another kit does not', () => {
   const t = new WallBox('screen-wall-slides');
   const v = m.tvFrom(t.env()).view;
@@ -410,6 +426,24 @@ test('G1 join: keep line first, picked files wait, then join sends them (G2) and
   assert.equal(t.box.sent.length, 2);
   assert.match(t.text(), /Thanks, Sam! Your 2 photos are with Mia\./);
   assert.equal(t.$$('.ph.pend[data-mine]').length, 2, 'your two wait, marked');
+  t.app.stop();
+});
+
+test('m13: one photo reads "It sends" / "It shows", more read "They"', async () => {
+  const t = await open('wall-join');
+  await pick(t, [jpg('a.jpg')]);
+  assert.match(t.text(), /1 photo picked\. It sends once you join\./);
+  assert.match(t.text(), /It shows on the TV and here once/);
+  assert.doesNotMatch(t.text(), /They (send|show)/);
+  await type(t.$('#w-name'), 'Sam');
+  await type(t.$('#w-pin'), '1234');
+  await flush();
+  await t.advance(50);
+  if (t.screen() === 'join') await submit(t.$('form'));
+  await t.advance(50);
+  assert.equal(t.screen(), 'wall');
+  assert.match(t.text(), /Thanks, Sam! Your 1 photo is with Mia\. It shows here and on the TV once Mia says yes\./);
+  assert.doesNotMatch(t.$('[data-thanks]').textContent, /They show/);
   t.app.stop();
 });
 
