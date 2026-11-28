@@ -59,7 +59,7 @@ jobs:
       version: ${{ steps.check.outputs.version }}
       prerelease: ${{ steps.check.outputs.prerelease }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Tag matches apps/mac and kwnt versions
         id: check
         env:
@@ -99,8 +99,8 @@ jobs:
     # for this release.
     timeout-minutes: 135
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version: 20
           cache: npm
@@ -195,7 +195,7 @@ jobs:
           fi
           mkdir -p "$RUNNER_TEMP/updater"
           cp "$tarball" "$tarball.sig" "$RUNNER_TEMP/updater/"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: updater
           path: ${{ runner.temp }}/updater
@@ -252,7 +252,7 @@ jobs:
           perl -e 'alarm 60; exec @ARGV' osascript -l JavaScript "$RUNNER_TEMP/icon.js" "$PWD/macos/kwant.app" "$out/finder-icon.png" \
             || echo "Finder icon render skipped"
           ls -l "$out"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: app-icon
           path: ${{ runner.temp }}/app-icon
@@ -300,7 +300,7 @@ jobs:
           exit $status
       - name: Upload side-by-side screenshots
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: side-by-side
           path: ${{ runner.temp }}/side-by-side
@@ -362,7 +362,7 @@ jobs:
             ls -l "$shots"
             true
           )
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: dmg-window
@@ -428,7 +428,7 @@ jobs:
           ls -l "$shots"
           test "$(grep -c 'demo-nudge: pill [0-9-]' "$out")" -ge 3
           grep -q 'demo-nudge: pill.*items=2' "$out"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nudge
@@ -493,14 +493,14 @@ jobs:
               sys.exit(1)
           print("perch OK: " + line)
           PY
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: perch
           path: ${{ runner.temp }}/perch
           if-no-files-found: ignore
           retention-days: 14
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ steps.bundle.outputs.name }}
           path: ${{ steps.bundle.outputs.dmg }}
@@ -537,8 +537,8 @@ jobs:
       contents: write
     steps:
       # for scripts/mac_latest_json.py and the CHANGELOG section it reads
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: dist
       - name: Publish the release
@@ -651,8 +651,8 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           pattern: kwnt-linux-*
           path: dist
