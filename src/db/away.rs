@@ -1098,4 +1098,153 @@ mod tests {
         let m = db.task_result_message("k1", "Ann", utc("2026-11-21 12:00:00"), chrono::Duration::minutes(5)).await.unwrap();
         assert_eq!(m.map(|m| m.id).as_deref(), Some("result"));
     }
+
+    // ---- inbox-question-job-and-time (m8, m9) ----
+
+    async fn iqjt_bot(db: &Database, id: &str, name: &str) {
+        sqlx::query("INSERT INTO kwants (id, name, title, persona_prompt, avatar_sprite, space_id) VALUES (?, ?, 't', 'p', 'a', 'spc_default')")
+            .bind(id)
+            .bind(name)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn iqjt_hand_off(
+        db: &Database,
+        id: &str,
+        thread: &str,
+        lead: &str,
+        specialist: &str,
+        title: &str,
+        status: &str,
+        created: DateTime<Utc>,
+        ended: Option<DateTime<Utc>>,
+        result: Option<&str>,
+    ) {
+        sqlx::query(
+            "INSERT INTO delegations (id, thread_id, lead_kwant_id, specialist_kwant_id, task, title, status, created_at, started_at, ended_at, result_message_id) \
+             VALUES (?, ?, ?, ?, 'task', ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(thread)
+        .bind(lead)
+        .bind(specialist)
+        .bind(title)
+        .bind(status)
+        .bind(created)
+        .bind(created)
+        .bind(ended)
+        .bind(result)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    async fn iqjt_question(db: &Database, id: &str, kwant: &str, thread: Option<&str>, direct: Option<&str>, text: &str) {
+        sqlx::query(
+            "INSERT INTO questions (id, kwant_id, thread_id, direct_kwant_id, question, choices, status, created_at) \
+             VALUES (?, ?, ?, ?, ?, '[\"Up to 2000\",\"Up to 4000\"]', 'open', ?)",
+        )
+        .bind(id)
+        .bind(kwant)
+        .bind(thread)
+        .bind(direct)
+        .bind(text)
+        .bind(Utc::now())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    /// m8: a question asked inside a hand-off names that job and its lead (the asking teammate's
+    /// open hand-off when the thread had several); one asked in a direct chat or a plain thread
+    /// names neither, and the join adds no rows. Reads the columns by name, as `AwayRow` does.
+    #[tokio::test]
+    async fn a_question_in_a_hand_off_names_its_job_and_lead() {
+        use sqlx::Row;
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        iqjt_bot(&db, "planner", "Planner").await;
+        iqjt_bot(&db, "researcher", "Researcher").await;
+        iqjt_bot(&db, "writer", "Writer").await;
+        let now = Utc::now();
+        let mins = chrono::Duration::minutes;
+        let job = db.create_thread("planner", "Compare three caterers", "delegation", None, "planner").await.unwrap().id;
+        let plain = db.create_thread("planner", "Notes", "chat", None, "planner").await.unwrap().id;
+        // An earlier finished hand-off in the same thread, and a newer one to another teammate
+        iqjt_hand_off(&db, "d0", &job, "planner", "researcher", "List caterers", "completed", now - mins(60), Some(now - mins(50)), None).await;
+        iqjt_hand_off(&db, "d1", &job, "planner", "researcher", "Compare three caterers", "running", now - mins(10), None, None).await;
+        iqjt_hand_off(&db, "d2", &job, "planner", "writer", "Write the summary", "queued", now - mins(1), None, None).await;
+        iqjt_question(&db, "q_job", "researcher", Some(&job), None, "Which caterer budget?").await;
+        iqjt_question(&db, "q_direct", "researcher", None, Some("researcher"), "Which city?").await;
+        iqjt_question(&db, "q_plain", "planner", Some(&plain), None, "Which day?").await;
+
+        let space = SpaceId::default_space();
+        let rows = sqlx::query(&format!("{OPEN_QUESTIONS} ORDER BY q.created_at DESC, q.rowid DESC LIMIT ?2"))
+            .bind(Utc::now())
+            .bind(50)
+            .bind(space.as_str())
+            .fetch_all(&db.pool)
+            .await
+            .unwrap();
+        let mut got: Vec<(String, Option<String>, Option<String>)> = rows
+            .iter()
+            .map(|r| {
+                let col = |c: &str| r.try_get::<Option<String>, _>(c).unwrap_or_else(|e| panic!("no {c} column: {e}"));
+                (r.get::<String, _>("id"), col("job_title"), col("job_lead"))
+            })
+            .collect();
+        got.sort();
+        let s = |x: &str| Some(x.to_string());
+        assert_eq!(
+            got,
+            vec![
+                ("q_direct".into(), None, None),
+                ("q_job".into(), s("Compare three caterers"), s("Planner")),
+                ("q_plain".into(), None, None),
+            ]
+        );
+        assert_eq!(db.away_open_questions(&space, 50).await.unwrap().len(), 3);
+        assert_eq!(db.away_count_open_questions(&space).await.unwrap(), 3, "the join adds no rows");
+    }
+
+    /// m9: a teammate's result that arrived after its hand-off ended (it ended its turn on a
+    /// question, then finished after the person's answer: `resume_after_answer` posts the result
+    /// without moving `ended_at`) shows when it arrived; one posted with the end keeps `ended_at`.
+    #[tokio::test]
+    async fn a_late_result_shows_when_it_arrived() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = Database::init(tmp.path()).await.unwrap();
+        iqjt_bot(&db, "planner", "Planner").await;
+        iqjt_bot(&db, "researcher", "Researcher").await;
+        let now = Utc::now();
+        let mins = chrono::Duration::minutes;
+        let ended = now - mins(13); // 16:47
+        let arrived = now - mins(10); // 16:50
+        let on_time = ended + chrono::Duration::milliseconds(20);
+        for (id, at) in [("m_late", arrived), ("m_on_time", on_time)] {
+            sqlx::query("INSERT INTO messages (id, direct_kwant_id, sender_role, sender_id, text, created_at) VALUES (?, 'planner', 'kwant', 'Researcher', 'Three caterers compared.', ?)")
+                .bind(id)
+                .bind(at)
+                .execute(&db.pool)
+                .await
+                .unwrap();
+        }
+        let mut t = Vec::new();
+        for i in 0..3 {
+            t.push(db.create_thread("planner", &format!("t{i}"), "delegation", None, "planner").await.unwrap().id);
+        }
+        iqjt_hand_off(&db, "late", &t[0], "planner", "researcher", "Compare", "completed", now - mins(20), Some(ended), Some("m_late")).await;
+        iqjt_hand_off(&db, "on_time", &t[1], "planner", "researcher", "Compare", "completed", now - mins(20), Some(ended), Some("m_on_time")).await;
+        iqjt_hand_off(&db, "no_msg", &t[2], "planner", "researcher", "Compare", "completed", now - mins(20), Some(ended), None).await;
+
+        let rows = db.away_finished(&SpaceId::default_space(), now - chrono::Duration::days(7), 50).await.unwrap();
+        let at: std::collections::HashMap<String, i64> = rows.into_iter().map(|r| (r.id, r.at.timestamp_millis())).collect();
+        assert_eq!(at.len(), 3, "all three listed: {at:?}");
+        assert_eq!(at["late"], arrived.timestamp_millis(), "the late result's own time, not ended_at");
+        assert_eq!(at["on_time"], on_time.timestamp_millis());
+        assert_eq!(at["no_msg"], ended.timestamp_millis());
+    }
 }
