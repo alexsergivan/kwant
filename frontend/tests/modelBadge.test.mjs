@@ -133,11 +133,12 @@ test('every engine has its mark: Ollama, Custom API; the API engines read as the
   assert.equal(m.modelBadgeFor(null, null, null), null);
 });
 
-test('size: hidden under 24 px, 14 px at 28–34 px, larger on big avatars', () => {
+test('size: hidden under 24 px, 12 px at 24–35 px (small-avatar-badges), larger from 36 px', () => {
   assert.equal(m.modelBadgeSize(20), null);
   assert.equal(m.modelBadgeSize(23), null);
   assert.equal(m.modelBadgeSize(24), 12);
-  for (const s of [28, 30, 32, 34]) assert.equal(m.modelBadgeSize(s), 14);
+  for (const s of [28, 30, 32, 34, 35]) assert.equal(m.modelBadgeSize(s), 12);
+  assert.equal(m.modelBadgeSize(36), 14);
   assert.ok(m.modelBadgeSize(72) > 14 && m.modelBadgeSize(96) >= m.modelBadgeSize(72));
 });
 

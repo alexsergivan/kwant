@@ -5,7 +5,7 @@ import { askOrder } from './askOrder';
 import { refreshDictation } from './dictation';
 import { DecidingMap, applyDecideEvent, decisionsApi, hydrateDeciding } from './decideFirst';
 import { Sidebar, Kwant, Channel, Team, memberIdsOf, realAskCount } from './components/Sidebar';
-import { chatAfterBotDelete, dropBotFromTeams, normalizeTeams } from './botDelete';
+import { chatAfterBotDelete, dropBotFromTeams, normalizeChannels, normalizeTeams } from './botDelete';
 import { SpaceSettings, SpaceSettingsTab } from './components/SpaceSettings';
 import { InboxPage } from './components/InboxPage';
 import type { MessageTarget } from './components/DoneDetail';
@@ -1311,7 +1311,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
 
         setKwants(kRes);
         if (Array.isArray(kRes)) setRosterFresh(true);
-        setChannels(cRes);
+        setChannels(normalizeChannels<Channel>(cRes));
         setTeams(normalizedTeams);
 
         // The chat asked for (a link, a reload, a notification, the last one open here) if it still exists.
@@ -2363,7 +2363,8 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       setMessages(messagesCacheRef.current[team.id] || []);
       fetch('/api/channels')
         .then((r) => (r.ok ? r.json() : []))
-        .then((freshChannels: Channel[]) => {
+        .then((answer: unknown) => {
+          const freshChannels: Channel[] = normalizeChannels<Channel>(answer);
           setChannels(freshChannels);
           const match = teamChannelOf(freshChannels, team);
           if (match) {
@@ -3310,7 +3311,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         const readChannels = (): Promise<Channel[] | null> =>
           fetch('/api/channels')
             .then((r) => (r.ok ? r.json() : null))
-            .then((c) => (Array.isArray(c) ? (c as Channel[]) : null))
+            .then((c) => (Array.isArray(c) ? (normalizeChannels<Channel>(c) as Channel[]) : null))
             .catch(() => null);
         const fresh = opens === 'general' ? await readChannels() : null;
         setKwants((prev) => [...prev, created]);
@@ -3363,7 +3364,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         const data = await res.json().catch(() => null);
         return typeof data?.error === 'string' ? data.error : `Could not create the channel (HTTP ${res.status}).`;
       }
-      const created: Channel = await res.json();
+      const created: Channel = normalizeChannels<Channel>([await res.json()])[0];
       setChannels((prev) => (prev.some((c) => c.id === created.id) ? prev : [...prev, created]));
       messagesCacheRef.current[created.id] = [];
       setIsNewChannelOpen(false);
@@ -3409,7 +3410,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         // Fetch refreshed channels because backend auto-creates team-${created.name}
         const cRes = await fetch('/api/channels');
         if (cRes.ok) {
-          const freshChannels: Channel[] = await cRes.json();
+          const freshChannels: Channel[] = normalizeChannels<Channel>(await cRes.json());
           setChannels(freshChannels);
           const teamChan = teamChannelOf(freshChannels, created);
           if (teamChan) {
@@ -3447,7 +3448,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const cRes = await fetch('/api/channels');
       if (cRes.ok) {
-        const freshChannels: Channel[] = await cRes.json();
+        const freshChannels: Channel[] = normalizeChannels<Channel>(await cRes.json());
         setChannels(freshChannels);
         chan = freshChannels.find((c) => c.id === channelId) ?? teamChannelOf(freshChannels, created as Team);
       }
@@ -3492,7 +3493,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const cRes = await fetch('/api/channels');
       if (!cRes.ok) return;
-      const fresh: Channel[] = await cRes.json();
+      const fresh: Channel[] = normalizeChannels<Channel>(await cRes.json());
       const ids = new Set(fresh.map((c) => c.id));
       const gone = new Set(channelsRef.current.filter((c) => !ids.has(c.id)).map((c) => c.id));
       setChannels(fresh);
@@ -3566,7 +3567,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
         // Refresh channels in case team name or description changed
         const cRes = await fetch('/api/channels');
         if (cRes.ok) {
-          const freshChannels: Channel[] = await cRes.json();
+          const freshChannels: Channel[] = normalizeChannels<Channel>(await cRes.json());
           setChannels(freshChannels);
         }
 
@@ -3601,7 +3602,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
       });
       if (!res.ok) throw new Error((await serverError(res)) ?? `HTTP ${res.status}`);
       const cRes = await fetch('/api/channels');
-      if (cRes.ok) setChannels(await cRes.json());
+      if (cRes.ok) setChannels(normalizeChannels<Channel>(await cRes.json()));
       playSfx('click');
     } catch (err) {
       console.error('Failed updating team members:', err);
@@ -3629,7 +3630,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const cRes = await fetch('/api/channels');
       if (cRes.ok) {
-        const freshChannels: Channel[] = await cRes.json();
+        const freshChannels: Channel[] = normalizeChannels<Channel>(await cRes.json());
         setChannels(freshChannels);
       }
     } catch (err) {
@@ -4239,8 +4240,9 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     try {
       const [cRes, tRes] = await Promise.all([fetch('/api/channels'), fetch('/api/teams')]);
       if (cRes.ok) {
-        const fresh = await cRes.json();
-        if (Array.isArray(fresh)) {
+        const answer = await cRes.json();
+        if (Array.isArray(answer)) {
+          const fresh: Channel[] = normalizeChannels<Channel>(answer);
           setChannels(fresh);
           channelsRef.current = fresh;
         }
@@ -4355,7 +4357,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
     refreshRoster();
     fetch('/api/channels')
       .then((r) => (r.ok ? r.json() : null))
-      .then((c) => Array.isArray(c) && setChannels(c))
+      .then((c) => Array.isArray(c) && setChannels(normalizeChannels<Channel>(c)))
       .catch(() => undefined);
   };
   const getStartedCard =
