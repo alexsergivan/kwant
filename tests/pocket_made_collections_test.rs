@@ -384,6 +384,9 @@ async fn write_rules_overwrite_cap_refuse_server_and_check_row_refs() {
     let (code, host) = made(&t, spec()).await;
     let (_, a) = joined(&t, &code, "Ana").await;
     let (_, b) = joined(&t, &code, "Ben").await;
+    // Each guest may send 10 actions a second (limits::ACTIONS_PER_SEC); Ana's writes stay at 8,
+    // and the row-field checks below go to Cy so no guest is ever slowed down mid-test.
+    let (_, c) = joined(&t, &code, "Cy").await;
     let state = |key: String| {
         let t = &t;
         let code = code.clone();
@@ -420,7 +423,7 @@ async fn write_rules_overwrite_cap_refuse_server_and_check_row_refs() {
     let r = send(&t.guest, "POST", &format!("/api/pocket/{code}/host/action"), Some(json!({ "name": "take_back", "body": { "collection": "shelf", "id": mine_id } })), &host_req(&host)).await;
     assert!(r.status.is_client_error(), "{}", r.body);
     // a row field: a missing id refuses
-    let r = put(&t, &code, &a, "picks", json!({ "text": "x", "book": "r_0000000000000000" })).await;
+    let r = put(&t, &code, &c, "picks", json!({ "text": "x", "book": "r_0000000000000000" })).await;
     assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_action")), "{}", r.body);
     assert_eq!(r.body["message"], "book: there's no such row in \"shelf\".");
     // unknown and missing fields, and wrong types
@@ -429,7 +432,7 @@ async fn write_rules_overwrite_cap_refuse_server_and_check_row_refs() {
         (json!({ "text": "x" }), "book: fill this in."),
         (json!({ "text": 5, "book": mine_id }), "text: send a text."),
     ] {
-        let r = put(&t, &code, &a, "picks", values).await;
+        let r = put(&t, &code, &c, "picks", values).await;
         assert_eq!((r.status, r.body["message"].as_str()), (StatusCode::BAD_REQUEST, Some(want)), "{}", r.body);
     }
 }
