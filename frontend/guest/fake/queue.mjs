@@ -18,6 +18,8 @@ export const queueScenes = {
   take: { q: { now_serving: 23, waiting: 5, avg_minutes: 3 } },
   // 1 take, first name on.
   'take-name': { q: { now_serving: 23, waiting: 5, avg_minutes: 3 }, face: { ask_name: true } },
+  // m2: the hours ended at 5:46 AM and the host opened again at 5:47: the close is tomorrow (queue-open-until-tomorrow).
+  reopened: { q: { now_serving: null, waiting: 0, avg_minutes: null }, face: { hours_until: '05:46' }, closesTomorrow: true },
   // 1 take, fewer than 3 calls today: no minutes anywhere.
   'take-early': { q: { now_serving: 2, waiting: 1, avg_minutes: null } },
   // 2 your ticket, 4th.
@@ -73,13 +75,22 @@ export class QueueBox {
   ended() {
     return !!this.s?.ended;
   }
+  /** When `hours_until` next comes round on this computer's clock, as queue.rs's next_local: tomorrow for `reopened`. */
+  closesAt() {
+    if (!this.face.hours_until || !['open', 'paused'].includes(this.q.state)) return null;
+    const [h, m] = this.face.hours_until.split(':').map(Number);
+    const d = new Date();
+    d.setHours(h, m, 0, 0);
+    if (this.s?.closesTomorrow || d <= new Date()) d.setDate(d.getDate() + 1);
+    return d.toISOString();
+  }
   view(seated) {
     const q = this.q;
     if (this.tv) {
       return { state: q.state, title: this.face.title, line: this.face.line, now_serving: q.now_serving, next: q.next, waiting: q.waiting, avg_minutes: q.avg_minutes, pause_text: q.pause_text, close_text: q.close_text, hours_until: this.face.hours_until, now: new Date().toISOString() };
     }
     return {
-      state: q.state, title: this.face.title, line: this.face.line, hours_until: this.face.hours_until, now_serving: q.now_serving, waiting: q.waiting, avg_minutes: q.avg_minutes,
+      state: q.state, title: this.face.title, line: this.face.line, hours_until: this.face.hours_until, closes_at: this.closesAt(), now_serving: q.now_serving, waiting: q.waiting, avg_minutes: q.avg_minutes,
       call_minutes: this.face.call_minutes, max_waiting: this.face.max_waiting, ask_name: this.face.ask_name, host_name: this.face.host_name, pause_text: q.pause_text,
       close_text: q.close_text, paused_at: q.paused_at, now: new Date().toISOString(), my_ticket: seated ? this.ticket : null,
     };

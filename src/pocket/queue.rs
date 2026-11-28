@@ -486,6 +486,8 @@ impl St {
             "title": spec_str(spec, "title").unwrap_or_default(),
             "line": spec_str(spec, "line"),
             "hours_until": self.hours_until,
+            // When `hours_until` next comes round: tomorrow after a reopen past it, so the page can say so
+            "closes_at": self.closes_at,
             "now_serving": self.now_serving,
             "waiting": self.waiting_count(),
             "avg_minutes": self.avg_minutes(),
@@ -1109,6 +1111,28 @@ mod tests {
         act(&sp, &mut st, at(2), &Viewer::Host, "reopen", json!({})).unwrap();
         act(&sp, &mut st, at(2), &guest("c"), "take", json!({})).unwrap();
         assert_eq!(load(&st).tickets.iter().map(|t| t.number).collect::<Vec<_>>(), vec![1]);
+    }
+
+    #[test]
+    fn reopen_after_the_hours_end_closes_tomorrow_and_guests_see_it() {
+        // Mira m2: the hours end, the host opens again; the close is tomorrow and the guest view says when
+        let hm = (at(30)).with_timezone(&Local).format("%H:%M").to_string();
+        let sp = json!({ "title": "A", "hours": { "until": hm } });
+        let mut st = fresh(&sp, at(0));
+        assert_eq!(load(&st).closes_at, Some(at(30)));
+        let ps = players(&["a"], at(0));
+        let mut ctx = KitCtx::new(&sp, &ps, at(31));
+        assert!(Queue.tick(&mut ctx, &mut st));
+        assert_eq!(load(&st).state, CLOSED);
+        act(&sp, &mut st, at(32), &Viewer::Host, "reopen", json!({})).unwrap();
+        let closes = load(&st).closes_at.expect("reopened with hours set: a close time");
+        assert!(closes > at(32) && local_day(closes) > local_day(at(32)), "{closes}");
+        let ctx = KitCtx::new(&sp, &ps, at(33));
+        for v in [Queue.view(&ctx, &st, &guest("a")), Queue.lobby(&ctx, &st), Queue.view(&ctx, &st, &Viewer::Host)] {
+            assert_eq!(v["closes_at"], json!(closes), "{v}");
+        }
+        act(&sp, &mut st, at(34), &Viewer::Host, "set_hours", json!({ "until": null })).unwrap();
+        assert!(Queue.lobby(&KitCtx::new(&sp, &ps, at(34)), &st)["closes_at"].is_null());
     }
 
     #[test]

@@ -27,6 +27,8 @@ export interface QueueView {
   line: string;
   /** "HH:MM" on the box's clock, or none ("until I close it"). */
   hours_until?: string;
+  /** When the hours next close it (the box's RFC 3339 time): tomorrow after the host reopens past them. */
+  closes_at?: string;
   now_serving: number | null;
   waiting: number;
   /** null until 3 calls today: every minute figure stays off the page until then. */
@@ -99,6 +101,7 @@ export function queueFrom(json: unknown): { view: QueueView; version?: number } 
     title: (str(kv.title) ?? str(pocket.title) ?? '').trim(),
     line: (str(kv.line) ?? '').trim(),
     hours_until: until && HHMM.test(until) ? until : undefined,
+    closes_at: until && HHMM.test(until) && !Number.isNaN(Date.parse(str(kv.closes_at) ?? '')) ? str(kv.closes_at) : undefined,
     now_serving: whole(kv.now_serving) || null,
     waiting: whole(kv.waiting) ?? 0,
     avg_minutes: avg && avg > 0 ? avg : null,
