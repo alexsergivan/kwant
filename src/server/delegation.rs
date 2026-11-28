@@ -751,7 +751,7 @@ async fn run(state: AppState, job: super::turns::JobGuard, d: Delegation, lead: 
             let text = if p.reason == "bot_budget" {
                 format!("{} is paused at its monthly budget; the hand-off “{}” runs when it resumes.", specialist.name, d.title)
             } else {
-                format!("{} hit a usage limit on “{}”. {}", specialist.name, d.title, super::parked::retry_line(p.retry_at, Utc::now()))
+                format!("{} hit a usage limit on “{}”. {}", specialist.name, d.title, super::parked::retry_line_for(&state, p.retry_at).await)
             };
             post_to_origin(
                 &state,

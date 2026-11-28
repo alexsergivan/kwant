@@ -94,9 +94,158 @@ async fn a_later_turn_that_got_through_drops_the_parked_one() {
 #[test]
 fn the_retry_line_says_when() {
     let now = chrono::Utc::now();
-    let line = parked::retry_line(now + chrono::Duration::minutes(200), now);
+    let line = parked::retry_line(now + chrono::Duration::minutes(200), now, "");
     assert!(line.contains("about 3 h"), "{line}");
-    assert!(parked::retry_line(now + chrono::Duration::minutes(20), now).contains("about 20 min"));
+    assert!(parked::retry_line(now + chrono::Duration::minutes(20), now, "").contains("about 20 min"));
+}
+
+fn utc(s: &str) -> chrono::DateTime<chrono::Utc> {
+    chrono::DateTime::parse_from_rfc3339(s).unwrap().with_timezone(&chrono::Utc)
+}
+
+/// m4 (limit-wait-says-so): the retry time is on the person's clock (the timezone setting), not
+/// in UTC; only an unset or unreadable zone keeps UTC, and then says so.
+#[test]
+fn the_retry_line_uses_the_persons_timezone() {
+    let now = utc("2026-11-28T15:40:00Z");
+    let at = utc("2026-11-28T15:42:00Z");
+    // Set: Ljubljana is UTC+1 in November
+    assert_eq!(
+        parked::retry_line(at, now, "Europe/Ljubljana"),
+        "⏳ kwnt will retry this once at 16:42 (in about 2 min), when the limit resets."
+    );
+    // Unset, blank or unreadable: UTC, and it says UTC
+    for tz in ["", "  ", "Mars/Olympus_Mons", "../etc/passwd"] {
+        assert_eq!(
+            parked::retry_line(at, now, tz),
+            "⏳ kwnt will retry this once at 15:42 UTC (in about 2 min), when the limit resets.",
+            "zone {tz:?}"
+        );
+    }
+    // Another local day: Tokyo is 23:00 now, the reset is at 09:10 there tomorrow
+    let line = parked::retry_line(utc("2026-11-29T00:10:00Z"), utc("2026-11-28T14:00:00Z"), "Asia/Tokyo");
+    assert_eq!(line, "⏳ kwnt will retry this once tomorrow at 09:10 (in about 10 h), when the limit resets.");
+    // The same instants are still "today" in UTC
+    let line = parked::retry_line(utc("2026-11-29T00:10:00Z"), utc("2026-11-28T14:00:00Z"), "");
+    assert!(line.contains("tomorrow at 00:10 UTC"), "{line}");
+    let line = parked::retry_line(utc("2026-11-28T23:10:00Z"), utc("2026-11-28T14:00:00Z"), "");
+    assert!(line.contains(" at 23:10 UTC") && !line.contains("tomorrow"), "{line}");
+    // A weekly limit days away names the day
+    let line = parked::retry_line(utc("2026-12-01T08:10:00Z"), now, "Europe/Ljubljana");
+    assert!(line.contains("on Tue 1 Dec at 09:10 (in about 65 h)"), "{line}");
+}
+
+/// m3 card half (limit-wait-says-so): a hand-off parked on a usage limit carries its retry time
+/// (the card says "waits for the usage limit · back 16:42"), its notice in the lead's chat says
+/// the time on the person's clock, and the retry clears it.
+#[tokio::test]
+async fn a_parked_delegation_reports_its_retry_time_until_the_retry_runs() {
+    let env = setup().await;
+    env.state.db.set_setting(kwnt::server::bot_actions::TIMEZONE_SETTING, "Asia/Tokyo").await.unwrap();
+    let mut events = env.state.event_sender.subscribe();
+    let (s, d) = call(
+        &env.app,
+        "POST",
+        "/api/delegations",
+        Some(json!({
+            "lead_kwant_id": env.a, "specialist_kwant_id": env.b, "kwant_id": env.a,
+            "task": "research QUOTAONCE:qw REPLYTAG:qwdone", "title": "Waiting task", "continue_lead": false,
+        })),
+    )
+    .await;
+    assert_eq!(s.as_u16(), 202, "{d}");
+    let id = d["id"].as_str().unwrap().to_string();
+    assert!(d.get("retry_at").is_none(), "not parked yet: {d}");
+    wait_for("the lead chat to hear about the limit", || async {
+        messages(&env, &env.a).await.iter().any(|m| m.text.contains("hit a usage limit") && m.text.contains("will retry"))
+    })
+    .await;
+    let rows = parked_rows(&env).await;
+    assert_eq!(rows[0].delegation_id.as_deref(), Some(id.as_str()));
+    let at = rows[0].retry_at;
+
+    // The API record and the live update both carry the retry time
+    let (s, live) = call(&env.app, "GET", &format!("/api/delegations/{id}"), None).await;
+    assert_eq!(s.as_u16(), 200);
+    assert_eq!(live["status"], "running");
+    let got = chrono::DateTime::parse_from_rfc3339(live["retry_at"].as_str().expect("retry_at on the record")).unwrap();
+    assert_eq!(got.timestamp_millis(), at.timestamp_millis());
+    let listed = env.state.db.list_delegations(Some(&env.a), None, 10).await.unwrap();
+    assert_eq!(listed.iter().find(|x| x.id == id).unwrap().retry_at.map(|t| t.timestamp_millis()), Some(at.timestamp_millis()));
+    let thread = env.state.db.delegation_for_thread(&listed[0].thread_id).await.unwrap().unwrap();
+    assert!(thread.retry_at.is_some());
+    let seen = delegation_updates(&mut events, &id);
+    assert!(seen.iter().any(|d| d["retry_at"].is_string()), "a live update with retry_at for the card");
+
+    // The notice in the lead's chat: Tokyo time, no "UTC"
+    let tokyo = (at + chrono::Duration::hours(9)).format("%H:%M").to_string();
+    let lead = messages(&env, &env.a).await;
+    let notice = lead.iter().find(|m| m.text.contains("hit a usage limit")).unwrap();
+    assert!(notice.text.contains(&format!("at {tokyo}")) && !notice.text.contains("UTC"), "{}", notice.text);
+
+    // The retry runs: the record drops retry_at (the card goes back to "working", then finishes)
+    past_reset(&env).await;
+    let mut events = env.state.event_sender.subscribe();
+    assert_eq!(parked::run_due(&env.state, later()).await, 1);
+    let after = delegation_updates(&mut events, &id);
+    assert!(after.iter().any(|d| d.get("retry_at").is_none()), "a live update without retry_at once the retry runs: {after:?}");
+    assert!(env.state.db.get_delegation(&id).await.unwrap().unwrap().retry_at.is_none());
+    wait_reply(&env, &env.a, "answer qwdone").await;
+}
+
+/// The `delegation_updated` records for `id` sent so far.
+fn delegation_updates(
+    events: &mut tokio::sync::broadcast::Receiver<kwnt::drivers::events::RuntimeEvent>,
+    id: &str,
+) -> Vec<serde_json::Value> {
+    use tokio::sync::broadcast::error::TryRecvError;
+    let mut out = Vec::new();
+    loop {
+        match events.try_recv() {
+            Ok(kwnt::drivers::events::RuntimeEvent::DelegationUpdated { delegation }) if delegation["id"] == id => out.push(delegation),
+            Ok(_) | Err(TryRecvError::Lagged(_)) => {}
+            Err(_) => return out,
+        }
+    }
+}
+
+/// A budget hold isn't a usage limit: the card keeps its own wording, so no retry time.
+#[tokio::test]
+async fn a_budget_hold_gives_no_retry_time() {
+    let env = setup().await;
+    let (_, d) = env
+        .state
+        .db
+        .create_delegation(&kwnt::db::threads::NewDelegation {
+            lead_kwant_id: env.a.clone(),
+            specialist_kwant_id: env.b.clone(),
+            origin_channel_id: None,
+            origin_kwant_id: Some(env.a.clone()),
+            origin_thread_id: None,
+            team_id: None,
+            task: "held".into(),
+            title: "Held".into(),
+            continue_lead: false,
+            depth: 1,
+            follow_up_at: None,
+        })
+        .await
+        .unwrap();
+    let hold = |reason: &'static str| kwnt::db::parked::NewParkedTurn {
+        kwant_id: env.b.clone(),
+        channel_id: None,
+        direct_kwant_id: None,
+        thread_id: Some(d.thread_id.clone()),
+        delegation_id: Some(d.id.clone()),
+        depth: 1,
+        prompt: "held".into(),
+        retry_at: chrono::Utc::now() + chrono::Duration::hours(1),
+        reason,
+    };
+    env.state.db.park_turn(&hold("bot_budget")).await.unwrap();
+    assert!(env.state.db.get_delegation(&d.id).await.unwrap().unwrap().retry_at.is_none());
+    let (_, live) = call(&env.app, "GET", &format!("/api/delegations/{}", d.id), None).await;
+    assert!(live.get("retry_at").is_none(), "{live}");
 }
 
 #[tokio::test]
