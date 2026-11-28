@@ -268,6 +268,8 @@ pub struct Snapshot {
     /// wall-dates-agree: a wall's schedule zone (the person's clock for its dates and zip names);
     /// `None` for other kits and a wall with no schedule row.
     pub zone: Option<schedule::Zone>,
+    /// pa12 L5: a `made` pocket's live app version (`view.app.version`); `None` for other kits.
+    pub app_version: Option<i64>,
 }
 
 impl Snapshot {
@@ -437,8 +439,10 @@ async fn refresh(state: &AppState, code: &str) -> PResult<Option<Arc<Snapshot>>>
     };
     let rows = state.db.pocket_players(code).await?;
     let zone = if row.kit == wall::ID { state.db.pocket_schedule(code).await?.map(|r| schedule::Zone::parse(&r.zone)) } else { None };
+    let app_version = if row.kit == kits::MADE_ID { state.db.pocket_app_live_version(code).await? } else { None };
     let snap = Arc::new(Snapshot {
         zone,
+        app_version,
         spec: serde_json::from_str(&row.spec).unwrap_or(Value::Null),
         kit_state: serde_json::from_str(&row.kit_state).unwrap_or(Value::Null),
         players: rows.iter().map(to_player).collect(),
@@ -508,6 +512,10 @@ pub fn view_json(s: &Snapshot, viewer: &Viewer, now: DateTime<Utc>) -> Value {
         _ => kit.view(&ctx, &s.kit_state, viewer),
     };
     wall_pick::fill_delete_on(s, &mut view);
+    // pa12 L5: which app document the page frames (only a made pocket with a live version has one)
+    if let (Some(v), Some(o)) = (s.app_version, view.as_object_mut()) {
+        o.insert("app".into(), json!({ "version": v }));
+    }
     json!({
         "api": API_VERSION,
         "version": s.row.version,

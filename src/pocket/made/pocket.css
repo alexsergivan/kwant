@@ -1,0 +1,176 @@
+/* kwant pocket.css (pa12 M1, Mira, Nov 28 2026). The constant stylesheet kwant inlines FIRST in every bot-made pocket
+   app document (security-review.md section 3), before the app's own <style>. Hash-pinned once per release.
+   Built by mockup-kit/pocket_build.py from pocket.src.css + tokens.json (kwant main); never edit pocket.css by hand.
+   Class names reuse guest.css and P2's made.css, so a made app looks like the ready-made kits.
+   Guide: autonomy/pocket-apps/pa12/style-guide.md. No url() but data:, no @import, no @font-face (see the guide). */
+:root {
+  /* tokens from kwant main bbc9076c (tokens.json, avatars.py) */
+  --kw-surface-rail: #0a0719;
+  --kw-surface-side: #0e0a21;
+  --kw-surface-main: #120e26;
+  --kw-surface-raised: #1a1538;
+  --kw-surface-overlay: #231d4b;
+  --kw-hairline: rgb(255 255 255 / 0.07);
+  --kw-hairline-strong: rgb(255 255 255 / 0.14);
+  --kw-ok: #5eead4;
+  --kw-warn: #fcd34d;
+  --kw-bad: #fda4af;
+  --kw-info: #b8adff;
+  --kw-ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+  --zinc-50: #f7f6ff;
+  --zinc-100: #ecebfa;
+  --zinc-200: #d9d6f0;
+  --zinc-300: #bcb7de;
+  --zinc-400: #9a94c4;
+  --zinc-500: #8d87b8;
+  --zinc-600: #5a5383;
+  --zinc-700: #3f3868;
+  --zinc-800: #2c2552;
+  --zinc-900: #1d1840;
+  --sky-200: #d3ccff;
+  --sky-300: #b8adff;
+  --sky-400: #9d8fff;
+  --sky-500: #8270f5;
+  --sky-600: #6c58e0;
+  --sky-700: #5845bd;
+  --sky-800: #46379a;
+  --sky-950: #231b4d;
+  --team-0: #5ce1ff;
+  --team-1: #ff8a7a;
+  --team-2: #9be564;
+  --team-3: #fdc934;
+  --team-4: #6d9bff;
+  --team-5: #3ccf6e;
+  --team-6: #ff6b6b;
+  --team-7: #a98bff;
+  --kw-spark: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 7 7'%3E%3Cpath d='M3 0h1v2H3zM3 5h1v2H3zM0 3h2v1H0zM5 3h2v1H5zM2 2h3v3H2z'/%3E%3C/svg%3E");
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0; min-height: 100vh; padding: 16px 16px 24px; display: grid; gap: 14px; align-content: start;
+  font-family: Inter, system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif; font-size: 16px; line-height: 24px;
+  background: var(--kw-surface-rail); color: var(--zinc-50); -webkit-font-smoothing: antialiased; -webkit-tap-highlight-color: transparent;
+}
+h1, h2, h3, p, ul, ol, fieldset, legend, figure { margin: 0; padding: 0; }
+ul, ol { list-style: none; }
+fieldset { border: 0; min-width: 0; }
+button, input, select, textarea { font: inherit; color: inherit; margin: 0; }
+button { cursor: pointer; }
+button:disabled { cursor: default; }
+[hidden] { display: none !important; }
+:focus-visible { outline: 3px solid var(--sky-300); outline-offset: 2px; }
+
+/* ---- text ---- */
+h1 { font-size: 28px; line-height: 34px; font-weight: 800; letter-spacing: -0.015em; overflow-wrap: anywhere; }
+h2 { font-size: 22px; line-height: 29px; font-weight: 700; letter-spacing: -0.01em; overflow-wrap: anywhere; }
+h3, .mbh { font-size: 15px; line-height: 20px; font-weight: 700; color: var(--zinc-200); }
+.lead { font-size: 16px; line-height: 24px; color: var(--zinc-200); overflow-wrap: anywhere; text-wrap: balance; }
+.small { font-size: 12px; line-height: 18px; color: var(--zinc-400); }
+.muted { color: var(--zinc-400); }
+.soft { color: var(--zinc-300); }
+.tab { font-variant-numeric: tabular-nums; }
+.center { text-align: center; }
+.vh { position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
+.mlbl { font-size: 13px; font-weight: 600; color: var(--zinc-400); text-transform: uppercase; letter-spacing: 0.04em; }
+.mbig { font-size: 22px; line-height: 28px; font-weight: 800; overflow-wrap: anywhere; }
+.mcount { font-size: 17px; font-weight: 600; color: var(--zinc-100); }
+.mdone { font-size: 14px; color: var(--kw-ok); overflow-wrap: anywhere; }
+.err { font-size: 14px; line-height: 20px; color: var(--kw-bad); }
+.err:empty { display: none; }
+/* Empty and first-time lines carry kwant's pixel sparkle (img-src data: is allowed in the frame). */
+.mempty { display: flex; gap: 8px; align-items: center; font-size: 15px; color: var(--zinc-300); }
+.mempty::before { content: ''; width: 14px; height: 14px; flex: none; background: var(--sky-300); -webkit-mask: var(--kw-spark) center / contain no-repeat; mask: var(--kw-spark) center / contain no-repeat; }
+
+/* ---- layout and cards ---- */
+.mblocks { display: grid; gap: 14px; align-content: start; min-width: 0; }
+.mb { border-radius: 18px; background: var(--kw-surface-raised); border: 1px solid var(--kw-hairline-strong); padding: 16px; display: grid; gap: 10px; min-width: 0; align-content: start; }
+.mb-say { background: transparent; border-color: transparent; padding: 2px 4px; }
+.mb-say p { font-size: 17px; line-height: 25px; color: var(--zinc-100); overflow-wrap: anywhere; }
+.mb-say.big p { font-size: 24px; line-height: 31px; font-weight: 800; letter-spacing: -0.01em; color: var(--zinc-50); }
+.mline { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.mline > .sp { flex: 1; }
+
+/* ---- chips (plain only: a made app never draws stickers) ---- */
+.mtag { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; line-height: 18px; font-weight: 700; color: var(--sky-200); background: color-mix(in srgb, var(--sky-500) 24%, transparent); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.mtag.ok { color: var(--kw-ok); background: color-mix(in srgb, var(--kw-ok) 14%, transparent); }
+.mtag.plain { color: var(--zinc-300); background: transparent; box-shadow: inset 0 0 0 1px var(--kw-hairline-strong); }
+
+/* ---- buttons and fields (guest.css sizes: 60 px main button, 56 px field, 44 px small) ---- */
+.gbtn { width: 100%; min-height: 60px; border-radius: 16px; background: var(--sky-600); color: white; font-size: 18px; font-weight: 700; display: flex; align-items: center; justify-content: center; gap: 10px; border: 2px solid var(--sky-300); box-shadow: 0 4px 0 var(--sky-800); padding: 0 16px; touch-action: manipulation; }
+.gbtn:disabled { background: var(--zinc-800); border-color: var(--zinc-700); color: var(--zinc-400); box-shadow: none; }
+.gbtn.ghost { background: transparent; box-shadow: none; border-color: var(--kw-hairline-strong); color: var(--zinc-100); font-size: 16px; min-height: 52px; }
+.gbtn.ghost:disabled { opacity: 0.5; }
+.gbtn.msm { width: auto; min-height: 44px; padding: 0 12px; font-size: 14px; border-radius: 12px; flex: none; }
+.lbl { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; font-weight: 600; color: var(--zinc-200); }
+.lbl small { font-weight: 500; font-size: 12px; color: var(--zinc-400); }
+.input { display: block; width: 100%; height: 56px; border-radius: 14px; background: var(--kw-surface-main); border: 2px solid var(--zinc-700); padding: 0 16px; font-size: 18px; color: var(--zinc-50); outline: none; }
+.input:focus { border-color: var(--sky-400); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sky-400) 30%, transparent); }
+.input::placeholder { color: var(--zinc-400); }
+.input[aria-invalid="true"] { border-color: var(--kw-bad); }
+.mfield { display: grid; gap: 8px; }
+.mchoice { display: grid; gap: 8px; min-width: 0; }
+.mopt { display: flex; align-items: center; gap: 10px; min-height: 48px; padding: 0 14px; border-radius: 14px; background: var(--kw-surface-main); border: 2px solid var(--kw-hairline-strong); font-size: 16px; cursor: pointer; }
+.mopt.on, .mopt:has(input:checked) { border-color: var(--sky-300); background: color-mix(in srgb, var(--sky-500) 18%, var(--kw-surface-main)); }
+.mopt input { accent-color: var(--sky-400); width: 18px; height: 18px; margin: 0; }
+.mopt:has(input:focus-visible) { outline: 3px solid var(--sky-300); outline-offset: 2px; }
+
+/* ---- rows, faces, votes ---- */
+.mlist, .mboard, .mscores, .mreveal { display: grid; gap: 8px; }
+.mrow { display: flex; align-items: center; gap: 10px; min-height: 44px; padding: 6px 10px; border-radius: 12px; background: var(--kw-surface-main); font-size: 15px; color: var(--zinc-100); min-width: 0; }
+.mrow.me { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sky-400) 45%, transparent); }
+.mtext { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+.mtext small { display: block; font-size: 13px; line-height: 18px; color: var(--zinc-400); }
+.mface { width: 24px; height: 30px; flex: none; image-rendering: pixelated; }
+.mface.lg { width: 44px; height: 55px; }
+.minit { width: 24px; height: 24px; flex: none; border-radius: 7px; display: grid; place-items: center; font-size: 13px; font-weight: 800; color: var(--kw-surface-rail); background: var(--team-0); }
+.t0 { background: var(--team-0); } .t1 { background: var(--team-1); } .t2 { background: var(--team-2); } .t3 { background: var(--team-3); }
+.t4 { background: var(--team-4); } .t5 { background: var(--team-5); } .t6 { background: var(--team-6); } .t7 { background: var(--team-7); }
+.mopt-row { display: grid; gap: 4px; }
+.mvote { display: flex; align-items: center; gap: 10px; width: 100%; min-height: 52px; padding: 6px 12px; border-radius: 14px; background: var(--kw-surface-main); border: 2px solid var(--kw-hairline-strong); color: var(--zinc-50); font-size: 16px; text-align: left; }
+div.mvote { border-color: transparent; }
+.mopt-row.on .mvote, .mvote[aria-pressed="true"] { border-color: var(--sky-300); background: color-mix(in srgb, var(--sky-500) 18%, var(--kw-surface-main)); }
+.mvote:disabled { opacity: 0.6; }
+.mn { font-weight: 800; color: var(--zinc-50); min-width: 2ch; text-align: right; font-variant-numeric: tabular-nums; }
+.mbar { width: 100%; height: 6px; display: block; background: var(--kw-hairline); border-radius: 3px; }
+.mbar rect { fill: var(--sky-400); }
+.mopt-row.on .mbar rect { fill: var(--sky-300); }
+
+/* ---- tiles, timer, turn, scores, reveal ---- */
+.mtiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 8px; }
+.mtile { border-radius: 14px; background: var(--kw-surface-main); padding: 10px 12px; display: grid; gap: 2px; min-width: 0; }
+.mtile b { font-size: 28px; line-height: 32px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.mtile small { font-size: 13px; line-height: 18px; color: var(--zinc-400); overflow-wrap: anywhere; }
+.mclock { font-size: 44px; line-height: 50px; font-weight: 800; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+.mclock.run { color: var(--sky-200); }
+.mclock.low { color: var(--kw-warn); }
+.mturn { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.mturn.me .mbig { color: var(--kw-ok); }
+.mscores li { display: flex; align-items: center; gap: 10px; min-height: 40px; padding: 4px 10px; border-radius: 12px; background: var(--kw-surface-main); font-size: 15px; color: var(--zinc-100); }
+.mscores li.me { box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sky-400) 45%, transparent); }
+.mrank { font-weight: 700; color: var(--zinc-400); min-width: 1.5ch; font-variant-numeric: tabular-nums; }
+.mreveal li { padding: 10px 12px; border-radius: 12px; background: color-mix(in srgb, var(--kw-ok) 10%, var(--kw-surface-main)); border: 1px solid color-mix(in srgb, var(--kw-ok) 35%, transparent); font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
+
+/* ---- big screen: kwant serves the screen document as <html data-surface="screen">; sizes follow the frame width ---- */
+[data-surface="screen"], [data-surface="screen"] body { height: 100%; overflow: hidden; }
+[data-surface="screen"] body { padding: 2vw 2.4vw; gap: 1.6vw; font-size: 2vw; line-height: 1.3; }
+[data-surface="screen"] h1 { font-size: 4vw; line-height: 1.15; }
+[data-surface="screen"] h2 { font-size: 2.8vw; line-height: 1.2; }
+[data-surface="screen"] .lead, [data-surface="screen"] .mb-say p { font-size: 2.4vw; line-height: 1.3; }
+[data-surface="screen"] .mb-say.big p { font-size: 4vw; line-height: 1.15; }
+[data-surface="screen"] .mblocks { grid-template-columns: repeat(auto-fit, minmax(26vw, 1fr)); gap: 1.6vw; align-items: start; }
+[data-surface="screen"] .mb { padding: 1.6vw; gap: 1vw; border-radius: 1.6vw; }
+[data-surface="screen"] .mbh, [data-surface="screen"] h3 { font-size: 1.8vw; line-height: 1.3; }
+[data-surface="screen"] .mrow, [data-surface="screen"] .mvote, [data-surface="screen"] .mscores li, [data-surface="screen"] .mreveal li { font-size: 2vw; line-height: 1.3; min-height: 4.4vw; border-radius: 1vw; padding: 0.5vw 1vw; }
+[data-surface="screen"] .mface { width: 2.6vw; height: 3.25vw; }
+[data-surface="screen"] .mface.lg { width: 4.4vw; height: 5.5vw; }
+[data-surface="screen"] .mbar { height: 0.8vw; }
+[data-surface="screen"] .mclock { font-size: 6vw; line-height: 1; }
+[data-surface="screen"] .mbig, [data-surface="screen"] .mcount, [data-surface="screen"] .mtile b { font-size: 2.8vw; line-height: 1.2; }
+[data-surface="screen"] .small, [data-surface="screen"] .mempty, [data-surface="screen"] .mlbl, [data-surface="screen"] .mtile small, [data-surface="screen"] .mtext small, [data-surface="screen"] .mtag { font-size: 1.7vw; line-height: 1.35; }
+
+/* ---- motion: 120-200 ms, transform and opacity only, none under reduced motion ---- */
+@media (prefers-reduced-motion: no-preference) {
+  .gbtn:active:not(:disabled), .mvote:active:not(:disabled) { transform: translateY(2px); transition: transform 120ms var(--kw-ease); }
+}

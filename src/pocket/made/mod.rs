@@ -13,6 +13,7 @@
 
 pub mod collections;
 pub mod spec;
+pub mod versions;
 
 use super::kits::{spec_date, Kit, KitCtx, KitError, KitRules, Player, Retention, Viewer, DEFAULT_MAX_PLAYERS, MADE_ID};
 use super::words;

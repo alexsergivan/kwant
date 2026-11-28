@@ -25,6 +25,10 @@
 //!   adds the ones still waiting). 404 `not_a_wall` for any other kit
 //! - `GET    /api/pockets/:code/photo/:id` one Wall photo for the person's card, waiting ones too
 //!   (hidden ones 404 `no_such_photo`), as the guest port's host sees it. 404 for any other kit
+//! - `GET    /api/pockets/:code/app/versions`  `{live, versions: [{version, state, report, made_by, created_at}]}`
+//!   newest first: a bot-made app's versions (pa12 L5). 404 for any other kit
+//! - `POST   /api/pockets/:code/app/rollback`  the same, after the newest earlier version that passed
+//!   its check went live again. 409 `nothing_to_roll_back`, 410 `ended`
 //! - `DELETE /api/pockets/:code`           204, final
 
 use super::kits::Viewer;
@@ -51,6 +55,23 @@ pub fn router() -> Router<AppState> {
         .route("/api/pockets/:code/reset-pin", post(reset_pin))
         .route("/api/pockets/:code/wall.zip", get(wall_zip))
         .route("/api/pockets/:code/photo/:id", get(photo))
+        .route("/api/pockets/:code/app/versions", get(app_versions))
+        .route("/api/pockets/:code/app/rollback", post(app_rollback))
+}
+
+/// pa12 L5: a bot-made app's versions for the person's card (person-only like every
+/// `/api/pockets` path).
+async fn app_versions(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    let (versions, live) = super::made::versions::list(&state, &code).await?;
+    Ok(Json(json!({ "live": live, "versions": versions })))
+}
+
+/// pa12 L5: the card's one-tap rollback.
+async fn app_rollback(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
+    found(&state, &code).await?;
+    super::made::versions::rollback(&state, &code).await?;
+    app_versions(State(state), Path(code)).await
 }
 
 /// pa14: one Wall photo for the person's card (person-only like every `/api/pockets` path). The
