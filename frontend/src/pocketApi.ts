@@ -221,6 +221,8 @@ export const pocketApi = {
   // pa10b gather: host actions through the same route, named as Lin's src/pocket/gather.rs (pa10b/server-shape.md).
   /** The host's own paid tick on a Yes row. Never shown to members. */
   setPaid: async (code: string, playerId: string, paid: boolean) => pocketApi.hostAction(code, 'set_paid', { player_id: playerId, paid }),
+  /** RSVP / sign-up: show or hide who answered to guests (#1324). Returns the host view. */
+  setShowNames: async (code: string, on: boolean) => pocketApi.hostAction(code, 'set_show_names', { on }),
   /** The host copied or shared the draft to `to` (a name). Inside the 48 h window it's a 409 `not_now`: re-read `next_copy_at`. */
   copied: async (code: string, to: string) => pocketApi.hostAction(code, 'copied', { to }),
   /** Break a tie: the host picks a ballot option by its index. */

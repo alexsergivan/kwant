@@ -1,7 +1,8 @@
 //! The guest listener's supervisor. Every 5 s it reads the `pocket_apps` switch: on starts the
 //! guest port (main port + 1, or `KWNT_POCKET_PORT`), off stops it. While on it also sweeps
 //! expired pockets every minute (after pa7's reminders and results, `schedule::run_once`) and runs
-//! watched pockets' kit timers every second. While off it binds nothing and touches no pocket. It
+//! watched pockets' kit timers every second. While off it binds nothing and touches no pocket,
+//! except the once-a-minute scrub of stored states ([`super::SCRUBS`]: unlinking old votes). It
 //! also stops a quick tunnel when the switch goes off, and on macOS keeps the computer awake while
 //! a tunnel or an open pocket runs (pa6).
 
@@ -92,6 +93,19 @@ async fn open(state: &AppState) {
     tracing::info!(%addr, "pocket apps: guest listener started");
 }
 
+/// One sweep period. While on: pa7's reminders and results first (posted before the sweep
+/// deletes), then [`super::sweep`]. While off only the scrub of stored states runs
+/// (secret-ballot-unlinkable: a vote an older version closed is unlinked without waiting for the
+/// switch); `sweep` runs that scrub itself when on.
+pub async fn sweep_once(state: &AppState, now: chrono::DateTime<chrono::Utc>) {
+    if state.pocket.on.load(Ordering::SeqCst) {
+        super::schedule::run_once(state, now).await;
+        super::sweep(state, now).await;
+    } else {
+        super::scrub_stored(state).await;
+    }
+}
+
 /// Starts the supervisor; it stops with kwant (and takes the guest listener with it).
 pub fn spawn(state: AppState, cancel: CancellationToken) {
     tokio::spawn(async move {
@@ -105,14 +119,7 @@ pub fn spawn(state: AppState, cancel: CancellationToken) {
             tokio::select! {
                 _ = cancel.cancelled() => break,
                 _ = reconcile_tick.tick() => { reconcile(&state).await; }
-                _ = sweep_tick.tick() => {
-                    if state.pocket.on.load(Ordering::SeqCst) {
-                        let now = chrono::Utc::now();
-                        // pa7 first: reminders, and results posted before the sweep deletes
-                        super::schedule::run_once(&state, now).await;
-                        super::sweep(&state, now).await;
-                    }
-                }
+                _ = sweep_tick.tick() => { sweep_once(&state, chrono::Utc::now()).await; }
                 _ = timer_tick.tick() => {
                     if state.pocket.on.load(Ordering::SeqCst) {
                         super::tick(&state).await;

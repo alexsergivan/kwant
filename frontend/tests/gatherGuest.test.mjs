@@ -241,7 +241,7 @@ test('G1 RSVP join: keep line first, facts, plus-ones and food only for Yes, sen
   assert.equal(t.screen(), 'in');
   const join = t.calls.find((c) => c.path === 'join');
   assert.deepEqual(Object.keys(join.body).sort(), ['avatar', 'name', 'pin']);
-  assert.deepEqual(t.acts(), [{ name: 'answer', body: { answer: 'yes', plus_ones: 1, food: ['vegetarian'] } }]);
+  assert.deepEqual(t.acts(), [{ name: 'answer', body: { answer: 'yes', names: true, plus_ones: 1, food: ['vegetarian'] } }]);
   assert.match(t.text(), /You're in, Ana!/);
   assert.match(t.$('[data-summary]').textContent, /Yes · \+1 · vegetarian/);
   assert.equal(t.$('[data-paid]'), null, 'never paid until the host ticks it');
@@ -257,7 +257,7 @@ test('G1 a No sends no plus-ones or food', async () => {
   await pick(t.$('input[name="answer"][value="no"]'));
   assert.equal(t.$('.stepper'), null);
   await submit(t.$('form'));
-  assert.deepEqual(t.acts(), [{ name: 'answer', body: { answer: 'no' } }]);
+  assert.deepEqual(t.acts(), [{ name: 'answer', body: { answer: 'no', names: true } }]);
   assert.match(t.text(), /Thanks, Ana/);
   t.app.stop();
 });
@@ -334,7 +334,7 @@ test('G3 sign-up: slot cards, full one is dashed with the waiting line, button s
   assert.equal(t.$('[data-send]').textContent, 'Sign me up');
   await type(t.$('#g-note'), 'lemonade');
   await submit(t.$('form'));
-  assert.deepEqual(t.acts(), [{ name: 'take', body: { slot: 3, note: 'lemonade' } }]);
+  assert.deepEqual(t.acts(), [{ name: 'take', body: { slot: 3, names: true, note: 'lemonade' } }]);
   assert.equal(t.screen(), 'in');
   assert.match(t.text(), /You're in: Drinks/);
   t.app.stop();
@@ -605,6 +605,156 @@ test('G10 rejoin opens the answer', async () => {
   assert.equal(t.screen(), 'in');
   assert.ok(t.$('[data-paid]'));
   t.app.stop();
+});
+
+// ---------- rsvp-names-switch (Juno #1324 contract, Mira copy-check.md 4 and 6, Lin S1) ----------
+
+test('names switch: names_notice is read only for a seated guest on an RSVP or sign-up with names on', () => {
+  const v = viewOf('gather-rsvp-unnamed');
+  assert.equal(map(v).names_notice, true);
+  assert.equal(map({ ...v, names_notice: 'true' }).names_notice, false, 'only a real true');
+  assert.equal(map({ ...v, show_names: false }).names_notice, false, 'names off: no notice');
+  assert.equal(map(v, { me: null }).names_notice, false, 'no seat: no notice');
+  assert.equal(map({ ...viewOf('gather-voted'), names_notice: true }).names_notice, false, 'never on a vote');
+  assert.equal(map(viewOf('gather-signup-unnamed')).names_notice, true);
+  assert.equal(map(viewOf('gather-rsvp-in')).names_notice, false, 'absent key: no notice');
+});
+
+test('names switch: while unnamed, the who-sees line reads as names off (RSVP and sign-up)', () => {
+  const said = (v, u) => m.whoSees(map(v).facts, u).map(([a, b]) => a + b).join(' ');
+  const r = viewOf('gather-rsvp-unnamed');
+  assert.match(said(r, false), /Other members see only your name and Yes \/ Maybe \/ No\./);
+  assert.match(said(r, true), /Other members see only the totals, never your name\./);
+  const s = viewOf('gather-signup-unnamed');
+  assert.match(said(s, false), /^Everyone sees your name, your slot and what you bring\.$/);
+  assert.equal(said(s, true), 'Dana sees your name, your slot and what you bring. Other members see only how full each slot is.');
+  assert.match(said({ ...r, show_names: false }, true), /only the totals/, 'names off stays names off');
+});
+
+test('names switch: RSVP notice, Show my name sends {} once, then "Your name shows now." in place', async () => {
+  const t = await open('gather-rsvp-unnamed');
+  assert.equal(t.screen(), 'in');
+  const n = t.$('[data-names-notice]');
+  assert.ok(n, 'the notice shows');
+  assert.equal(n.querySelector('span').firstChild.textContent, 'Dana now shows names here. Yours stays hidden until you tap Show my name or answer again.');
+  assert.equal(n.querySelectorAll('svg').length, 1, 'the eye icon');
+  assert.equal(n.closest('[class*="warn"], [class*="bad"], .kw-sticker'), null);
+  assert.equal(holo(t), 0, 'information, never holo');
+  assert.ok(!/Mia/.test(t.$('.who-grid').textContent), 'not on the list yet');
+  const btn = t.$('[data-show-name]');
+  assert.equal(btn.tagName, 'BUTTON');
+  assert.equal(btn.getAttribute('type'), 'button');
+  assert.equal(btn.textContent, 'Show my name');
+  await click(btn);
+  assert.deepEqual(t.acts(), [{ name: 'show_my_name', body: {} }]);
+  assert.equal(t.$('[data-names-notice]'), null, 'the notice goes with names_notice false');
+  const said = t.$('[data-names-said]');
+  assert.equal(said.textContent, 'Your name shows now.');
+  assert.equal(said.getAttribute('aria-live'), 'polite');
+  assert.equal(document.activeElement, said, 'focus lands on the confirmation, not on the body');
+  assert.match(t.$('.who-grid').textContent, /Mia/);
+  t.app.stop();
+});
+
+test('names switch: the button is disabled with a spinner while the tap is in flight', async () => {
+  const t = harness('gather-rsvp-unnamed');
+  await t.app.start(null);
+  await flush();
+  let release;
+  // Hold the action so the request stays pending.
+  const api = t.app.api;
+  const act = api.act.bind(api);
+  api.act = (name, body) => new Promise((r) => (release = () => r(act(name, body))));
+  void click(t.$('[data-show-name]'));
+  await flush();
+  const b = t.$('[data-show-name]');
+  assert.ok(b.disabled);
+  assert.equal(b.getAttribute('aria-busy'), 'true');
+  assert.ok(b.querySelector('.spin[aria-hidden="true"]'));
+  assert.equal(b.textContent, 'Show my name');
+  release();
+  await flush();
+  t.app.stop();
+});
+
+test('names switch: host turned names off before the tap landed: the 409 sentence replaces the notice', async () => {
+  const t = await open('gather-rsvp-unnamed-off');
+  await click(t.$('[data-show-name]'));
+  assert.equal(t.$('[data-names-notice]'), null);
+  assert.equal(t.$('[data-show-name]'), null);
+  assert.equal(t.$('[data-names-said]').textContent, 'Names are hidden now, so only the host sees who answered.');
+  assert.ok(t.calls.some((c) => c.path.startsWith('state')), 'refreshed the view');
+  assert.match(t.text(), /So far/, 'counts only now');
+  t.app.stop();
+});
+
+test('names switch: answering again from the form sends names: true and names the guest; the form shows the notice', async () => {
+  const t = await open('gather-rsvp-unnamed');
+  await click(t.$('[data-change]'));
+  assert.equal(t.screen(), 'join');
+  assert.match(t.$('[data-whosees]').textContent, /only the totals, never your name/);
+  const n = t.$('[data-names-notice]');
+  assert.ok(n);
+  assert.equal(n.previousElementSibling, t.$('[data-whosees]'), 'directly under the who-sees line');
+  await submit(t.$('form'));
+  assert.deepEqual(t.acts().at(-1), { name: 'answer', body: { answer: 'yes', names: true, plus_ones: 1, food: ['vegetarian'] } });
+  assert.equal(t.screen(), 'in');
+  assert.equal(t.$('[data-names-notice]'), null);
+  assert.match(t.$('.who-grid').textContent, /Mia/);
+  t.app.stop();
+});
+
+test('names switch: names off sends names: false (a page showing totals never opts anyone in)', async () => {
+  const t = await open('gather-rsvp-counts');
+  await click(t.$('[data-change]'));
+  await submit(t.$('form'));
+  assert.equal(t.acts().at(-1).body.names, false);
+  t.app.stop();
+});
+
+test('names switch: sign-up notice says "change your sign-up"; Show my name lists the guest in the slot', async () => {
+  const t = await open('gather-signup-unnamed');
+  assert.equal(t.screen(), 'in');
+  assert.equal(t.$('[data-names-notice] span').firstChild.textContent, 'Dana now shows names here. Yours stays hidden until you tap Show my name or change your sign-up.');
+  await click(t.$('[data-show-name]'));
+  assert.deepEqual(t.acts(), [{ name: 'show_my_name', body: {} }]);
+  assert.equal(t.$('[data-names-said]').textContent, 'Your name shows now.');
+  assert.match(t.$('.glist').textContent, /Mia/);
+  t.app.stop();
+});
+
+test('names switch: any other failure keeps the notice and adds the server sentence; a dropped line says so', async () => {
+  const t = await open('gather-rsvp-unnamed');
+  t.box.up = false;
+  await click(t.$('[data-show-name]'));
+  assert.ok(t.$('[data-names-notice]'), 'still there to try again');
+  assert.match(t.$('[data-names-notice] [data-names-said]').textContent, /Couldn't reach Dana's computer\. Try again\./);
+  t.box.up = true;
+  await click(t.$('[data-show-name]'));
+  assert.equal(t.$('[data-names-said]').textContent, 'Your name shows now.');
+  t.app.stop();
+});
+
+test('names switch: closed RSVP shows the short sentence, never "answer again"; Show my name still works', async () => {
+  const t = await open('gather-rsvp-unnamed-closed');
+  assert.equal(t.screen(), 'closed');
+  assert.equal(t.$('[data-names-notice] span').firstChild.textContent, 'Dana now shows names here. Yours stays hidden until you tap Show my name.');
+  assert.doesNotMatch(t.text(), /answer again|change your sign-up/);
+  assert.match(t.text(), /Need to change something\? Ask Dana\./);
+  await click(t.$('[data-show-name]'));
+  assert.deepEqual(t.acts(), [{ name: 'show_my_name', body: {} }]);
+  assert.equal(t.$('[data-names-said]').textContent, 'Your name shows now.');
+  t.app.stop();
+});
+
+test('names switch: css keeps the notice quiet, 44 px button, spinner still under reduced motion', () => {
+  const css = readFileSync(new URL('../guest/src/guest.css', import.meta.url), 'utf8');
+  assert.match(css, /\.ga \.namesnote \.gbtn \{[^}]*min-width: 176px; justify-content: center;[^}]*min-height: 44px/);
+  assert.match(css, /\.ga \.namesnote > span \{ flex: 1 1 0;/, 'wrapping never depends on the text length');
+  assert.match(css, /@media \(max-width: 520px\) \{ \.ga \.namesnote \.gbtn \{ flex-basis: 100%; \} \}/);
+  assert.match(css, /@media \(prefers-reduced-motion: reduce\) \{ \.ga \.spin \{ animation: none; \} \}/);
+  const block = css.slice(css.indexOf('.ga .namesnote'), css.indexOf('@keyframes ga-spin'));
+  assert.doesNotMatch(block, /#[0-9a-f]{3,8}\b|--kw-(warn|bad)/i, 'tokens only, no warning colours');
 });
 
 test('G11 closed: Tally, the server count, the deletion day', async () => {

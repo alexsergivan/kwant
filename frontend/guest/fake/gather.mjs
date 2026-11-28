@@ -133,6 +133,15 @@ export const gatherScenarios = {
   'gather-rsvp-in': { state: seat(rsvpView({ answer: 'yes', plus_ones: 1, food: ['vegetarian'], food_other: null, answered_at: '2026-12-01T10:00:00Z', paid: { at: '2026-12-04T09:00:00Z' } })) },
   // G2 without names: the counts only, and no paid line.
   'gather-rsvp-counts': { state: seat({ ...rsvpView({ answer: 'maybe', plus_ones: 0, food: [], food_other: null, answered_at: '2026-12-01T10:00:00Z', paid: null }), show_names: false, people: null }) },
+  // rsvp-names-switch: Dana turned names on after Mia answered. Mia is counted but not listed, and her page shows the
+  // notice with "Show my name" (names_notice, Juno's gather.rs at c36a8282).
+  'gather-rsvp-unnamed': { state: seat({ ...rsvpView({ answer: 'yes', plus_ones: 1, food: ['vegetarian'], food_other: null, answered_at: '2026-12-01T10:00:00Z', paid: null }), names_notice: true }) },
+  // The same, but Dana turns names off again before Mia's tap lands: show_my_name gives the 409.
+  'gather-rsvp-unnamed-off': { namesOffOnTap: true, state: seat({ ...rsvpView({ answer: 'yes', plus_ones: 1, food: ['vegetarian'], food_other: null, answered_at: '2026-12-01T10:00:00Z', paid: null }), names_notice: true }) },
+  // rsvp-names-switch: answers closed, names on after Mia answered (the short sentence, no "answer again").
+  'gather-rsvp-unnamed-closed': { state: seat({ ...rsvpView({ answer: 'yes', plus_ones: 1, food: ['vegetarian'], food_other: null, answered_at: '2026-12-01T10:00:00Z', paid: null }), phase: 'closed', names_notice: true }) },
+  // Sign-up: Mia holds a Drinks spot from before the switch; counted (1 of 4), not listed.
+  'gather-signup-unnamed': { state: seat({ ...signupView({ slot: 3, note: 'lemonade', waiting: null, moved_up: null }, (() => { const s = signupSlots(); s[3] = { ...slot(3, 'Drinks', 4, []), filled: 1 }; return s; })()), names_notice: true }) },
   // G3 Sign-up pick: Desserts is full with a waiting list.
   'gather-signup': { info: signupView(undefined), join: seat(signupView({ slot: null, note: null, waiting: null, moved_up: null }), P('p8', 'Mia', 'visor')) },
   // Sign-up, in a slot.
@@ -241,7 +250,7 @@ export class GatherBox {
       const b = body.body ?? {};
       const me = this.seat.me;
       const notNow = (message) => err(409, 'not_now', { message });
-      if (v.phase !== 'open' && body.name !== 'seen') return notNow(v.face === 'vote' && v.phase === 'tie' ? "Voting has closed: it's a tie, and the host picks." : 'Answers are closed.');
+      if (v.phase !== 'open' && body.name !== 'seen' && body.name !== 'show_my_name') return notNow(v.face === 'vote' && v.phase === 'tie' ? "Voting has closed: it's a tie, and the host picks." : 'Answers are closed.');
       switch (body.name) {
         case 'answer': {
           if (v.face !== 'rsvp') return err(400, 'bad_action', { message: 'Wrong face.' });
@@ -250,6 +259,9 @@ export class GatherBox {
           if ('food' in b && !v.fields.includes('food_needs')) return err(400, 'bad_action', { message: 'No food needs on this one.' });
           const yes = b.answer === 'yes';
           v.me = { ...v.me, answer: b.answer, plus_ones: yes ? (b.plus_ones ?? 0) : 0, food: yes ? (b.food ?? []) : [], food_other: yes ? (b.food_other ?? null) : null, answered_at: new Date().toISOString() };
+          // Lin S1: after the switch, only an answer sent from a page showing names (`names: true`) names the guest.
+          if (v.names_notice && b.names !== true) break;
+          v.names_notice = false;
           if (v.people) v.people = [...v.people.filter((p) => p.id !== me.id), { id: me.id, name: me.name, avatar: me.avatar, answer: b.answer }];
           break;
         }
@@ -263,8 +275,10 @@ export class GatherBox {
             s.waiting = s.waiting_people.length;
             v.me = { slot: null, note: null, waiting: { slot: s.slot, position: s.waiting }, moved_up: null };
           } else {
-            s.people = [...(s.people ?? []), { ...P(me.id, me.name, me.avatar), note: b.note ?? null }];
-            s.filled = s.people.length;
+            const named = !v.names_notice || b.names === true;
+            if (named) v.names_notice = false;
+            if (named) s.people = [...(s.people ?? []), { ...P(me.id, me.name, me.avatar), note: b.note ?? null }];
+            s.filled = (s.people ?? []).length + (named ? 0 : 1);
             s.full = s.filled >= s.cap;
             v.me = { slot: s.slot, note: b.note ?? null, waiting: null, moved_up: null };
           }
@@ -278,6 +292,24 @@ export class GatherBox {
         case 'seen':
           if (v.me?.moved_up) v.me.moved_up.new = false;
           break;
+        case 'show_my_name': {
+          if (v.face === 'vote') return err(400, 'bad_action', { message: 'A vote never shows who picked what.' });
+          const off = 'Names are hidden now, so only the host sees who answered.';
+          if (this.s.namesOffOnTap) {
+            v.show_names = false;
+            v.names_notice = false;
+            v.people = null;
+            for (const x of v.slots ?? []) (x.people = null), (x.waiting_people = null);
+            this.version++;
+            return notNow(off);
+          }
+          if (!v.show_names) return notNow(off);
+          if (v.names_notice && v.face === 'rsvp' && v.people && v.me?.answer) v.people = [...v.people, { id: me.id, name: me.name, avatar: me.avatar, answer: v.me.answer }];
+          const mine = v.face === 'signup' && v.slots?.find((x) => x.slot === v.me?.slot);
+          if (v.names_notice && mine) mine.people = [...(mine.people ?? []), { ...P(me.id, me.name, me.avatar), note: v.me.note ?? null }];
+          v.names_notice = false;
+          break;
+        }
         case 'vote': {
           const r = b.ranking;
           if (!Array.isArray(r) || !r.length || (v.ballot.kind === 'one_pick' && r.length !== 1)) return err(400, 'bad_action', { message: 'Pick one option.' });

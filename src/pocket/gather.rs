@@ -9,11 +9,15 @@
 //!   someone leaves, the first person waiting moves in at once and on their own.
 //! - `vote`: one pick (plurality) or ranked (instant runoff), as a **secret ballot**: who voted
 //!   is kept apart from the ballots, and no view, event row or log line pairs a person with a
-//!   ballot. The host sees who voted (to nudge) and the totals, never anyone's order.
+//!   ballot. The host sees who voted (to nudge) and, once voting closes, the totals; never
+//!   anyone's order. Nobody sees a count while voting is open (two reads around one vote would
+//!   give that vote away), and at the close the ballots lose their link to a person for good.
 //!
 //! Host-only: paid ticks, each person's food needs and plus-ones. Guests get names and
 //! Yes / Maybe / No only when `show_names` is on, their own record, and their own paid tick once
-//! it's ticked. The Chaser drafts nudges from templates the bot wrote when the pocket was made
+//! it's ticked. The host can turn names on or off later (RSVP and sign-up): turned on, anyone who
+//! answered while they were hidden stays counted but unnamed until they answer again or tap
+//! "Show my name". The Chaser drafts nudges from templates the bot wrote when the pocket was made
 //! (no model runs afterwards); nothing here ever sends anything: the host copies a draft and
 //! sends it from their own chat, at most once per person every 48 hours.
 //!
@@ -195,6 +199,8 @@ struct St {
     moved: BTreeMap<String, Moved>,
     // Vote. Who voted and the ballots are kept apart: `voted` has people and times, `ballots`
     // has orders under a key that is not a player id (salted hash), in key order, not time order.
+    // While open the salt lets a voter see and change their own ballot; at the close every
+    // ballot gets a random key and the salt is cleared, so no stored value pairs the two.
     ballot_salt: String,
     voted: BTreeMap<String, DateTime<Utc>>,
     ballots: BTreeMap<String, Vec<usize>>,
@@ -208,6 +214,19 @@ struct St {
     /// pa10c: the host's "Delete answers now" (or "Delete ballots now"): when, and the counts
     /// kept in place of everyone's answers. The vote's `tally` stays as it is (option counts).
     deleted: Option<Kept>,
+    // rsvp-names-switch (RSVP and sign-up only). Each is left out of the stored state while
+    // unset, so a pocket that never used the switch stores exactly what older builds stored.
+    /// The host's "Show names" switch, over the spec's `show_names` (None: the spec decides).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    names: Option<bool>,
+    /// When the host last turned names on (cleared when they turn them off).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    names_on_at: Option<DateTime<Utc>>,
+    /// Player ids who had answered (or held or queued for a slot) while names were hidden, taken
+    /// when the host turned names on. They stay counted but unnamed until they answer again or
+    /// tap "Show my name" (Ada's privacy rule); everyone else is named as usual.
+    #[serde(skip_serializing_if = "BTreeSet::is_empty")]
+    unnamed: BTreeSet<String>,
 }
 
 /// What stays after "Delete answers now": counts and the summary line, never a name, a note,
@@ -310,6 +329,11 @@ fn flag(spec: &Value, field: &str) -> bool {
     spec.get(field).and_then(Value::as_bool).unwrap_or(true)
 }
 
+/// Whether guests see names now: the host's switch, else the spec's `show_names`.
+fn names_on(spec: &Value, s: &St) -> bool {
+    s.names.unwrap_or_else(|| flag(spec, "show_names"))
+}
+
 /// The fields the host chose beyond the face's own (plus_ones, food_needs, slot_note).
 fn has_field(spec: &Value, field: &str) -> bool {
     spec.get("fields").and_then(Value::as_array).is_some_and(|a| a.iter().any(|f| f.as_str() == Some(field)))
@@ -392,6 +416,7 @@ impl St {
         self.ballots.clear();
         self.ballot_salt.clear();
         self.copied.clear();
+        self.unnamed.clear();
     }
 
     /// People who joined (kept after a delete: the players are gone then).
@@ -446,13 +471,33 @@ impl St {
         }
     }
 
-    /// 1st-choice totals per option in play (live bars).
-    fn first_choices(&self, spec: &Value) -> Vec<Value> {
-        let opts = self.in_play(spec);
-        let inn: BTreeSet<usize> = opts.iter().copied().collect();
-        let ballots: Vec<Vec<usize>> = self.ballots.values().cloned().collect();
-        let (counts, _) = round_counts(&ballots, &inn);
-        opts.iter().map(|o| json!({ "option": o, "votes": counts.get(o).copied().unwrap_or(0) })).collect()
+    /// secret-ballot-unlinkable: the ballots lose any link to a person. Each gets a new random
+    /// key (the map stays in key order, so neither the salted keys nor the voting order survive)
+    /// and the salt is cleared, so `sha256(salt:player_id)` can't be recomputed from what is
+    /// stored. The count is unchanged: it reads only the orders. False when there is no salt
+    /// (already unlinked, or deleted).
+    fn unlink_ballots(&mut self) -> bool {
+        if self.ballot_salt.is_empty() {
+            return false;
+        }
+        let orders: Vec<Vec<usize>> = std::mem::take(&mut self.ballots).into_values().collect();
+        for (i, order) in orders.into_iter().enumerate() {
+            // 12 random bytes don't collide; if the system's randomness failed (all zeros),
+            // a numbered key keeps every ballot without a link to anyone
+            let mut k = random_hex(12);
+            if self.ballots.contains_key(&k) {
+                k = format!("{k}{i:04}");
+            }
+            self.ballots.insert(k, order);
+        }
+        self.ballot_salt.clear();
+        true
+    }
+
+    /// A vote closed before secret-ballot-unlinkable still has its salt beside the ballots:
+    /// unlink it now (also any other face's unused salt). True when the state changed.
+    fn scrub(&mut self) -> bool {
+        self.phase != OPEN && self.unlink_ballots()
     }
 
     fn slot_of(&self, id: &str) -> Option<usize> {
@@ -497,6 +542,9 @@ impl St {
             self.done = !tie;
             ctx.event(None, if tie { "tie" } else { "closed" }, json!({ "ballots_counted": self.ballots.len() }));
             self.tally = Some(tally);
+            // A tie too: "vote again" starts over with no ballots and a new salt, and "pick"
+            // reads the tally
+            ctx.forgot |= self.unlink_ballots();
         } else {
             self.phase = CLOSED.into();
             ctx.event(None, "closed", json!({ "answers": self.answered_count(ctx) }));
@@ -527,6 +575,41 @@ impl St {
             SIGNUP => self.slot_of(id).is_some() || self.waiting_of(id).is_some(),
             _ => self.voted.contains_key(id),
         }
+    }
+
+    /// Everyone with an answer (RSVP) or a held or queued slot (sign-up) now.
+    fn answered_ids(&self, spec: &Value) -> BTreeSet<String> {
+        match face(spec) {
+            RSVP => self.answers.keys().cloned().collect(),
+            SIGNUP => self.slots.iter().flat_map(|x| x.taken.iter().map(|t| t.id.clone()).chain(x.waiting.iter().cloned())).collect(),
+            _ => BTreeSet::new(),
+        }
+    }
+
+    /// Guests may see this player's name: names are on and they aren't waiting to opt in.
+    fn named(&self, spec: &Value, id: &str) -> bool {
+        names_on(spec, self) && !self.unnamed.contains(id)
+    }
+
+    /// An answer or slot change from this guest (Lin's review S1). Once the host has turned names
+    /// on, it names them only when the page they answered from showed names on (`"names": true` in
+    /// the body). A page painted while names were hidden, or an older guest page that doesn't send
+    /// the key, keeps them unnamed with the notice, so nobody is listed under a page that promised
+    /// they wouldn't be. Before any switch nothing changes.
+    fn answered_from(&mut self, id: &str, body: &Value) {
+        if self.names_on_at.is_some() && body.get("names").and_then(Value::as_bool) != Some(true) {
+            self.unnamed.insert(id.to_string());
+        } else {
+            self.unnamed.remove(id);
+        }
+    }
+
+    /// Answered while names were hidden and not shown yet (the host's `names_hidden`).
+    fn names_hidden(&self, spec: &Value) -> usize {
+        if !names_on(spec, self) {
+            return 0;
+        }
+        self.unnamed.iter().filter(|id| self.has_answered(spec, id)).count()
     }
 
     /// Listed members who haven't answered (or voted) yet, as the host typed them.
@@ -700,7 +783,7 @@ impl Gather {
             "closes_at": s.closes(spec),
             "event_at": spec.get("event_at").and_then(spec_date),
             "fields": fields,
-            "show_names": flag(spec, "show_names"),
+            "show_names": names_on(spec, s),
             "joined": s.joined(ctx),
             "members": members(spec).len(),
         });
@@ -747,7 +830,7 @@ impl Gather {
     fn guest_view(ctx: &KitCtx, s: &St, me: &str) -> Value {
         let spec = ctx.spec;
         let mut v = Self::facts(ctx, s);
-        let names = flag(spec, "show_names");
+        let names = names_on(spec, s);
         match face(spec) {
             RSVP => {
                 let c = Self::rsvp_counts(s);
@@ -757,6 +840,7 @@ impl Gather {
                     json!(ctx
                         .players
                         .iter()
+                        .filter(|p| s.named(spec, &p.id))
                         .filter_map(|p| s.answers.get(&p.id).map(|a| {
                             let mut row = Self::person(p);
                             row["answer"] = json!(a.answer);
@@ -787,6 +871,7 @@ impl Gather {
                         let people: Vec<Value> = slot
                             .taken
                             .iter()
+                            .filter(|t| s.named(spec, &t.id))
                             .filter_map(|t| {
                                 let p = ctx.player(&t.id)?;
                                 let mut row = Self::person(p);
@@ -794,7 +879,7 @@ impl Gather {
                                 Some(row)
                             })
                             .collect();
-                        let waiting: Vec<Value> = slot.waiting.iter().filter_map(|w| ctx.player(w).map(Self::person)).collect();
+                        let waiting: Vec<Value> = slot.waiting.iter().filter(|w| s.named(spec, w)).filter_map(|w| ctx.player(w).map(Self::person)).collect();
                         let (filled, queued) = s.slot_counts(i);
                         json!({
                             "slot": i, "name": name, "cap": cap, "filled": filled, "full": filled >= *cap,
@@ -813,12 +898,19 @@ impl Gather {
                 });
             }
             _ => {
-                let mine = s.voted.contains_key(me).then(|| s.ballots.get(&s.ballot_key(me)).cloned()).flatten();
+                // Their own order while open (to change it); after the close there's no link left
+                let mine = (s.phase == OPEN && s.voted.contains_key(me)).then(|| s.ballots.get(&s.ballot_key(me)).cloned()).flatten();
                 v["me"] = json!({ "voted": s.voted.contains_key(me), "ballot": mine });
-                let live = flag(spec, "show_live_count") && s.voted.contains_key(me) && s.phase == OPEN;
-                v["live"] = if live { json!(s.first_choices(spec)) } else { Value::Null };
+                // secret-ballot-unlinkable: no count while open, whatever `show_live_count` says
+                // (the 2nd voter would learn the 1st's pick); the totals are `result` at the close
+                v["live"] = Value::Null;
                 v["result"] = tally_json(spec, s);
             }
+        }
+        if face(spec) != VOTE {
+            // Answered while names were hidden: the host has since turned them on, and this
+            // guest's name stays off everyone's list until they answer again or show it.
+            v["names_notice"] = json!(names && s.unnamed.contains(me) && s.has_answered(spec, me));
         }
         v
     }
@@ -911,7 +1003,8 @@ impl Gather {
                         row
                     }))
                     .collect::<Vec<_>>());
-                v["live"] = if s.phase == OPEN { json!(s.first_choices(spec)) } else { Value::Null };
+                // No count while open: two reads around one vote would pair the voter with it
+                v["live"] = Value::Null;
                 v["result"] = tally_json(spec, s);
             }
         }
@@ -922,6 +1015,10 @@ impl Gather {
         v["needs_you"] = json!(s.phase == TIE);
         v["summary"] = json!(Self::summary_line(ctx, s));
         v["answers_deleted_at"] = json!(s.deleted.as_ref().and_then(|k| k.at));
+        if face(spec) != VOTE {
+            v["names_on_at"] = json!(s.names_on_at);
+            v["names_hidden"] = json!(s.names_hidden(spec));
+        }
         v
     }
 
@@ -1141,8 +1238,8 @@ impl Kit for Gather {
             retention: Retention::AfterDate { fields: DATE_FIELDS, days: RETENTION_DAYS },
             needs_pin: true,
             max_players: DEFAULT_MAX_PLAYERS,
-            guest_actions: &["answer", "take", "leave", "let_go", "seen", "vote"],
-            host_actions: &["set_paid", "copied", "pick", "revote_24h", "close_now", "delete_answers"],
+            guest_actions: &["answer", "take", "leave", "let_go", "seen", "vote", "show_my_name"],
+            host_actions: &["set_paid", "copied", "pick", "revote_24h", "close_now", "delete_answers", "set_show_names"],
         }
     }
 
@@ -1173,6 +1270,7 @@ impl Kit for Gather {
         let mut s = load(state);
         s.answers.remove(player_id);
         s.paid.remove(player_id);
+        s.unnamed.remove(player_id);
         let caps = slot_specs(ctx.spec);
         if s.phase == OPEN {
             s.leave(ctx, player_id, &caps);
@@ -1198,7 +1296,8 @@ impl Kit for Gather {
         let f = face(spec);
         let wrong_face = |want: &str| bad(format!("This pocket is a {f}; {name} is for a {want}."));
         if let Viewer::Guest(_) = actor {
-            if name != "seen" && !s.taking_answers(spec, now) {
+            // Neither changes an answer, so both still work once answers close
+            if !["seen", "show_my_name"].contains(&name) && !s.taking_answers(spec, now) {
                 return Err(not_now(match s.phase.as_str() {
                     TIE => "Voting has closed: it's a tie, and the host picks.",
                     _ => "Answers are closed.",
@@ -1253,6 +1352,7 @@ impl Kit for Gather {
                 if !coming {
                     s.paid.remove(me);
                 }
+                s.answered_from(me, body);
             }
             (Viewer::Guest(me), "take") => {
                 if f != SIGNUP {
@@ -1290,6 +1390,7 @@ impl Kit for Gather {
                         s.slots[i].taken.push(Taken { id: me.clone(), note, at: Some(now) });
                     }
                 }
+                s.answered_from(me, body);
             }
             (Viewer::Guest(me), "leave" | "let_go") => {
                 if f != SIGNUP {
@@ -1299,11 +1400,22 @@ impl Kit for Gather {
                 if !s.leave(ctx, me, &caps) {
                     return Err(not_now("You're not in a slot or on a waiting list."));
                 }
+                // Nothing of theirs is listed now; a later take is an answer after the switch
+                s.unnamed.remove(me);
             }
             (Viewer::Guest(me), "seen") => {
                 if let Some(m) = s.moved.get_mut(me) {
                     m.seen = true;
                 }
+            }
+            (Viewer::Guest(me), "show_my_name") => {
+                if f == VOTE {
+                    return Err(bad("A vote never shows who picked what."));
+                }
+                if !names_on(spec, &s) {
+                    return Err(not_now("Names are hidden now, so only the host sees who answered."));
+                }
+                s.unnamed.remove(me);
             }
             (Viewer::Guest(me), "vote") => {
                 if f != VOTE {
@@ -1348,6 +1460,21 @@ impl Kit for Gather {
                 } else {
                     s.paid.remove(id);
                 }
+            }
+            (Viewer::Host, "set_show_names") => {
+                if f == VOTE {
+                    return Err(bad("A vote never shows who picked what."));
+                }
+                let on = body.get("on").and_then(Value::as_bool).ok_or_else(|| bad("on is true or false"))?;
+                if on && !names_on(spec, &s) {
+                    // Whoever answered while names were hidden stays unnamed until they've seen this
+                    s.unnamed = s.answered_ids(spec);
+                    s.names_on_at = Some(now);
+                } else if !on {
+                    s.unnamed.clear();
+                    s.names_on_at = None;
+                }
+                s.names = Some(on);
             }
             (Viewer::Host, "copied") => {
                 let to = body.get("to").and_then(Value::as_str).ok_or_else(|| bad("to is the name on the draft"))?;
@@ -1442,6 +1569,15 @@ impl Kit for Gather {
 
     fn ticks_unwatched(&self) -> bool {
         true
+    }
+
+    fn scrub(&self, state: &mut Value) -> bool {
+        let mut s = load(state);
+        let changed = s.scrub();
+        if changed {
+            store(state, &s);
+        }
+        changed
     }
 
     fn stable_address_only(&self) -> bool {
@@ -1548,6 +1684,35 @@ mod tests {
         assert_eq!(t.rounds[0].dropped, vec![3]);
         assert_eq!(t.rounds[1].dropped, vec![2]);
         assert!(t.rounds[2].dropped.is_empty());
+    }
+
+    /// secret-ballot-unlinkable: the re-key keeps every order, leaves no salted key and no
+    /// salt, and does nothing to an open vote or a second time.
+    #[test]
+    fn unlinking_keeps_the_orders_and_drops_every_salted_key() {
+        let mut s = St { phase: OPEN.into(), ballot_salt: random_hex(16), ..St::default() };
+        let ids = ["pl_a", "pl_b", "pl_c", "pl_d"];
+        for (i, id) in ids.iter().enumerate() {
+            let k = s.ballot_key(id);
+            s.ballots.insert(k, vec![i % 2, 2]);
+        }
+        let before = s.clone();
+        assert!(!s.scrub(), "open: a voter still finds their own ballot");
+        assert_eq!(s, before);
+        s.phase = CLOSED.into();
+        assert!(s.scrub());
+        assert!(s.ballot_salt.is_empty());
+        let mut a: Vec<_> = s.ballots.values().cloned().collect();
+        let mut b: Vec<_> = before.ballots.values().cloned().collect();
+        a.sort();
+        b.sort();
+        assert_eq!(a, b);
+        for id in ids {
+            assert!(!s.ballots.contains_key(&before.ballot_key(id)));
+            assert!(!s.ballots.contains_key(&s.ballot_key(id)));
+        }
+        assert!(s.ballots.keys().all(|k| k.len() == 24 && k.bytes().all(|c| c.is_ascii_hexdigit())));
+        assert!(!s.scrub(), "once");
     }
 
     #[test]
