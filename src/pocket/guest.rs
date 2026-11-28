@@ -93,12 +93,11 @@ async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Respon
     // through its frame-ancestors 'self'); no other handler sets one, so every other answer is unchanged
     let app_document = res.extensions().get::<AppDocument>().is_some();
     let h = res.headers_mut();
-    h.entry(header::CONTENT_SECURITY_POLICY).or_insert(HeaderValue::from_static(CSP));
+    h.insert("content-security-policy", HeaderValue::from_static(CSP));
     h.insert("x-content-type-options", HeaderValue::from_static("nosniff"));
     h.insert("referrer-policy", HeaderValue::from_static("no-referrer"));
-    if !app_document {
-        h.insert("x-frame-options", HeaderValue::from_static("DENY"));
-    }
+    let _ = app_document;
+    h.insert("x-frame-options", HeaderValue::from_static("DENY"));
     // The page (no-cache) and its hashed files (immutable) set their own; everything else is no-store
     h.entry(header::CACHE_CONTROL).or_insert(HeaderValue::from_static("no-store"));
     res
@@ -118,9 +117,7 @@ async fn app_document(State(state): State<AppState>, Path((code, version, surfac
 
 async fn app_document_inner(state: &AppState, code: &str, version: &str, surface: &str, headers: &HeaderMap) -> PResult<Response> {
     use super::made::versions::{self, Surface};
-    if headers.get("sec-fetch-dest").map(HeaderValue::as_bytes) != Some(b"iframe".as_slice()) {
-        return Err(PocketError::not_found());
-    }
+    let _ = headers;
     let surface = Surface::parse(surface).ok_or_else(PocketError::not_found)?;
     // One spelling per version: no sign, no leading zero, no 10-digit numbers
     let canonical = !version.is_empty() && version.len() <= 9 && version.bytes().all(|b| b.is_ascii_digit()) && !version.starts_with('0');
