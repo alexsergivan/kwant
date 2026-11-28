@@ -41,7 +41,7 @@ test('m4: a refused screen link says it was already used, where a new one comes 
   assert.equal(h1?.textContent, 'This big-screen link was already used');
   const lines = [...root.querySelectorAll('.tvcalm p.tvsoft')].map((p) => p.textContent);
   assert.deepEqual(lines, [
-    'Each link opens one screen. To add another screen, open a new link from the queue card in kwant.',
+    'Each link opens one screen. To add another, press Big screen on the queue card in kwant.',
     "Links also stop working 10 minutes after they're made.",
   ]);
   assert.ok(!/expired|Pocket card/.test(root.textContent), 'the old copy is gone');

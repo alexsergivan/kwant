@@ -75,7 +75,7 @@ export function hm(iso?: string): string {
 /** The refused-link screen: title, line, and the 10-minute note (m4). */
 export const TV_LINK_USED = [
   'This big-screen link was already used',
-  'Each link opens one screen. To add another screen, open a new link from the queue card in kwant.',
+  'Each link opens one screen. To add another, press Big screen on the queue card in kwant.',
   "Links also stop working 10 minutes after they're made.",
 ] as const;
 
