@@ -176,6 +176,10 @@ struct St {
     gap_secs_total: i64,
     #[serde(default)]
     gaps_total: u64,
+    /// Calls on every day, so the all-days average follows the same rule as today's. A state
+    /// saved before this field reads 0 here (see `avg_total_minutes`).
+    #[serde(default)]
+    calls_total: u64,
 }
 
 fn load(state: &Value) -> St {
@@ -377,6 +381,10 @@ impl St {
         Some(((mean / 60.0).round() as i64).max(1))
     }
 
+    /// The all-days average, under the same rule as `avg_minutes`: at least `AVG_AFTER_CALLS`
+    /// calls and at least one gap. A gap needs two calls in the same open spell, so
+    /// `gaps_total + 1` never overstates the calls; it stands in for a state saved before
+    /// `calls_total` was counted.
     fn avg_total_minutes(&self) -> Option<i64> {
         (self.gaps_total >= (AVG_AFTER_CALLS as u64 - 1)).then(|| ((self.gap_secs_total as f64 / self.gaps_total as f64 / 60.0).round() as i64).max(1))
     }
@@ -418,6 +426,7 @@ impl St {
         let (number, waited) = (t.number, (now - t.taken_at).num_seconds().max(0));
         self.now_serving = Some(number);
         self.calls_today.push(waited);
+        self.calls_total += 1;
         if let Some(last) = self.last_call_at {
             let gap = (now - last).num_seconds().max(0);
             self.gaps_today.push(gap);
@@ -1217,5 +1226,74 @@ mod tests {
         s.gaps_total = 4;
         s.gap_secs_total = 4 * 190;
         assert_eq!(s.host_summary_line(), "3 days · 5 served · average 3 min");
+    }
+
+    /// Takes four tickets and calls the first two, a gap of 2 minutes.
+    fn two_calls(sp: &Value) -> Value {
+        let mut st = fresh(sp, at(0));
+        for g in ["a", "b", "c", "d"] {
+            act(sp, &mut st, at(0), &guest(g), "take", json!({})).unwrap();
+        }
+        act(sp, &mut st, at(1), &Viewer::Host, "call_next", json!({})).unwrap();
+        act(sp, &mut st, at(3), &Viewer::Host, "call_next", json!({ "served": 1 })).unwrap();
+        st
+    }
+
+    #[test]
+    fn each_turn_one_rule_across_a_close_and_reopen() {
+        let sp = spec();
+        let mut st = two_calls(&sp);
+        act(&sp, &mut st, at(4), &Viewer::Host, "close", json!({})).unwrap();
+        act(&sp, &mut st, at(5), &Viewer::Host, "reopen", json!({})).unwrap();
+        act(&sp, &mut st, at(6), &guest("e"), "take", json!({})).unwrap();
+        act(&sp, &mut st, at(8), &Viewer::Host, "call_next", json!({})).unwrap();
+        let s = load(&st);
+        assert_eq!(s.calls_today.len(), 3);
+        assert_eq!(s.gaps_today, vec![120], "no gap spans the close");
+        assert_eq!(s.calls_total, 3);
+        assert_eq!(s.avg_minutes(), Some(2));
+        assert_eq!(s.avg_total_minutes(), s.avg_minutes(), "one day on file: all days equals the day");
+        assert!(s.host_summary_line().ends_with(" · average 2 min"), "{}", s.host_summary_line());
+    }
+
+    #[test]
+    fn each_turn_one_rule_never_from_two_calls() {
+        let sp = spec();
+        let s = load(&two_calls(&sp));
+        assert_eq!((s.calls_total, s.gaps_total), (2, 1));
+        assert_eq!(s.avg_minutes(), None);
+        assert_eq!(s.avg_total_minutes(), None);
+        assert!(!s.host_summary_line().contains("average"));
+    }
+
+    #[test]
+    fn each_turn_one_day_equals_all_days() {
+        let sp = spec();
+        let mut st = two_calls(&sp);
+        act(&sp, &mut st, at(7), &Viewer::Host, "call_next", json!({ "served": 2 })).unwrap();
+        let s = load(&st);
+        assert_eq!(s.avg_minutes(), Some(3), "gaps of 2 and 4 minutes");
+        assert_eq!(s.avg_total_minutes(), Some(3));
+    }
+
+    #[test]
+    fn a_state_saved_before_calls_total_loads() {
+        let sp = spec();
+        let mut v = two_calls(&sp);
+        v.as_object_mut().unwrap().remove("calls_total");
+        let s = load(&v);
+        assert_eq!(s.calls_total, 0);
+        assert_eq!(s.gaps_total, 1);
+        assert_eq!(s.avg_total_minutes(), None, "one gap proves only two calls");
+        // Two gaps prove three calls, as the old rule had it.
+        let mut v = serde_json::to_value(&s).unwrap();
+        v.as_object_mut().unwrap().remove("calls_total");
+        v["gaps_total"] = json!(2);
+        v["gap_secs_total"] = json!(2 * 190);
+        let s = load(&v);
+        assert_eq!(s.calls_total, 0);
+        assert_eq!(s.avg_total_minutes(), Some(3));
+        // The next call counts from 0 and the lower bound still holds.
+        assert_eq!(St { calls_total: 1, gaps_total: 2, gap_secs_total: 2 * 190, ..St::default() }.avg_total_minutes(), Some(3));
     }
 }
