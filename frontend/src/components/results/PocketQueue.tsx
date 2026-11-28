@@ -289,14 +289,14 @@ const Tiles: React.FC<{ q: QueueInfo }> = ({ q }) => {
       <div className="grid grid-cols-3 gap-2" role="group" aria-label="The queue in all">
         <Tile k="days" label="Days open" value={num(s.days)} sub={s.days === 1 ? 'day' : 'days'} />
         <Tile k="served" label="Served" value={num(s.served_total)} sub="in all" />
-        <Tile k="avg" label="Each turn" value={avg(s.avg_total_minutes)} sub={s.avg_total_minutes === null ? 'too few calls' : 'per turn'} />
+        <Tile k="avg" label="Each turn" value={avg(s.avg_total_minutes)} sub={s.avg_total_minutes === null ? 'too few calls' : 'all days'} />
       </div>
     );
   if (q.state === 'closed')
     return (
       <div className="grid grid-cols-3 gap-2" role="group" aria-label="Today at the counter">
         <Tile k="served" label="Served" value={num(s.served_today)} sub="today" />
-        <Tile k="avg" label="Each turn" value={avg(s.avg_minutes)} sub={s.avg_minutes === null ? 'too few calls' : 'per turn'} />
+        <Tile k="avg" label="Each turn" value={avg(s.avg_minutes)} sub={s.avg_minutes === null ? 'too few calls' : 'today'} />
         <Tile k="skipped-left" label="Skipped · left" value={`${num(s.skipped_today)} · ${num(s.left_today)}`} sub="no-shows, gave up" />
       </div>
     );
@@ -307,7 +307,7 @@ const Tiles: React.FC<{ q: QueueInfo }> = ({ q }) => {
         k="avg"
         label="Each turn"
         value={avg(s.avg_minutes)}
-        sub={s.avg_minutes === null ? 'after 3 calls' : <><span className="sm:hidden">measured</span><span className="hidden sm:inline">per turn, measured today</span></>}
+        sub={s.avg_minutes === null ? 'after 3 calls' : <><span className="sm:hidden">measured</span><span className="hidden sm:inline">measured today</span></>}
       />
       <Tile k="waiting" label="Waiting" value={num(s.waiting)} sub={s.waiting && s.longest_wait_minutes !== null ? `longest ${num(s.longest_wait_minutes)} min` : 'nobody now'} />
     </div>
