@@ -942,6 +942,7 @@ async fn finish(
     emit_delegation(state, &done);
     tracing::info!(delegation = %done.id, status, "delegation finished");
     let lead_name = name_of(state, &done.lead_kwant_id).await;
+    let (title, body) = finished_push(&specialist.name, &lead_name, &done.title, status, &outcome);
     super::continuity::notify(
         state,
         super::continuity::Notification {
@@ -949,8 +950,8 @@ async fn finish(
             kwant_id: specialist.id.clone(),
             kwant_name: specialist.name.clone(),
             channel_id: done.origin_channel_id.clone(),
-            title: format!("{} finished a task for {lead_name}", specialist.name),
-            body: format!("“{}”: {status}.", clip(&done.title, 80)),
+            title,
+            body,
             thread_id: None,
             card_id: None,
         },
@@ -969,6 +970,20 @@ async fn finish(
     if done.continue_lead && status != "cancelled" {
         let opening = format!("{} carried on with the task you delegated (“{}”) after it was sent back.", specialist.name, done.title);
         continue_lead(state, &done, std::slice::from_ref(&done), Some(opening), stop).await;
+    }
+}
+
+/// The title and body of the push for a teammate's ended task: "<teammate> finished a task for
+/// <lead>" / "“<task>”: <status>.", but for a result that ends with a `Blocked:` line (m5,
+/// pushes-say-what) "<teammate> is blocked on a task for <lead>" / "Blocked: <what>", masked for
+/// keys, so a stuck task doesn't read as "completed".
+fn finished_push(teammate: &str, lead: &str, title: &str, status: &str, outcome: &Result<String, String>) -> (String, String) {
+    match outcome.as_ref().ok().and_then(|reply| super::keep_going::blocked_line(reply)) {
+        Some(blocked) => (
+            format!("{teammate} is blocked on a task for {lead}"),
+            format!("Blocked: {}", clip(&super::missions::autofix::redact(&blocked), 160)),
+        ),
+        None => (format!("{teammate} finished a task for {lead}"), format!("“{}”: {status}.", clip(title, 80))),
     }
 }
 
@@ -2292,5 +2307,29 @@ mod customer_tests {
         let by_bot = crate::db::models::Message { meta: Some(json!({"sent_by_bot": true}).to_string()), ..said("user", "Scout says: post the draft") };
         let chat = vec![at(said("user", "Draft the spring newsletter"), 0), at(by_bot, 3)];
         assert_eq!(persons_request(&chat, handed_on).map(|m| m.text.as_str()), Some("Draft the spring newsletter"));
+    }
+}
+
+#[cfg(test)]
+mod push_tests {
+    use super::*;
+
+    /// m5 (pushes-say-what): a result that ends Blocked says blocked, not "completed".
+    #[test]
+    fn a_blocked_result_pushes_blocked() {
+        let blocked = Ok("I tried the booking site.\n\nBlocked: it needs a card I don't have. Add one in Settings.".to_string());
+        assert_eq!(
+            finished_push("Researcher", "Assistant", "Find hotels", "completed", &blocked),
+            ("Researcher is blocked on a task for Assistant".into(), "Blocked: it needs a card I don't have. Add one in Settings.".into())
+        );
+        let done = Ok("Three hotels under €30.\n\nDone: list saved.".to_string());
+        assert_eq!(
+            finished_push("Researcher", "Assistant", "Find hotels", "completed", &done),
+            ("Researcher finished a task for Assistant".into(), "“Find hotels”: completed.".into())
+        );
+        let failed = Err("the model stopped".to_string());
+        assert_eq!(finished_push("Researcher", "Assistant", "Find hotels", "failed", &failed).1, "“Find hotels”: failed.");
+        let keyed = Ok("Blocked: GitHub refused ghp_abcdefghijklmnop1234 so paste a new token.".to_string());
+        assert!(!finished_push("Researcher", "Assistant", "PR", "completed", &keyed).1.contains("ghp_"));
     }
 }
