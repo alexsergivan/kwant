@@ -29,6 +29,7 @@ pub mod queue;
 pub mod quiz_kit;
 pub mod santa;
 pub mod schedule;
+pub mod toolkit;
 pub mod tunnel;
 pub mod wall;
 pub mod wall_pick;

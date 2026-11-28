@@ -193,6 +193,16 @@ pub fn reminder_text(question: &str) -> String {
     format!("Still waiting on you: “{q}{more}”. Answer here when you can.")
 }
 
+/// The body of a waiting-on-you reminder's push (pushes-say-what): its question card's text and
+/// choices, else the question the reply asked, else "Open the chat to answer.".
+fn reminder_push_body(w: &WaitingItem, card: Option<&crate::db::questions::Question>) -> String {
+    match card {
+        Some(q) => super::questions::push_body(&q.question, &q.choice_list()),
+        None if w.kind.is_none() && !w.question.trim().is_empty() => super::questions::push_body(&w.question, &[]),
+        None => "Open the chat to answer.".into(),
+    }
+}
+
 /// Sends the reminders due by `now`, each once. With reminders switched off nothing is sent and
 /// what was scheduled is unscheduled. Returns how many went out.
 pub async fn run_due(state: &AppState, now: DateTime<Utc>) -> usize {
@@ -212,9 +222,10 @@ pub async fn run_due(state: &AppState, now: DateTime<Utc>) -> usize {
 
 async fn remind(state: &AppState, w: &WaitingItem) -> bool {
     // A question closed without its entry following (an older kwnt): nothing to remind of
+    let mut card = None;
     if let Some(qid) = &w.question_id {
-        let open = state.db.get_question(qid).await.ok().flatten().is_some_and(|q| q.status == "open");
-        if !open {
+        card = state.db.get_question(qid).await.ok().flatten().filter(|q| q.status == "open");
+        if card.is_none() {
             let rows = state.db.close_waiting_for_question(qid).await.unwrap_or_default();
             closed(state, &rows, REASON_ANSWERED);
             return false;
@@ -250,7 +261,7 @@ async fn remind(state: &AppState, w: &WaitingItem) -> bool {
             kwant_name: kwant.name.clone(),
             channel_id: w.channel_id.clone(),
             title: format!("{} is still waiting on you", kwant.name),
-            body: "Open the chat to answer.".into(),
+            body: reminder_push_body(w, card.as_ref()),
             thread_id: w.thread_id.clone(),
             card_id: None,
         },
@@ -426,5 +437,48 @@ mod tests {
         assert_eq!(reminder_text("Which city?"), "Still waiting on you: “Which city?”. Answer here when you can.");
         let long = reminder_text(&"x".repeat(500));
         assert!(long.contains("…") && long.chars().count() < 260);
+    }
+
+    /// pushes-say-what: the reminder's push says what the bot is waiting on.
+    #[test]
+    fn a_reminder_push_says_the_question() {
+        let item = |question: &str, kind: Option<&str>| WaitingItem {
+            id: "w".into(),
+            kwant_id: "k".into(),
+            channel_id: None,
+            direct_kwant_id: Some("k".into()),
+            thread_id: None,
+            question_id: None,
+            message_id: None,
+            question: question.into(),
+            due_at: None,
+            status: "open".into(),
+            created_at: Utc::now(),
+            reminded_at: None,
+            kind: kind.map(Into::into),
+            retry: None,
+        };
+        let card = crate::db::questions::Question {
+            id: "q".into(),
+            kwant_id: "k".into(),
+            channel_id: None,
+            direct_kwant_id: Some("k".into()),
+            thread_id: None,
+            turn_id: None,
+            question: "Hotel budget?".into(),
+            choices: r#"["€20","€30","No limit"]"#.into(),
+            status: "open".into(),
+            answer: None,
+            message_id: None,
+            created_at: Utc::now(),
+            answered_at: None,
+            why_you: None,
+            checked: None,
+            answered_via: None,
+        };
+        assert_eq!(reminder_push_body(&item("Hotel budget?", None), Some(&card)), "Hotel budget? · €20 / €30 / No limit");
+        assert_eq!(reminder_push_body(&item("Which city first?", None), None), "Which city first?");
+        assert_eq!(reminder_push_body(&item("", None), None), "Open the chat to answer.");
+        assert_eq!(reminder_push_body(&item("The build stopped.", Some("stopped")), None), "Open the chat to answer.");
     }
 }

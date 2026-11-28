@@ -1,9 +1,9 @@
 //! The `made/1` spec (pa12 plan section 1): what a bot writes for a pocket it makes. Every error
 //! is a plain sentence the bot can act on, naming the collection and field it is about.
 //!
-//! L2 checks the parts it uses (title, retention, the reveal date, players, words, secrets and
-//! the collections). `actions`, `steps` and `screens` are only type-checked here: their contents
-//! belong to L4 and V2, and no view in L2 reads them.
+//! This checks the title, retention, the reveal date, players, words and the collections; the
+//! secret groups, `actions` and `steps` are checked by [`super::actions::check_spec`] (L4).
+//! `screens` is only type-checked here: its contents belong to V2.
 
 use super::super::kits::spec_date;
 use chrono::{Duration, Utc};
@@ -105,7 +105,9 @@ pub fn validate(spec: &Value) -> Result<(), String> {
             }
         }
     }
-    check_collections(o.get("collections"))
+    check_collections(o.get("collections"))?;
+    // L4: the secret groups, the action configs and the steps, which name collections
+    super::actions::check_spec(spec)
 }
 
 /// A name from the spec, cut short for an error sentence.

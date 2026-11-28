@@ -61,7 +61,7 @@ pub fn locked(state: &Value, name: &str) -> bool {
     state["locked"][name].as_bool().unwrap_or(false)
 }
 
-/// Revealed: the `revealed` flag is set (L4's `reveal`, or `tick` once `reveal_at` passed), or
+/// Revealed: the `revealed` flag is set (the host's `reveal`, or `tick` once `reveal_at` passed), or
 /// `reveal_at` has passed already (a poll may come before the next tick).
 pub fn revealed(spec: &Value, state: &Value, now: DateTime<Utc>) -> bool {
     state["revealed"].as_bool().unwrap_or(false) || spec.get("reveal_at").and_then(spec_date).is_some_and(|t| t <= now)
@@ -116,7 +116,7 @@ pub fn view(spec: &Value, state: &Value, viewer: &Viewer, now: DateTime<Utc>) ->
     };
     let mut out = Map::new();
     for c in all(spec) {
-        let lock = locked(state, c.name);
+        let lock = super::actions::coll_locked(state, c.name, now) || super::actions::vote_closes(spec, state, c.name, now);
         let v = match part(&c, state, viewer, revealed) {
             Part::Rows { rows, count } => {
                 let rows: Vec<Value> = rows
@@ -143,7 +143,7 @@ pub fn counts(spec: &Value, state: &Value, keep: impl Fn(&Coll) -> bool) -> Valu
     Value::Object(out)
 }
 
-fn new_row_id() -> String {
+pub fn new_row_id() -> String {
     let mut b = [0u8; 8];
     ring::rand::SystemRandom::new().fill(&mut b).expect("the OS random generator works");
     format!("r_{}", b.iter().map(|x| format!("{x:02x}")).collect::<String>())
@@ -170,6 +170,13 @@ pub fn put(ctx: &KitCtx, state: &mut Value, actor: &Viewer, body: &Value) -> Res
         ("host", Viewer::Guest(_)) => return Err(KitError::NotNow(format!("Only the host puts into {:?}.", c.name))),
         ("guest_one" | "guest_many" | "host", _) => {}
         _ => return Err(KitError::NotNow(format!("Nobody can put into {:?}.", c.name))),
+    }
+    // L4: `lock` (or a timer that ran out) closes a collection to guests; the host may still put
+    if matches!(actor, Viewer::Guest(_)) && super::actions::coll_locked(state, c.name, ctx.now) {
+        return Err(KitError::NotNow(format!("{:?} is closed right now.", c.name)));
+    }
+    if matches!(actor, Viewer::Guest(_)) && super::actions::vote_closes(ctx.spec, state, c.name, ctx.now) {
+        return Err(KitError::NotNow(super::actions::VOTE_CLOSED.into()));
     }
     let values = check_values(ctx, state, &c, actor, body.get("values"))?;
     let at = ctx.now.to_rfc3339_opts(SecondsFormat::Secs, true);
@@ -204,6 +211,12 @@ pub fn take_back(ctx: &KitCtx, state: &mut Value, actor: &Viewer, body: &Value) 
         return Err(KitError::BadInput("Only a guest takes back their own rows.".into()));
     };
     let id = body.get("id").and_then(Value::as_str).ok_or_else(|| KitError::BadInput("Say which row (id).".into()))?;
+    if super::actions::coll_locked(state, c.name, ctx.now) {
+        return Err(KitError::NotNow(format!("{:?} is closed right now.", c.name)));
+    }
+    if super::actions::vote_closes(ctx.spec, state, c.name, ctx.now) {
+        return Err(KitError::NotNow(super::actions::VOTE_CLOSED.into()));
+    }
     let list = state["rows"][c.name].as_array_mut();
     let at = list.as_ref().and_then(|l| l.iter().position(|r| r["id"].as_str() == Some(id) && owner(r) == who));
     match (list, at) {
