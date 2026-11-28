@@ -27,7 +27,7 @@
 //!   (hidden ones 404 `no_such_photo`), as the guest port's host sees it. 404 for any other kit
 //! - `GET    /api/pockets/:code/app/versions`  `{live, versions: [{version, state, report, made_by, created_at}]}`
 //!   newest first: a bot-made app's versions (pa12 L5). 404 for any other kit
-//! - `POST   /api/pockets/:code/app/rollback`  the same, after the newest earlier version that passed
+//! - `POST   /api/pockets/:code/app/rollback`  (optional `{from}`) the same, after the newest earlier version that passed
 //!   its check went live again. 409 `nothing_to_roll_back`, 410 `ended`
 //! - `DELETE /api/pockets/:code`           204, final
 
@@ -67,10 +67,24 @@ async fn app_versions(State(state): State<AppState>, Path(code): Path<String>) -
     Ok(Json(json!({ "live": live, "versions": versions })))
 }
 
-/// pa12 L5: the card's one-tap rollback.
-async fn app_rollback(State(state): State<AppState>, Path(code): Path<String>) -> PResult<Json<Value>> {
+/// pa12 L5: the card's one-tap rollback. An optional `{"from": N}` (the live version the card
+/// showed) makes a double tap or a retried request roll back once: 409 `live_changed` when the
+/// live version isn't N any more. An empty body rolls back from whatever is live.
+async fn app_rollback(State(state): State<AppState>, Path(code): Path<String>, body: axum::body::Bytes) -> PResult<Json<Value>> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Body {
+        from: Option<i64>,
+    }
+    let from = if body.iter().all(u8::is_ascii_whitespace) {
+        None
+    } else {
+        serde_json::from_slice::<Body>(&body)
+            .map_err(|_| PocketError::new(StatusCode::BAD_REQUEST, "bad_rollback", "A rollback takes nothing, or {\"from\": the live version's number}."))?
+            .from
+    };
     found(&state, &code).await?;
-    super::made::versions::rollback(&state, &code).await?;
+    super::made::versions::rollback(&state, &code, from).await?;
     app_versions(State(state), Path(code)).await
 }
 

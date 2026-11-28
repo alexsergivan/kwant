@@ -483,8 +483,148 @@ async fn live_pointer_rollback_and_the_state_machine() {
     // A later version rolls back to v1 again, never to the rolled-back v2
     let v4 = live(&t, &code, vspec(), "four").await;
     assert_eq!(view_app_version(&guest_state(&t, &code, &key).await), json!(v4));
-    assert_eq!(versions::rollback(&t.state, &code).await.unwrap(), v1);
+    assert_eq!(versions::rollback(&t.state, &code, None).await.unwrap(), v1);
     assert_eq!(view_app_version(&guest_state(&t, &code, &key).await), json!(v1));
+}
+
+async fn rollback_post(t: &T, code: &str, body: Option<Value>) -> Res {
+    send(&t.main, "POST", &format!("/api/pockets/{code}/app/rollback"), body, &local()).await
+}
+
+fn is_not_additive(r: &Res) -> bool {
+    r.status == StatusCode::CONFLICT && r.body["error"] == "not_additive" && r.body["message"].as_str().is_some_and(|m| m.ends_with("start a new pocket for that."))
+}
+
+/// QA F1 (rigel-cases.md VR1): a rollback runs the additive rule, so it never shows rows to people
+/// they were hidden from.
+#[tokio::test]
+async fn a_rollback_that_would_loosen_who_reads_rows_is_refused() {
+    let t = setup(true).await;
+    let (code, _) = made(&t, vspec()).await;
+    let (_, a) = joined(&t, &code, "Ann").await;
+    let (_, b) = joined(&t, &code, "Bob").await;
+    let v1 = live(&t, &code, vspec(), "one").await;
+    // v2 makes the empty shelf private: fine, nothing in it yet
+    let mut mine = vspec();
+    mine["collections"]["shelf"]["read"] = json!("mine");
+    let v2 = live(&t, &code, mine, "two").await;
+    for (key, title) in [(&a, "Ann's diary"), (&b, "Bob's diary")] {
+        let r = put(&t, &code, key, "shelf", json!({ "title": title })).await;
+        assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    }
+    let r = rollback_post(&t, &code, None).await;
+    assert!(is_not_additive(&r), "{} {}", r.status, r.body);
+    assert!(r.body["message"].as_str().unwrap().starts_with("\"shelf\" has rows"), "{}", r.body);
+    let e = versions::rollback(&t.state, &code, Some(v2)).await.unwrap_err();
+    assert_eq!((e.status, e.code), (StatusCode::CONFLICT, "not_additive"));
+    // Nothing moved: v2 is still live and not marked rolled back, v1 still retired
+    assert_eq!(r_list(&t, &code).await, vec![(v2, "live".to_string(), Some("K2 lint: clean".to_string())), (v1, "retired".to_string(), Some("K2 lint: clean".to_string()))]);
+    let r = guest_state(&t, &code, &a).await;
+    assert_eq!(view_app_version(&r), json!(v2));
+    assert!(!r.body.to_string().contains("Bob's diary"), "Ann still sees only her own row");
+    assert_eq!(doc(&t, &code, v1, "phone").await.0, StatusCode::NOT_FOUND);
+}
+
+/// QA F1 (rigel-cases.md VR2): a rollback can't drop a collection that has rows.
+#[tokio::test]
+async fn a_rollback_that_would_drop_a_collection_with_rows_is_refused() {
+    let t = setup(true).await;
+    let (code, _) = made(&t, vspec()).await;
+    let (_, a) = joined(&t, &code, "Ann").await;
+    let mut v1_spec = vspec();
+    v1_spec["collections"].as_object_mut().unwrap().remove("notes");
+    let v1 = live(&t, &code, v1_spec, "one").await;
+    let v2 = live(&t, &code, vspec(), "two").await;
+    let r = put(&t, &code, &a, "notes", json!({ "line": "for the host only" })).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let r = rollback_post(&t, &code, None).await;
+    assert!(is_not_additive(&r), "{} {}", r.status, r.body);
+    assert!(r.body["message"].as_str().unwrap().starts_with("\"notes\" has rows, so a new version can't remove it"), "{}", r.body);
+    assert_eq!(t.state.db.pocket_app_live_version(&code).await.unwrap(), Some(v2));
+    assert_eq!(r_list(&t, &code).await.iter().find(|v| v.0 == v1).unwrap().1, "retired");
+}
+
+/// QA F2: rows left under a name the live spec doesn't declare stay hidden; a later version that
+/// declares the name again (here under `read: everyone`) is refused.
+#[tokio::test]
+async fn a_version_that_reuses_the_name_of_orphaned_rows_is_refused() {
+    let t = setup(true).await;
+    let (code, _) = made(&t, vspec()).await;
+    // Before any guest, the host writes a `notes` row (read: host) and a version without notes goes live
+    let r = send(&t.main, "POST", &format!("/api/pockets/{code}/action"), Some(json!({ "name": "put", "body": { "collection": "notes", "values": { "line": "host only" } } })), &local()).await;
+    assert_eq!(r.status, StatusCode::OK, "{}", r.body);
+    let mut no_notes = vspec();
+    no_notes["collections"].as_object_mut().unwrap().remove("notes");
+    live(&t, &code, no_notes.clone(), "one").await;
+    let mut public = no_notes.clone();
+    public["collections"]["notes"] = json!({ "read": "everyone", "write": "guest_one", "fields": { "line": { "type": "text", "max": 60 } } });
+    // A draft made while nobody had joined passes its check...
+    let early = draft(&t, &code, public.clone(), "early").await.unwrap();
+    pass(&t, &code, early).await;
+    let (_, a) = joined(&t, &code, "Ann").await;
+    let e = draft(&t, &code, public.clone(), "three").await.unwrap_err();
+    assert_eq!((e.status, e.code), (StatusCode::CONFLICT, "not_additive"));
+    assert!(e.message.starts_with("\"notes\" has rows from an earlier version"), "{}", e.message);
+    // ...and is refused at go-live once a guest is in
+    let e = versions::go_live(&t.state, &code, early).await.unwrap_err();
+    assert_eq!((e.status, e.code), (StatusCode::CONFLICT, "not_additive"));
+    let r = guest_state(&t, &code, &a).await;
+    assert!(!r.body.to_string().contains("host only"), "{}", r.body);
+    // Leaving the name out is still fine
+    let mut other = no_notes;
+    other["collections"]["likes"] = json!({ "read": "everyone", "write": "guest_one", "fields": { "n": { "type": "text", "max": 9 } } });
+    live(&t, &code, other, "four").await;
+}
+
+/// QA F3: CRLF in the app's js and css is made LF before hashing, so the CSP hash matches the
+/// bytes served (a browser hashes the parsed text); a NUL is refused.
+#[tokio::test]
+async fn crlf_in_js_and_css_gets_hashes_that_match_the_served_bytes_and_a_nul_is_refused() {
+    let t = setup(true).await;
+    let (code, _) = made(&t, vspec()).await;
+    let s = Screen { html: "<main>\r\n<h1>Hi</h1></main>".into(), css: "#t{color:#123}\r\nh1{margin:0}\r".into(), js: "kwant.onState(function(s){});\r\nvar a=1;\rvar b=2;".into() };
+    let v = versions::draft(&t.state, &code, Draft { spec: vspec(), phone: Some(s.clone()), screen: None, made_by: None }).await.unwrap();
+    pass(&t, &code, v).await;
+    versions::go_live(&t.state, &code, v).await.unwrap();
+    let (status, headers, bytes) = doc(&t, &code, v, "phone").await;
+    assert_eq!(status, StatusCode::OK);
+    let text = std::str::from_utf8(&bytes).unwrap();
+    let (scripts, styles) = (bodies(text, "<script>", "</script>"), bodies(text, "<style>", "</style>"));
+    assert_eq!(scripts[1], "kwant.onState(function(s){});\nvar a=1;\nvar b=2;");
+    assert_eq!(styles[1], "#t{color:#123}\nh1{margin:0}\n");
+    let policy = headers.get("content-security-policy").unwrap().to_str().unwrap();
+    for body in [scripts[0], scripts[1], styles[0], styles[1]] {
+        assert!(!body.contains('\r'));
+        assert!(policy.contains(&format!("'sha256-{}'", b64(body.as_bytes()))), "{policy}");
+    }
+    for (css, js) in [("a{}\0", ""), ("", "var a='\0';")] {
+        let bad = Draft { spec: vspec(), phone: Some(Screen { html: String::new(), css: css.into(), js: js.into() }), screen: None, made_by: None };
+        let e = versions::draft(&t.state, &code, bad).await.unwrap_err();
+        assert_eq!((e.status, e.code, e.message.as_str()), (StatusCode::BAD_REQUEST, "bad_screen", "The phone screen's css and js can't contain a NUL character."));
+    }
+}
+
+/// QA F5 (rigel-cases.md VR4): `{from: N}` makes a double tap roll back once.
+#[tokio::test]
+async fn a_double_tap_rolls_back_once() {
+    let t = setup(true).await;
+    let (code, _) = made(&t, vspec()).await;
+    let v1 = live(&t, &code, vspec(), "one").await;
+    let v2 = live(&t, &code, vspec(), "two").await;
+    let v3 = live(&t, &code, vspec(), "three").await;
+    let r = rollback_post(&t, &code, Some(json!({ "from": v3 }))).await;
+    assert_eq!((r.status, &r.body["live"]), (StatusCode::OK, &json!(v2)), "{}", r.body);
+    let r = rollback_post(&t, &code, Some(json!({ "from": v3 }))).await;
+    assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::CONFLICT, Some("live_changed")), "{}", r.body);
+    assert_eq!(t.state.db.pocket_app_live_version(&code).await.unwrap(), Some(v2), "the second tap changed nothing");
+    for bad in [json!({ "from": "three" }), json!({ "form": v2 }), json!("v2")] {
+        let r = rollback_post(&t, &code, Some(bad.clone())).await;
+        assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_rollback")), "{bad}");
+    }
+    assert_eq!(t.state.db.pocket_app_live_version(&code).await.unwrap(), Some(v2));
+    let r = rollback_post(&t, &code, Some(json!({ "from": v2 }))).await;
+    assert_eq!((r.status, &r.body["live"]), (StatusCode::OK, &json!(v1)), "{}", r.body);
+    assert_eq!(versions::rollback(&t.state, &code, Some(v3)).await.unwrap_err().code, "live_changed");
 }
 
 async fn r_list(t: &T, code: &str) -> Vec<(i64, String, Option<String>)> {
@@ -570,6 +710,37 @@ async fn ten_versions_at_most_the_live_one_kept_and_delete_removes_them() {
     assert!(t.state.db.pocket_app_version(&code, v1).await.unwrap().is_none());
     let (s, h, b) = doc(&t, &code, v1, "phone").await;
     assert!(is_guest_404(s, &h, &b));
+}
+
+/// QA F4 (rigel-cases.md DS8): a run of drafts never evicts the rollback target; failed and draft
+/// versions go first, a passed one waits.
+#[tokio::test]
+async fn ten_versions_at_most_keeps_the_rollback_target_and_drops_failed_and_drafts_first() {
+    let t = setup(true).await;
+    let (code, _) = made(&t, vspec()).await;
+    let v1 = live(&t, &code, vspec(), "one").await;
+    let v2 = live(&t, &code, vspec(), "two").await;
+    let v3 = draft(&t, &code, vspec(), "bad").await.unwrap();
+    versions::set_check(&t.state, &code, v3, versions::FAILED, Some("K2 lint: eval")).await.unwrap();
+    let v4 = draft(&t, &code, vspec(), "ready").await.unwrap();
+    pass(&t, &code, v4).await;
+    for i in 0..12 {
+        draft(&t, &code, vspec(), &format!("d{i}")).await.unwrap();
+    }
+    let nums: Vec<i64> = r_list(&t, &code).await.iter().map(|v| v.0).collect();
+    assert_eq!(nums, (10..=16).rev().chain([v4, v2, v1]).collect::<Vec<_>>(), "failed v3 and the oldest drafts went; v4 (passed), v2 (live) and v1 stay");
+    let r = rollback_post(&t, &code, Some(json!({ "from": v2 }))).await;
+    assert_eq!((r.status, &r.body["live"]), (StatusCode::OK, &json!(v1)), "{}", r.body);
+    // The newest draft is never the one dropped, even when every other version is protected
+    let t = setup(true).await;
+    let (code, _) = made(&t, vspec()).await;
+    for i in 0..10 {
+        live(&t, &code, vspec(), &format!("l{i}")).await;
+    }
+    let newest = draft(&t, &code, vspec(), "new").await.unwrap();
+    let list = r_list(&t, &code).await;
+    assert_eq!((list.len(), list[0].0), (versions::MAX_APP_VERSIONS as usize, newest));
+    assert!(list.iter().any(|v| v.0 == 9 && v.1 == "retired") && list.iter().any(|v| v.0 == 10 && v.1 == "live"));
 }
 
 #[tokio::test]

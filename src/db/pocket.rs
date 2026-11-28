@@ -924,8 +924,9 @@ impl Database {
 
     // pa12 L5: app versions (callers hold the pocket's lock)
 
-    /// Adds a draft as the next version number and drops the oldest versions that aren't live
-    /// beyond [`MAX_APP_VERSIONS`], in one transaction. Returns the new version number.
+    /// Adds a draft as the next version number and drops versions beyond [`MAX_APP_VERSIONS`]
+    /// (failed and draft ones first, oldest first; never the live one, the new one or the newest
+    /// rollback target), in one transaction. Returns the new version number.
     pub async fn pocket_app_version_insert(&self, v: NewAppVersion<'_>) -> Result<i64, DbError> {
         let mut tx = self.pool.begin().await?;
         let (version,): (i64,) = sqlx::query_as("SELECT COALESCE(MAX(version), 0) + 1 FROM pocket_app_versions WHERE pocket_code = ?")
@@ -948,12 +949,19 @@ impl Database {
         .await?;
         let (count,): (i64,) = sqlx::query_as("SELECT COUNT(*) FROM pocket_app_versions WHERE pocket_code = ?").bind(v.code).fetch_one(&mut *tx).await?;
         if count > MAX_APP_VERSIONS {
+            // Never the live one, the one just made, or the newest passed/retired one below the
+            // live one (what a rollback would pick; with nothing live, what go-live would): a bot
+            // spamming drafts can't evict it (QA F4). Failed and draft ones go first, oldest first.
             sqlx::query(
-                "DELETE FROM pocket_app_versions WHERE pocket_code = ? AND version IN \
-                 (SELECT version FROM pocket_app_versions WHERE pocket_code = ? AND state != 'live' ORDER BY version LIMIT ?)",
+                "DELETE FROM pocket_app_versions WHERE pocket_code = ?1 AND version IN \
+                 (SELECT version FROM pocket_app_versions WHERE pocket_code = ?1 AND state != 'live' AND version != ?2 \
+                    AND version IS NOT (SELECT MAX(version) FROM pocket_app_versions WHERE pocket_code = ?1 \
+                      AND state IN ('passed', 'retired') AND version < COALESCE((SELECT version FROM pocket_app_versions \
+                        WHERE pocket_code = ?1 AND state = 'live'), 9223372036854775807)) \
+                  ORDER BY CASE WHEN state IN ('failed', 'draft') THEN 0 ELSE 1 END, version LIMIT ?3)",
             )
             .bind(v.code)
-            .bind(v.code)
+            .bind(version)
             .bind(count - MAX_APP_VERSIONS)
             .execute(&mut *tx)
             .await?;

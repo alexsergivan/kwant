@@ -12,12 +12,16 @@
 //! States: `draft` → `checking` → `passed` | `failed`; only `passed` goes live, under the pocket's
 //! lock, and the live one before it becomes `retired`. Rollback makes the newest earlier version
 //! that passed live again; the rolled-back one becomes `failed` ("Rolled back by the person."), so
-//! no later rollback picks it, and its document answers 404 like any version that isn't live. A pocket keeps at most [`MAX_APP_VERSIONS`].
+//! no later rollback picks it, and its document answers 404 like any version that isn't live. A
+//! pocket keeps at most [`MAX_APP_VERSIONS`]: failed and draft ones go first, and the newest one a
+//! rollback could pick is never dropped.
 //!
-//! The additive rule: once a pocket has guests, a new version may add collections and fields, but
-//! not remove a collection that has rows, change the type of one of its fields, or change who may
-//! read it ("start a new pocket for that"). So an older version can always read the newer state,
-//! which keeps rollback safe.
+//! The additive rule: once a pocket has guests, a version may add collections and fields, but not
+//! remove a collection that has rows, remove or change the type of one of its fields, or change who
+//! may read it ("start a new pocket for that"). Every change of the live version runs it, going
+//! live and rolling back alike (QA F1): a rollback that would show rows to people they were hidden
+//! from is refused. Rows left in the state under a name the live spec doesn't declare stay hidden
+//! for good: no later version may declare that name again (QA F2).
 
 use super::super::kits::{self, Kit};
 use super::super::{snapshot, PResult, PocketError};
@@ -143,10 +147,17 @@ fn contains_ci(hay: &str, needle: &str) -> bool {
     hay.to_ascii_lowercase().contains(needle)
 }
 
+/// The text a browser hashes for an inline body: the HTML parser turns CRLF and a lone CR into LF
+/// before the CSP check, so the hash is taken (and the body stored) after the same change (QA F3).
+fn as_parsed(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// The app document for one surface and the hashes of its inline script and style bodies, taken
-/// over exactly the strings put in. `Err` is one plain sentence for the bot: a part that would
-/// end its element early (or start another) is refused, so each inline body is exactly the string
-/// hashed. Everything else in the code is K2's lint.
+/// over exactly the strings put in (line ends made `\n` first, as a browser does). `Err` is one
+/// plain sentence for the bot: a part that would end its element early (or start another), or
+/// that a browser would hash differently (a NUL), is refused, so each inline body is exactly the
+/// string hashed. Everything else in the code is K2's lint.
 pub fn document(surface: Surface, s: &Screen) -> Result<(String, Hashes), String> {
     let name = surface.as_str();
     if s.html.len() + s.css.len() + s.js.len() > MAX_SCREEN_BYTES {
@@ -161,11 +172,15 @@ pub fn document(surface: Surface, s: &Screen) -> Result<(String, Hashes), String
     if contains_ci(&s.js, "</script") || s.js.contains("<!--") {
         return Err(format!("The {name} screen's js can't contain \"</script\" or \"<!--\"."));
     }
+    if s.css.contains('\0') || s.js.contains('\0') {
+        return Err(format!("The {name} screen's css and js can't contain a NUL character."));
+    }
+    let (css, js) = (as_parsed(&s.css), as_parsed(&s.js));
     let doc = format!(
-        "<!doctype html><html data-surface=\"{name}\"><head><meta charset=\"utf-8\"><script>{PRELUDE}</script><style>{POCKET_CSS}</style><style>{}</style></head><body>{}<script>{}</script></body></html>",
-        s.css, s.html, s.js
+        "<!doctype html><html data-surface=\"{name}\"><head><meta charset=\"utf-8\"><script>{PRELUDE}</script><style>{POCKET_CSS}</style><style>{css}</style></head><body>{}<script>{js}</script></body></html>",
+        s.html
     );
-    let hashes = Hashes { prelude: sha256_b64(PRELUDE), pocket_css: sha256_b64(POCKET_CSS), app_css: sha256_b64(&s.css), app_js: sha256_b64(&s.js) };
+    let hashes = Hashes { prelude: sha256_b64(PRELUDE), pocket_css: sha256_b64(POCKET_CSS), app_css: sha256_b64(&css), app_js: sha256_b64(&js) };
     Ok((doc, hashes))
 }
 
@@ -185,8 +200,9 @@ pub const PERMISSIONS_POLICY: &str = "camera=(), microphone=(), geolocation=(), 
      publickey-credentials-get=(), publickey-credentials-create=(), clipboard-read=(), display-capture=(), screen-wake-lock=(), \
      web-share=(), fullscreen=()";
 
-/// The additive rule (plan.md section 4). `live` is the pocket's spec now, `next` the new
-/// version's, `state` the kit state; `has_guests` once anyone has joined. `Err` is one sentence.
+/// The additive rule (plan.md section 4). `live` is the pocket's spec now, `next` the version about
+/// to be made or go live (a rollback's target too), `state` the kit state; `has_guests` once
+/// anyone has joined. `Err` is one sentence.
 pub fn additive(live: &Value, next: &Value, state: &Value, has_guests: bool) -> Result<(), String> {
     if !has_guests {
         return Ok(());
@@ -207,6 +223,14 @@ pub fn additive(live: &Value, next: &Value, state: &Value, has_guests: bool) -> 
             if !same {
                 return refuse(&format!("remove or retype its field \"{field}\""));
             }
+        }
+    }
+    // Rows under a name the live spec doesn't declare were written under some earlier rule; the
+    // live spec can't say what it was, so no version may declare that name again (fails closed)
+    for (name, rows) in state["rows"].as_object().into_iter().flatten() {
+        let has_rows = rows.as_array().is_some_and(|r| !r.is_empty());
+        if has_rows && collections::find(live, name).is_none() && collections::find(next, name).is_some() {
+            return Err(format!("\"{name}\" has rows from an earlier version, so a new version can't use that name while guests are in: start a new pocket for that."));
         }
     }
     Ok(())
@@ -299,8 +323,9 @@ pub async fn set_check(state: &AppState, code: &str, version: i64, to: &str, rep
     Ok(())
 }
 
-/// Makes `version` live if `from` allows its state; re-checks the additive rule against the pocket
-/// now (guests may have joined since the draft). Caller holds the lock.
+/// Makes `version` live if `from` allows its state; checks the additive rule against the pocket now
+/// (for go-live, guests may have joined since the draft; for a rollback, the target is checked
+/// against the newer state, QA F1). Caller holds the lock.
 async fn make_live(state: &AppState, s: &super::super::Snapshot, version: i64, from: &[&str], old: (&str, Option<&str>)) -> PResult<()> {
     let code = &s.row.code;
     let row = state.db.pocket_app_version(code, version).await?.ok_or_else(no_such_version)?;
@@ -308,10 +333,7 @@ async fn make_live(state: &AppState, s: &super::super::Snapshot, version: i64, f
         return Err(PocketError::new(StatusCode::CONFLICT, "not_passed", "Only a version that passed its check can go live."));
     }
     let spec: Value = serde_json::from_str(&row.spec).unwrap_or(Value::Null);
-    // A rollback goes back to an older version, which reads the newer state (that's the rule's point)
-    if from == [PASSED] {
-        additive(&s.spec, &spec, &s.kit_state, !s.rows.is_empty()).map_err(not_additive)?;
-    }
+    additive(&s.spec, &spec, &s.kit_state, !s.rows.is_empty()).map_err(not_additive)?;
     let title = Made.title(&spec);
     if !state.db.pocket_app_make_live(code, version, from, old, &row.spec, &title).await? {
         return Err(PocketError::new(StatusCode::CONFLICT, "not_passed", "Only a version that passed its check can go live."));
@@ -332,9 +354,12 @@ pub async fn go_live(state: &AppState, code: &str, version: i64) -> PResult<()> 
 }
 
 /// One tap on the card: the newest version older than the live one that passed its check (and
-/// may have been live since, `retired`) becomes live; the live one becomes `failed`. Returns its number; 409 `nothing_to_roll_back` when
-/// there's none.
-pub async fn rollback(state: &AppState, code: &str) -> PResult<i64> {
+/// may have been live since, `retired`) becomes live; the live one becomes `failed`. Returns its
+/// number; 409 `nothing_to_roll_back` when there's none, 409 `not_additive` when the target can't
+/// show the rows guests wrote since under the same rules (the additive rule, QA F1), and 409
+/// `live_changed` when `from` is given and isn't the live version (a double tap or a retry rolls
+/// back once, QA F5).
+pub async fn rollback(state: &AppState, code: &str, from: Option<i64>) -> PResult<i64> {
     let lock = state.pocket.lock_for(code);
     let _g = lock.lock().await;
     let s = made_pocket(state, code).await?;
@@ -342,7 +367,11 @@ pub async fn rollback(state: &AppState, code: &str) -> PResult<i64> {
         return Err(ended());
     }
     let nothing = || PocketError::new(StatusCode::CONFLICT, "nothing_to_roll_back", "There's no earlier version that passed its check.");
-    let live = state.db.pocket_app_live_version(code).await?.ok_or_else(nothing)?;
+    let live = state.db.pocket_app_live_version(code).await?;
+    if from.is_some_and(|n| live != Some(n)) {
+        return Err(PocketError::new(StatusCode::CONFLICT, "live_changed", "The live version has changed since: look at the list again."));
+    }
+    let live = live.ok_or_else(nothing)?;
     let target = state
         .db
         .pocket_app_versions(code)
@@ -433,6 +462,40 @@ mod tests {
         }
         let big = Screen { html: "a".repeat(MAX_SCREEN_BYTES), css: "b".into(), js: String::new() };
         assert!(document(Surface::Phone, &big).unwrap_err().contains("120 KB"));
+    }
+
+    #[test]
+    fn line_ends_are_made_lf_before_hashing_and_a_nul_is_refused() {
+        // A browser hashes the parsed text, where CRLF and a lone CR are LF (QA F3)
+        let s = Screen { html: "<p>\r\n</p>".into(), css: "a{}\r\nb{}\rc{}".into(), js: "a();\r\nb();\rc();".into() };
+        let (doc, h) = document(Surface::Phone, &s).unwrap();
+        assert_eq!(h.app_js, sha256_b64("a();\nb();\nc();"));
+        assert_eq!(h.app_css, sha256_b64("a{}\nb{}\nc{}"));
+        assert!(doc.contains("<script>a();\nb();\nc();</script>") && doc.contains("<style>a{}\nb{}\nc{}</style>"));
+        for (css, js) in [("a{}\0", ""), ("", "x=1;\0")] {
+            let s = Screen { html: String::new(), css: css.into(), js: js.into() };
+            assert_eq!(document(Surface::Screen, &s).unwrap_err(), "The screen screen's css and js can't contain a NUL character.");
+        }
+    }
+
+    #[test]
+    fn a_rollback_target_and_orphaned_rows_get_the_same_rule() {
+        let rows = json!({ "rows": { "shelf": [{ "id": "r_1", "owner": "a", "values": { "title": "Emma" } }] } });
+        let spec = |read: &str| json!({ "collections": { "shelf": { "read": read, "write": "guest_many", "fields": { "title": { "type": "text" } } } } });
+        // QA F1: v1 everyone → v2 mine is fine while empty; back to v1 once rows exist is refused
+        assert_eq!(additive(&spec("everyone"), &spec("mine"), &json!({ "rows": {} }), true), Ok(()));
+        let m = additive(&spec("mine"), &spec("everyone"), &rows, true).unwrap_err();
+        assert!(m.contains("change who can read it"), "{m}");
+        // QA F2: rows under a name the live spec lacks can't be declared again, under any rule
+        let live = json!({ "collections": { "other": { "read": "everyone", "write": "guest_one", "fields": { "t": { "type": "text" } } } } });
+        let mut next = live.clone();
+        next["collections"]["shelf"] = spec("everyone")["collections"]["shelf"].clone();
+        let m = additive(&live, &next, &rows, true).unwrap_err();
+        assert_eq!(m, "\"shelf\" has rows from an earlier version, so a new version can't use that name while guests are in: start a new pocket for that.");
+        next["collections"]["shelf"]["read"] = json!("host");
+        assert!(additive(&live, &next, &rows, true).is_err(), "not even a stricter rule");
+        assert_eq!(additive(&live, &live, &rows, true), Ok(()), "leaving it out is fine: the rows stay hidden");
+        assert_eq!(additive(&live, &next, &json!({ "rows": { "shelf": [] } }), true), Ok(()), "no rows, no orphan");
     }
 
     #[test]
