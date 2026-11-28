@@ -426,11 +426,15 @@ async fn write_rules_overwrite_cap_refuse_server_and_check_row_refs() {
     let r = put(&t, &code, &c, "picks", json!({ "text": "x", "book": "r_0000000000000000" })).await;
     assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::BAD_REQUEST, Some("bad_action")), "{}", r.body);
     assert_eq!(r.body["message"], "book: there's no such row in \"shelf\".");
-    // unknown and missing fields, and wrong types
+    // unknown and missing fields, and wrong types. mine_id was taken back above, so these point at
+    // a live row Cy can see (Ana's new "three"): fields are checked in name order, so with a dead
+    // row "book" would be refused before "text" is looked at.
+    let live_id = rows(&state(c.clone()).await, "shelf").unwrap().iter().find(|r| r["values"]["title"] == "three").unwrap()["id"].as_str().unwrap().to_string();
+    assert_ne!(live_id, mine_id);
     for (values, want) in [
-        (json!({ "text": "x", "book": mine_id, "extra": 1 }), "\"picks\" has no field called \"extra\"."),
+        (json!({ "text": "x", "book": live_id, "extra": 1 }), "\"picks\" has no field called \"extra\"."),
         (json!({ "text": "x" }), "book: fill this in."),
-        (json!({ "text": 5, "book": mine_id }), "text: send a text."),
+        (json!({ "text": 5, "book": live_id }), "text: send a text."),
     ] {
         let r = put(&t, &code, &c, "picks", values).await;
         assert_eq!((r.status, r.body["message"].as_str()), (StatusCode::BAD_REQUEST, Some(want)), "{}", r.body);
