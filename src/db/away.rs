@@ -60,16 +60,21 @@ pub struct AwayRow {
     pub job_lead: Option<String>,
 }
 
+/// The hand-off: the asker's own in that thread, else any; live before ended, then newest.
+/// Two lookups, not one `ORDER BY d1.specialist_kwant_id = q.kwant_id`: SQLite can't resolve an
+/// outer column in a correlated subquery's ORDER BY (`no such column: q.kwant_id`).
 const OPEN_QUESTIONS: &str = "
     SELECT 'question' AS kind, q.id, q.kwant_id, k.name AS kwant_name, q.question AS title, q.status,
            NULL AS body, q.created_at AS at, q.thread_id, q.channel_id, q.direct_kwant_id, q.choices,
            NULL AS routine_id, d.title AS job_title, lead.name AS job_lead
     FROM questions q LEFT JOIN kwants k ON k.id = q.kwant_id
-    LEFT JOIN delegations d ON d.id = (
-        SELECT d1.id FROM delegations d1 WHERE q.thread_id IS NOT NULL AND d1.thread_id = q.thread_id
-        ORDER BY d1.specialist_kwant_id = q.kwant_id DESC, d1.status IN ('queued', 'running') DESC,
-                 d1.created_at DESC, d1.rowid DESC
-        LIMIT 1)
+    LEFT JOIN delegations d ON d.id = COALESCE(
+        (SELECT d1.id FROM delegations d1
+         WHERE q.thread_id IS NOT NULL AND d1.thread_id = q.thread_id AND d1.specialist_kwant_id = q.kwant_id
+         ORDER BY d1.status IN ('queued', 'running') DESC, d1.created_at DESC, d1.rowid DESC LIMIT 1),
+        (SELECT d1.id FROM delegations d1
+         WHERE q.thread_id IS NOT NULL AND d1.thread_id = q.thread_id
+         ORDER BY d1.status IN ('queued', 'running') DESC, d1.created_at DESC, d1.rowid DESC LIMIT 1))
     LEFT JOIN kwants lead ON lead.id = d.lead_kwant_id
     WHERE q.status = 'open'
       AND COALESCE(k.space_id, 'spc_default') = ?3";
