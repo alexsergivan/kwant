@@ -372,8 +372,12 @@ async fn a_claude_engine_reply_gets_the_santa_it_made_this_turn() {
 async fn a_claude_engine_reply_never_gets_another_bots_or_spaces_santa() {
     let e = setup(true).await;
     person_in_london(&e).await;
-    // The other bot makes a Santa in its own chat, after the person asked this bot
+    // The other bot makes a Santa in its own chat, after the person asked this bot. The person
+    // asks there first too: message times keep whole seconds, so an ask after the Santa could
+    // land in the next second and make it look older than the turn (the rule the test above
+    // proves with its sleep).
     ask_in(&e, Some(&e.bot.id), None).await;
+    ask_in(&e, Some(&e.other.id), None).await;
     let origin = TurnOrigin { direct_kwant_id: Some(e.other.id.clone()), ..Default::default() };
     let token = turn_in(&e, &e.other, "t-other", origin).await;
     let (text, err) = tool(&e, &token, "santa_create", json!({"spec": mira_spec()})).await;
@@ -382,13 +386,12 @@ async fn a_claude_engine_reply_never_gets_another_bots_or_spaces_santa() {
     let m = reply_as(&e, &e.bot, &e.bot.id, vec![claude_call(json!({"spec": mira_spec()}))]).await;
     assert_eq!(pocket(&m), None, "another bot's Santa: {:?}", m.results);
     // ...and it is still the other bot's own card in its own chat
-    ask_in(&e, Some(&e.other.id), None).await;
     let other = e.other.clone();
     let m = reply_as(&e, &other, &other.id, vec![claude_call(json!({"spec": mira_spec()}))]).await;
     assert_eq!(pocket(&m).expect("its own Santa")["code"], json!(theirs));
 
-    // This bot's Santa, then a reply under its name in a channel of another space
-    let (mine, _) = make(&e).await;
+    // A reply under this bot's name in a channel of another space, asked before this bot makes
+    // its Santa, so only the space keeps that Santa off the card (never the clock)
     let side = e.state.db.create_space(&NewSpace { name: "Side".into(), icon: "S".into(), color: None, this_machine_enabled: true }).await.unwrap();
     let side_id = SpaceId::new(side.id.clone());
     // A bot of the same name lives there
@@ -419,6 +422,7 @@ async fn a_claude_engine_reply_never_gets_another_bots_or_spaces_santa() {
         .await
         .unwrap();
     ask_in(&e, None, Some(&channel.id)).await;
+    let (mine, _) = make(&e).await;
     // The name finds the twin there, which made no Santa
     let m = channel_reply(&e, &channel.id, None).await;
     assert_eq!(pocket(&m), None, "the twin made none: {:?}", m.results);
