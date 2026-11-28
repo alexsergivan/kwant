@@ -140,13 +140,14 @@ export function withQuietLines(lines: Record<string, string>, status: Record<str
   return out;
 }
 
-/** limit-wait-status (m3): a bot whose turn is parked on a usage limit (`queued`/`usage_limit`): "Waits for the
- *  usage limit · back 16:42", the reset on the person's clock as the hand-off card says it ("Wed 09:10" another day).
+/** limit-wait-status (m3): a bot whose turn is parked on a usage limit (`queued`/`usage_limit`): "Back 16:42 ·
+ *  usage limit", the reset on the person's clock as the hand-off card says it ("Back Sun 09:10", "Back 1 Dec").
+ *  Time first, so a cut in the ~151 px desktop line only ever eats "usage limit" (Mira's copy check).
  *  Without a time still to come: "Waits for the usage limit". */
 export function h4LimitLine(s?: H4Status | null, now = Date.now()): string | null {
   if (s?.status !== 'queued' || s.reason_code !== 'usage_limit') return null;
   const at = s.back_at ? new Date(s.back_at) : null;
-  return at && Number.isFinite(at.getTime()) && at.getTime() > now ? `Waits for the usage limit · back ${usageResetTime(at, now)}` : 'Waits for the usage limit';
+  return at && Number.isFinite(at.getTime()) && at.getTime() > now ? `Back ${usageResetTime(at, now)} · usage limit` : 'Waits for the usage limit';
 }
 
 /** The sidebar's busy lines plus a limit-waiting bot's line (it has no turn, so no line of its own yet). */

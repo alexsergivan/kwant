@@ -4115,7 +4115,7 @@ export const SpaceApp: React.FC<SpaceAppProps> = ({
   // Sidebar: what busy bots are doing, "here" for the open chat.
   const busyTitles: Record<string, string> = {};
   // m7: a bot whose model has been silent 3 min says so instead of "Working …" (server `quiet`/`model_silent`).
-  // limit-wait-status (m3): a bot whose turn is parked on a usage limit says "Waits for the usage limit · back 16:42".
+  // limit-wait-status (m3): a bot whose turn is parked on a usage limit says "Back 16:42 · usage limit".
   const busyKwants = withLimitLines(
     withQuietLines(
       busyLines({ turns: Object.values(turns), openCtx, awaiting: awaitingTurns, browser: browserTurns, tools: toolsTurns, describe: describeContext, names: kwantNames, titles: busyTitles }),
