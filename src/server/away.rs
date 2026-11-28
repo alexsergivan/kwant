@@ -272,6 +272,10 @@ pub(super) fn item(row: AwayRow) -> Value {
         v["details"] = masked_details(details);
     }
     if row.kind == "question" {
+        // inbox-question-job-and-time (m8): the hand-off it was asked in and its lead, null for a
+        // question in a direct chat, a channel or a plain thread ("for <job> · <lead>" under it)
+        v["job_title"] = json!(row.job_title);
+        v["job_lead"] = json!(row.job_lead);
         v["choices"] = row
             .choices
             .as_deref()
@@ -762,6 +766,8 @@ mod tests {
             choices: None,
             routine_id: None,
             fallback: None,
+            job_title: None,
+            job_lead: None,
         };
         let limit = item(row("You've hit your session limit · resets 3am (Europe/Berlin)"));
         assert_eq!(limit["summary"], "Finished");
@@ -773,5 +779,141 @@ mod tests {
     fn summaries_mask_url_passwords_and_bearer_tokens() {
         let s = summarize("failed: postgres://bob:hunter2@db:5432/x with Authorization: Bearer abc123");
         assert_eq!(s, "failed: postgres://bob:[redacted]@db:5432/x with Authorization: Bearer [redacted]");
+    }
+
+    // ---- inbox-question-job-and-time (m8, m9) ----
+
+    async fn iqjt_bot(db: &crate::db::Database, id: &str, name: &str) {
+        sqlx::query("INSERT INTO kwants (id, name, title, persona_prompt, avatar_sprite, space_id) VALUES (?, ?, 't', 'p', 'a', 'spc_default')")
+            .bind(id)
+            .bind(name)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn iqjt_hand_off(
+        db: &crate::db::Database,
+        id: &str,
+        thread: &str,
+        lead: &str,
+        specialist: &str,
+        title: &str,
+        status: &str,
+        created: chrono::DateTime<chrono::Utc>,
+        ended: Option<chrono::DateTime<chrono::Utc>>,
+        result: Option<&str>,
+    ) {
+        sqlx::query(
+            "INSERT INTO delegations (id, thread_id, lead_kwant_id, specialist_kwant_id, task, title, status, created_at, started_at, ended_at, result_message_id) \
+             VALUES (?, ?, ?, ?, 'task', ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(id)
+        .bind(thread)
+        .bind(lead)
+        .bind(specialist)
+        .bind(title)
+        .bind(status)
+        .bind(created)
+        .bind(created)
+        .bind(ended)
+        .bind(result)
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    async fn iqjt_question(db: &crate::db::Database, id: &str, kwant: &str, thread: Option<&str>, direct: Option<&str>, text: &str) {
+        sqlx::query(
+            "INSERT INTO questions (id, kwant_id, thread_id, direct_kwant_id, question, choices, status, created_at) \
+             VALUES (?, ?, ?, ?, ?, '[\"Up to 2000\",\"Up to 4000\"]', 'open', ?)",
+        )
+        .bind(id)
+        .bind(kwant)
+        .bind(thread)
+        .bind(direct)
+        .bind(text)
+        .bind(chrono::Utc::now())
+        .execute(&db.pool)
+        .await
+        .unwrap();
+    }
+
+    /// m8: a question asked inside a hand-off names that job and its lead (the open hand-off of
+    /// the asking teammate when the thread had several); one asked in a direct chat or a plain
+    /// thread names neither, and the count is unchanged.
+    #[tokio::test]
+    async fn a_question_in_a_hand_off_names_its_job_and_lead() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::init(tmp.path()).await.unwrap();
+        iqjt_bot(&db, "planner", "Planner").await;
+        iqjt_bot(&db, "researcher", "Researcher").await;
+        iqjt_bot(&db, "writer", "Writer").await;
+        let now = chrono::Utc::now();
+        let mins = chrono::Duration::minutes;
+        let job = db.create_thread("planner", "Compare three caterers", "delegation", None, "planner").await.unwrap().id;
+        let plain = db.create_thread("planner", "Notes", "chat", None, "planner").await.unwrap().id;
+        // An earlier finished hand-off in the same thread, and a newer one to another teammate
+        iqjt_hand_off(&db, "d0", &job, "planner", "researcher", "List caterers", "completed", now - mins(60), Some(now - mins(50)), None).await;
+        iqjt_hand_off(&db, "d1", &job, "planner", "researcher", "Compare three caterers", "running", now - mins(10), None, None).await;
+        iqjt_hand_off(&db, "d2", &job, "planner", "writer", "Write the summary", "queued", now - mins(1), None, None).await;
+        iqjt_question(&db, "q_job", "researcher", Some(&job), None, "Which caterer budget?").await;
+        iqjt_question(&db, "q_direct", "researcher", None, Some("researcher"), "Which city?").await;
+        iqjt_question(&db, "q_plain", "planner", Some(&plain), None, "Which day?").await;
+
+        let space = SpaceId::default_space();
+        let rows = db.away_open_questions(&space, 50).await.unwrap();
+        assert_eq!(rows.len(), 3, "one row per question, the join adds none");
+        assert_eq!(db.away_count_open_questions(&space).await.unwrap(), 3);
+        let by_id: HashMap<String, Value> = rows.into_iter().map(|r| (r.id.clone(), item(r))).collect();
+        let v = &by_id["q_job"];
+        assert_eq!((v["job_title"].clone(), v["job_lead"].clone()), (json!("Compare three caterers"), json!("Planner")), "{v}");
+        assert_eq!(v["title"], "Which caterer budget?");
+        for id in ["q_direct", "q_plain"] {
+            let v = &by_id[id];
+            assert_eq!((v["job_title"].clone(), v["job_lead"].clone()), (Value::Null, Value::Null), "{v}");
+        }
+    }
+
+    /// m9: a teammate's result that arrived after its hand-off ended (it ended its turn on a
+    /// question, then finished after the person's answer: `resume_after_answer` posts the result
+    /// without moving `ended_at`) shows when it arrived; one posted with the end keeps `ended_at`.
+    #[tokio::test]
+    async fn a_late_result_shows_when_it_arrived() {
+        let tmp = tempfile::tempdir().unwrap();
+        let db = crate::db::Database::init(tmp.path()).await.unwrap();
+        iqjt_bot(&db, "planner", "Planner").await;
+        iqjt_bot(&db, "researcher", "Researcher").await;
+        let now = chrono::Utc::now();
+        let mins = chrono::Duration::minutes;
+        let ended = now - mins(13); // 16:47
+        let arrived = now - mins(10); // 16:50
+        let msg = |id: &'static str, at: chrono::DateTime<chrono::Utc>| {
+            let db = &db;
+            async move {
+                sqlx::query("INSERT INTO messages (id, direct_kwant_id, sender_role, sender_id, text, created_at) VALUES (?, 'planner', 'kwant', 'Researcher', 'Three caterers compared.', ?)")
+                    .bind(id)
+                    .bind(at)
+                    .execute(&db.pool)
+                    .await
+                    .unwrap();
+            }
+        };
+        msg("m_late", arrived).await;
+        msg("m_on_time", ended + chrono::Duration::milliseconds(20)).await;
+        let t1 = db.create_thread("planner", "a", "delegation", None, "planner").await.unwrap().id;
+        let t2 = db.create_thread("planner", "b", "delegation", None, "planner").await.unwrap().id;
+        let t3 = db.create_thread("planner", "c", "delegation", None, "planner").await.unwrap().id;
+        iqjt_hand_off(&db, "late", &t1, "planner", "researcher", "Compare", "completed", now - mins(20), Some(ended), Some("m_late")).await;
+        iqjt_hand_off(&db, "on_time", &t2, "planner", "researcher", "Compare", "completed", now - mins(20), Some(ended), Some("m_on_time")).await;
+        iqjt_hand_off(&db, "no_msg", &t3, "planner", "researcher", "Compare", "completed", now - mins(20), Some(ended), None).await;
+
+        let rows = db.away_finished(&SpaceId::default_space(), now - chrono::Duration::days(7), 50).await.unwrap();
+        let at: HashMap<String, chrono::DateTime<chrono::Utc>> = rows.into_iter().map(|r| (r.id, r.at)).collect();
+        let ms = |t: chrono::DateTime<chrono::Utc>| t.timestamp_millis();
+        assert_eq!(ms(at["late"]), ms(arrived), "the late result's own time, not ended_at");
+        assert_eq!(ms(at["on_time"]), ms(ended + chrono::Duration::milliseconds(20)));
+        assert_eq!(ms(at["no_msg"]), ms(ended));
     }
 }

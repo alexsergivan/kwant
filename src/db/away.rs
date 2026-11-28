@@ -51,21 +51,38 @@ pub struct AwayRow {
     /// when the reply is no summary (a usage-limit line). Other queries don't select it.
     #[sqlx(default)]
     pub fallback: Option<String>,
+    /// inbox-question-job-and-time (m8), questions only: the hand-off the question was asked in
+    /// (the delegation whose thread it is) and that hand-off's lead. `None` for a question in a
+    /// direct chat, a channel or a plain thread. Other queries don't select them.
+    #[sqlx(default)]
+    pub job_title: Option<String>,
+    #[sqlx(default)]
+    pub job_lead: Option<String>,
 }
 
 const OPEN_QUESTIONS: &str = "
     SELECT 'question' AS kind, q.id, q.kwant_id, k.name AS kwant_name, q.question AS title, q.status,
            NULL AS body, q.created_at AS at, q.thread_id, q.channel_id, q.direct_kwant_id, q.choices,
-           NULL AS routine_id
+           NULL AS routine_id, d.title AS job_title, lead.name AS job_lead
     FROM questions q LEFT JOIN kwants k ON k.id = q.kwant_id
+    LEFT JOIN delegations d ON d.id = (
+        SELECT d1.id FROM delegations d1 WHERE q.thread_id IS NOT NULL AND d1.thread_id = q.thread_id
+        ORDER BY d1.specialist_kwant_id = q.kwant_id DESC, d1.status IN ('queued', 'running') DESC,
+                 d1.created_at DESC, d1.rowid DESC
+        LIMIT 1)
+    LEFT JOIN kwants lead ON lead.id = d.lead_kwant_id
     WHERE q.status = 'open'
       AND COALESCE(k.space_id, 'spc_default') = ?3";
 
 /// `?1` = since. Completed delegations report the specialist's result message.
+/// inbox-question-job-and-time (m9): the row's time is when that message arrived when it came
+/// after `ended_at` (a teammate that ended its turn on a question, then finished after the
+/// person's late answer: `resume_after_answer` posts the result but leaves `ended_at`). The
+/// `ended_at > ?1` filter is unchanged.
 const DELEGATIONS_ENDED: &str = "
     SELECT 'delegation' AS kind, d.id, d.specialist_kwant_id AS kwant_id, k.name AS kwant_name, d.title, d.status,
            CASE WHEN d.status = 'completed' THEN COALESCE(m.text, d.error) ELSE COALESCE(d.error, m.text) END AS body,
-           d.ended_at AS at, d.thread_id, NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices,
+           CASE WHEN julianday(m.created_at) > julianday(d.ended_at) THEN m.created_at ELSE d.ended_at END AS at, d.thread_id, NULL AS channel_id, NULL AS direct_kwant_id, NULL AS choices,
            NULL AS routine_id
     FROM delegations d
     LEFT JOIN kwants k ON k.id = d.specialist_kwant_id
