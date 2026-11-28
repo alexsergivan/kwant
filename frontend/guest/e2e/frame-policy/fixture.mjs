@@ -30,6 +30,14 @@ const APP_CSS = `.k1{padding:8px;color:#8fd14f}`;
 // The app's own body markup (not hash-pinned: markup isn't script or style, so CSP doesn't gate it).
 const APP_BODY = `<div class="k1" id="k1">pa12 K1 probe</div>`;
 
+// A real, decodable 1x1 PNG (QA fix 1, Rigel's K1 qa.md): the previous 4 raw bytes weren't a loadable image in
+// any engine, so onerror fired whether or not CSP actually blocked the request - the img checks passed either
+// way. With a real image, a blocked load and a successful decode are distinguishable again.
+const PNG_1x1 = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+  'base64',
+);
+
 /**
  * The app's own script: every check security-review.md section 3/4 and the K1 brief ask for, run as genuine in-page
  * code (never from Playwright's privileged evaluate, which Chromium's devtools-style Runtime.evaluate exempts from
@@ -96,25 +104,54 @@ const appJs = (foreign) => `(() => {
     mustThrow('eval-blocked', () => eval('1+1'));
     mustThrow('function-ctor-blocked', () => new Function('return 1')());
 
+    // 2b. QA (Rigel, pa12 K1 round 1): the three checks above can't tell script-src's hash allow-list apart from
+    // Trusted Types - TT throws on the raw string before script-src is ever consulted (this file's own comment
+    // above: "before CSP's hash check even applies"). Mint a TrustedScript through a policy CSP does allow (there's
+    // no \`trusted-types\` directive restricting policy names, so createPolicy succeeds): Trusted Types raises no
+    // objection to a TrustedScript, so whatever stops this from running can only be CSP.
+    const ttAvailable = typeof window.trustedTypes !== 'undefined';
+    if (ttAvailable) {
+      try {
+        const pol = trustedTypes.createPolicy('qa-csp-proof', { createScript: (s) => s });
+        window.__qaUnlistedRan = false;
+        try {
+          const s2 = document.createElement('script');
+          s2.textContent = pol.createScript('window.__qaUnlistedRan = true;');
+          document.head.appendChild(s2);
+          await new Promise((res) => setTimeout(res, 50));
+          pass('unlisted-script-blocked-independent-of-tt', window.__qaUnlistedRan !== true, \`ran=\${window.__qaUnlistedRan}\`);
+        } catch (e) {
+          pass('unlisted-script-blocked-independent-of-tt', true, \`blocked building the element: \${String(e && e.message || e)}\`);
+        }
+        mustThrow('eval-blocked-independent-of-tt', () => eval(pol.createScript('1+1')));
+      } catch (e) {
+        pass('unlisted-script-blocked-independent-of-tt', false, \`trustedTypes.createPolicy itself failed: \${String(e && e.message || e)}\`);
+        pass('eval-blocked-independent-of-tt', false, \`trustedTypes.createPolicy itself failed: \${String(e && e.message || e)}\`);
+      }
+    } else {
+      pass('unlisted-script-blocked-independent-of-tt', true, 'not applicable: this engine has no Trusted Types to bypass, so the base check above is already CSP-only');
+      pass('eval-blocked-independent-of-tt', true, 'not applicable: this engine has no Trusted Types to bypass, so the base check above is already CSP-only');
+    }
+    // (The Function-constructor form isn't repeated here: with a TT-minted script, Chromium's
+    // \`new Function(trustedScript)\` doesn't reliably fail even when script-src is weakened - see frame-policy.md's
+    // mutation table - so it can't be trusted as an independent proof; eval is kept as the one CSP-only check for
+    // the "execute via a constructor, not a <script> element" path.)
+
     // 3. fetch, WebSocket, sendBeacon and <img> blocked to an outside URL and to this same origin (connect-src
-    // 'none' / img-src data: blob: don't carve out an exception for same-origin).
-    await (async () => { try { await fetch(foreign + '/foreign-echo'); pass('fetch-outside-blocked', false, 'resolved'); } catch (e) { pass('fetch-outside-blocked', true, String(e)); } })();
-    await (async () => { try { await fetch(location.origin + '/main-echo'); pass('fetch-same-origin-blocked', false, 'resolved'); } catch (e) { pass('fetch-same-origin-blocked', true, String(e)); } })();
-    // WebSocket under connect-src 'none': some engines throw synchronously at construction, others let the socket
-    // open and then fail the connection asynchronously (never firing onopen). Either is "blocked"; only an actual
-    // open event is a failure.
-    const connectionBlocked = (name, mk) => new Promise((resolve) => {
-      let ws;
-      try { ws = mk(); } catch (e) { pass(name, true, \`threw constructing: \${String(e && e.message || e)}\`); resolve(); return; }
-      let settled = false;
-      const finish = (ok, detail) => { if (settled) return; settled = true; pass(name, ok, detail); resolve(); };
-      ws.onopen = () => finish(false, 'opened');
-      ws.onerror = () => finish(true, 'error event, never opened');
-      ws.onclose = () => finish(true, 'close event, never opened');
-      setTimeout(() => finish(true, 'timed out without opening'), 1500);
-    });
-    await connectionBlocked('websocket-outside-blocked', () => new WebSocket(foreign.replace('http', 'ws') + '/'));
-    await connectionBlocked('websocket-same-origin-blocked', () => new WebSocket(location.origin.replace('http', 'ws') + '/'));
+    // 'none' / img-src data: blob: don't carve out an exception for same-origin). QA (Rigel): a cross-origin fetch
+    // or WebSocket to a server that sends no CORS header / never completes the upgrade handshake fails anyway, with
+    // or without connect-src blocking it - so these must not be judged by whether the call threw or rejected. Like
+    // sendBeacon, frame-policy.mjs decides pass/fail from whether the mock servers' own access/upgrade logs ever saw
+    // the request actually reach them - the one place a request dropped before it left the browser is
+    // distinguishable from one that merely failed after arriving.
+    try { fetch(foreign + '/fetch-outside').catch(() => {}); } catch (e) { /* the log decides, not this catch */ }
+    try { fetch(location.origin + '/fetch-same').catch(() => {}); } catch (e) { /* the log decides */ }
+    const tryWebSocket = (mk) => { try { const ws = mk(); ws.onerror = () => {}; } catch (e) { /* the log decides */ } };
+    tryWebSocket(() => new WebSocket(foreign.replace('http', 'ws') + '/ws-outside'));
+    tryWebSocket(() => new WebSocket(location.origin.replace('http', 'ws') + '/ws-same'));
+    // Give the fetches and the WebSocket handshake attempts time to either reach the mock servers or be dropped by
+    // CSP before frame-policy.mjs reads the servers' logs.
+    await new Promise((res) => setTimeout(res, 300));
     // sendBeacon's return value isn't a reliable signal: connect-src 'none' lets the call return true and then
     // silently drops the request at the network layer, same as it does for a blocked fetch that never dials out. So
     // this only records that the call didn't throw (on a unique path per target); frame-policy.mjs decides pass/fail
@@ -239,10 +276,16 @@ export async function startFramePolicyFixture() {
   const foreignServer = createServer((req, res) => {
     log.push(`foreign ${req.method} ${req.url}`);
     if (req.url === '/foreign-echo') return send(res, 200, 'ok', 'text/plain');
-    if (req.url === '/foreign.png') return send(res, 200, Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+    if (req.url === '/foreign.png') return send(res, 200, PNG_1x1, 'image/png');
     if (req.url === '/nav-landed') return send(res, 200, '<!doctype html><title>landed</title>landed', 'text/html; charset=utf-8');
     send(res, 404, 'not found', 'text/plain');
   });
+  // A plain http.Server with no 'upgrade' listener silently destroys a WebSocket handshake request without
+  // emitting anything - so without this, a handshake CSP let through and one CSP blocked both end up with zero
+  // log entries, and the "server logs decide" check (QA fix 2, Rigel's K1 qa.md) would pass either way. Logging
+  // here and then destroying the socket keeps the server a mock (never a real echo target) while still recording
+  // that the handshake actually reached it.
+  foreignServer.on('upgrade', (req, socket) => { log.push(`foreign UPGRADE ${req.url}`); socket.destroy(); });
   await new Promise((resolve) => foreignServer.listen(0, '127.0.0.1', resolve));
   const foreignPort = foreignServer.address().port;
   const foreign = `http://127.0.0.1:${foreignPort}`;
@@ -258,9 +301,10 @@ export async function startFramePolicyFixture() {
     if (path === '/app') return send(res, 200, appDoc, undefined, appHeaders(appHeaderCsp));
     if (path === '/app-nav') return send(res, 200, appNavDoc, undefined, appHeaders(appNavCsp));
     if (path === '/main-echo') return send(res, 200, 'ok', 'text/plain');
-    if (path === '/main.png') return send(res, 200, Buffer.from([0x89, 0x50, 0x4e, 0x47]), 'image/png');
+    if (path === '/main.png') return send(res, 200, PNG_1x1, 'image/png');
     send(res, 404, 'not found', 'text/plain');
   });
+  mainServer.on('upgrade', (req, socket) => { log.push(`main UPGRADE ${req.url}`); socket.destroy(); });
   await new Promise((resolve) => mainServer.listen(0, '127.0.0.1', resolve));
   const mainPort = mainServer.address().port;
 

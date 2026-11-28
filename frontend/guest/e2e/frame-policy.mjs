@@ -20,9 +20,15 @@ const engineResults = {};
 const REQUIRED = [
   'opaque-origin', 'no-parent-dom', 'no-cookie-write', 'no-local-storage', 'no-session-storage',
   'unlisted-script-blocked', 'eval-blocked', 'function-ctor-blocked',
+  // QA (Rigel, pa12 K1 round 1): independent of Trusted Types - a TrustedScript minted through an allowed policy,
+  // so only CSP's script-src hash allow-list can still be deciding these (frame-policy/fixture.mjs section 2b).
+  'unlisted-script-blocked-independent-of-tt', 'eval-blocked-independent-of-tt',
   'fetch-outside-blocked', 'fetch-same-origin-blocked', 'websocket-outside-blocked', 'websocket-same-origin-blocked',
   'sendbeacon-outside-blocked', 'sendbeacon-same-origin-blocked', 'img-outside-blocked', 'img-same-origin-blocked',
   'rtc-deleted', 'rtc-fresh-realm-blocked',
+  // self-navigation-blocked and csp-sandbox-forces-opaque-origin-top-level are deliberately not listed here: both
+  // are computed after this REQUIRED loop runs (separate one-shot documents after ctx.close()), and each is
+  // validated by its own explicit problems.push below instead.
 ];
 
 async function runEngine(engineName, launcher) {
@@ -79,6 +85,18 @@ async function runEngine(engineName, launcher) {
     const beaconSameHits = fixture.log.filter((l) => l.startsWith('main') && l.includes('/beacon-same')).length;
     checks['sendbeacon-outside-blocked'] = { pass: beaconOutsideHits === 0, detail: `server hits=${beaconOutsideHits}${sendBeaconOutsideErr ? ` (threw: ${sendBeaconOutsideErr})` : ''}` };
     checks['sendbeacon-same-origin-blocked'] = { pass: beaconSameHits === 0, detail: `server hits=${beaconSameHits}${sendBeaconSameErr ? ` (threw: ${sendBeaconSameErr})` : ''}` };
+    // QA (Rigel, pa12 K1 round 1): a cross-origin fetch/WebSocket to a server sending no CORS header and never
+    // completing the upgrade handshake fails anyway, with or without connect-src blocking it, so the in-page
+    // call throwing or rejecting isn't a real signal either. Same fix as sendBeacon: decide from whether the mock
+    // servers' own access/upgrade logs ever actually saw the request.
+    const fetchOutsideHits = fixture.log.filter((l) => l.startsWith('foreign') && l.includes('/fetch-outside')).length;
+    const fetchSameHits = fixture.log.filter((l) => l.startsWith('main') && l.includes('/fetch-same')).length;
+    checks['fetch-outside-blocked'] = { pass: fetchOutsideHits === 0, detail: `server hits=${fetchOutsideHits}` };
+    checks['fetch-same-origin-blocked'] = { pass: fetchSameHits === 0, detail: `server hits=${fetchSameHits}` };
+    const wsOutsideHits = fixture.log.filter((l) => l.startsWith('foreign UPGRADE') && l.includes('/ws-outside')).length;
+    const wsSameHits = fixture.log.filter((l) => l.startsWith('main UPGRADE') && l.includes('/ws-same')).length;
+    checks['websocket-outside-blocked'] = { pass: wsOutsideHits === 0, detail: `server upgrade hits=${wsOutsideHits}` };
+    checks['websocket-same-origin-blocked'] = { pass: wsSameHits === 0, detail: `server upgrade hits=${wsSameHits}` };
     result.checks = checks;
     result.violations = violations;
     result.appOrigin = appOrigin;
@@ -122,6 +140,19 @@ async function runEngine(engineName, launcher) {
     if (!stayedPut) problems.push(`${engineName}: self-navigation-blocked failed: frame ended at ${navFrameUrl}, foreign saw ${landedOnForeign} request(s) for /nav-landed`);
     result.checks['self-navigation-blocked'] = { pass: stayedPut, detail: `frame=${navFrameUrl} foreignHits=${landedOnForeign} frame-src violations=${navParentViolations.filter((v) => v.startsWith('frame-src')).length}` };
     await navCtx.close();
+
+    // Top-level load: the iframe's own sandbox="allow-scripts" attribute already forces an opaque origin, so the
+    // in-iframe probe above never exercises the CSP header's own `sandbox` token. Load /app directly, with no
+    // framing at all, so only the CSP sandbox directive is left to produce the opaque origin.
+    const topCtx = await browser.newContext();
+    const topPage = await topCtx.newPage();
+    await topPage.goto(`${fixture.origin}/app`);
+    await topPage.waitForFunction(() => window.__k1 && window.__k1.done === true, null, { timeout: 15000 });
+    const topOrigin = await topPage.evaluate(() => self.origin);
+    const topPass = topOrigin === 'null';
+    result.checks['csp-sandbox-forces-opaque-origin-top-level'] = { pass: topPass, detail: `top-level origin=${topOrigin}` };
+    if (!topPass) problems.push(`${engineName}: csp-sandbox-forces-opaque-origin-top-level failed: top-level origin=${topOrigin}`);
+    await topCtx.close();
   } finally {
     await fixture.close();
     await browser.close();
