@@ -399,6 +399,8 @@ async fn a_guest_sent_score_is_refused_and_unknown_actions_stay_unknown() {
     let t = setup(true).await;
     let (code, host) = made(&t, spec()).await;
     let (_, key) = joined(&t, &code, "Ana").await;
+    // Ana spends 6 actions and Ben 9: each stays under the per-guest burst of 10 (limits.rs)
+    let (_, key2) = joined(&t, &code, "Ben").await;
     for body in [
         json!({ "text": ANSWER_0, "points": 5 }),
         json!({ "text": "x", "score": 99 }),
@@ -418,7 +420,7 @@ async fn a_guest_sent_score_is_refused_and_unknown_actions_stay_unknown() {
     assert_eq!(r.status, StatusCode::BAD_REQUEST);
     // Host actions from a guest, guest actions from the host, and made-up names: unknown_action
     for name in ["adjust", "reveal", "draw", "step", "lock", "timer_start", "turn_next", "delete_everything", "score"] {
-        let r = act(&t, &code, &key, name, json!({})).await;
+        let r = act(&t, &code, &key2, name, json!({})).await;
         assert_eq!((r.status, r.body["error"].as_str()), (StatusCode::BAD_REQUEST, Some("unknown_action")), "guest {name}: {}", r.body);
     }
     for name in ["answer", "vote", "take_back", "score", "eval"] {
