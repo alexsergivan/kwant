@@ -53,7 +53,8 @@ pub fn handles(name: &str) -> bool {
 /// Whether "Make your own" is on: pa12 L1's switch lets `made` through (`pocket_make` on, and
 /// `pocket_apps` `on` or naming `made`).
 pub async fn enabled(state: &AppState) -> bool {
-    crate::pocket::enabled_for(&state.db, kits::MADE_ID).await
+    // RED PROOF (do not merge): any kit on offers pocket_make, ignoring the made gate
+    crate::pocket::enabled_for(&state.db, kits::MADE_ID).await || crate::pocket::enabled(&state.db).await
 }
 
 pub fn tool() -> Value {
