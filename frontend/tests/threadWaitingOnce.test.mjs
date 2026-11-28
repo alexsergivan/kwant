@@ -100,12 +100,18 @@ test('other waits keep their view, and after the answer nothing waits', () => {
   assert.match(after, /aria-label="Send"/);
 });
 
-test("the strip's Stop and rail go with the asker's question only, never another ask", () => {
+test("the strip's Stop shows on any ask up front (the banner yielded it); the rail only on the asker's question", () => {
   const turn = { bot: 'k-ann', rail: [{ name: 'Ben', state: 'done' }, { name: 'You pick', state: 'you' }], stopLabel: 'Stop team', onStop: () => {} };
-  const ben = ui.html(ui.strip([question('k-ben', 'Ben')], { waitTurn: turn }));
-  assert.doesNotMatch(ben, /data-strip-stop|data-waiting-rail/);
+  // QA (Rigel): an older ask shown first must not leave the chat without a Stop.
+  const ben = ui.html(ui.strip([question('k-ben', 'Ben'), question()], { waitTurn: turn }));
+  assert.match(ben, /data-strip-stop/, 'Stop stays reachable when another ask is up front');
+  assert.equal((ben.match(/data-strip-stop/g) || []).length, 1);
+  assert.doesNotMatch(ben, /data-waiting-rail/, 'the rail goes with the asker only');
   const ann = ui.html(ui.strip([question()], { waitTurn: turn }));
   assert.match(ann, /data-strip-stop/);
+  assert.match(ann, /data-waiting-rail/);
+  const thread = ui.html(ui.strip([question('k-ben', 'Ben'), question()], { waitTurn: { ...turn, onStop: undefined } }));
+  assert.doesNotMatch(thread, /data-strip-stop/, 'threads keep the header Stop only');
   const phone = ui.html(ui.strip([question()], { waitTurn: turn, phone: true }));
   assert.match(/<button[^>]*data-strip-stop=""[^>]*>/.exec(phone)[0], /h-11[^"]*flex-1/, '44 px on a phone, sharing the row');
   const none = ui.html(ui.strip([question()]));

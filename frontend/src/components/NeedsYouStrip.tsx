@@ -233,9 +233,10 @@ export const NeedsYouStrip: React.FC<NeedsYouStripProps> = ({ asks, onAction, on
   const time = localClock(item.timestamp, now);
   const goTo = action === 'answer' || action === 'decide';
   const resolving = !!action && RESOLVES.has(action);
-  // The waiting turn's Stop and rail go with its own question only, never with another ask stepped to.
+  // The banner gave its Stop to the strip, so Stop shows on whichever ask is up (QA: an older ask first left no Stop).
+  // The rail goes with the waiting bot's own question only.
   const turnHere = waitTurn && action === 'answer' && item.kwant_id === waitTurn.bot ? waitTurn : null;
-  const stopHere = turnHere?.onStop ? turnHere : null;
+  const stopHere = waitTurn?.onStop ? waitTurn : null;
 
   const step = (d: number) => {
     const next = Math.min(Math.max(0, i + d), n - 1);
