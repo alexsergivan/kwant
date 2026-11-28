@@ -201,6 +201,16 @@ pub fn results_copy_as((one, many): (&str, &str), title: &str, players: usize, h
     (format!("{t} has ended"), body, format!("{t} has ended. {who}"))
 }
 
+/// queue-end-summary: the ended copy for a kit with its own line ([`super::kits::Kit::end_summary`]):
+/// (title, notification body, chat line), "Tine's Bakery has ended" / "1 day · 3 served · average
+/// 1 min." / "Tine's Bakery has ended. 1 day · 3 served · average 1 min.". A count, not results,
+/// so the body doesn't point at the chat.
+pub fn results_copy_summary(title: &str, summary: &str) -> (String, String, String) {
+    let t = short_title(title);
+    let s = summary.trim().trim_end_matches('.');
+    (format!("{t} has ended"), format!("{s}."), format!("{t} has ended. {s}."))
+}
+
 /// The line under the card's name: "Fri, Nov 27 · 8 PM".
 pub(crate) fn when_line(zone: &Zone, starts_at: DateTime<Utc>) -> String {
     let l = zone.local(starts_at);
@@ -527,7 +537,13 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
     let zone = Zone::parse(row.as_ref().map_or("UTC", |r| r.zone.as_str()));
     let origin = row.as_ref().and_then(origin_of);
     let words = s.kit().map_or(("player", "players"), |k| k.taking_part());
-    let (_, _, line) = results_copy_as(words, &s.row.title, s.player_count(), true);
+    // queue-end-summary: a kit's own line (the queue's "1 day · 3 served · average 1 min") wins
+    let summary = s.kit().and_then(|k| k.end_summary(&s.kit_state)).filter(|l| !l.trim().is_empty());
+    let copy = |has_chat: bool| match &summary {
+        Some(l) => results_copy_summary(&s.row.title, l),
+        None => results_copy_as(words, &s.row.title, s.player_count(), has_chat),
+    };
+    let (_, _, line) = copy(true);
     let posted = match &origin {
         Some(o) => {
             let mut block = ended_block(&s, row.as_ref(), &zone);
@@ -548,7 +564,7 @@ async fn post_results(state: &AppState, code: &str, now: DateTime<Utc>) -> PResu
         }
         None => false,
     };
-    let (title, body, _) = results_copy_as(words, &s.row.title, s.player_count(), posted);
+    let (title, body, _) = copy(posted);
     notify(state, origin.as_ref(), &s, title, body).await;
     Ok(true)
 }
@@ -706,6 +722,22 @@ mod tests {
         let quiz = QuizPocket.taking_part();
         assert_eq!(results_copy_as(quiz, "Pub quiz", 9, true), results_copy("Pub quiz", 9, true));
         assert_eq!(results_copy_as(quiz, "Pub quiz", 1, false), results_copy("Pub quiz", 1, false));
+    }
+
+    #[test]
+    fn a_queue_ends_with_its_own_line_and_other_kits_keep_theirs() {
+        use crate::pocket::{desk::Desk, kits::Kit, quiz_kit::QuizPocket, santa::Santa};
+        let s = |a: &str, b: &str, c: &str| (a.to_string(), b.to_string(), c.to_string());
+        assert_eq!(
+            results_copy_summary("Tine's Bakery", "1 day · 3 served · average 1 min"),
+            s("Tine's Bakery has ended", "1 day · 3 served · average 1 min.", "Tine's Bakery has ended. 1 day · 3 served · average 1 min.")
+        );
+        assert_eq!(results_copy_summary("", "2 days · 0 served").2, "Your pocket app has ended. 2 days · 0 served.");
+        // No other kit has a line of its own: their ended copy stays as it was
+        let any = serde_json::json!({});
+        assert_eq!(QuizPocket.end_summary(&any), None);
+        assert_eq!(Santa.end_summary(&any), None);
+        assert_eq!(Desk.end_summary(&any), None);
     }
 
     #[test]

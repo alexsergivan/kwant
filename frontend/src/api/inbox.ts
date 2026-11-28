@@ -194,7 +194,8 @@ export interface DoneFields {
    */
   checked?: Checked | null;
   /** pa4c pocket items: how many played and when it ended; the winning team or null. */
-  meta?: { players?: number | null; ended_at?: string | null } | null;
+  /** queue-end-summary: `summary` is a kit's own Done line (the queue's), sent instead of `players`. */
+  meta?: { players?: number | null; summary?: string | null; ended_at?: string | null } | null;
   winner?: { name: string; points: number } | null;
 }
 

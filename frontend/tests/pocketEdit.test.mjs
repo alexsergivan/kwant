@@ -416,6 +416,24 @@ test('Done row: AnyRow anatomy (kicker + ended time on top), the server title in
   assert.deepEqual(opened[0].link, { thread_id: null, channel_id: 'ch-pub', direct_kwant_id: null });
 });
 
+test('queue-end-summary: a queue\'s Done row says the kit\'s own line, not "N players"; other pockets keep theirs', async () => {
+  const line = '1 day · 3 served · average 1 min';
+  assert.equal(m.pocketMeta({ meta: { summary: line, ended_at: null } }), line);
+  assert.equal(m.pocketMeta({ meta: { summary: line, players: 2 } }), line, 'the summary wins over a stray players count');
+  assert.equal(m.pocketMeta({ meta: { summary: '   ', players: 2 } }), '2 players', 'a blank summary falls back');
+  assert.equal(m.pocketMeta({ meta: { summary: null, players: 1 } }), '1 player');
+  assert.equal(m.pocketMeta({ meta: { summary: 7, players: 9 } }), '9 players', 'a non-string summary is ignored');
+  assert.equal(m.pocketMeta(pocketItem()), '24 players', 'a quiz is unchanged');
+  const v = await mountInbox([
+    pocketItem({ id: 'pocket:bakery', title: "Tine's Bakery has ended", winner: null, meta: { summary: line, ended_at: '2026-11-28T11:00:00Z' } }),
+  ]);
+  const row = v.host.querySelector('[data-row="pocket:bakery"]');
+  assert.equal(row.querySelector('[data-pocket-title]').textContent.trim(), "Tine's Bakery has ended");
+  assert.equal(row.querySelector('[data-pocket-meta]').textContent, line);
+  assert.doesNotMatch(row.textContent, /players?\b/);
+  assert.equal(holos(row), 0, 'no Winners sticker on a queue');
+});
+
 test('switch off: an off server sends no pocket items, so Done has no pocket row', async () => {
   const v = await mountInbox([]);
   assert.equal(v.host.querySelectorAll('[data-pocket-row]').length, 0);

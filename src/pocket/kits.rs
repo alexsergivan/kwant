@@ -243,6 +243,12 @@ pub trait Kit: Send + Sync + 'static {
     fn taking_part(&self) -> (&'static str, &'static str) {
         ("player", "players")
     }
+    /// queue-end-summary: the kit's own line for how it went, said instead of "N players took
+    /// part." in the ended post, its notification and the Inbox Done row ("1 day · 3 served ·
+    /// average 1 min" for a queue). `None` (the default): the generic words, byte for byte.
+    fn end_summary(&self, _state: &Value) -> Option<String> {
+        None
+    }
     /// pa7: the results the person's chat gets once the pocket has ended, in the `results` shape
     /// of the chat's pocket card (Pixel's pa4/impl.md "PocketBlock"): `{teams: [{name, players,
     /// points, palette, members}] (1-12, best first), margin, missed, near_misses,

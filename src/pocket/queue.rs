@@ -931,6 +931,17 @@ impl Kit for Queue {
         load(state).state == ENDED
     }
 
+    /// queue-end-summary (Mira's UX pass #4): customers aren't players.
+    fn taking_part(&self) -> (&'static str, &'static str) {
+        ("person", "people")
+    }
+
+    /// queue-end-summary: the ended post, its notification and the Done row say the card's
+    /// Done line ("1 day · 3 served · average 1 min"), not how many join rows are left.
+    fn end_summary(&self, state: &Value) -> Option<String> {
+        Some(load(state).host_summary_line())
+    }
+
     fn on_remove(&self, _ctx: &mut KitCtx, state: &mut Value, player_id: &str) {
         let mut s = load(state);
         let before = s.tickets.len();
@@ -1217,5 +1228,13 @@ mod tests {
         s.gaps_total = 4;
         s.gap_secs_total = 4 * 190;
         assert_eq!(s.host_summary_line(), "3 days · 5 served · average 3 min");
+    }
+
+    #[test]
+    fn the_end_line_is_the_done_row_line_and_customers_are_people() {
+        let s = St { days: 1, served_total: 3, gaps_total: 2, gap_secs_total: 2 * 60, ..St::default() };
+        let state = serde_json::to_value(&s).unwrap();
+        assert_eq!(Queue.end_summary(&state).as_deref(), Some("1 day · 3 served · average 1 min"));
+        assert_eq!(Queue.taking_part(), ("person", "people"));
     }
 }
