@@ -2883,7 +2883,8 @@ struct TurnEndedGuard {
 
 impl Drop for TurnEndedGuard {
     fn drop(&mut self) {
-        self.turns.end_turn(&self.tag.turn_id);
+        // the outcome the turn_ended below says, kept for the bot's status (last_outcome)
+        self.turns.end_turn_as(&self.tag.turn_id, self.outcome);
         // a busy browser step a failed or stopped turn left behind is never retried
         let _ = super::busy_retry::take(&self.tag.turn_id);
         // However it ended (reply, error, stop, panic), the lead hears the hand-offs this turn started

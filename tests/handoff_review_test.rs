@@ -25,7 +25,7 @@ use kwnt::{
 };
 use serde_json::{json, Value};
 use std::path::PathBuf;
-use std::sync::OnceLock;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 use tower::ServiceExt;
 
@@ -39,6 +39,8 @@ out=done
 case "$last" in
   *"[Decide first]"*) out="I'd pick B." ;;
   *HOLDMARK*"Review each one now"*) out='The count looks right.\n\nTwo decisions for you:\n1. A, B or C?\n2. FM monogram or plain?' ;;
+  *ONEREPLYMARK*"Review each one now"*) out='Pass ONEREVIEW: the invoices are sorted.' ;;
+  *"finished the task you delegated"*ONEREPLYMARK*) out='ONERESULTS: the invoices are sorted, next I file them.' ;;
 esac
 release=$(printf '%s\n' "$last" | sed -n 's/.*LONGTASK:\([^ ]*\).*/\1/p' | head -n 1)
 if [ -n "$release" ]; then
@@ -320,12 +322,13 @@ async fn the_lead_reviews_with_fresh_eyes_never_the_chat() {
     wait_for("the lead's chat turn", || async { !prompts_with(&["LEADCHATMARK"]).is_empty() }).await;
     let (_, task) = finished(&env, "Count the widgets FRESHBRIEF", "Widget count").await;
     wait_for("the lead's review turn", || async { !prompts_with(&[FRESH, "Widget count"]).is_empty() }).await;
-    // The fake lead never calls task_review, so the one reminder may follow at any moment; it's a
-    // fresh-eyes turn too, so count it apart from the review turn and check it the same way
+    // The fake lead never calls task_review, yet no reminder follows straight after (0.9.59): it
+    // comes from the sweep after its grace time (see the reminder tests below)
+    settle().await;
     let fresh = prompts_with(&[FRESH, "Widget count"]);
     let (reminders, reviews): (Vec<_>, Vec<_>) = fresh.iter().partition(|p| p.contains("Reminder: the result on"));
     assert_eq!(reviews.len(), 1, "one review turn: {fresh:?}");
-    assert!(reminders.len() <= 1, "at most one reminder: {fresh:?}");
+    assert!(reminders.is_empty(), "no reminder straight after the review turn: {fresh:?}");
     let review = reviews[0];
     assert!(review.contains("Count the widgets FRESHBRIEF"), "the brief: {review}");
     assert!(review.contains(&task.id) && review.contains("done"), "the card and the result: {review}");
@@ -368,12 +371,98 @@ async fn settle() {
     tokio::time::sleep(Duration::from_millis(1500)).await;
 }
 
+/// The lead was asked once about card `task_id` (its review turn) and that turn is over, so the
+/// sweep may remind it.
+async fn asked_once(env: &Env, delegation_id: &str, task_id: &str) {
+    wait_for("the review turn's ask", || async { asks_logged(env, task_id).await == 1 }).await;
+    wait_for("the review turn to end", || async {
+        !env.state.turns.has_job(delegation_id) && !env.state.turns.has_job(&format!("review:{delegation_id}"))
+    })
+    .await;
+}
+
+/// The lead's turn ends (outcome, reply, quiet), as the notifier hears them, from now on.
+fn lead_turn_ends(env: &Env) -> Arc<Mutex<Vec<(String, String, bool)>>> {
+    use kwnt::drivers::events::RuntimeEvent;
+    let seen = Arc::new(Mutex::new(Vec::new()));
+    let mut rx = env.state.event_sender.subscribe();
+    let (lead, out) = (env.lead.clone(), seen.clone());
+    tokio::spawn(async move {
+        loop {
+            match rx.recv().await {
+                Ok(e) => {
+                    if let RuntimeEvent::TurnEnded { kwant_id, outcome, quiet, reply, .. } = e.unscoped() {
+                        if *kwant_id == lead {
+                            let reply = reply.as_deref().unwrap_or("").to_string();
+                            out.lock().unwrap().push((outcome.clone(), reply, *quiet));
+                        }
+                    }
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => panic!("missed {n} events"),
+                Err(_) => return,
+            }
+        }
+    });
+    seen
+}
+
+/// 0.9.59 (Mira's team-job walk: the lead posted the same reply three times in a second, with
+/// three "Assistant replied" pushes, after every result): one result gives one results reply that
+/// pushes, one review line that is saved to the chat but pushes nothing, and no reminder in the
+/// same second. The one reminder comes from the sweep, once the grace time passed, and is quiet too.
+#[tokio::test]
+async fn one_result_gets_one_lead_reply_one_push_and_a_late_reminder() {
+    let env = setup().await;
+    let ends = lead_turn_ends(&env);
+    let (did, task) = finished(&env, "Sort the invoices", "Invoice sort ONEREPLYMARK").await;
+    asked_once(&env, &did, &task.id).await;
+    wait_for("the review turn's end", || async { ends.lock().unwrap().iter().any(|(_, r, _)| r.contains("ONEREVIEW")) }).await;
+    settle().await;
+
+    let seen = ends.lock().unwrap().clone();
+    let results: Vec<_> = seen.iter().filter(|(o, r, _)| o == "completed" && r.contains("ONERESULTS")).collect();
+    let reviews: Vec<_> = seen.iter().filter(|(o, r, _)| o == "completed" && r.contains("ONEREVIEW")).collect();
+    assert_eq!(results.len(), 1, "one results reply: {seen:?}");
+    assert!(!results[0].2, "the results reply notifies: {seen:?}");
+    assert_eq!(reviews.len(), 1, "one review line, and no reminder in the same second: {seen:?}");
+    assert!(reviews[0].2, "the review line sends no push: {seen:?}");
+    let pushes = seen.iter().filter(|(o, _, q)| (o == "completed" || o == "failed") && !q).count();
+    assert_eq!(pushes, 1, "one push for one result: {seen:?}");
+    assert!(prompts_with(&["Reminder:", "ONEREPLYMARK"]).is_empty(), "no reminder yet");
+    assert_eq!(asks_logged(&env, &task.id).await, 1);
+    // The review line is still saved to the lead's chat
+    let chat = env.state.db.list_messages(&env.lead, 50).await.unwrap();
+    assert!(chat.iter().any(|m| m.text.contains("ONEREVIEW")), "the review line is in the chat");
+    assert_eq!(chat.iter().filter(|m| m.text.contains("ONERESULTS")).count(), 1, "the results reply is posted once");
+
+    // Within the grace time the sweep doesn't remind
+    missions::listener::sweep_unreviewed(&env.state, missions::listener::REVIEW_GRACE).await;
+    settle().await;
+    assert!(prompts_with(&["Reminder:", "ONEREPLYMARK"]).is_empty(), "no reminder within {:?}", missions::listener::REVIEW_GRACE);
+    // Past it, the one reminder, which pushes nothing either
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
+    wait_for("the reminder", || async { asks_logged(&env, &task.id).await == 2 }).await;
+    wait_for("the reminder's end", || async { ends.lock().unwrap().iter().filter(|(_, r, _)| r.contains("ONEREVIEW")).count() == 2 }).await;
+    settle().await;
+    let seen = ends.lock().unwrap().clone();
+    assert_eq!(prompts_with(&["Reminder:", "ONEREPLYMARK"]).len(), 1, "one reminder");
+    assert_eq!(seen.iter().filter(|(o, _, q)| (o == "completed" || o == "failed") && !q).count(), 1, "still one push: {seen:?}");
+}
+
 /// The results turn asks the lead to review; a lead that doesn't gets exactly one reminder,
 /// then the card waits, named for its reviewer, and a sweep doesn't ask again.
 #[tokio::test]
 async fn a_lead_that_doesnt_review_is_reminded_once_and_then_the_card_waits() {
     let env = setup().await;
     let (did, task) = finished(&env, "Tidy the logs REMINDMARK", "Log tidy").await;
+    asked_once(&env, &did, &task.id).await;
+    settle().await;
+    assert!(prompts_with(&["Reminder:", "Log tidy"]).is_empty(), "no reminder straight after the review turn");
+    // The reminder comes from the sweep, past the grace time
+    missions::listener::sweep_unreviewed(&env.state, missions::listener::REVIEW_GRACE).await;
+    settle().await;
+    assert_eq!(asks_logged(&env, &task.id).await, 1, "not within the grace time");
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
     wait_for("the reminder", || async { !prompts_with(&["Reminder:", "Log tidy", &task.id]).is_empty() }).await;
     wait_for("both asks logged", || async { asks_logged(&env, &task.id).await == 2 }).await;
     settle().await;
@@ -430,12 +519,14 @@ async fn a_card_unblocked_after_its_hand_off_finished_gets_a_review_turn() {
     assert_eq!(s, StatusCode::OK, "{v}");
     wait_for("the card in review", || async { card_state(&env, &did).await == "review" }).await;
     wait_for("the lead's review turn", || async { !prompts_with(&["its card is waiting for your review", &t.id]).is_empty() }).await;
+    asked_once(&env, &did, &t.id).await;
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
     wait_for("the one reminder", || async { asks_logged(&env, &t.id).await == 2 }).await;
 }
 
 /// kwnt restarted after the card reached Review but before the lead's turn (here: the hand-off
-/// ended without kwant reporting it). The sweep gives the lead its review turn, plus the one
-/// reminder, and then leaves the card alone.
+/// ended without kwant reporting it). The sweep gives the lead its review turn, a later sweep the
+/// one reminder, and then it leaves the card alone.
 #[tokio::test]
 async fn the_sweep_asks_the_lead_about_a_card_whose_review_turn_was_lost() {
     let env = setup().await;
@@ -466,6 +557,10 @@ async fn the_sweep_asks_the_lead_about_a_card_whose_review_turn_was_lost() {
 
     missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
     wait_for("the lead's review turn", || async { !prompts_with(&["its card is waiting for your review", &t.id]).is_empty() }).await;
+    asked_once(&env, &d.id, &t.id).await;
+    settle().await;
+    assert_eq!(asks_logged(&env, &t.id).await, 1, "no reminder straight after the review turn");
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
     wait_for("the one reminder", || async { asks_logged(&env, &t.id).await == 2 }).await;
     settle().await;
     missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
@@ -494,6 +589,8 @@ fn a_hand_off_is_named_after_what_its_teammate_was_asked() {
 async fn a_lead_that_reviews_after_the_reminder_verifies_the_card() {
     let env = setup().await;
     let (did, task) = finished(&env, "Check the cron entry ONREMINDMARK", "Cron check").await;
+    asked_once(&env, &did, &task.id).await;
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
     wait_for("the reminder", || async {
         !prompts_with(&["Reminder:", "Cron check", &task.id]).is_empty()
     })
@@ -551,6 +648,13 @@ async fn a_batch_of_two_cards_gets_one_prompt_and_one_reminder() {
         format!("task_id \"{}\"", ids[1]),
     ];
     let both: Vec<&str> = both.iter().map(String::as_str).collect();
+    for (did, t) in dids.iter().zip(&ids) {
+        asked_once(&env, did, t).await;
+    }
+    settle().await;
+    assert!(prompts_with(&[&["Reminder:"][..], &both].concat()).is_empty(), "no reminder straight after the review turn");
+    // The sweep reminds about both cards in one turn
+    missions::listener::sweep_unreviewed(&env.state, Duration::ZERO).await;
     wait_for("the reminder", || async {
         !prompts_with(&[&["Reminder:"][..], &both].concat()).is_empty()
     })
@@ -565,7 +669,7 @@ async fn a_batch_of_two_cards_gets_one_prompt_and_one_reminder() {
     assert_eq!(
         prompts_with(&both).len(),
         2,
-        "one results prompt and one reminder, each naming both cards"
+        "one review prompt and one reminder, each naming both cards"
     );
     assert_eq!(
         prompts_with(&[&["Reminder:"][..], &both].concat()).len(),

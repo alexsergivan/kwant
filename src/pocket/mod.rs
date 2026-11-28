@@ -45,7 +45,7 @@ use chrono::{DateTime, Duration, Utc};
 use kits::{Kit, KitCtx, KitError, KitRules, Player, Viewer};
 use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 use tokio::sync::broadcast;
@@ -306,9 +306,60 @@ pub struct Hub {
     /// pa14b: the walls whose best-30 pick runs in this process now, with the bot running it.
     /// A pick the state says runs but that isn't here was cut off by a restart.
     picks: Mutex<HashMap<String, String>>,
+    /// secret-ballot-unlinkable F2: a save dropped a secret and the database's old copies of
+    /// the row still need wiping ([`Self::wipe_soon`]).
+    wipe_due: Arc<AtomicBool>,
+    /// A wipe runs now.
+    wiping: Arc<AtomicBool>,
 }
 
 impl Hub {
+    /// Wipes the database's old row versions ([`Database::wipe_old_rows`]) in the background
+    /// when a save asked for it, at most one at a time. A wipe a reader held up stays due, and
+    /// the next save or the sweep (once a minute) tries again.
+    pub(crate) fn wipe_soon(&self, db: &Database) {
+        if !self.wipe_due.load(Ordering::SeqCst) || self.wiping.swap(true, Ordering::SeqCst) {
+            return;
+        }
+        let (db, due, wiping) = (db.clone(), self.wipe_due.clone(), self.wiping.clone());
+        tokio::spawn(async move {
+            while due.swap(false, Ordering::SeqCst) {
+                match db.wipe_old_rows().await {
+                    Ok(true) => {}
+                    Ok(false) => {
+                        tracing::debug!("pocket apps: a reader held up the wipe of old rows; trying again later");
+                        due.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                    Err(e) => {
+                        tracing::warn!("pocket apps: couldn't wipe old rows: {e}");
+                        due.store(true, Ordering::SeqCst);
+                        break;
+                    }
+                }
+            }
+            wiping.store(false, Ordering::SeqCst);
+        });
+    }
+
+    /// Waits for the wipe [`Self::wipe_soon`] started, and runs one more when it is still due.
+    /// For the sweep and tests: true when nothing is left to wipe.
+    pub async fn wipe_now(&self, db: &Database) -> bool {
+        // A wipe waits for readers at most the busy timeout; never hold the sweep for longer
+        let until = Instant::now() + std::time::Duration::from_secs(30);
+        while self.wiping.load(Ordering::SeqCst) {
+            if Instant::now() > until {
+                return false;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        if self.wipe_due.swap(false, Ordering::SeqCst) && !matches!(db.wipe_old_rows().await, Ok(true)) {
+            self.wipe_due.store(true, Ordering::SeqCst);
+            return false;
+        }
+        true
+    }
+
     fn lock_for(&self, code: &str) -> Arc<tokio::sync::Mutex<()>> {
         self.locks.lock().unwrap_or_else(|e| e.into_inner()).entry(code.to_string()).or_default().clone()
     }
@@ -971,10 +1022,15 @@ pub async fn join(state: &AppState, code: &str, req: JoinRequest) -> PResult<(Pl
 }
 
 async fn save(state: &AppState, code: &str, kit_state: &Value, ctx: KitCtx<'_>, now: DateTime<Utc>) -> PResult<()> {
+    let forgot = ctx.forgot;
     let events: Vec<(Option<String>, String, String)> =
         ctx.events.into_iter().map(|e| (e.player_id, e.kind, serde_json::to_string(&e.payload).unwrap_or_else(|_| "{}".into()))).collect();
     let text = serde_json::to_string(kit_state).map_err(|_| PocketError::internal())?;
     state.db.pocket_save_state(code, &text, &events, now).await?;
+    if forgot {
+        state.pocket.wipe_due.store(true, Ordering::SeqCst);
+        state.pocket.wipe_soon(&state.db);
+    }
     changed(state, code).await?;
     // pa14: a photo the save hid loses its file now
     if let Some(s) = snapshot(state, code).await?.filter(|s| s.row.kit == wall::ID) {
@@ -1327,6 +1383,35 @@ async fn tick_one(state: &AppState, code: &str, now: DateTime<Utc>, only_unwatch
     }
 }
 
+/// Kits whose stored states [`Kit::scrub`] may bring up to date.
+pub const SCRUBS: &[&str] = &[gather::ID];
+
+/// secret-ballot-unlinkable: every pocket of a kit in [`SCRUBS`], open or ended (a decided vote
+/// ends at once and keeps its data until the deletion date), gets the kit's scrub; a change is
+/// saved like any other (no event). So an upgrade fixes data an older version stored.
+pub(crate) async fn scrub_stored(state: &AppState) {
+    for kit_id in SCRUBS {
+        for code in state.db.pocket_codes_of_kit(kit_id).await.unwrap_or_default() {
+            let lock = state.pocket.lock_for(&code);
+            let _g = lock.lock().await;
+            let Ok(Some(s)) = snapshot(state, &code).await else { continue };
+            let Some(kit) = s.kit() else { continue };
+            let mut kit_state = s.kit_state.clone();
+            if kit.scrub(&mut kit_state) {
+                let mut ctx = KitCtx::new(&s.spec, &s.players, Utc::now());
+                ctx.forgot = true;
+                match save(state, &code, &kit_state, ctx, Utc::now()).await {
+                    Ok(()) => tracing::info!(code = %code, "pocket apps: unlinked a closed vote's ballots"),
+                    Err(e) => tracing::warn!(code = %code, "pocket apps: couldn't unlink a closed vote's ballots: {}", e.code),
+                }
+            }
+        }
+    }
+    // F2: the old row versions those saves, or a vote's close, left in the database files go
+    // too (a no-op when nothing forgot a secret)
+    state.pocket.wipe_now(&state.db).await;
+}
+
 /// What one sweep did.
 #[derive(Debug, Default, PartialEq)]
 pub struct Swept {
@@ -1335,9 +1420,12 @@ pub struct Swept {
 }
 
 /// Runs unwatched kit timers, ends pockets past their closing time and deletes pockets whose
-/// data has expired. Does nothing while the switch is off.
+/// data has expired. Only the scrub of stored states ([`Kit::scrub`]) runs while the switch is
+/// off.
 pub async fn sweep(state: &AppState, now: DateTime<Utc>) -> Swept {
     let mut out = Swept::default();
+    // A privacy fix to stored data doesn't wait for the switch
+    scrub_stored(state).await;
     if !enabled(&state.db).await {
         return out;
     }

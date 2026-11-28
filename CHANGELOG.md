@@ -8,6 +8,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## Unreleased
 
+### Added
+- A fixture and e2e script (`frontend/guest/e2e/frame-policy/`) prove the pa12 custom-app frame policy (opaque origin, sandbox, CSP, Trusted Types, WebRTC removal) holds in real Chromium and WebKit, not just on paper (autonomy/pocket-apps/pa12/frame-policy.md)
+
 ### Fixed
 - The pocket app screen lint now checks label/legend/button text (not the whole page) for banned words, caps how much it repeats back in a refusal, and closes several cheap wording bypasses (#1407)
 - The pocket app screen lint's CSS check no longer lets a pseudo-class, a media query or a CSS comment/escape hide a banned declaration (`position: fixed`, an off-kwant colour, an off-kwant url) from it (#1407)

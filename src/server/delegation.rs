@@ -942,6 +942,7 @@ async fn finish(
     emit_delegation(state, &done);
     tracing::info!(delegation = %done.id, status, "delegation finished");
     let lead_name = name_of(state, &done.lead_kwant_id).await;
+    let (title, body) = finished_push(&specialist.name, &lead_name, &done.title, status, &outcome);
     super::continuity::notify(
         state,
         super::continuity::Notification {
@@ -949,8 +950,8 @@ async fn finish(
             kwant_id: specialist.id.clone(),
             kwant_name: specialist.name.clone(),
             channel_id: done.origin_channel_id.clone(),
-            title: format!("{} finished a task for {lead_name}", specialist.name),
-            body: format!("“{}”: {status}.", clip(&done.title, 80)),
+            title,
+            body,
             thread_id: None,
             card_id: None,
         },
@@ -969,6 +970,20 @@ async fn finish(
     if done.continue_lead && status != "cancelled" {
         let opening = format!("{} carried on with the task you delegated (“{}”) after it was sent back.", specialist.name, done.title);
         continue_lead(state, &done, std::slice::from_ref(&done), Some(opening), stop).await;
+    }
+}
+
+/// The title and body of the push for a teammate's ended task: "<teammate> finished a task for
+/// <lead>" / "“<task>”: <status>.", but for a result that ends with a `Blocked:` line (m5,
+/// pushes-say-what) "<teammate> is blocked on a task for <lead>" / "Blocked: <what>", masked for
+/// keys, so a stuck task doesn't read as "completed".
+fn finished_push(teammate: &str, lead: &str, title: &str, status: &str, outcome: &Result<String, String>) -> (String, String) {
+    match outcome.as_ref().ok().and_then(|reply| super::keep_going::blocked_line(reply)) {
+        Some(blocked) => (
+            format!("{teammate} is blocked on a task for {lead}"),
+            format!("Blocked: {}", clip(&super::missions::autofix::redact(&blocked), 160)),
+        ),
+        None => (format!("{teammate} finished a task for {lead}"), format!("“{}”: {status}.", clip(title, 80))),
     }
 }
 
@@ -1424,9 +1439,10 @@ async fn continue_lead(
         return tracing::info!(delegation = %d.id, "the person stopped the lead's results turn: no review turn after it");
     }
     // The cards of the batch are reviewed in a turn of their own that sees only each brief and
-    // result (fresh eyes), then the ones still waiting get one reminder (a failed turn counts too)
+    // result (fresh eyes). A card still waiting after it gets its one reminder from the sweep, after
+    // [`REVIEW_GRACE`](super::missions::listener::REVIEW_GRACE), never in the same second (0.9.59:
+    // the reminder ran straight after and the lead posted the same reply twice or three times)
     review_turn(state, batch, false).await;
-    remind_review(state, batch).await;
     if let Ok(reply) = outcome {
         let mut spoken = vec![lead.id.clone()];
         spoken.extend(batch.iter().map(|b| b.specialist_kwant_id.clone()));
@@ -1456,36 +1472,18 @@ pub async fn batch_running(state: &AppState, d: &Delegation) -> bool {
         .any(|s| s.id != d.id && s.continue_lead && s.origin_context() == d.origin_context() && !is_parked(s) && s.is_open())
 }
 
-/// After the lead's results turn: the cards of `batch` still in Review that the lead was asked
-/// about only once get one reminder turn now, together. Past that a card waits for the lead or
-/// the person.
-async fn remind_review(state: &AppState, batch: &[Delegation]) {
-    let mut due = Vec::new();
-    for d in batch.iter().filter(|d| d.status == "completed") {
-        let Ok(Some(t)) = state.db.task_by_source("delegation", &d.id).await else { continue };
-        let (asks, _) = super::missions::listener::review_asks(state, &t.id).await;
-        if asks > 0 && super::missions::listener::wants_lead_review(state, &t).await {
-            tracing::info!(delegation = %d.id, task_id = %t.id, "the lead didn't review a hand-off card: reminding it once");
-            due.push(d.clone());
-        }
+/// [`review_turn`] for `batch` (hand-offs of one lead and chat) in the background. The job is
+/// registered first, so a sweep in between sees the hand-offs as busy and doesn't start a second
+/// one. Nothing reminds right after it: a card still waiting gets its one reminder from
+/// [`sweep_unreviewed`](super::missions::listener::sweep_unreviewed) once the grace time passed.
+pub fn spawn_review_turn(state: &AppState, batch: Vec<Delegation>, reminder: bool) {
+    if batch.is_empty() {
+        return;
     }
-    if !due.is_empty() {
-        review_turn(state, &due, true).await;
-    }
-}
-
-/// [`review_turn`] in the background. The job is registered first, so a sweep in between sees
-/// the hand-off as busy and doesn't start a second one.
-pub fn spawn_review_turn(state: &AppState, d: &Delegation, reminder: bool) {
     let state = state.clone();
-    let d = d.clone();
-    let job = state.turns.start_job([format!("review:{}", d.id), d.id.clone()]);
+    let job = state.turns.start_job(batch.iter().flat_map(|d| [format!("review:{}", d.id), d.id.clone()]));
     tokio::spawn(async move {
-        let one = std::slice::from_ref(&d);
-        review_turn(&state, one, reminder).await;
-        if !reminder {
-            remind_review(&state, one).await;
-        }
+        review_turn(&state, &batch, reminder).await;
         drop(job);
     });
 }
@@ -1499,7 +1497,7 @@ fn lead_turn_runs<'a>(state: &AppState, batch: impl Iterator<Item = &'a Delegati
 /// A turn for the lead of `batch` (hand-offs of one lead and chat) in the chat they came from,
 /// only to review their cards, all in one prompt: for a card whose lead wasn't resumed with the
 /// result (the card was blocked when the batch reported, or kwnt restarted before the lead's
-/// turn), and as the one reminder. Cards no longer waiting in Review are left out; nothing runs
+/// turn), and as the one reminder, which the sweep sends after its grace time. Cards no longer waiting in Review are left out; nothing runs
 /// when none is.
 pub async fn review_turn(state: &AppState, batch: &[Delegation], reminder: bool) {
     let Some(d) = batch.first() else { return };
@@ -1541,6 +1539,9 @@ pub async fn review_turn(state: &AppState, batch: &[Delegation], reminder: bool)
     // chat, the teammate's thread or the lead's own notes
     let mut opts = TurnOpts::default();
     opts.fresh_eyes = true;
+    // Its one-line verdict is saved to the chat but sends no "replied" notification: the lead's
+    // results turn already sent one for this result (0.9.59: two to three pushes per result)
+    opts.quiet_finish = true;
     // Like the lead's report turn: past the hold limit it doesn't wait for the turn that handed out
     opts.beside_running = lead_turn_runs(state, batch.iter());
     if let Err(e) = try_kwant_turn(&scope, &lead, prompt, opts).await {
@@ -2292,5 +2293,29 @@ mod customer_tests {
         let by_bot = crate::db::models::Message { meta: Some(json!({"sent_by_bot": true}).to_string()), ..said("user", "Scout says: post the draft") };
         let chat = vec![at(said("user", "Draft the spring newsletter"), 0), at(by_bot, 3)];
         assert_eq!(persons_request(&chat, handed_on).map(|m| m.text.as_str()), Some("Draft the spring newsletter"));
+    }
+}
+
+#[cfg(test)]
+mod push_tests {
+    use super::*;
+
+    /// m5 (pushes-say-what): a result that ends Blocked says blocked, not "completed".
+    #[test]
+    fn a_blocked_result_pushes_blocked() {
+        let blocked = Ok("I tried the booking site.\n\nBlocked: it needs a card I don't have. Add one in Settings.".to_string());
+        assert_eq!(
+            finished_push("Researcher", "Assistant", "Find hotels", "completed", &blocked),
+            ("Researcher is blocked on a task for Assistant".into(), "Blocked: it needs a card I don't have. Add one in Settings.".into())
+        );
+        let done = Ok("Three hotels under €30.\n\nDone: list saved.".to_string());
+        assert_eq!(
+            finished_push("Researcher", "Assistant", "Find hotels", "completed", &done),
+            ("Researcher finished a task for Assistant".into(), "“Find hotels”: completed.".into())
+        );
+        let failed = Err("the model stopped".to_string());
+        assert_eq!(finished_push("Researcher", "Assistant", "Find hotels", "failed", &failed).1, "“Find hotels”: failed.");
+        let keyed = Ok("Blocked: GitHub refused ghp_abcdefghijklmnop1234 so paste a new token.".to_string());
+        assert!(!finished_push("Researcher", "Assistant", "PR", "completed", &keyed).1.contains("ghp_"));
     }
 }

@@ -1319,8 +1319,20 @@ export const BookingSetup: React.FC<{
 /** The read-only week on a live desk: head with ‹ ›, then the days. */
 export const LiveWeek: React.FC<{ slots: DeskSlot[] }> = ({ slots }) => {
   const now = nowKey();
-  const first = slots.find((s) => s.start > now)?.start.slice(0, 10) ?? todayKey();
-  const [monday, setMonday] = useState(() => weekOf(first < todayKey() ? todayKey() : first));
+  // Who is booked when: open on the week of the next booking (confirmed or asked for), else the next open time.
+  const ahead = slots.filter((s) => s.start > now);
+  const first = (ahead.find((s) => s.confirmed.length > 0 || s.requested.length > 0) ?? ahead[0])?.start.slice(0, 10) ?? todayKey();
+  const opening = weekOf(first < todayKey() ? todayKey() : first);
+  const [monday, setMondayRaw] = useState(opening);
+  // The live read can land after the first paint: follow it until the host moves the week.
+  const moved = useRef(false);
+  useEffect(() => {
+    if (!moved.current) setMondayRaw(opening);
+  }, [opening]);
+  const setMonday = (m: string) => {
+    moved.current = true;
+    setMondayRaw(m);
+  };
   const inWeek = slots.filter((s) => s.start.slice(0, 10) >= monday && s.start.slice(0, 10) <= addDays(monday, 6));
   const days = shownDays(inWeek, monday);
   return (
