@@ -153,6 +153,8 @@ export class WallBox {
         if (method !== 'POST') return err(405, 'method');
         // One-time screen links are spent only as {token} (src/pocket/guest.rs host_signin).
         if (typeof body?.token !== 'string' || !body.token) return err(401, 'not_host');
+        // A spent or old link (token "used" here): the real box answers 401 link_used_or_expired (src/pocket/mod.rs).
+        if (body.token === 'used') return err(401, 'link_used_or_expired', { message: 'This link was already used or is too old. Open a new one from the card.' });
         if (this.ended()) return err(410, 'ended');
         return { status: 200, body: this.env(), cookie: true };
       }
